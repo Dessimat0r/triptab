@@ -6,7 +6,7 @@ import { createSourceFile, isCallExpression, isFunctionDeclaration, isIdentifier
 import { ledgerEtag } from '../lib/ledger-freshness';
 import type { Ledger } from '../lib/model';
 
-const source = await readFile(new URL('../app/page.tsx', import.meta.url), 'utf8');
+const source = await readFile(new URL('../components/trip-app.tsx', import.meta.url), 'utf8');
 const syntax = createSourceFile('page.tsx', source, ScriptTarget.Latest, true, ScriptKind.TSX);
 const home = syntax.statements.find(statement => isFunctionDeclaration(statement) && statement.name?.text === 'Home');
 assert(home && isFunctionDeclaration(home) && home.body);

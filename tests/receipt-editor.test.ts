@@ -9,7 +9,7 @@ import { itemSchema, itemSplitError, ledgerSchema, receiptSplitError, total, val
 // Execute the actual page handlers against a small state/persistence boundary.
 // JSX, network, clipboard and React hooks are excluded; receipt transitions and
 // financial validation are the production functions, not a second algorithm.
-const pageSource = await readFile(new URL('../app/page.tsx', import.meta.url), 'utf8');
+const pageSource = await readFile(new URL('../components/trip-app.tsx', import.meta.url), 'utf8');
 const syntax = createSourceFile('page.tsx', pageSource, ScriptTarget.Latest, true, ScriptKind.TSX);
 const home = syntax.statements.find(statement => isFunctionDeclaration(statement) && statement.name?.text === 'Home');
 assert(home && isFunctionDeclaration(home) && home.body);

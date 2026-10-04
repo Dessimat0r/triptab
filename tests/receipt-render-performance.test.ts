@@ -11,7 +11,7 @@ import { createSourceFile, isArrayBindingPattern, isBindingElement, isCallExpres
 // Run Home's actual render and event handlers with a small hook boundary. Child
 // rendering is excluded here so these assertions measure saved-ledger work,
 // independent of the machine's speed or a second financial implementation.
-const source = await readFile(new URL('../app/page.tsx', import.meta.url), 'utf8');
+const source = await readFile(new URL('../components/trip-app.tsx', import.meta.url), 'utf8');
 const syntax = createSourceFile('page.tsx', source, ScriptTarget.Latest, true, ScriptKind.TSX);
 const home = syntax.statements.find(statement => isFunctionDeclaration(statement) && statement.name?.text === 'Home');
 assert(home && isFunctionDeclaration(home) && home.body);
@@ -38,7 +38,7 @@ function fixture(count = 100): model.Trip {
   })) };
 }
 function controller(trip: model.Trip, fetcher?: typeof fetch) {
-  const state: Record<string, unknown> = { ledger: { trips: [trip] }, selected: trip.id, loading: false, profile: { id: 'account-alice', displayName: 'Alice', email: 'alice@example.test' } };
+  const state: Record<string, unknown> = { view: 'expenses', ledger: { trips: [trip] }, selected: trip.id, loading: false, profile: { id: 'account-alice', displayName: 'Alice', email: 'alice@example.test' } };
   const refs: { current: unknown }[] = [], memos: { dependencies: unknown[]; value: unknown }[] = [];
   const calls = { balances: 0, settlements: 0, expenseShares: 0, expenseTotal: 0 };
   const models = { ...model };
@@ -46,6 +46,7 @@ function controller(trip: model.Trip, fetcher?: typeof fetch) {
     models[name] = ((...args: never[]) => { calls[name]++; return (model[name] as (...args: never[]) => unknown)(...args); }) as never;
   }
   let stateIndex = 0, refIndex = 0, memoIndex = 0;
+  const navigationEffects: (() => void)[] = [];
   const hooks = { ...React,
     useState(initial: unknown) {
       const key = states[stateIndex++];
@@ -59,22 +60,38 @@ function controller(trip: model.Trip, fetcher?: typeof fetch) {
       return memos[index].value;
     },
     useCallback: (callback: unknown) => callback,
-    useEffect() {},
+    useEffect(callback: () => void, dependencies: unknown[]) {
+      // Run the real section-entry refresh, while excluding mount listeners.
+      if (dependencies?.length === 2 && dependencies[0] === state.view && typeof dependencies[1] === 'function') navigationEffects.push(callback);
+    },
   };
   const component = (props: unknown) => props;
-  const exported = { exports: {} as { default: () => React.ReactNode } };
+  const exported = { exports: {} as { default: (props: {children: React.ReactNode}) => React.ReactNode } };
   new Function('require', 'module', 'exports', 'fetch', compiled)((name: string) => {
     if (name === 'react') return hooks;
     if (name === 'react/jsx-runtime') return runtime;
     if (name === '@/lib/model') return models;
     if (name === '@/lib/dates') return dates;
     if (name === '@/lib/client-ledger') return clientLedger;
+    if (name === '@/components/trip-routing') return {
+      TripTabRouteProvider: component, TripTabNavigation: component,
+      useTripTabEntryQuery: () => '',
+      useTripTabNavigation: () => ({ view: state.view, navigate: (next: string) => {state.view = next;}, replaceEntryUrl() {} }),
+    };
     if (name === '@/components/confirmation-dialog') return { useConfirmation: () => ({ confirm: async () => true, dialog: null, confirming: false }) };
     if (name === 'lucide-react') return new Proxy({}, { get: () => component });
     return { __esModule: true, default: component, PwaUpdatePrompt: component };
   }, exported, exported.exports, fetcher || fetch);
   return { calls, state,
-    render() { stateIndex = 0; refIndex = 0; memoIndex = 0; return elements(exported.exports.default()); },
+    render() {
+      stateIndex = 0; refIndex = 0; memoIndex = 0;
+      const shell = elements(exported.exports.default({children: null}));
+      const provider = shell.find(element => typeof element.props.renderSection === 'function');
+      assert(provider, 'the persistent shell supplies the active route body');
+      const body = elements((provider.props.renderSection as (view: unknown) => React.ReactNode)(state.view));
+      for (const effect of navigationEffects.splice(0)) effect();
+      return [...shell, ...body];
+    },
     resetCounts() { for (const name of Object.keys(calls) as (keyof typeof calls)[]) calls[name] = 0; },
   };
 }
@@ -130,18 +147,17 @@ test('invalid saved and edited receipts keep their review warnings rather than s
   assert(rendered.some(element => element.type === 'b' && element.props.children === '—'));
 });
 
-test('Balances navigation displays the panel immediately while its fresh ledger request is held', async () => {
+test('the Balances route renders immediately while its background ledger request is held', async () => {
   const holiday = fixture(1);
   let finish!: (response: Response) => void;
   const editor = controller(holiday, () => new Promise(resolve => {finish = resolve;}));
-  const initial = editor.render();
-  const tab = initial.find(element => element.props.id === 'tab-balances');
-  assert(tab && typeof tab.props.onClick === 'function');
-  tab.props.onClick();
+  editor.render();
+  editor.state.view = 'balances';
+  const displayed = editor.render();
   assert.equal(editor.state.view, 'balances', 'panel selection must not wait for the network');
   assert.equal(editor.state.loading, false, 'background refresh keeps the saved panel usable');
-  const displayed = editor.render();
-  assert(displayed.some(element => element.props.id === 'panel-balances'));
+  assert(displayed.some(element => element.type === 'h2' && element.props.children === 'Settle up'));
+  await Promise.resolve();
   finish(Response.json({data: {trips: [holiday]}, revision: 1}, {headers: {ETag: '"fresh"'}}));
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(editor.state.revision, 1);

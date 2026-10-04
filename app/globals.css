@@ -397,6 +397,9 @@ main {
   border-bottom: 1px solid var(--line);
   margin: 32px 0 26px;
 }
+.tabs a {
+  text-decoration: none;
+}
 .tabs :is(button, a) {
   min-height: 44px;
   display: flex;
