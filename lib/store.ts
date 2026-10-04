@@ -199,7 +199,9 @@ export async function readActivity(user: string, tripId: string, options: { befo
   `).bind(tripId, JSON.stringify(selected.map(event => event.id)), user, user).all<ActivityRow>();
   if (rows.results.length !== selected.length) throw new RequestError('Your access to this trip changed. Refresh before viewing its history.', 403);
   const result = {
-    events: rows.results.map(row => ({ id: row.id, sequence: row.sequence, tripId: row.trip_id, actorId: row.actor_id, actorName: row.actor_name, createdAt: row.created_at, entityType: row.entity_type, entityId: row.entity_id, action: row.action, before: row.before_data ? clearAssistantAuthors(JSON.parse(row.before_data)) : null, after: row.after_data ? clearAssistantAuthors(JSON.parse(row.after_data)) : null, revision: row.revision, source: row.source })),
+    // Audit evidence is immutable. Role-first UI labels handle legacy mistaken
+    // assistant attribution without rewriting either historical snapshot.
+    events: rows.results.map(row => ({ id: row.id, sequence: row.sequence, tripId: row.trip_id, actorId: row.actor_id, actorName: row.actor_name, createdAt: row.created_at, entityType: row.entity_type, entityId: row.entity_id, action: row.action, before: row.before_data ? JSON.parse(row.before_data) : null, after: row.after_data ? JSON.parse(row.after_data) : null, revision: row.revision, source: row.source })),
     nextCursor: candidates.results.length > selected.length ? selected[selected.length - 1].sequence : null,
   };
   if (new TextEncoder().encode(JSON.stringify(result)).byteLength > MAX_ACTIVITY_BYTES) {

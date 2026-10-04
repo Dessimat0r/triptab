@@ -1130,6 +1130,29 @@ test('a genuine financial edit keeps the raw legacy assistant before image and o
   assert.match(String(notifications[0][3]), /updated an expense/);
 });
 
+test('history preserves raw pre-existing assistant-attribution corrections instead of hiding their before/after difference', async () => {
+  const database = await storage();
+  await create(database);
+  const before = { ...dinner(), conversation: [{ id: 'historic-assistant', role: 'assistant', text: 'Check the receipt.',
+    createdAt: '2026-10-04T20:32:00Z', authorMemberId: 'b', authorName: 'Mistaken Bob' }] };
+  const after = { ...before, conversation: before.conversation.map(({ id, role, text, createdAt }) => ({ id, role, text, createdAt })) };
+  database.sqlite.prepare(`INSERT INTO activity_events
+    (id,trip_id,actor_id,actor_name,created_at,entity_type,entity_id,action,before_data,after_data,revision,source)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).run('old-attribution-repair', 'trip-1', member, 'Bob', '2026-10-04T21:00:00Z',
+      'expense', before.id, 'update', JSON.stringify(before), JSON.stringify(after), 1, 'web');
+  const event = (await store.readActivity(actor, 'trip-1')).events.find(candidate => candidate.id === 'old-attribution-repair')!;
+  assert.deepEqual(event.before, before);
+  assert.deepEqual(event.after, after);
+  assert.notDeepEqual(event.before, event.after, 'a historical correction must retain visible evidence');
+  const evidence = database.sqlite.prepare('SELECT before_data,after_data FROM activity_events WHERE id=?').get(event.id) as { before_data: string; after_data: string };
+  assert.deepEqual(event.before, JSON.parse(evidence.before_data));
+  assert.deepEqual(event.after, JSON.parse(evidence.after_data));
+  (event.before!.conversation as { text: string }[])[0].text = 'Changed in the browser';
+  const fresh = (await store.readActivity(actor, 'trip-1')).events.find(candidate => candidate.id === event.id)!;
+  assert.deepEqual(fresh.before, before, 'view mutations cannot alter immutable history');
+  assert.deepEqual(database.sqlite.prepare('SELECT before_data,after_data FROM activity_events WHERE id=?').get(event.id), evidence);
+});
+
 test('known Bob messages keep their original speakers when Alice copies a receipt into review and submits a new reply', async () => {
   const database = await storage();
   const holiday = trip(); holiday.expenses = [dinner()];
