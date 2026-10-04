@@ -74,7 +74,7 @@ R-01 through R-08 address [the earlier 4 October PR comment](https://github.com/
 
 ## Latest inline-review follow-up
 
-The following ten dispositions cover the latest inline comments on PRs #2, #3 and #4. I-01 through I-08 describe the shared receipt/audit fixes; I-09 and I-10 describe the receipt-history follow-up. Focused results describe the reviewed fix commits; the combined final branch checks are pending the validation record below. The original reports and their evidence remain unchanged.
+The following ten dispositions cover the latest inline comments on PRs #2, #3 and #4. I-01 through I-08 describe the shared receipt/audit fixes; I-09 and I-10 describe the receipt-history follow-up. Focused results describe the reviewed fix commits; the final receipt-history branch passes 397 regressions, TypeScript, lint and production build as recorded below. The original reports and their evidence remain unchanged.
 
 | Finding | Status | Disposition and evidence |
 |---|---|---|
@@ -100,21 +100,21 @@ Both commits exist in the expected repositories and match the current v6 tags; e
 
 ## Validation record
 
-The published PR #3 baseline on 4 October 2026 reported 317 passing regressions, including the earlier PR-review fixes, receipt context and expanded audit coverage. The R-09 through R-11 follow-up passed 338/338, and the subsequent receipt-specific-history baseline passed 347/347. Those are historical results for the earlier versions, not the latest inline-review changes. The latest focused results are recorded separately; the integrated PR #3 inline-review run passes 367/367 regressions, TypeScript, lint and production build. Earlier native/browser counts below describe the builds examined then.
+The published PR #3 baseline on 4 October 2026 reported 317 passing regressions, including the earlier PR-review fixes, receipt context and expanded audit coverage. The R-09 through R-11 follow-up passed 338/338, and the subsequent receipt-specific-history baseline passed 347/347. Those are historical results for the earlier versions, not the latest inline-review changes. The latest focused results are recorded separately; the integrated PR #3 inline-review run passes 367/367 regressions, and the final PR #4 receipt-history branch passes 397/397. Both pass TypeScript, lint and production build. Earlier native/browser counts below describe the builds examined then.
 
 | Check | Result |
 |---|---|
 | Clean locked installation (`npm run install:ci`) | Passed in an isolated clean directory; 687 packages installed |
-| Regression suite (`npm test`) | Historical baselines: PR #3 317/317; R-09–R-11 follow-up 338/338; receipt-specific history 347/347. Latest integrated PR #3 inline-review run: 367/367 passed |
-| TypeScript (`npx --no-install tsc --noEmit`) | Latest integrated PR #3 inline-review check passed with 0 errors |
-| ESLint (`npm run lint`) | Latest integrated PR #3 inline-review check passed with 0 errors and the same 4 warnings |
-| Production build (`npm run build`) | Latest integrated PR #3 inline-review build passed |
+| Regression suite (`npm test`) | Historical baselines: PR #3 317/317; R-09–R-11 follow-up 338/338; receipt-specific history 347/347. Latest integrated runs: PR #3 367/367; PR #4 397/397 passed, including native Miniflare D1 queries |
+| TypeScript (`npx --no-install tsc --noEmit`) | Latest integrated PR #4 check passed with 0 errors |
+| ESLint (`npm run lint`) | Latest integrated PR #4 check passed with 0 errors and the same 4 warnings |
+| Production build (`npm run build`) | Latest integrated PR #4 build passed |
 | CI workflow (`actionlint`) | Passed |
 | Native local HTTP checks | Earlier 22 HTTP and 4 invitation/activity checks passed; additional receipt route 13, export route 16 and MCP/push 4 checks passed. Invitation preview, stale-consent rejection and joining also passed native checks |
 | Native local browser checks | Earlier 20/20 passed; 6 additional checks passed for health/ETag, referenced-image deletion, image detachment/purge, expense restoration, payment restoration and phone CSV download. Re-review passed refresh races 3/3, restoration-concurrency 3/3, invitation/account-switch 2/2, concurrent matching-payment review 3/3 and sandboxed confirmations 8/8. Mounted 320/390/768-pixel layouts in light/dark mode showed no horizontal overflow |
 | Receipt preparation | Tall/square/noisy/thin image pixel/dimension/5 MiB checks, orientation/EXIF removal, known-text OCR and native R2 upload/read/delete passed |
 | Historical-data UI recovery | 6 checks passed: saved invalid bank charge stays visible, explicit correction succeeds, history retains the old value, balances recover and no browser errors occur |
-| Compiled Worker/browser checks | Earlier builds passed 8 security/hydration checks and 6 receipt lifecycle/restoration/freshness/download checks without browser or CSP errors. The earlier PR #1 re-review build passed 6 critical receipt/restoration/download checks and 3 delayed-refresh checks. PR #3 added compiled invitation/payment, private-history/export and connected-MCP/context checks; latest follow-up compiled checks are pending |
+| Compiled Worker/browser checks | Earlier builds passed 8 security/hydration checks and 6 receipt lifecycle/restoration/freshness/download checks without browser or CSP errors. The earlier PR #1 re-review build passed 6 critical receipt/restoration/download checks and 3 delayed-refresh checks. PR #3 added compiled invitation/payment, private-history/export and connected-MCP/context checks; latest PR #4 compiled checks pass 7/7 for real D1/R2 draft provenance, photos, connected replies, trusted speakers, shared access, denied outsiders and normal-API cleanup |
 | Earlier focused ledger-headroom checks | Near-limit Unicode normalization/resave/edit and both byte ceilings have regression coverage; focused cases and historical integrated 338-test follow-up passed |
 | Earlier focused export/privacy checks | 12/12 real-SQLite export checks and historical integrated 338-test follow-up passed |
 | Earlier focused receipt-maintenance checks | 34/34 SQLite/HTTP receipt checks passed; scoped TypeScript and lint passed; historical integrated 338-test follow-up passed; hosted scheduling remains unverified |
@@ -126,3 +126,5 @@ The published PR #3 baseline on 4 October 2026 reported 317 passing regressions,
 Focused tests cover financial conservation, bank/FX validation, local dates, client rebasing, authentication limits, MCP boundaries, Worker headers, SQLite migrations, invitation management, receipt lifecycle, export privacy/CSV formatting and storage/route authorization. SQLite shims and browser emulation do not substitute for real-D1 load tests, physical iOS/Android/PWA camera/push checks, or a screen-reader audit.
 
 The remaining wider work includes account verification/recovery/deletion; verified invitation binding; interrupted pending-upload recovery and a full retention/erasure policy; production receipt-maintenance activation; trip archive/leave/ownership workflows; granular per-trip revisions and storage scale; notification privacy; production gateway assurance, backups/restores and monitoring; currency minor-unit migration and penny rotation; and device/accessibility validation. The live reference-provider precision question in S-08 remains unverified. Shared editing remains the intended group trust model, rather than a newly identified defect.
+
+Native release-path checks also applied migrations `0007` and `0008` successfully to local D1. Registry SQL uses equivalent `iif` expressions compatible with Wrangler's exact statement splitter; its regression executes each split statement. The final compiled Worker reports healthy only with the registry and receipt-family indexes present. These are local checks, not a production release or D1 load measurement.
