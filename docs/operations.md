@@ -15,7 +15,7 @@ For each release, record the GitHub commit, Sites source commit/version, deploym
 5. Publish through the Sites build/version/deploy workflow, allowing its migration lifecycle to manage the target database. Do not run local Wrangler commands against production as an additional migration path.
 6. After the deployment succeeds, verify the approved release's essential journeys with test accounts: login, existing trip read, expense save, shared-trip access, receipt upload/retrieval and balances. Record the result and keep the previous Sites version available.
 
-Code using activity history and receipt lifecycle requires both `0003_rainy_blazing_skull.sql` and `0004_hot_old_lace.sql` before it serves traffic. A local migration or a generated SQL journal does not establish production readiness. Apply the migrations through Sites' release path and retain its applied-migration evidence.
+Code using activity history, receipt lifecycle and private account history requires `0003_rainy_blazing_skull.sql`, `0004_hot_old_lace.sql` and `0005_audit_coverage.sql` after the earlier migrations before it serves traffic. The latest migration also adds invitation/image audit metadata and browser-subscription generations. A local migration or a generated SQL journal does not establish production readiness. Apply the migrations through Sites' release path and retain its applied-migration evidence.
 
 Redeploying a previous Sites version rolls back code, not necessarily D1 data or schema. Confirm that the previous code is compatible with the current schema before using it. A financial-data problem may require a data restore and reconciliation as well as a code rollback.
 
@@ -27,7 +27,7 @@ For the approved release, exercise the actual Sites preview and ChatGPT embed th
 
 ## User data downloads
 
-The account's **Download your data** panel provides account JSON, holiday JSON, a financial CSV and paginated history CSV. This is a user download, not an operator backup or recovery mechanism.
+The account's **Download your data** panel provides account JSON, holiday JSON, a financial CSV and paginated history downloads. Private account history is available separately in JSON/CSV and never includes another account's events. This is a user download, not an operator backup or recovery mechanism.
 
 Account JSON includes the caller's own profile and current trips they own or belong to; holiday JSON includes the selected authorized trip, item splits, drafts and receipt conversations. It contains shared financial records, not only entries created by the caller. Optional receipt metadata describes attached receipt IDs and trip IDs; it does not contain image bytes, unreferenced stored images or R2 recovery material. Downloads exclude credentials, sessions, invitation secrets and provider account links.
 
@@ -79,7 +79,7 @@ Use this endpoint as one signal when configuring an external monitor through the
 
 ## History privacy and retention design
 
-Activity history is append-only: SQLite triggers reject event UPDATE/DELETE, and financial snapshots can contain actor display names and member emails. Purging a receipt image does not erase these snapshots. Account deletion is not implemented, and changing a current profile does not redact its historical values. The following is a proposed design checklist, not an agreed retention policy or an available erasure operation.
+Shared holiday and private account histories are append-only: SQLite triggers reject event UPDATE/DELETE and replacement of existing events. Financial snapshots can contain actor display names and member emails; private account events use state flags and safe descriptions without authentication secrets. Purging a receipt image does not erase these snapshots. Account deletion is not implemented, and changing a current profile does not redact its historical values. See [audit coverage](audit-coverage.md) for the write-path matrix and the operational/browser state that is deliberately excluded. The following is a proposed design checklist, not an agreed retention policy or an available erasure operation.
 
 - Decide which shared financial facts must be retained, which personal identifiers can be removed, and who can authorize redaction when other travellers rely on the history. Include downloaded exports, R2 images and backup copies in the policy.
 - Minimise personal identifiers in future snapshots after checking that history display, financial review and recovery still work. Define how existing actor names, email fields and free-text details would be handled rather than treating an ID replacement as complete erasure.
@@ -96,7 +96,7 @@ FROM activity_events
 GROUP BY trip_id;
 ```
 
-Treat trip identifiers and the resulting metrics as private operator data. Choose alert thresholds and capacity headroom from the actual D1 plan, normal trip sizes and measured write behavior; indexed 50-event reads alone do not establish safe write/storage scale. Record an approved archive/redaction migration before applying retention: the current triggers intentionally block deletion, and no automatic pruning or compaction is implemented. Production growth monitoring and real-D1 load measurements remain outstanding.
+Apply the same aggregate count/byte monitoring to `account_activity_events`, grouped by `user_id`, without exposing private snapshots. Treat trip/account identifiers and the resulting metrics as private operator data. Choose alert thresholds and capacity headroom from the actual D1 plan, normal trip sizes and measured write behavior; indexed 50-event reads alone do not establish safe write/storage scale. Record an approved archive/redaction migration before applying retention: the current triggers intentionally block deletion, and no automatic pruning or compaction is implemented. Production growth monitoring and real-D1 load measurements remain outstanding.
 
 ## Restore drill and incident recovery
 

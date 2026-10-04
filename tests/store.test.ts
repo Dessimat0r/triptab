@@ -29,10 +29,12 @@ class SQLiteStatement {
 class SQLiteD1 {
   readonly sqlite = new DatabaseSync(':memory:');
   beforeWriteBatch?: () => void;
+  beforeBatch?: (statements: SQLiteStatement[]) => void;
   private pending: Promise<unknown> = Promise.resolve();
   prepare(sql: string) { return new SQLiteStatement(this.sqlite, sql); }
   batch(statements: SQLiteStatement[]) {
     const operation = this.pending.then(() => {
+      this.beforeBatch?.(statements);
       if (statements.some(statement => /^UPDATE sync_state/.test(statement.sql.trim()))) {
         const hook = this.beforeWriteBatch;
         this.beforeWriteBatch = undefined;
@@ -58,7 +60,8 @@ Object.defineProperty(globalThis, Symbol.for('triptab.store-test-notifications')
 const envUrl = 'data:text/javascript;base64,' + Buffer.from("export const env=globalThis[Symbol.for('triptab.store-test-env')]; export const waitUntil=()=>{};").toString('base64');
 const notificationStoreUrl = 'data:text/javascript;base64,' + Buffer.from("export const db=()=>{throw new Error('Notification transport must be mocked');}; export class RequestError extends Error {}").toString('base64');
 const notificationSource = transpileModule(await readFile(new URL('../lib/notifications.ts', import.meta.url), 'utf8'), { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
-  .replace("'cloudflare:workers'", JSON.stringify(envUrl)).replace("'./store'", JSON.stringify(notificationStoreUrl));
+  .replace("'cloudflare:workers'", JSON.stringify(envUrl)).replace("'./store'", JSON.stringify(notificationStoreUrl))
+  .replaceAll("'./audit'", JSON.stringify(new URL('../lib/audit.ts', import.meta.url).href));
 const notificationFormatterUrl = 'data:text/javascript;base64,' + Buffer.from(notificationSource).toString('base64');
 const notificationUrl = 'data:text/javascript;base64,' + Buffer.from(`export {activityNotification} from ${JSON.stringify(notificationFormatterUrl)}; export const notifyMembers=async(...args)=>{globalThis[Symbol.for('triptab.store-test-notifications')].push(args);};`).toString('base64');
 const source = await readFile(new URL('../lib/store.ts', import.meta.url), 'utf8');
@@ -68,6 +71,7 @@ const compiled = transpileModule(source, { compilerOptions: { module: ModuleKind
   .replace("'./model'", JSON.stringify(new URL('../lib/model.ts', import.meta.url).href))
   .replace("'./auth'", JSON.stringify(new URL('../lib/auth.ts', import.meta.url).href))
   .replace("'./receipt-lifecycle'", JSON.stringify(new URL('../lib/receipt-lifecycle.ts', import.meta.url).href))
+  .replaceAll("'./audit'", JSON.stringify(new URL('../lib/audit.ts', import.meta.url).href))
   .replace("'./notifications'", JSON.stringify(notificationUrl));
 const storeUrl = 'data:text/javascript;base64,' + Buffer.from(compiled).toString('base64');
 const store = await import(storeUrl) as typeof import('../lib/store');
@@ -181,13 +185,13 @@ test('expense, payment and draft creation/edit/deletion each have precise before
   state.data.trips[0].payments.push({ id: 'payment-1', from: 'b', to: 'a', amount: 1000, date: '2026-10-04' });
   state.data.trips[0].drafts.push({ ...dinner(), id: 'draft-1', status: 'review' });
   state = await store.writeLedger(actor, state.data, state.revision);
-  assert.equal(count(database), initial + 3);
+  assert.equal(count(database), initial + 4);
   const oldExpense = structuredClone(state.data.trips[0].expenses[0]);
   state.data.trips[0].expenses[0].items[0].amount = 15000;
   state.data.trips[0].payments[0].amount = 600;
   state.data.trips[0].drafts[0].title = 'Check the tip';
   state = await store.writeLedger(actor, state.data, state.revision, { source: 'chatgpt' });
-  assert.equal(count(database), initial + 6);
+  assert.equal(count(database), initial + 7);
   let events = await history();
   assert.deepEqual(lastEntity(events, 'expense', 'dinner').before, oldExpense);
   assert.equal((lastEntity(events, 'expense', 'dinner').after?.items as { amount: number }[])[0].amount, 15000);
@@ -198,7 +202,7 @@ test('expense, payment and draft creation/edit/deletion each have precise before
   state.data.trips[0].payments = [];
   state.data.trips[0].drafts = [];
   await store.writeLedger(actor, state.data, state.revision);
-  assert.equal(count(database), initial + 9);
+  assert.equal(count(database), initial + 11);
   events = await history();
   for (const [type, id] of [['expense', 'dinner'], ['payment', 'payment-1'], ['draft', 'draft-1']]) {
     const event = lastEntity(events, type, id);
@@ -261,12 +265,153 @@ test('stale or competing saves have exactly one winner and no loser events', asy
   assert.equal(results.filter(result => result.status === 'fulfilled').length, 1);
   const rejected = results.find(result => result.status === 'rejected') as PromiseRejectedResult;
   assert.match(rejected.reason.message, /CONFLICT/);
-  assert.equal(count(database), initial + 1);
+  assert.equal(count(database), initial + 2);
   const current = await store.readLedger(actor);
   assert.equal(current.revision, 2);
   assert.equal(current.data.trips[0].expenses.length + current.data.trips[0].payments.length, 1);
   await assert.rejects(store.writeLedger(actor, first, state.revision), /CONFLICT/);
-  assert.equal(count(database), initial + 1);
+  assert.equal(count(database), initial + 2);
+});
+
+test('future ledger revisions are rejected before a competing write can make the token current', async () => {
+  const database = await storage();
+  const holiday = trip(); holiday.expenses = [dinner()];
+  const baseline = await create(database, holiday);
+  database.sqlite.prepare('INSERT INTO memberships (trip_id,user_id,member_id) VALUES (?,?,?)').run('trip-1', member, 'b');
+  const proposed = structuredClone(baseline.data);
+  proposed.trips[0].expenses[0].items[0].amount = 33333;
+  const competing = structuredClone(baseline.data);
+  competing.trips[0].expenses[0].items[0].amount = 22222;
+  const originalBatch = database.batch.bind(database);
+  let attemptedCommit = false;
+  database.batch = async statements => {
+    if (!attemptedCommit && statements.some(statement => /^UPDATE sync_state/.test(statement.sql.trim()))) {
+      attemptedCommit = true;
+      await store.writeLedger(member, competing, baseline.revision);
+    }
+    return originalBatch(statements);
+  };
+  const initialEvents = count(database);
+  await assert.rejects(store.writeLedger(actor, proposed, baseline.revision + 1), /CONFLICT/);
+  assert.equal(attemptedCommit, false, 'a future token must fail at the consistent baseline read');
+  assert.equal(count(database), initialEvents);
+  assert.equal((await store.readLedger(actor)).data.trips[0].expenses[0].items[0].amount, 12345);
+  // A normal competing commit and fresh edit retain an exact predecessor chain.
+  database.batch = originalBatch;
+  const winner = await store.writeLedger(member, competing, baseline.revision);
+  const saved = await store.writeLedger(actor, proposed, winner.revision);
+  const events = (await history()).filter(event => event.entityType === 'expense');
+  assert.equal((events[0].before?.items as { amount: number }[])[0].amount, 22222);
+  assert.equal((events[0].after?.items as { amount: number }[])[0].amount, 33333);
+  assert.deepEqual(events[0].before, events[1].after);
+  assert.equal(saved.revision, winner.revision + 1);
+});
+
+test('ledger CAS verifies trusted trip preimages and the expected absence of new IDs', async context => {
+  for (const mutation of ['data', 'owner', 'remove', 'new-id'] as const) await context.test(mutation, async () => {
+    const database = await storage();
+    const holiday = trip(); holiday.expenses = [dinner()];
+    const state = await create(database, holiday);
+    const proposed = structuredClone(state.data);
+    proposed.trips[0].expenses[0].items[0].amount = 33333;
+    if (mutation === 'new-id') proposed.trips.push(trip('new-trip'));
+    const initialEvents = count(database);
+    database.beforeWriteBatch = () => {
+      if (mutation === 'data') {
+        const changed = structuredClone(state.data.trips[0]);
+        changed.expenses[0].items[0].amount = 22222;
+        database.sqlite.prepare('UPDATE trips SET data=? WHERE id=?').run(JSON.stringify(changed), 'trip-1');
+      } else if (mutation === 'owner') {
+        database.sqlite.prepare('UPDATE trips SET owner=? WHERE id=?').run(member, 'trip-1');
+      } else if (mutation === 'remove') {
+        database.sqlite.prepare('DELETE FROM trips WHERE id=?').run('trip-1');
+      } else {
+        const collision = trip('new-trip'); collision.name = 'Previously committed holiday';
+        database.sqlite.prepare('INSERT INTO trips (id,owner,data) VALUES (?,?,?)').run(collision.id, actor, JSON.stringify(collision));
+      }
+    };
+    await assert.rejects(store.writeLedger(actor, proposed, state.revision), /CONFLICT/);
+    assert.equal(database.sqlite.prepare('SELECT revision FROM sync_state WHERE id=1').get()?.revision, state.revision);
+    assert.equal(count(database), initialEvents);
+    if (mutation === 'data') assert.equal((await store.readLedger(actor)).data.trips[0].expenses[0].items[0].amount, 22222);
+    if (mutation === 'owner') assert.equal(database.sqlite.prepare('SELECT owner FROM trips WHERE id=?').get('trip-1')?.owner, member);
+    if (mutation === 'remove') assert.equal(database.sqlite.prepare('SELECT id FROM trips WHERE id=?').get('trip-1'), undefined);
+    if (mutation === 'new-id') assert.equal((await store.readLedger(actor)).data.trips.find(value => value.id === 'new-trip')?.name, 'Previously committed holiday');
+  });
+});
+
+test('fifty-trip saves keep exact before snapshots through the maximum ledger collection', async () => {
+  await storage();
+  const holidays = Array.from({ length: 50 }, (_, index) => trip(`trip-${index}`));
+  let state = await store.writeLedger(actor, { trips: holidays }, 0);
+  const previous = structuredClone(state.data);
+  state.data.trips.forEach(holiday => { holiday.name += ' updated'; });
+  state = await store.writeLedger(actor, state.data, state.revision);
+  assert.equal(state.data.trips.length, 50);
+  for (const holiday of state.data.trips) {
+    const event = lastEntity(await history(actor, holiday.id), 'trip', holiday.id);
+    assert.equal(event.before?.name, previous.trips.find(value => value.id === holiday.id)?.name);
+    assert.equal(event.after?.name, holiday.name);
+    assert.equal(event.revision, state.revision);
+  }
+});
+
+test('participant reorder-only changes preserve every collection order in immutable history', async () => {
+  const database = await storage();
+  const holiday = trip();
+  holiday.expenses = [dinner(), { ...dinner(), id: 'second-expense' }];
+  holiday.payments = ['first-payment', 'second-payment'].map(id => ({ id, from: 'b', to: 'a', amount: 1000, date: '2026-10-04' }));
+  holiday.drafts = ['first-draft', 'second-draft'].map(id => ({ ...dinner(), id, status: 'review' }));
+  await create(database, holiday);
+  database.sqlite.prepare('INSERT INTO memberships (trip_id,user_id,member_id) VALUES (?,?,?)').run('trip-1', member, 'b');
+  let state = await store.readLedger(member);
+  const baseline = structuredClone(state.data.trips[0]);
+  const initialEvents = count(database);
+  for (const collection of ['members', 'expenses', 'payments', 'drafts'] as const) state.data.trips[0][collection].reverse();
+  state = await store.writeLedger(member, state.data, state.revision);
+  assert.equal(count(database), initialEvents + 1, 'unchanged records need only the collection-order event');
+  const event = lastEntity(await history(member), 'trip', 'trip-1');
+  assert.equal(event.actorId, member); assert.equal(event.actorName, 'Bob');
+  for (const [collection, field] of [['members', 'memberOrder'], ['expenses', 'expenseOrder'], ['payments', 'paymentOrder'], ['drafts', 'draftOrder']] as const) {
+    assert.deepEqual(event.before?.[field], baseline[collection].map(entry => entry.id));
+    assert.deepEqual(event.after?.[field], state.data.trips[0][collection].map(entry => entry.id));
+  }
+  await store.writeLedger(member, state.data, state.revision);
+  assert.equal(count(database), initialEvents + 1, 'an unchanged order resave is not another edit');
+});
+
+test('one participant’s financial metadata, units, receipt override, memory and chat edits retain exact snapshots', async () => {
+  const database = await storage();
+  const holiday = trip(); holiday.expenses = [dinner()];
+  holiday.payments = [{ id: 'payment', from: 'b', to: 'a', amount: 1000, date: '2026-10-04' }];
+  holiday.drafts = [{ ...dinner(), id: 'draft', status: 'waiting' }];
+  await create(database, holiday);
+  database.sqlite.prepare('INSERT INTO memberships (trip_id,user_id,member_id) VALUES (?,?,?)').run('trip-1', member, 'b');
+  let state = await store.readLedger(member);
+  const before = structuredClone(state.data.trips[0]);
+  const expense = state.data.trips[0].expenses[0];
+  Object.assign(expense, { title: 'Chocolate', currency: 'EUR', payer: 'b', date: '2026-10-03', time: '11:15', timezone: 'Europe/Paris',
+    bankAmount: 1100, fx: { rate: 0.85, asOf: '2026-10-02', source: 'manual' }, tax: 30, tip: 10, discount: 5, source: 'manual',
+    percentages: { a: 25, b: 75 }, items: [{ id: 'food', name: 'Chocolate', amount: 1001, members: ['a', 'b'], units: { total: 3, allocations: { a: 2.5, b: 0.5 }, label: 'bars' } }],
+    memory: { notes: 'Bars are the full line total.', aliases: [{ name: 'choc', itemId: 'food', scopeMemberId: 'b' }] },
+    conversation: [{ id: 'question', role: 'user', text: 'Was this my chocolate?', itemId: 'food', createdAt: '2026-10-04T20:31:00Z' }],
+  });
+  Object.assign(state.data.trips[0].payments[0], { from: 'a', to: 'b', amount: 750, date: '2026-10-03', time: '11:30', timezone: 'Europe/Paris', method: 'Bank transfer', note: 'Part of the receipt' });
+  Object.assign(state.data.trips[0].drafts[0], { ...expense, id: 'draft', expenseId: expense.id, status: 'review' });
+  Object.assign(state.data.trips[0], { name: 'Paris', startDate: '2026-10-01', endDate: '2026-10-08' });
+  state.data.trips[0].members[0].name = 'Alice';
+  state = await store.writeLedger(member, state.data, state.revision, { source: 'web' });
+  const events = (await history(member)).filter(event => event.revision === state.revision);
+  assert.deepEqual(events.map(event => event.entityType).sort(), ['draft', 'expense', 'member', 'payment', 'trip']);
+  for (const event of events) { assert.equal(event.actorId, member); assert.equal(event.actorName, 'Bob'); assert.equal(event.source, 'web'); }
+  for (const [kind, entries] of [['expense', 'expenses'], ['payment', 'payments'], ['draft', 'drafts']] as const) {
+    const event = events.find(event => event.entityType === kind)!;
+    assert.deepEqual(event.before, before[entries][0]);
+    assert.deepEqual(event.after, state.data.trips[0][entries][0]);
+  }
+  assert.equal(state.data.trips[0].expenses[0].conversation![0].authorMemberId, 'b');
+  assert.equal(state.data.trips[0].expenses[0].conversation![0].authorName, 'Bob');
+  assert.deepEqual(state.data.trips[0].expenses[0].items[0].units, { total: 3, allocations: { a: 2.5, b: 0.5 }, label: 'bars' });
 });
 
 test('identity linking or membership removal between validation and CAS produces no records or events', async () => {
@@ -354,10 +499,180 @@ test('history is immutable in SQLite and paginated without duplication as newer 
   const older = await store.readActivity(actor, 'trip-1', { limit: 2, before: first.nextCursor! });
   assert.equal(older.events.length, 1); assert.equal(older.nextCursor, null);
   assert.equal(new Set([...first.events, ...older.events].map(event => event.id)).size, 3);
-  assert.equal((await history()).length, 4);
+  assert.equal((await history()).length, 5);
   await assert.rejects(store.readActivity('outsider', 'trip-1'), (error: unknown) => error instanceof store.RequestError && error.status === 403);
   for (const options of [{ limit: 0 }, { limit: 51 }, { before: -1 }, { before: Number.MAX_SAFE_INTEGER + 1 }]) await assert.rejects(store.readActivity(actor, 'trip-1', options));
   assert.equal(state.revision, 2);
+});
+
+test('history selects bounded metadata before snapshots and pages all large Unicode records without gaps', async () => {
+  const database = await storage();
+  await create(database);
+  const snapshot = JSON.stringify({ title: '🥐'.repeat(180_000), details: '"\\\n'.repeat(1000) });
+  for (let index = 0; index < 3; index++) database.sqlite.prepare(`
+    INSERT INTO activity_events (id,trip_id,actor_id,actor_name,created_at,entity_type,entity_id,action,before_data,after_data,revision,source)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+  `).run(`large-${index}`, 'trip-1', actor, 'Original Owner', '2026-10-04T20:30:00Z', 'expense', 'dinner', 'update', snapshot, snapshot, index + 2, 'web');
+  const materializedCounts: number[] = [];
+  const originalPrepare = database.prepare.bind(database);
+  database.prepare = sql => {
+    const statement = originalPrepare(sql);
+    if (/SELECT e\.\*/.test(sql)) {
+      assert.match(sql, /e\.id IN \(SELECT value FROM json_each\(\?\)\)/, 'snapshot reads must be restricted to the budgeted immutable IDs');
+      const originalAll = statement.all.bind(statement);
+      statement.all = async <T>() => { const rows = await originalAll<T>(); materializedCounts.push(rows.results.length); return rows; };
+    }
+    return statement;
+  };
+  const first = await store.readActivity(actor, 'trip-1', { limit: 50 });
+  assert.deepEqual(first.events.map(event => event.id), ['large-2', 'large-1']);
+  assert.ok(first.nextCursor);
+  assert.ok(new TextEncoder().encode(JSON.stringify(first)).byteLength <= store.MAX_ACTIVITY_BYTES);
+  const second = await store.readActivity(actor, 'trip-1', { limit: 50, before: first.nextCursor! });
+  assert.equal(second.events[0].id, 'large-0');
+  assert.equal(second.nextCursor, null);
+  assert.equal(new Set([...first.events, ...second.events].map(event => event.id)).size, count(database));
+  assert.deepEqual(materializedCounts, [2, 4]);
+  assert.equal(first.events[0].before?.title, '🥐'.repeat(180_000), 'whole snapshots survive byte paging');
+});
+
+test('an oversized history entry is rejected before materializing any snapshot', async () => {
+  const database = await storage();
+  await create(database);
+  database.sqlite.prepare(`
+    INSERT INTO activity_events (id,trip_id,actor_id,actor_name,created_at,entity_type,entity_id,action,before_data,after_data,revision,source)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+  `).run('oversized', 'trip-1', actor, 'Original Owner', '2026-10-04T20:30:00Z', 'expense', 'dinner', 'update', null,
+    JSON.stringify({ title: 'x'.repeat(store.MAX_ACTIVITY_BYTES) }), 2, 'web');
+  const originalPrepare = database.prepare.bind(database);
+  database.prepare = sql => {
+    assert.doesNotMatch(sql, /SELECT e\.\*/, 'an entry that cannot fit must never be fetched');
+    return originalPrepare(sql);
+  };
+  await assert.rejects(store.readActivity(actor, 'trip-1'), (error: unknown) => error instanceof store.RequestError && error.status === 413);
+});
+
+test('legacy JSON numeric notation cannot expand an activity response above its byte limit', async () => {
+  const database = await storage();
+  await create(database);
+  // Earlier SQL-written snapshots can use a compact numeric notation that
+  // JSON.stringify expands. Apply the limit to the actual encoded response too.
+  const snapshot = `{"amounts":[${Array.from({ length: 200_000 }, () => '1e20').join(',')}]}`;
+  assert.ok(new TextEncoder().encode(snapshot).byteLength < store.MAX_ACTIVITY_BYTES);
+  database.sqlite.prepare(`
+    INSERT INTO activity_events (id,trip_id,actor_id,actor_name,created_at,entity_type,entity_id,action,before_data,after_data,revision,source)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+  `).run('legacy-numbers', 'trip-1', actor, 'Original Owner', '2026-10-04T20:30:00Z', 'expense', 'dinner', 'update', null, snapshot, 2, 'web');
+  await assert.rejects(store.readActivity(actor, 'trip-1'), (error: unknown) => error instanceof store.RequestError && error.status === 413);
+});
+
+test('membership loss after selecting history metadata exposes neither snapshots nor a cursor', async () => {
+  const database = await storage();
+  await create(database);
+  database.sqlite.prepare('INSERT INTO memberships (trip_id,user_id,member_id) VALUES (?,?,?)').run('trip-1', member, 'b');
+  const originalPrepare = database.prepare.bind(database);
+  database.prepare = sql => {
+    const statement = originalPrepare(sql);
+    if (/SELECT e\.id, e\.sequence/.test(sql)) {
+      const originalAll = statement.all.bind(statement);
+      statement.all = async <T>() => {
+        const rows = await originalAll<T>();
+        database.sqlite.prepare('DELETE FROM memberships WHERE trip_id=? AND user_id=?').run('trip-1', member);
+        return rows;
+      };
+    }
+    return statement;
+  };
+  await assert.rejects(store.readActivity(member, 'trip-1', { limit: 2 }), (error: unknown) => error instanceof store.RequestError && error.status === 403);
+});
+
+test('provider profile creation and its private audit commit atomically with no events on unchanged reads', async () => {
+  const database = await storage();
+  const providerRequest = new Request('https://triptab.test/api/profile', { headers: {
+    'oai-authenticated-user-id': 'new-provider', 'oai-authenticated-user-email': 'new@example.com', 'oai-authenticated-user-full-name': 'New%20Traveller',
+  } });
+  const profiles = await Promise.all([store.ensureProfile(providerRequest), store.ensureProfile(providerRequest)]);
+  assert.equal(profiles[0].displayName, 'New Traveller');
+  assert.equal(profiles[1].id, 'new-provider');
+  let events = database.sqlite.prepare('SELECT * FROM account_activity_events WHERE user_id=?').all('new-provider');
+  assert.equal(events.length, 1);
+  assert.equal(events[0].entity_type, 'profile'); assert.equal(events[0].action, 'create'); assert.equal(events[0].source, 'chatgpt');
+  assert.equal(events[0].before_data, null);
+  assert.deepEqual(JSON.parse(events[0].after_data as string), { displayName: 'New Traveller' });
+  assert.doesNotMatch(JSON.stringify(events), /new@example\.com|token|password|cookie/);
+  await store.ensureProfile(providerRequest);
+  events = database.sqlite.prepare('SELECT * FROM account_activity_events WHERE user_id=?').all('new-provider');
+  assert.equal(events.length, 1);
+  assert.equal(count(database), 0, 'private profile history is not trip history');
+});
+
+test('a private audit insert failure rolls back provider profile creation', async () => {
+  const database = await storage();
+  database.sqlite.exec("CREATE TRIGGER refuse_account_audit BEFORE INSERT ON account_activity_events BEGIN SELECT RAISE(ABORT, 'simulated private history failure'); END;");
+  const providerRequest = new Request('https://triptab.test/api/profile', { headers: {
+    'oai-authenticated-user-id': 'new-provider', 'oai-authenticated-user-email': 'new@example.com', 'oai-authenticated-user-full-name': 'New%20Traveller',
+  } });
+  await assert.rejects(store.ensureProfile(providerRequest), /simulated private history failure/);
+  assert.equal(database.sqlite.prepare('SELECT id FROM profiles WHERE id=?').get('new-provider'), undefined);
+  assert.equal(database.sqlite.prepare('SELECT COUNT(*) AS count FROM account_activity_events').get()?.count, 0);
+  database.sqlite.exec('DROP TRIGGER refuse_account_audit');
+  await store.ensureProfile(providerRequest);
+  assert.equal(database.sqlite.prepare('SELECT COUNT(*) AS count FROM account_activity_events').get()?.count, 1);
+});
+
+test('a provider link winning before profile creation leaves no orphan profile or private event', async () => {
+  const database = await storage();
+  const providerRequest = new Request('https://triptab.test/api/profile', { headers: {
+    'oai-authenticated-user-id': 'new-provider', 'oai-authenticated-user-email': 'new@example.com',
+  } });
+  database.beforeBatch = statements => {
+    if (!statements.some(statement => /^INSERT INTO profiles/.test(statement.sql.trim()))) return;
+    database.beforeBatch = undefined;
+    database.sqlite.prepare('INSERT INTO auth_links (oai_user_id,user_id,created_at) VALUES (?,?,?)')
+      .run('new-provider', actor, '2026-10-04T00:00:00Z');
+  };
+  await assert.rejects(store.ensureProfile(providerRequest), /UNAUTHORIZED/);
+  assert.equal(database.sqlite.prepare('SELECT id FROM profiles WHERE id=?').get('new-provider'), undefined);
+  assert.equal(database.sqlite.prepare('SELECT COUNT(*) AS count FROM account_activity_events').get()?.count, 0);
+  const canonical = await store.ensureProfile(providerRequest);
+  assert.equal(canonical.id, actor); assert.equal(canonical.displayName, 'Original Owner');
+  assert.equal(database.sqlite.prepare('SELECT COUNT(*) AS count FROM account_activity_events').get()?.count, 0);
+});
+
+test('profile reads reject a raced provider link even when the previous provider profile already exists', async () => {
+  const database = await storage();
+  database.sqlite.prepare('INSERT INTO profiles (id,email,display_name,created_at) VALUES (?,?,?,?)')
+    .run('old-provider', 'old@example.com', 'Old Traveller', '2026-10-04T00:00:00Z');
+  const providerRequest = new Request('https://triptab.test/api/profile', { headers: {
+    'oai-authenticated-user-id': 'old-provider', 'oai-authenticated-user-email': 'old@example.com',
+  } });
+  database.beforeBatch = statements => {
+    if (!statements.some(statement => /^INSERT INTO profiles/.test(statement.sql.trim()))) return;
+    database.beforeBatch = undefined;
+    database.sqlite.prepare('INSERT INTO auth_links (oai_user_id,user_id,created_at) VALUES (?,?,?)')
+      .run('old-provider', actor, '2026-10-04T00:00:00Z');
+  };
+  await assert.rejects(store.ensureProfile(providerRequest), /UNAUTHORIZED/);
+  assert.equal(database.sqlite.prepare('SELECT display_name FROM profiles WHERE id=?').get('old-provider')?.display_name, 'Old Traveller');
+  assert.equal(database.sqlite.prepare('SELECT COUNT(*) AS count FROM account_activity_events').get()?.count, 0);
+  assert.equal((await store.ensureProfile(providerRequest)).id, actor);
+});
+
+test('profile reads recheck the original provider when its existing canonical link changes', async () => {
+  const database = await storage();
+  database.sqlite.prepare('INSERT INTO auth_links (oai_user_id,user_id,created_at) VALUES (?,?,?)')
+    .run('linked-provider', actor, '2026-10-04T00:00:00Z');
+  const providerRequest = new Request('https://triptab.test/api/profile', { headers: {
+    'oai-authenticated-user-id': 'linked-provider', 'oai-authenticated-user-email': 'provider@example.com',
+  } });
+  database.beforeBatch = statements => {
+    if (!statements.some(statement => /^INSERT INTO profiles/.test(statement.sql.trim()))) return;
+    database.beforeBatch = undefined;
+    database.sqlite.prepare('UPDATE auth_links SET user_id=? WHERE oai_user_id=?').run(member, 'linked-provider');
+  };
+  await assert.rejects(store.ensureProfile(providerRequest), /UNAUTHORIZED/);
+  assert.equal(database.sqlite.prepare('SELECT COUNT(*) AS count FROM account_activity_events').get()?.count, 0);
+  assert.equal((await store.ensureProfile(providerRequest)).id, member);
 });
 
 test('activity endpoint requires auth/membership and validates bounded, unambiguous pagination', async context => {
@@ -483,7 +798,7 @@ test('unchanged historical invalid bank charges/names do not block unrelated tri
   state.data.trips.find(holiday => holiday.id === 'clean-trip')!.expenses.push(dinner());
   state = await store.writeLedger(actor, state.data, state.revision);
   assert.deepEqual(state.data.trips.find(holiday => holiday.id === legacy.id), legacy);
-  assert.equal(count(database), 4);
+  assert.equal(count(database), 5);
   assert.equal((await history(actor, legacy.id)).length, 0);
 });
 

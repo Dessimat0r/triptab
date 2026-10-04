@@ -8,7 +8,7 @@ A mobile-friendly holiday expense splitter with itemised receipts, shared trips 
 
 - Email/password accounts, editable profiles, holiday dates and traveller names. Owners can list, revoke or replace pending invitation links; joining previews the shared history before confirmation. ChatGPT/Codex is an optional connection for AI assistance.
 - Expenses, partial and editable payments with review before confirmation, balances, traveller statements and suggested settlements, with exact rounding of each participant's share.
-- Immutable activity history records who changed a financial entry and its previous details. Deleted expenses and payments can be reviewed and confirmed as new entries. Shared-trip members can edit shared entries; history makes these changes visible, but there are no approval roles or soft-delete tombstones.
+- Append-only holiday activity records who changed settings, travellers, receipts, items, payments, conversations, invitations and image metadata, with complete before/after details and recording times. Private account history covers profile, sign-in, connection and notification changes. Deleted expenses and payments can be reviewed and confirmed as new entries. Shared-trip members can edit shared entries; there are no approval roles.
 - Camera/gallery receipt uploads are capped at 4 million pixels and 8,192 pixels per dimension, preserving detail in long receipts. Photos are orientation-normalised and re-encoded as JPEG within the 5 MiB upload limit, without camera EXIF metadata. The prepared image is stored alongside an editable itemised receipt.
 - Split each item equally, assign it to one person, specify percentages or allocate fractional quantities such as 2.5 of 3 blocks. The item amount is its full line price; quantities divide that cost. A whole-receipt percentage split can override item shares, including tax, tip and discount.
 - Receipt storage is limited to 500 images per account and 200 per holiday. Removing an image's last saved reference schedules deletion; referenced images cannot be directly deleted. Restoring an expense does not recover a purged image.
@@ -30,7 +30,7 @@ npm run install:ci
 npm run build
 ```
 
-The initial build generates `dist/server/wrangler.json`. Before the first local run, apply the five migrations in order:
+The initial build generates `dist/server/wrangler.json`. Before the first local run, apply the six migrations in order:
 
 ```sh
 node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file drizzle/0000_charming_zeigeist.sql
@@ -38,6 +38,7 @@ node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1
 node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file drizzle/0002_windy_cammi.sql
 node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file drizzle/0003_rainy_blazing_skull.sql
 node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file drizzle/0004_hot_old_lace.sql
+node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file drizzle/0005_audit_coverage.sql
 npm run dev
 ```
 
@@ -87,5 +88,7 @@ GitHub hosts this source mirror. Pushing here does **not** automatically deploy 
 For Sites changes, use the Sites build/publish workflow, including its production migrations and environment configuration. `.openai/hosting.json` identifies the existing Site and declares the `DB`, `RECEIPTS` and MCP capabilities. It contains no account credentials. Running `npm run build` or `npm start` alone does not publish anything.
 
 See [the operations runbook](docs/operations.md) for release records, migration precautions, D1/R2 backup and recovery steps, and the checks still needed before broader production use. A documented procedure is not an exercised restore or an automated backup service.
+
+See [audit coverage](docs/audit-coverage.md) for the shared/private write-path matrix, image-storage boundaries, exports and legacy-history limits. Earlier unlogged changes are not reconstructed.
 
 The audit reports under `docs/audit/` remain historical evidence. [Implementation status](docs/audit/IMPLEMENTATION.md) maps their findings to these changes and the work still outstanding.

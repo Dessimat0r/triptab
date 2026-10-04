@@ -4,6 +4,7 @@ import { X, UserRound, LogOut, Sparkles } from "lucide-react";
 import ModalA11y from "./modal-accessibility";
 import PwaControls, { clearBrowserNotifications } from "./pwa-controls";
 import DataExport from "./data-export";
+import AccountActivityPanel from "./account-activity-panel";
 import type { Trip } from "@/lib/model";
 export type Profile = {
   id: string;
@@ -49,6 +50,8 @@ export default function AccountPanel({
   trips?: Pick<Trip, "id" | "name">[];
 }) {
   const id = useId();
+  const [activityRefresh, setActivityRefresh] = useState(0);
+  const refreshActivity = () => setActivityRefresh(value => value + 1);
   const [name, setName] = useState(profile?.displayName || ""),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
@@ -108,6 +111,7 @@ export default function AccountPanel({
                     error?: string;
                   };
                   if (!r.ok) throw Error(b.error || "Unable to save profile");
+                  refreshActivity();
                   onSaved({ ...profile, ...(b.profile || b) });
                 } catch (e) {
                   setError(e instanceof Error ? e.message : "Unable to save");
@@ -172,6 +176,7 @@ export default function AccountPanel({
                       throw Error(body.error || "Unable to save your password.");
                     setPassword("");
                     setCurrentPassword("");
+                    refreshActivity();
                     onSaved(updatedProfile);
                   } catch (cause) {
                     setPasswordError(
@@ -264,6 +269,7 @@ export default function AccountPanel({
                         const updatedProfile = profileFromAuth(body);
                         if (!response.ok || !updatedProfile)
                           throw Error(body.error || "Unable to unlink ChatGPT.");
+                        refreshActivity();
                         onSaved(updatedProfile);
                       } catch (cause) {
                         setAccountError(
@@ -310,7 +316,8 @@ export default function AccountPanel({
           </p>
         )}
         {profile && <DataExport trips={trips} />}
-        <PwaControls accountId={profile?.id} />
+        {profile && <AccountActivityPanel key={profile.id} refreshKey={activityRefresh} />}
+        <PwaControls accountId={profile?.id} onChanged={refreshActivity} />
         {profile && (
           <div className="account-signout">
             <button

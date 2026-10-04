@@ -60,6 +60,7 @@ const compiled = transpileModule(source, { compilerOptions: { module: ModuleKind
   .replace("'./model'", JSON.stringify(new URL('../lib/model.ts', import.meta.url).href))
   .replace("'./auth'", JSON.stringify(new URL('../lib/auth.ts', import.meta.url).href))
   .replace("'./receipt-lifecycle'", JSON.stringify(new URL('../lib/receipt-lifecycle.ts', import.meta.url).href))
+  .replaceAll("'./audit'", JSON.stringify(new URL('../lib/audit.ts', import.meta.url).href))
   .replace("'./notifications'", JSON.stringify(notificationUrl));
 const storeUrl = 'data:text/javascript;base64,' + Buffer.from(compiled).toString('base64');
 const store = await import(storeUrl) as typeof import('../lib/store');
@@ -81,7 +82,7 @@ function post(body: Record<string, unknown>, user: keyof typeof users | null = '
   return route.POST(new Request('https://triptab.test/api/invite', { method: 'POST', headers: { ...(user ? provider(user) : {}), origin: 'https://triptab.test', 'content-type': 'application/json', ...extra }, body: JSON.stringify(body) }));
 }
 async function json<T = Record<string, unknown>>(response: Response) { return await response.json() as T; }
-type Created = { url: string; expiresAt: string; invitationId: string };
+type Created = { url: string; expiresAt: string; invitationId: string; revision: number };
 type Preview = { tripId: string; memberName: string; historySnapshot: string; history: { available: boolean; currency: string; costShare?: number; paidUpfront?: number; paymentsSent?: number; paymentsReceived?: number; netBalance?: number; expenseCount: number; paymentCount: number } };
 function token(invitation: Created) { return new URL(invitation.url).searchParams.get('invite')!; }
 function holiday(id = 'trip-1'): Trip {
@@ -117,6 +118,15 @@ function accept(invitation: Created, info: Preview, user: keyof typeof users = '
   return post({ mode: 'accept', token: token(invitation), acceptHistory: true, historySnapshot: info.historySnapshot }, user);
 }
 function activityCount(database: SQLiteD1) { return database.sqlite.prepare('SELECT COUNT(*) AS n FROM activity_events').get()?.n as number; }
+function revision(database: SQLiteD1) { return database.sqlite.prepare('SELECT revision FROM sync_state WHERE id=1').get()?.revision as number; }
+function inviteEvents(database: SQLiteD1) {
+  return database.sqlite.prepare("SELECT * FROM activity_events WHERE entity_type='invite' ORDER BY sequence").all().map(row => ({
+    id: String(row.entity_id), actorId: String(row.actor_id), actorName: String(row.actor_name),
+    source: String(row.source), action: String(row.action), revision: Number(row.revision),
+    before: row.before_data ? JSON.parse(String(row.before_data)) : null,
+    after: row.after_data ? JSON.parse(String(row.after_data)) : null,
+  }));
+}
 
 test('only the owner can list/revoke invitations; responses omit tokens and stored hashes', async () => {
   const database = await storage(); const invitation = await create();
@@ -150,6 +160,166 @@ test('regenerating a traveller invitation atomically invalidates every earlier u
   assert.deepEqual(list.invitations.map(value => value.id).sort(), [carol.invitationId, fresh.invitationId].sort());
 });
 
+test('invitation create, replacement, revoke and accept use stable safe identities and trusted lifecycle snapshots', async () => {
+  const database = await storage();
+  const baseline = revision(database);
+  const first = await create('b', 'bob@example.com');
+  const firstStored = database.sqlite.prepare("SELECT token_hash, audit_id FROM invites WHERE member_id='b'").get()!;
+  assert.match(String(firstStored.audit_id), /^[a-f0-9-]{36}$/);
+  const firstEvent = inviteEvents(database)[0];
+  assert.equal(firstEvent.id, firstStored.audit_id);
+  assert.notEqual(firstEvent.id, token(first));
+  assert.notEqual(firstEvent.id, firstStored.token_hash);
+  assert.equal(first.revision, baseline + 1);
+  assert.deepEqual(firstEvent.after, { id: firstStored.audit_id, memberId: 'b', memberName: 'Traveller Bob', expiresAt: first.expiresAt, emailRestricted: true, status: 'pending' });
+  assert.equal(firstEvent.before, null);
+  const second = await create('b');
+  const secondStored = database.sqlite.prepare("SELECT audit_id FROM invites WHERE member_id='b'").get()!;
+  let events = inviteEvents(database);
+  assert.equal(events.length, 3);
+  assert.equal(events[1].id, firstEvent.id);
+  assert.deepEqual(events[1].before, firstEvent.after);
+  assert.deepEqual(events[1].after, { ...firstEvent.after, status: 'revoked', reason: 'replaced' });
+  assert.equal(events[2].id, secondStored.audit_id);
+  assert.equal(events[2].after.emailRestricted, false);
+  assert.equal(events[1].revision, second.revision);
+  assert.equal(events[2].revision, second.revision);
+  const revoked = await post({ mode: 'revoke', tripId: 'trip-1', invitationId: second.invitationId, actorId: users.outsider, source: 'chatgpt' });
+  assert.equal(revoked.status, 200);
+  events = inviteEvents(database);
+  assert.equal(events.length, 4);
+  assert.deepEqual(events[3].after, { ...events[2].after, status: 'revoked', reason: 'owner' });
+  assert.equal((await json<{ revision: number }>(revoked)).revision, baseline + 3);
+  const third = await create('b', 'bob@example.com');
+  const accepted = await accept(third, await preview(third));
+  assert.equal(accepted.status, 200);
+  events = inviteEvents(database);
+  assert.equal(events.length, 6);
+  assert.equal(events[5].id, events[4].id);
+  assert.deepEqual(events[5].before, events[4].after);
+  assert.deepEqual(events[5].after, { ...events[4].after, status: 'accepted' });
+  assert.equal(events[5].actorId, users.bob);
+  assert.equal(events[5].actorName, 'bob profile name');
+  assert.equal(events[5].revision, baseline + 5);
+  for (const event of events.slice(0, 5)) {
+    assert.equal(event.actorId, users.owner);
+    assert.equal(event.actorName, 'owner profile name');
+  }
+  assert.ok(events.every(event => event.source === 'web'));
+  const serialized = JSON.stringify(events);
+  for (const value of [token(first), token(second), token(third), String(firstStored.token_hash), 'bob@example.com', first.url, second.url, third.url]) assert.equal(serialized.includes(value), false);
+  await assert.rejects(store.readActivity(users.outsider, 'trip-1'), /access/);
+  const bobHistory = await store.readActivity(users.bob, 'trip-1', { limit: 50 });
+  assert.equal(bobHistory.events.filter(event => event.entityType === 'invite').length, 6);
+});
+
+test('empty legacy audit IDs use a stable non-redeemable fallback when accepted', async () => {
+  const database = await storage(); const invitation = await create();
+  database.sqlite.exec("UPDATE invites SET audit_id='' WHERE member_id='b'");
+  const count = activityCount(database);
+  assert.equal((await accept(invitation, await preview(invitation))).status, 200);
+  const event = inviteEvents(database).at(-1)!;
+  assert.equal(event.id, invitation.invitationId);
+  assert.notEqual(event.id, token(invitation));
+  assert.equal((await get('token=' + event.id)).status, 404);
+  assert.equal((await post({ mode: 'accept', token: token(invitation) }, 'bob')).status, 200);
+  assert.equal(activityCount(database), count + 2);
+});
+
+test('replacement audits every earlier unused link including expired rollout rows and preserves other travellers', async () => {
+  const database = await storage();
+  await create('b'); const carol = await create('c');
+  database.sqlite.prepare(`INSERT INTO invites (token_hash,audit_id,trip_id,member_id,email,expires_at,used_by,created_by)
+    VALUES (?,?,?,?,?,?,NULL,?)`).run('7'.repeat(64), 'legacy-expired-audit-id', 'trip-1', 'b', 'private-pending@example.com', '2000-01-01T00:00:00Z', users.owner);
+  const before = activityCount(database);
+  const fresh = await create('b');
+  assert.equal(activityCount(database), before + 3);
+  const events = inviteEvents(database).filter(event => event.revision === fresh.revision);
+  assert.equal(events.length, 3);
+  assert.equal(events.filter(event => event.after?.reason === 'replaced').length, 2);
+  const expired = events.find(event => event.id === 'legacy-expired-audit-id')!;
+  assert.equal(expired.before.status, 'expired');
+  assert.equal(expired.after.status, 'revoked');
+  assert.equal(expired.after.emailRestricted, true);
+  assert.equal(JSON.stringify(events).includes('private-pending@example.com'), false);
+  assert.equal(JSON.stringify(events).includes('7'.repeat(64)), false);
+  assert.equal((await get('token=' + token(carol))).status, 200);
+  assert.equal(database.sqlite.prepare("SELECT COUNT(*) AS n FROM invites WHERE member_id='b'").get()?.n, 1);
+});
+
+test('activity insert failures roll back create, replacement, revoke and acceptance completely', async context => {
+  for (const operation of ['create', 'replace', 'revoke', 'accept'] as const) await context.test(operation, async () => {
+    const database = await storage(true);
+    const invitation = operation === 'create' ? undefined : await create('b', 'bob@example.com');
+    const info = operation === 'accept' ? await preview(invitation!) : undefined;
+    const invitationsBefore = database.sqlite.prepare('SELECT * FROM invites ORDER BY token_hash').all();
+    const tripsBefore = database.sqlite.prepare('SELECT * FROM trips ORDER BY id').all();
+    const membersBefore = database.sqlite.prepare('SELECT * FROM memberships ORDER BY trip_id,user_id').all();
+    const revisionBefore = revision(database);
+    const eventsBefore = activityCount(database);
+    database.sqlite.exec("CREATE TRIGGER fail_invite_audit BEFORE INSERT ON activity_events WHEN NEW.entity_type='invite' BEGIN SELECT RAISE(ABORT,'simulated invitation audit failure'); END;");
+    const response = operation === 'revoke'
+      ? await post({ mode: 'revoke', tripId: 'trip-1', invitationId: invitation!.invitationId })
+      : operation === 'accept' ? await accept(invitation!, info!) : await post({ mode: 'create', tripId: 'trip-1', memberId: 'b' });
+    assert.ok(response.status >= 400, 'Audit storage failures must not report a successful mutation');
+    assert.doesNotMatch(JSON.stringify(await response.json()), /simulated invitation audit failure|token_hash|bob@example.com/);
+    assert.deepEqual(database.sqlite.prepare('SELECT * FROM invites ORDER BY token_hash').all(), invitationsBefore);
+    assert.deepEqual(database.sqlite.prepare('SELECT * FROM trips ORDER BY id').all(), tripsBefore);
+    assert.deepEqual(database.sqlite.prepare('SELECT * FROM memberships ORDER BY trip_id,user_id').all(), membersBefore);
+    assert.equal(revision(database), revisionBefore);
+    assert.equal(activityCount(database), eventsBefore);
+    assert.equal(notifications.length, 0);
+  });
+});
+
+test('unauthorized, invalid and duplicate revoke requests cannot fabricate lifecycle events or revisions', async () => {
+  const database = await storage(); const invitation = await create();
+  const before = activityCount(database); const version = revision(database);
+  for (const [user, body] of [
+    ['bob', { mode: 'create', tripId: 'trip-1', memberId: 'c' }],
+    ['outsider', { mode: 'revoke', tripId: 'trip-1', invitationId: invitation.invitationId }],
+    ['owner', { mode: 'revoke', tripId: 'trip-1', invitationId: 'invite_' + '0'.repeat(64) }],
+    ['owner', { mode: 'create', tripId: 'trip-1', memberId: 'a' }],
+  ] as const) assert.ok((await post(body, user)).status >= 400);
+  assert.equal(activityCount(database), before);
+  assert.equal(revision(database), version);
+  const replies = await Promise.all([
+    post({ mode: 'revoke', tripId: 'trip-1', invitationId: invitation.invitationId }),
+    post({ mode: 'revoke', tripId: 'trip-1', invitationId: invitation.invitationId }),
+  ]);
+  assert.deepEqual(replies.map(response => response.status).sort(), [200, 409]);
+  assert.equal(activityCount(database), before + 1);
+  assert.equal(revision(database), version + 1);
+});
+
+test('competing regeneration records only the committed winner and exactly its prior-link revocation', async () => {
+  const database = await storage(); const invitation = await create();
+  const previous = inviteEvents(database).at(-1)!;
+  const before = activityCount(database); const version = revision(database);
+  const responses = await Promise.all([
+    post({ mode: 'create', tripId: 'trip-1', memberId: 'b' }),
+    post({ mode: 'create', tripId: 'trip-1', memberId: 'b' }),
+  ]);
+  assert.deepEqual(responses.map(response => response.status).sort(), [200, 409]);
+  assert.equal(activityCount(database), before + 2);
+  assert.equal(revision(database), version + 1);
+  assert.equal(inviteEvents(database).at(-2)!.id, previous.id);
+  assert.equal(inviteEvents(database).at(-2)!.after.reason, 'replaced');
+  assert.equal((await get('token=' + token(invitation))).status, 404);
+  assert.equal(database.sqlite.prepare('SELECT COUNT(*) AS n FROM invites').get()?.n, 1);
+});
+
+test('regeneration snapshot guard rejects an unversioned link replacement without logging stale revocations', async () => {
+  const database = await storage(); await create();
+  const before = activityCount(database); const version = revision(database);
+  database.beforeInviteBatch = () => database.sqlite.exec("UPDATE invites SET audit_id='concurrently-changed-audit-id'");
+  const response = await post({ mode: 'create', tripId: 'trip-1', memberId: 'b' });
+  assert.equal(response.status, 409);
+  assert.equal(activityCount(database), before);
+  assert.equal(revision(database), version);
+  assert.equal(database.sqlite.prepare('SELECT COUNT(*) AS n FROM invites').get()?.n, 1);
+});
+
 test('join preview contains exact inherited expense/payment totals and no unrelated trip or record details', async () => {
   const database = await storage(true);
   const state = await store.readLedger(users.owner); const other = holiday('private-trip');
@@ -179,7 +349,7 @@ test('a stale financial preview cannot be accepted; refreshed confirmation prese
   assert.deepEqual(after.expenses, financialBefore.expenses); assert.deepEqual(after.payments, financialBefore.payments);
   assert.equal(after.members.find(member => member.id === 'b')?.name, 'Traveller Bob');
   assert.equal(database.sqlite.prepare('SELECT display_name FROM profiles WHERE id=?').get(users.bob)?.display_name, 'bob profile name');
-  assert.equal(activityCount(database), before + 1);
+  assert.equal(activityCount(database), before + 2);
 });
 
 test('consent for one traveller cannot claim another invitation in the same unchanged holiday', async () => {
@@ -207,7 +377,7 @@ test('consent for one traveller cannot claim another invitation in the same unch
   const financialBefore = JSON.parse(String(originalTrip)) as Trip;
   assert.deepEqual(joined.expenses, financialBefore.expenses);
   assert.deepEqual(joined.payments, financialBefore.payments);
-  assert.equal(activityCount(database), before + 1);
+  assert.equal(activityCount(database), before + 2);
 });
 
 test('simultaneous repeated join is idempotent and emits one membership/activity/notification', async () => {
@@ -215,7 +385,7 @@ test('simultaneous repeated join is idempotent and emits one membership/activity
   const replies = await Promise.all([accept(invitation, info), accept(invitation, info)]);
   assert.deepEqual(replies.map(response => response.status), [200, 200]);
   assert.equal(database.sqlite.prepare("SELECT COUNT(*) AS n FROM memberships WHERE member_id='b'").get()?.n, 1);
-  assert.equal(activityCount(database), before + 1); assert.equal(notifications.length, 1);
+  assert.equal(activityCount(database), before + 2); assert.equal(notifications.length, 1);
   const event = database.sqlite.prepare("SELECT actor_id, before_data, after_data FROM activity_events WHERE entity_type='member' AND entity_id='b' AND action='update'").get();
   assert.equal(event?.actor_id, users.bob); assert.equal(JSON.parse(String(event?.before_data)).userId, undefined); assert.equal(JSON.parse(String(event?.after_data)).userId, users.bob);
   assert.equal((await post({ mode: 'accept', token: token(invitation) }, 'bob')).status, 200, 'self replay remains idempotent without a fresh confirmation');
@@ -227,7 +397,7 @@ test('two different accounts cannot claim the same traveller even with the same 
   const replies = await Promise.all([accept(invitation, info, 'bob'), accept(invitation, info, 'outsider')]);
   assert.deepEqual(replies.map(response => response.status).sort(), [200, 409]);
   assert.equal(database.sqlite.prepare("SELECT COUNT(*) AS n FROM memberships WHERE member_id='b'").get()?.n, 1);
-  assert.equal(activityCount(database), before + 1);
+  assert.equal(activityCount(database), before + 2);
 });
 
 test('trip changes after preview validation still fail the in-batch CAS/snapshot check', async () => {
@@ -241,6 +411,31 @@ test('trip changes after preview validation still fail the in-batch CAS/snapshot
   assert.equal((await accept(invitation, info)).status, 409);
   assert.equal(database.sqlite.prepare("SELECT COUNT(*) AS n FROM memberships WHERE member_id='b'").get()?.n, 0); assert.equal(activityCount(database), before);
   assert.equal(database.sqlite.prepare('SELECT used_by FROM invites').get()?.used_by, null);
+});
+
+test('acceptance pins every captured invitation reference even when independent row changes omit revision updates', async context => {
+  for (const [field, value] of [
+    ['member_id', 'c'], ['trip_id', 'other-trip'], ['created_by', users.outsider], ['email', 'bob@example.com'],
+  ] as const) await context.test(field, async () => {
+    const database = await storage(true);
+    const existing = await store.readLedger(users.owner);
+    await store.writeLedger(users.owner, { trips: [...existing.data.trips, holiday('other-trip')] }, existing.revision);
+    const invitation = await create('b'); const info = await preview(invitation);
+    const tripBefore = database.sqlite.prepare('SELECT id,data FROM trips ORDER BY id').all();
+    const membersBefore = database.sqlite.prepare('SELECT * FROM memberships ORDER BY trip_id,user_id').all();
+    const countBefore = activityCount(database); const revisionBefore = revision(database);
+    database.beforeWriteBatch = () => {
+      database.sqlite.prepare(`UPDATE invites SET ${field}=? WHERE member_id='b'`).run(value);
+    };
+    const response = await accept(invitation, info);
+    assert.ok(response.status >= 400, `Changed ${field} must prevent acceptance`);
+    assert.deepEqual(database.sqlite.prepare('SELECT id,data FROM trips ORDER BY id').all(), tripBefore);
+    assert.deepEqual(database.sqlite.prepare('SELECT * FROM memberships ORDER BY trip_id,user_id').all(), membersBefore);
+    assert.equal(database.sqlite.prepare('SELECT used_by FROM invites').get()?.used_by, null);
+    assert.equal(revision(database), revisionBefore);
+    assert.equal(activityCount(database), countBefore);
+    assert.equal(notifications.length, 0);
+  });
 });
 
 test('revoking after an accept pre-read prevents the join and leaves no activity', async () => {

@@ -55,6 +55,7 @@ export const memberships = sqliteTable('memberships', {
 
 export const invites = sqliteTable('invites', {
   tokenHash: text('token_hash').primaryKey(),
+  auditId: text('audit_id').notNull().default(''),
   tripId: text('trip_id').notNull().references(() => trips.id, { onDelete: 'cascade' }),
   memberId: text('member_id').notNull(), email: text('email'), expiresAt: text('expires_at').notNull(), usedBy: text('used_by'), createdBy: text('created_by').notNull(),
 });
@@ -65,6 +66,9 @@ export const receipts = sqliteTable('receipts', {
   // Empty dates on historical uploads mean "unknown", not a fabricated age.
   createdAt: text('created_at').notNull().default(''),
   state: text('state', { enum: ['pending', 'active', 'deleting'] }).notNull().default('active'),
+  contentType: text('content_type').notNull().default(''),
+  sizeBytes: integer('size_bytes').notNull().default(0),
+  sha256: text('sha256').notNull().default(''),
 }, table => [
   index('receipts_trip_idx').on(table.tripId),
   index('receipts_owner_idx').on(table.owner),
@@ -82,15 +86,29 @@ export const activityEvents = sqliteTable('activity_events', {
   id: text('id').notNull(), tripId: text('trip_id').notNull(),
   actorId: text('actor_id').notNull(), actorName: text('actor_name').notNull(),
   createdAt: text('created_at').notNull(),
-  entityType: text('entity_type', { enum: ['trip', 'member', 'expense', 'payment', 'draft'] }).notNull(),
+  entityType: text('entity_type', { enum: ['trip', 'member', 'expense', 'payment', 'draft', 'invite', 'receipt'] }).notNull(),
   entityId: text('entity_id').notNull(),
   action: text('action', { enum: ['create', 'update', 'delete'] }).notNull(),
   before: text('before_data'), after: text('after_data'),
   revision: integer('revision').notNull(),
-  source: text('source', { enum: ['web', 'chatgpt'] }).notNull(),
+  source: text('source', { enum: ['web', 'chatgpt', 'system'] }).notNull(),
 }, table => [
   uniqueIndex('activity_events_id_idx').on(table.id),
   index('activity_events_trip_sequence_idx').on(table.tripId, table.sequence),
+]);
+
+// Account changes stay private; operational cleanup cannot erase their history.
+export const accountActivityEvents = sqliteTable('account_activity_events', {
+  sequence: integer('sequence').primaryKey({ autoIncrement: true }),
+  id: text('id').notNull(), userId: text('user_id').notNull(),
+  actorName: text('actor_name').notNull(), createdAt: text('created_at').notNull(),
+  entityType: text('entity_type', { enum: ['profile', 'password', 'session', 'chatgpt', 'notifications'] }).notNull(),
+  entityId: text('entity_id').notNull(), action: text('action', { enum: ['create', 'update', 'delete'] }).notNull(),
+  before: text('before_data'), after: text('after_data'),
+  source: text('source', { enum: ['web', 'chatgpt', 'system'] }).notNull(),
+}, table => [
+  uniqueIndex('account_activity_events_id_idx').on(table.id),
+  index('account_activity_events_user_sequence_idx').on(table.userId, table.sequence),
 ]);
 
 export const notifications = sqliteTable('notifications', {
@@ -99,4 +117,5 @@ export const notifications = sqliteTable('notifications', {
 
 export const pushSubscriptions = sqliteTable('push_subscriptions', {
   endpoint: text('endpoint').primaryKey(), userId: text('user_id').notNull(), createdAt: text('created_at').notNull(),
+  generation: text('generation').notNull().default(''),
 }, table => [index('push_subscriptions_user_idx').on(table.userId)]);

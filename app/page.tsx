@@ -11,6 +11,7 @@ import ReceiptCapture, { prepareReceiptImage } from "@/components/receipt-captur
 import ReceiptChat from "@/components/receipt-chat";
 import PaymentEditor from "@/components/payment-editor";
 import ActivityPanel from "@/components/activity-panel";
+import RestorationNotice, { type RestorationInfo } from "@/components/restoration-notice";
 import MemberStatement from "@/components/member-statement";
 import TripDetails from "@/components/trip-details";
 import DataExport from "@/components/data-export";
@@ -145,7 +146,8 @@ export default function Home() {
     [offline, setOffline] = useState(false),
     [lastRefreshed, setLastRefreshed] = useState<Date | null>(null),
     [editorConflict, setEditorConflict] = useState<{ latest: Expense | null } | null>(null),
-    [paymentEditor, setPaymentEditor] = useState<{ entry: Payment; original?: Payment; tripId: string; key: string } | null>(null),
+    [paymentEditor, setPaymentEditor] = useState<{ entry: Payment; original?: Payment; tripId: string; key: string; restoredFrom?: RestorationInfo } | null>(null),
+    [restoration, setRestoration] = useState<RestorationInfo | null>(null),
     [statement, setStatement] = useState(""),
     [referenceRate, setReferenceRate] = useState<{ rate: number; currency: Currency; date: string; time: string; timezone: string } | null>(null);
   const editorBaseline = useRef<{ tripId: string; expense?: Expense } | null>(null);
@@ -355,6 +357,7 @@ export default function Home() {
     return true;
   }
   function openExpense(expense: Expense) {
+    setRestoration(null);
     if (!trip) return;
     editorBaseline.current = { tripId: trip.id, expense: structuredClone(expense) };
     setEditorConflict(null); setReferenceRate(null); resetReceiptReview();
@@ -379,6 +382,7 @@ export default function Home() {
     setEditorConflict(null); setError("");
   }
   function newExpense() {
+    setRestoration(null);
     if (!trip) return;
     resetReceiptReview();
     setPaste("");
@@ -410,6 +414,7 @@ export default function Home() {
     });
   }
   function openDraft(d: Draft) {
+    setRestoration(null);
     resetReceiptReview();
     setPaste("");
     setFxError("");
@@ -850,22 +855,30 @@ export default function Home() {
     if (!current) return;
     if (event.entityType === "payment") {
       if (current.payments.some(value => value.id === event.entityId)) { setError("This payment is already recorded. Edit it from Balances if needed."); return; }
-      setPaymentEditor({ entry: structuredClone(event.before) as Payment, tripId: current.id, key: uid() });
+      setPaymentEditor({ entry: structuredClone(event.before) as Payment, tripId: current.id, key: uid(), restoredFrom: { actorName: event.actorName, createdAt: event.createdAt, adjustments: [] } });
       return;
     }
     if (event.entityType !== "expense") return;
     if (current.expenses.some(value => value.id === event.entityId)) { setError("This expense is already recorded. Edit its current version from Expenses."); return; }
     const expense = structuredClone(event.before) as Expense;
+    const adjustments: string[] = [];
     if (expense.receiptId) {
       try {
         const response = await fetch("/api/receipt?id=" + encodeURIComponent(expense.receiptId), { cache: "no-store" });
         await response.body?.cancel();
-        if (response.status === 404) delete expense.receiptId;
+        if (response.status === 404) {
+          delete expense.receiptId;
+          adjustments.push("The original receipt photo is no longer available. Upload it again if you want to attach it to this restored expense.");
+        }
         else if (!response.ok) throw Error("The receipt image could not be checked. Refresh and try restoring again.");
       } catch (cause) { setError(cause instanceof Error ? cause.message : "Unable to check the saved receipt."); return; }
     }
     editorBaseline.current = { tripId: current.id };
     setEditorConflict(null); setReferenceRate(null); resetReceiptReview(); setError("");
+    if (expense.percentages === undefined && expense.adjustmentAllocation === undefined && expense.items.every(item => item.amount === 0) && expense.tax + expense.tip > expense.discount && current.members.some(member => !expense.items.some(item => item.members.includes(member.id)))) {
+      adjustments.push("This earlier receipt shared tax and tip across all travellers. Restoring it uses the current rule: share these adjustments between the people selected on receipt items. Review those shares before saving.");
+    }
+    setRestoration({ actorName: event.actorName, createdAt: event.createdAt, adjustments });
     setEditing({ ...expense, adjustmentAllocation: "selected-participants", expenseId: undefined });
   }
   function previewTotal(e: Expense, t: Trip) {
@@ -1314,7 +1327,7 @@ export default function Home() {
                       )}
                     </>
                   )}
-                  {view === "history" && <ActivityPanel tripId={trip.id} refreshKey={revision} currency={trip.currency} memberNames={Object.fromEntries(trip.members.map(member => [member.id, member.name]))} busy={saving || loading} onRestore={event => void reviewRestore(event)} />}
+                  {view === "history" && <ActivityPanel tripId={trip.id} refreshKey={revision} currency={trip.currency} memberNames={Object.fromEntries(trip.members.map(member => [member.id, member.name]))} actorMemberNames={Object.fromEntries(trip.members.filter(member => member.userId).map(member => [member.userId!, member.name]))} busy={saving || loading} onRestore={event => void reviewRestore(event)} />}
                   {view === "receipts" && (
                     <>
                       <div className="sectionheading">
@@ -1470,7 +1483,7 @@ export default function Home() {
                           </button>
                         </form>
                       </div>
-                      <TripSharing key={`${trip.id}:${profile?.id || "anonymous"}`} trip={trip} profile={profile} />
+                      <TripSharing key={`${trip.id}:${profile?.id || "anonymous"}`} trip={trip} profile={profile} onChanged={load} />
                       <TripDetails key={trip.id} trip={trip} busy={saving || loading} error={error} onSave={updateTrip} />
                       <DataExport tripId={trip.id} compact />
                     </>
@@ -1565,7 +1578,7 @@ export default function Home() {
           </footer>
         </main>
       </div>
-      {paymentEditor && trip && <PaymentEditor key={paymentEditor.key} trip={trip} initial={paymentEditor.entry} busy={saving || loading} error={error} onClose={() => setPaymentEditor(null)} onSave={savePayment} />}
+      {paymentEditor && trip && <PaymentEditor key={paymentEditor.key} trip={trip} initial={paymentEditor.entry} restoredFrom={paymentEditor.restoredFrom} busy={saving || loading} error={error} onClose={() => setPaymentEditor(null)} onSave={savePayment} />}
       {statement && trip && <MemberStatement trip={trip} memberId={statement} onClose={() => setStatement("")} />}
       {create && (
         <ModalA11y className="overlay" onClose={() => setCreate(false)}>
@@ -1797,6 +1810,7 @@ export default function Home() {
                   onUseProcessed={reviewProcessedReceipt}
                 />
                 <div className="edit-fields">
+                  {restoration && <RestorationNotice info={restoration} />}
                   <label>
                     Expense name
                     <input

@@ -1,5 +1,6 @@
 import { db, failure, owner, RequestError, tripAccess } from '@/lib/store';
 import { expenseShares, expenseTotal, parseStoredTrip, total, type Trip } from '@/lib/model';
+import { readAccountActivity } from '@/lib/audit';
 
 export const dynamic = 'force-dynamic';
 
@@ -121,16 +122,25 @@ export async function GET(request: Request) {
     const tripId = params.get('tripId') || undefined;
     const cursor = params.get('before');
     const includeReceipts = params.get('receipts');
-    if (!['account', 'trip', 'activity'].includes(scope) || !['json', 'csv'].includes(format)) throw new RequestError('Choose an account, holiday or history export in JSON or CSV.');
+    if (!['account', 'trip', 'activity', 'account-activity'].includes(scope) || !['json', 'csv'].includes(format)) throw new RequestError('Choose an account, holiday or history export in JSON or CSV.');
     if (scope === 'account' && (tripId !== undefined || format !== 'json')) throw new RequestError('Account exports use JSON. Choose a holiday for CSV.');
-    if (scope !== 'account' && (!tripId || tripId.length > 100)) throw new RequestError('Choose a holiday to export.');
-    if (cursor !== null && (scope !== 'activity' || !/^[1-9]\d*$/.test(cursor) || !Number.isSafeInteger(Number(cursor)))) throw new RequestError('Choose a valid history cursor.');
+    if (scope === 'account-activity' && tripId !== undefined) throw new RequestError('Account history is private to your account.');
+    if (['trip', 'activity'].includes(scope) && (!tripId || tripId.length > 100)) throw new RequestError('Choose a holiday to export.');
+    if (cursor !== null && (!['activity', 'account-activity'].includes(scope) || !/^[1-9]\d*$/.test(cursor) || !Number.isSafeInteger(Number(cursor)))) throw new RequestError('Choose a valid history cursor.');
     if (includeReceipts !== null && (!['0', '1'].includes(includeReceipts) || scope !== 'trip' || format !== 'json')) throw new RequestError('Receipt metadata is an option for holiday JSON exports.');
     const exportedAt = new Date().toISOString();
     const ownProfile = { id: profile.id, email: profile.email, displayName: profile.display_name, createdAt: utc(profile.created_at) };
     let body: string;
     let nextCursor: number | null = null;
-    if (scope === 'activity') {
+    if (scope === 'account-activity') {
+      const page = await readAccountActivity(db(), actor, { before: cursor === null ? undefined : Number(cursor), limit: 50 });
+      page.events = page.events.map(event => ({ ...event, createdAt: utc(event.createdAt) }));
+      nextCursor = page.nextCursor;
+      body = format === 'json' ? JSON.stringify({ schemaVersion: 1, exportedAt, ...page }) : csv([
+        ['event_id', 'sequence', 'account_id', 'actor_name', 'created_at_utc', 'entity_type', 'entity_id', 'action', 'source', 'before_json', 'after_json'],
+        ...page.events.map(event => [event.id, event.sequence, event.userId, event.actorName, utc(event.createdAt), event.entityType, event.entityId, event.action, event.source, event.before ? JSON.stringify(event.before) : '', event.after ? JSON.stringify(event.after) : '']),
+      ]);
+    } else if (scope === 'activity') {
       const page = await activity(actor, tripId!, cursor === null ? undefined : Number(cursor));
       nextCursor = page.nextCursor;
       body = format === 'json' ? JSON.stringify({ schemaVersion: 1, exportedAt, tripId, ...page }) : csv([

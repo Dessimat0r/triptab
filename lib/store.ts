@@ -4,6 +4,8 @@ import { LedgerValidationError, parseLedgerStructure, parseStoredTrip, validateL
 import { activityNotification, notifyMembers } from './notifications';
 import { AuthError, resolveIdentity, readAuthState } from './auth';
 import { markRemovedReceipts, purgeDeletingReceipts, ReceiptLifecycleError } from './receipt-lifecycle';
+import { activityStatements, accountAuditStatement, type ActivityEntity, type ActivitySource, type ActivityChange, type ActivityEvent } from './audit';
+export { activityStatements, type ActivityEntity, type ActivitySource, type ActivityChange, type ActivityEvent } from './audit';
 
 export class RequestError extends Error {
   constructor(message: string, public readonly status = 400) {
@@ -71,17 +73,6 @@ export type Profile = { id: string; email: string; displayName: string; createdA
 type StoredTrip = { id: string; owner: string; data: string };
 type MembershipRow = { trip_id: string; user_id: string; member_id: string; email: string | null };
 
-export type ActivityEntity = 'trip' | 'member' | 'expense' | 'payment' | 'draft';
-export type ActivitySource = 'web' | 'chatgpt';
-export type ActivityChange = {
-  tripId: string; entityType: ActivityEntity; entityId: string;
-  action: 'create' | 'update' | 'delete';
-  before: Record<string, unknown> | null; after: Record<string, unknown> | null;
-};
-export type ActivityEvent = ActivityChange & {
-  id: string; sequence: number; actorId: string; actorName: string;
-  createdAt: string; revision: number; source: ActivitySource;
-};
 type ActivityRow = {
   sequence: number; id: string; trip_id: string; actor_id: string; actor_name: string;
   created_at: string; entity_type: ActivityEntity; entity_id: string;
@@ -101,8 +92,14 @@ function canonical(value: unknown): string {
 function tripMetadata(trip: Trip): Record<string, unknown> {
   const metadata: Record<string, unknown> = { ...trip };
   for (const key of ['members', 'expenses', 'payments', 'drafts']) delete metadata[key];
-  // Member order affects deterministic remainder pennies and is part of history.
-  return { ...metadata, memberOrder: trip.members.map(member => member.id) };
+  // Record every collection's placement, including order-only edits. Member
+  // order also affects deterministic remainder pennies.
+  return { ...metadata,
+    memberOrder: trip.members.map(member => member.id),
+    expenseOrder: trip.expenses.map(expense => expense.id),
+    paymentOrder: trip.payments.map(payment => payment.id),
+    draftOrder: trip.drafts.map(draft => draft.id),
+  };
 }
 
 function tripChanges(previous: Trip | undefined, next: Trip): ActivityChange[] {
@@ -129,43 +126,7 @@ function tripChanges(previous: Trip | undefined, next: Trip): ActivityChange[] {
   return changes;
 }
 
-/** Add these statements to the same CAS-guarded batch as the live mutation. */
-export function activityStatements(database: D1Database, changes: ActivityChange[], actor: { id: string; displayName: string }, marker: string, revision: number, source: ActivitySource = 'web'): D1PreparedStatement[] {
-  const now = new Date().toISOString();
-  const statements: D1PreparedStatement[] = [];
-  let chunk: (ActivityChange & { id: string })[] = [];
-  let size = 0;
-  const flush = () => {
-    if (!chunk.length) return;
-    statements.push(database.prepare(`
-      INSERT INTO activity_events (id, trip_id, actor_id, actor_name, created_at, entity_type, entity_id, action, before_data, after_data, revision, source)
-      SELECT json_extract(j.value, '$.id'), json_extract(j.value, '$.tripId'), ?, ?, ?,
-        json_extract(j.value, '$.entityType'), json_extract(j.value, '$.entityId'), json_extract(j.value, '$.action'),
-        json_extract(j.value, '$.before'), json_extract(j.value, '$.after'), ?, ?
-      FROM json_each(?) j WHERE EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND last_write = ?)
-    `).bind(actor.id, actor.displayName.slice(0, 80), now, revision, source, JSON.stringify(chunk), marker));
-    chunk = []; size = 0;
-  };
-  for (const change of changes) {
-    const event = { ...change, id: crypto.randomUUID() };
-    const bytes = new TextEncoder().encode(JSON.stringify(event)).byteLength;
-    // Bound each D1 parameter. A single very large edit uses separate before/
-    // after parameters; both individual snapshots fit the ledger size limit.
-    if (bytes > 1_000_000) {
-      flush();
-      statements.push(database.prepare(`
-        INSERT INTO activity_events (id, trip_id, actor_id, actor_name, created_at, entity_type, entity_id, action, before_data, after_data, revision, source)
-        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-        WHERE EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND last_write = ?)
-      `).bind(event.id, event.tripId, actor.id, actor.displayName.slice(0, 80), now, event.entityType, event.entityId, event.action, event.before ? JSON.stringify(event.before) : null, event.after ? JSON.stringify(event.after) : null, revision, source, marker));
-    } else {
-      if (size + bytes > 1_000_000) flush();
-      chunk.push(event); size += bytes + 1;
-    }
-  }
-  flush();
-  return statements;
-}
+export const MAX_ACTIVITY_BYTES = 4 * 1024 * 1024;
 
 export async function readActivity(user: string, tripId: string, options: { before?: number; limit?: number } = {}): Promise<{ events: ActivityEvent[]; nextCursor: number | null }> {
   if (!tripId || tripId.length > 100) throw new RequestError('Choose a valid trip.');
@@ -173,19 +134,49 @@ export async function readActivity(user: string, tripId: string, options: { befo
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 50) throw new RequestError('Choose an activity page size between 1 and 50.');
   if (options.before !== undefined && (!Number.isSafeInteger(options.before) || options.before < 1)) throw new RequestError('Choose a valid activity cursor.');
   if (!await tripAccess(user, tripId)) throw new RequestError('You do not have access to this trip.', 403);
-  // Recheck membership in the data query, so a removal between the two reads
-  // cannot expose history. The sequence cursor is stable when newer edits arrive.
-  const rows = await db().prepare(`
-    SELECT e.* FROM activity_events e JOIN trips t ON t.id = e.trip_id
+  // Select only identifiers and encoded lengths first. Particularly large
+  // immutable snapshots must not materialize as an unbounded activity page.
+  const candidates = await db().prepare(`
+    SELECT e.id, e.sequence,
+      length(CAST(json_object('id', e.id, 'sequence', e.sequence, 'tripId', e.trip_id,
+        'actorId', e.actor_id, 'actorName', e.actor_name, 'createdAt', e.created_at,
+        'entityType', e.entity_type, 'entityId', e.entity_id, 'action', e.action,
+        'before', NULL, 'after', NULL, 'revision', e.revision, 'source', e.source) AS BLOB))
+      + length(CAST(COALESCE(e.before_data, '') AS BLOB))
+      + length(CAST(COALESCE(e.after_data, '') AS BLOB)) AS bytes
+    FROM activity_events e JOIN trips t ON t.id = e.trip_id
     WHERE e.trip_id = ? AND e.sequence < ?
       AND (t.owner = ? OR EXISTS (SELECT 1 FROM memberships m WHERE m.trip_id = t.id AND m.user_id = ?))
     ORDER BY e.sequence DESC LIMIT ?
-  `).bind(tripId, options.before ?? Number.MAX_SAFE_INTEGER, user, user, limit + 1).all<ActivityRow>();
-  const page = rows.results.slice(0, limit);
-  return {
-    events: page.map(row => ({ id: row.id, sequence: row.sequence, tripId: row.trip_id, actorId: row.actor_id, actorName: row.actor_name, createdAt: row.created_at, entityType: row.entity_type, entityId: row.entity_id, action: row.action, before: row.before_data ? JSON.parse(row.before_data) : null, after: row.after_data ? JSON.parse(row.after_data) : null, revision: row.revision, source: row.source })),
-    nextCursor: rows.results.length > limit ? page[page.length - 1].sequence : null,
+  `).bind(tripId, options.before ?? Number.MAX_SAFE_INTEGER, user, user, limit + 1).all<{ id: string; sequence: number; bytes: number }>();
+  const selected: { id: string; sequence: number }[] = [];
+  let bytes = 128; // Envelope, commas and the bounded sequence cursor.
+  for (const candidate of candidates.results.slice(0, limit)) {
+    if (bytes + candidate.bytes + 1 > MAX_ACTIVITY_BYTES) break;
+    selected.push(candidate);
+    bytes += candidate.bytes + 1;
+  }
+  if (!selected.length) {
+    if (candidates.results.length) throw new RequestError('This history entry is too large to load as a page.', 413);
+    return { events: [], nextCursor: null };
+  }
+  // Recheck access while fetching only the chosen immutable IDs, so membership
+  // loss between metadata and snapshot reads cannot expose history or cursors.
+  const rows = await db().prepare(`
+    SELECT e.* FROM activity_events e JOIN trips t ON t.id = e.trip_id
+    WHERE e.trip_id = ? AND e.id IN (SELECT value FROM json_each(?))
+      AND (t.owner = ? OR EXISTS (SELECT 1 FROM memberships m WHERE m.trip_id = t.id AND m.user_id = ?))
+    ORDER BY e.sequence DESC
+  `).bind(tripId, JSON.stringify(selected.map(event => event.id)), user, user).all<ActivityRow>();
+  if (rows.results.length !== selected.length) throw new RequestError('Your access to this trip changed. Refresh before viewing its history.', 403);
+  const result = {
+    events: rows.results.map(row => ({ id: row.id, sequence: row.sequence, tripId: row.trip_id, actorId: row.actor_id, actorName: row.actor_name, createdAt: row.created_at, entityType: row.entity_type, entityId: row.entity_id, action: row.action, before: row.before_data ? JSON.parse(row.before_data) : null, after: row.after_data ? JSON.parse(row.after_data) : null, revision: row.revision, source: row.source })),
+    nextCursor: candidates.results.length > selected.length ? selected[selected.length - 1].sequence : null,
   };
+  if (new TextEncoder().encode(JSON.stringify(result)).byteLength > MAX_ACTIVITY_BYTES) {
+    throw new RequestError('This history entry is too large to load as a page.', 413);
+  }
+  return result;
 }
 
 export async function ensureProfile(request: Request, options: { allowSession?: boolean } = { allowSession: true }): Promise<Profile> {
@@ -195,10 +186,19 @@ export async function ensureProfile(request: Request, options: { allowSession?: 
   if (!email || email.length > 320 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('UNAUTHORIZED');
   const name = identity.displayName || email.split('@')[0];
   const createdAt = new Date().toISOString();
-  await db().prepare('INSERT INTO profiles (id, email, display_name, created_at) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO NOTHING').bind(id, email, name.slice(0, 80), createdAt).run();
+  const displayName = name.slice(0, 80);
+  const providerId = identity.kind === 'chatgpt' ? identity.chatgptId || id : null;
+  await db().batch([
+    db().prepare(`INSERT INTO profiles (id, email, display_name, created_at)
+      SELECT ?, ?, ?, ? WHERE ? IS NULL OR NOT EXISTS (SELECT 1 FROM auth_links WHERE oai_user_id = ? AND user_id <> ?)
+      ON CONFLICT(id) DO NOTHING`).bind(id, email, displayName, createdAt, providerId, providerId, id),
+    accountAuditStatement(db(), { userId: id, actorName: displayName, entityType: 'profile', entityId: id,
+      action: 'create', before: null, after: { displayName }, source: 'chatgpt' }, { sql: 'changes() > 0', bindings: [] }),
+  ]);
   const profile = await db().prepare('SELECT id, email, display_name, created_at FROM profiles WHERE id = ?').bind(id).first<ProfileRow>();
-  if (!profile) throw new Error('Storage unavailable');
+  if (!profile) throw new Error('UNAUTHORIZED');
   const state = await readAuthState(request, db(), options);
+  if (!state.authenticated || state.profile?.id !== id) throw new Error('UNAUTHORIZED');
   return { id: profile.id, email: profile.email, displayName: profile.display_name, createdAt: profile.created_at, authMethod: identity.kind === 'session' ? 'password' : 'chatgpt', hasPassword: state.hasPassword, chatgptConnected: state.chatgptLinked, chatgptAvailable: state.chatgptAvailable, emailVerified: state.emailVerified };
 }
 
@@ -297,11 +297,22 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
   if (typeof revision !== 'number' || !Number.isSafeInteger(revision) || revision < 0) throw new Error('Invalid revision');
   if (new TextEncoder().encode(JSON.stringify(ledger)).byteLength > 1_500_000) throw new RequestError('Your ledger is too large.', 413);
   const tripIds = ledger.trips.map(trip => trip.id);
-  const placeholders = tripIds.map(() => '?').join(',');
-  const existingRows = tripIds.length ? await db().prepare(`SELECT id, owner, data FROM trips WHERE id IN (${placeholders})`).bind(...tripIds).all<StoredTrip>() : { results: [] as StoredTrip[] };
-  const linkedRows = tripIds.length ? await db().prepare(`SELECT m.trip_id, m.user_id, m.member_id, p.email FROM memberships m LEFT JOIN profiles p ON p.id = m.user_id WHERE m.trip_id IN (${placeholders})`).bind(...tripIds).all<MembershipRow>() : { results: [] as MembershipRow[] };
-  const receiptRows = tripIds.length ? await db().prepare(`SELECT id, trip_id FROM receipts WHERE state = 'active' AND trip_id IN (${placeholders})`).bind(...tripIds).all<{ id: string; trip_id: string }>() : { results: [] as { id: string; trip_id: string }[] };
-  const profile = await db().prepare('SELECT id, email, display_name, created_at FROM profiles WHERE id = ?').bind(id).first<ProfileRow>();
+  const tripIdsJson = JSON.stringify(tripIds);
+  // D1 batches read one transactional snapshot. Reject future as well as stale
+  // tokens before diffing, so every before-image belongs to that exact revision.
+  const baseline = await db().batch([
+    db().prepare('SELECT id, owner, data FROM trips WHERE id IN (SELECT value FROM json_each(?))').bind(tripIdsJson),
+    db().prepare('SELECT m.trip_id, m.user_id, m.member_id, p.email FROM memberships m LEFT JOIN profiles p ON p.id = m.user_id WHERE m.trip_id IN (SELECT value FROM json_each(?))').bind(tripIdsJson),
+    db().prepare("SELECT id, trip_id FROM receipts WHERE state = 'active' AND trip_id IN (SELECT value FROM json_each(?))").bind(tripIdsJson),
+    db().prepare('SELECT id, email, display_name, created_at FROM profiles WHERE id = ?').bind(id),
+    db().prepare('SELECT COALESCE((SELECT revision FROM sync_state WHERE id = 1), 0) AS revision'),
+  ]);
+  const baselineRevision = (baseline[4].results as { revision: number }[])[0].revision;
+  if (baselineRevision !== revision) throw new Error('CONFLICT');
+  const existingRows = { results: baseline[0].results as StoredTrip[] };
+  const linkedRows = { results: baseline[1].results as MembershipRow[] };
+  const receiptRows = { results: baseline[2].results as { id: string; trip_id: string }[] };
+  const profile = (baseline[3].results as ProfileRow[])[0];
   const existing = new Map(existingRows.results.map(row => [row.id, row]));
   const newTrips: Trip[] = [];
   const changedTrips: Trip[] = [];
@@ -372,6 +383,12 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
   const receiptReferences = ledger.trips.flatMap(trip => [...trip.expenses, ...trip.drafts].flatMap(entry => entry.receiptId ? [{ id: entry.receiptId, tripId: trip.id }] : []));
   const retainedReceiptIds = new Set(receiptReferences.map(reference => reference.id));
   const removedReceiptIds = [...new Set([...previousTrips.values()].flatMap(trip => [...trip.expenses, ...trip.drafts].flatMap(entry => entry.receiptId && !retainedReceiptIds.has(entry.receiptId) ? [entry.receiptId] : [])))];
+  const preimageIndexes = new Map(existingRows.results.map((row, index) => [row.id, index]));
+  const preimages = tripIds.map(tripId => ({ id: tripId, owner: existing.get(tripId)?.owner ?? null, index: preimageIndexes.get(tripId) ?? null }));
+  // Keep full preimages in separate parameters instead of JSON-escaping an
+  // entire ledger again. Fifty trips still fit D1's parameter-count limit.
+  const preimageData = existingRows.results.length
+    ? `CASE json_extract(prior.value, '$.index') ${existingRows.results.map((_, index) => `WHEN ${index} THEN ?`).join(' ')} ELSE NULL END` : 'NULL';
   const marker = crypto.randomUUID();
   const statements: D1PreparedStatement[] = [
     db().prepare("INSERT OR IGNORE INTO sync_state (id, revision, last_write) VALUES (1, 0, '')"),
@@ -385,7 +402,12 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
         AND NOT EXISTS (SELECT 1 FROM json_each(?) author LEFT JOIN memberships m
           ON m.trip_id = json_extract(author.value, '$.tripId') AND m.user_id = ?
           WHERE m.member_id IS NOT json_extract(author.value, '$.memberId'))
-    `).bind(marker, revision, id, id, JSON.stringify(tripIds), id, id, JSON.stringify(receiptReferences), JSON.stringify(conversationAuthors), id),
+        AND NOT EXISTS (SELECT 1 FROM json_each(?) prior LEFT JOIN trips t ON t.id = json_extract(prior.value, '$.id')
+          WHERE (json_extract(prior.value, '$.index') IS NULL AND t.id IS NOT NULL)
+            OR (json_extract(prior.value, '$.index') IS NOT NULL
+              AND (t.id IS NULL OR t.owner IS NOT json_extract(prior.value, '$.owner') OR t.data IS NOT ${preimageData})))
+    `).bind(marker, revision, id, id, tripIdsJson, id, id, JSON.stringify(receiptReferences), JSON.stringify(conversationAuthors), id,
+      JSON.stringify(preimages), ...existingRows.results.map(row => row.data)),
   ];
   for (const trip of ledger.trips) {
     statements.push(db().prepare('INSERT INTO trips (id, owner, data) SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND last_write = ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data WHERE EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND last_write = ?) AND (trips.owner = ? OR EXISTS (SELECT 1 FROM memberships m WHERE m.trip_id = trips.id AND m.user_id = ?))').bind(trip.id, trip.ownerId!, JSON.stringify(trip), marker, marker, id, id));
@@ -400,7 +422,7 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
     // Cleanup follows the successful financial commit. The atomic reference
     // check and deleting state prevent a concurrent save from reattaching an
     // image while R2 deletion is in progress. Failures never undo saved money.
-    await markRemovedReceipts(db(), id, removedReceiptIds).then(() => purgeDeletingReceipts(db(), bucket(), id)).catch(() => {
+    await markRemovedReceipts(db(), id, removedReceiptIds, { source: options.source }).then(() => purgeDeletingReceipts(db(), bucket(), id)).catch(() => {
       console.warn('TripTab saved the entry; receipt cleanup will retry.');
     });
   }

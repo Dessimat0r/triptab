@@ -1,12 +1,13 @@
 import { env, waitUntil } from 'cloudflare:workers';
 import { db, RequestError } from './store';
+import { accountAuditStatement, type ActivityEntity } from './audit';
 
 type PushEnvironment = {
   VAPID_PUBLIC_KEY?: string;
   VAPID_PRIVATE_KEY?: string;
   VAPID_SUBJECT?: string;
 };
-type Subscription = { endpoint: string; user_id: string };
+type Subscription = { endpoint: string; user_id: string; generation: string };
 type NotificationRow = { id: string; title: string; body: string; url: string; created_at: string };
 
 const subscriptionsPerUser = 5;
@@ -70,22 +71,62 @@ export async function revokeBrowserPush(request: Request, user: string) {
   const rows = await db().prepare('SELECT endpoint FROM push_subscriptions WHERE user_id = ? LIMIT 5').bind(user).all<{ endpoint: string }>();
   const hashes = await Promise.all(rows.results.map(row => endpointHash(row.endpoint)));
   const index = hashes.indexOf(hash);
-  if (index >= 0) await unsubscribe(user, rows.results[index].endpoint);
+  if (index >= 0) await removeSubscription(user, rows.results[index].endpoint, 'logout_or_account_switch');
+}
+
+async function actorName(database: D1Database, user: string) {
+  const profile = await database.prepare('SELECT display_name FROM profiles WHERE id = ?').bind(user).first<{ display_name: string }>();
+  return profile?.display_name || 'Account holder';
 }
 
 export async function subscribe(user: string, rawEndpoint: unknown) {
   const endpoint = validatePushEndpoint(rawEndpoint);
   if (!pushConfiguration().enabled) throw new RequestError('Push notifications are not configured yet.', 503);
-  const existing = await db().prepare('SELECT user_id FROM push_subscriptions WHERE endpoint = ?').bind(endpoint).first<{ user_id: string }>();
+  const database = db();
+  const existing = await database.prepare('SELECT user_id FROM push_subscriptions WHERE endpoint = ?').bind(endpoint).first<{ user_id: string }>();
   if (existing && existing.user_id !== user) throw new RequestError('This browser subscription belongs to another account. Reset browser notifications before enabling them here.', 409);
   if (!existing && await subscriptionCount(user) >= subscriptionsPerUser) throw new RequestError('Notifications are already enabled on five browsers. Disable one before adding another.');
-  const result = await db().prepare('INSERT INTO push_subscriptions (endpoint, user_id, created_at) SELECT ?, ?, ? WHERE (SELECT COUNT(*) FROM push_subscriptions WHERE user_id = ?) < 5 OR EXISTS (SELECT 1 FROM push_subscriptions WHERE endpoint = ? AND user_id = ?) ON CONFLICT(endpoint) DO UPDATE SET created_at = excluded.created_at WHERE push_subscriptions.user_id = excluded.user_id').bind(endpoint, user, new Date().toISOString(), user, endpoint, user).run();
-  if (!result.meta.changes) throw new RequestError('Unable to register this browser subscription.', 409);
+  const entityId = await endpointHash(endpoint);
+  const name = await actorName(database, user);
+  const guard = 'NOT EXISTS (SELECT 1 FROM push_subscriptions WHERE endpoint = ?) AND (SELECT COUNT(*) FROM push_subscriptions WHERE user_id = ?) < 5';
+  const results = await database.batch([
+    accountAuditStatement(database, { userId: user, actorName: name, entityType: 'notifications', entityId, action: 'create', before: null,
+      after: { enabled: true, service: new URL(endpoint).hostname, reason: 'enabled_on_device' } }, { sql: guard, bindings: [endpoint, user] }),
+    database.prepare(`INSERT INTO push_subscriptions (endpoint, user_id, created_at, generation) SELECT ?, ?, ?, ? WHERE ${guard} ON CONFLICT(endpoint) DO NOTHING`)
+      .bind(endpoint, user, new Date().toISOString(), crypto.randomUUID(), endpoint, user),
+  ]);
+  if (!results[1].meta.changes) {
+    // A concurrent identical enable may already have committed its own event.
+    const current = await database.prepare('SELECT user_id FROM push_subscriptions WHERE endpoint = ?').bind(endpoint).first<{ user_id: string }>();
+    if (current?.user_id === user) return;
+    if (current) throw new RequestError('This browser subscription belongs to another account. Reset browser notifications before enabling them here.', 409);
+    if (await subscriptionCount(user) >= subscriptionsPerUser) throw new RequestError('Notifications are already enabled on five browsers. Disable one before adding another.');
+    throw new RequestError('Unable to register this browser subscription.', 409);
+  }
 }
 
 export async function unsubscribe(user: string, rawEndpoint: unknown) {
-  const endpoint = validatePushEndpoint(rawEndpoint);
-  await db().prepare('DELETE FROM push_subscriptions WHERE endpoint = ? AND user_id = ?').bind(endpoint, user).run();
+  await removeSubscription(user, validatePushEndpoint(rawEndpoint), 'disabled_on_device');
+}
+
+async function removeSubscription(user: string, endpoint: string, reason: 'disabled_on_device' | 'logout_or_account_switch' | 'provider_expired', expectedGeneration?: string) {
+  const database = db();
+  const previous = await database.prepare('SELECT generation FROM push_subscriptions WHERE endpoint = ? AND user_id = ?')
+    .bind(endpoint, user).first<{ generation: string }>();
+  if (!previous || (expectedGeneration !== undefined && previous.generation !== expectedGeneration)) return;
+  const source = reason === 'provider_expired' ? 'system' : 'web';
+  const name = source === 'system' ? 'TripTab system' : await actorName(database, user);
+  const entityId = await endpointHash(endpoint);
+  const service = new URL(endpoint).hostname;
+  const guard = 'EXISTS (SELECT 1 FROM push_subscriptions WHERE endpoint = ? AND user_id = ? AND generation = ?)';
+  const results = await database.batch([
+    accountAuditStatement(database, { userId: user, actorName: name, entityType: 'notifications', entityId, action: 'delete',
+      before: { enabled: true, service }, after: { enabled: false, service, reason }, source }, { sql: guard, bindings: [endpoint, user, previous.generation] }),
+    database.prepare('DELETE FROM push_subscriptions WHERE endpoint = ? AND user_id = ? AND generation = ?').bind(endpoint, user, previous.generation),
+  ]);
+  if (!results[1].meta.changes && source !== 'system' && await ownsSubscription(user, endpoint)) {
+    throw new RequestError('Notification settings changed. Refresh and try again.', 409);
+  }
 }
 
 export async function latestNotifications(user: string) {
@@ -94,13 +135,35 @@ export async function latestNotifications(user: string) {
 }
 
 type NotificationChange = {
-  entityType: 'trip' | 'member' | 'expense' | 'payment' | 'draft';
+  entityType: ActivityEntity;
+  entityId?: string;
   action: 'create' | 'update' | 'delete';
+  before?: Record<string, unknown> | null;
+  after?: Record<string, unknown> | null;
 };
+
+function derivedCollectionOrder(change: NotificationChange, changes: readonly NotificationChange[]): boolean {
+  if (change.entityType !== 'trip' || change.action !== 'update' || !change.before || !change.after) return false;
+  const before = change.before, after = change.after;
+  const fields = [...new Set([...Object.keys(before), ...Object.keys(after)])].filter(key => JSON.stringify(before[key]) !== JSON.stringify(after[key]));
+  const collections: Record<string, ActivityEntity> = { expenseOrder: 'expense', paymentOrder: 'payment', draftOrder: 'draft' };
+  return fields.length > 0 && fields.every(key => {
+    const type = collections[key];
+    const oldOrder = before[key], newOrder = after[key];
+    if (!type || !Array.isArray(oldOrder) || !Array.isArray(newOrder) || [...oldOrder, ...newOrder].some(id => typeof id !== 'string')) return false;
+    const oldIds = new Set(oldOrder), newIds = new Set(newOrder);
+    const retainedBefore = oldOrder.filter(id => newIds.has(id)), retainedAfter = newOrder.filter(id => oldIds.has(id));
+    if (JSON.stringify(retainedBefore) !== JSON.stringify(retainedAfter)) return false; // Keep deliberate reorders visible.
+    const added = newOrder.filter(id => !oldIds.has(id)), removed = oldOrder.filter(id => !newIds.has(id));
+    return added.length + removed.length > 0
+      && added.every(id => changes.some(event => event.entityType === type && event.entityId === id && event.action === 'create'))
+      && removed.every(id => changes.some(event => event.entityType === type && event.entityId === id && event.action === 'delete'));
+  });
+}
 
 /** Lock-screen summaries describe the action without exposing holiday contents. */
 export function activityNotification(actorName: string, changes: readonly NotificationChange[]) {
-  const events = changes.filter(change => change.entityType !== 'draft');
+  const events = changes.filter(change => change.entityType !== 'draft' && !derivedCollectionOrder(change, changes));
   if (!events.length) return null;
   const actor = actorName.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80) || 'A traveller';
   const types = new Set(events.map(event => event.entityType));
@@ -113,8 +176,8 @@ export function activityNotification(actorName: string, changes: readonly Notifi
     if (entity === 'trip') {
       summary = action === 'create' ? 'created this holiday' : action === 'delete' ? 'removed this holiday' : 'updated the holiday details';
     } else {
-      const noun = entity === 'member' ? 'traveller' : entity;
-      summary = events.length === 1 ? `${verb} ${entity === 'expense' ? 'an' : 'a'} ${noun}` : `${verb} ${events.length} ${noun}s`;
+      const noun = entity === 'member' ? 'traveller' : entity === 'invite' ? 'invitation' : entity === 'receipt' ? 'receipt image' : entity;
+      summary = events.length === 1 ? `${verb} ${entity === 'expense' || entity === 'invite' ? 'an' : 'a'} ${noun}` : `${verb} ${events.length} ${noun}s`;
     }
   }
   return { title: 'TripTab activity', body: `${actor} ${summary}. Open TripTab to review the activity.` };
@@ -170,7 +233,7 @@ async function sendPush(subscription: Subscription) {
       signal: AbortSignal.timeout(sendTimeoutMs),
     });
     if (response.status === 404 || response.status === 410) {
-      await db().prepare('DELETE FROM push_subscriptions WHERE endpoint = ? AND user_id = ?').bind(endpoint, subscription.user_id).run();
+      await removeSubscription(subscription.user_id, endpoint, 'provider_expired', subscription.generation);
     }
     // Do not consume untrusted provider response text or expose endpoint tokens.
     await response.body?.cancel();
@@ -199,7 +262,7 @@ async function deliverNotifications(tripId: string, actor: string, title: string
     if (!pushConfiguration().enabled) return;
     const recipients = users.filter(user => !throttled.has(user));
     if (!recipients.length) return;
-    const result = await db().prepare(`SELECT endpoint, user_id FROM push_subscriptions WHERE user_id IN (${recipients.map(() => '?').join(',')}) ORDER BY created_at DESC LIMIT 40`).bind(...recipients).all<Subscription>();
+    const result = await db().prepare(`SELECT endpoint, user_id, generation FROM push_subscriptions WHERE user_id IN (${recipients.map(() => '?').join(',')}) ORDER BY created_at DESC LIMIT 40`).bind(...recipients).all<Subscription>();
     const subscriptions = result.results ?? [];
     // Eight concurrent requests and five-second deadlines fit within the
     // Workers background lifetime. Every member still receives an inbox entry.

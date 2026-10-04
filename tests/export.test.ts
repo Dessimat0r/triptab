@@ -6,6 +6,7 @@ import { ModuleKind, ScriptTarget, transpileModule } from 'typescript';
 import { hashToken } from '../lib/auth';
 import type { Trip } from '../lib/model';
 import type { ActivityEvent } from '../lib/store';
+import type { AccountAuditEvent } from '../lib/audit';
 
 type Snapshot = { profile: Record<string, unknown>; data: { trips: Trip[] }; amountScale: number; exportedAt: string; receiptMetadata?: { id: string; tripId: string }[] };
 type HistoryPage = { events: ActivityEvent[]; nextCursor: number | null };
@@ -53,14 +54,21 @@ const storeCompiled = transpileModule(storeSource, { compilerOptions: { module: 
   .replace("'./auth'", JSON.stringify(new URL('../lib/auth.ts', import.meta.url).href))
   .replace("'./receipt-lifecycle'", JSON.stringify(new URL('../lib/receipt-lifecycle.ts', import.meta.url).href))
   .replace("'./receipt-context'", JSON.stringify(new URL('../lib/receipt-context.ts', import.meta.url).href))
+  .replaceAll("'./audit'", JSON.stringify(new URL('../lib/audit.ts', import.meta.url).href))
   .replace("'./notifications'", JSON.stringify(notificationUrl));
 const storeUrl = 'data:text/javascript;base64,' + Buffer.from(storeCompiled).toString('base64');
 const store = await import(storeUrl) as typeof import('../lib/store');
 const routeSource = await readFile(new URL('../app/api/export/route.ts', import.meta.url), 'utf8');
 const routeCompiled = transpileModule(routeSource, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
   .replace("'@/lib/store'", JSON.stringify(storeUrl))
+  .replace("'@/lib/audit'", JSON.stringify(new URL('../lib/audit.ts', import.meta.url).href))
   .replace("'@/lib/model'", JSON.stringify(new URL('../lib/model.ts', import.meta.url).href));
 const route = await import('data:text/javascript;base64,' + Buffer.from(routeCompiled).toString('base64')) as { GET(request: Request): Promise<Response> };
+const accountRouteSource = await readFile(new URL('../app/api/account-activity/route.ts', import.meta.url), 'utf8');
+const accountRouteCompiled = transpileModule(accountRouteSource, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
+  .replace("'@/lib/store'", JSON.stringify(storeUrl))
+  .replace("'@/lib/audit'", JSON.stringify(new URL('../lib/audit.ts', import.meta.url).href));
+const accountRoute = await import('data:text/javascript;base64,' + Buffer.from(accountRouteCompiled).toString('base64')) as { GET(request: Request): Promise<Response> };
 const tokens = { owner: 'a'.repeat(43), joined: 'b'.repeat(43), outsider: 'c'.repeat(43) };
 
 function holiday(id: string, owner: string): Trip {
@@ -260,6 +268,49 @@ test('history pages are bounded, cursor-complete, UTC, scoped and safe as CSV', 
   assert.equal(rows[1][4], "'=FORMULA");
   assert.equal(rows[1][5], '2026-10-04T01:00:00.000Z');
   assert.doesNotMatch(JSON.stringify(first), /NEVER_EXPORT_PRIVATE_EVENT/);
+});
+
+test('private account history API and exports stay owner-scoped with complete safe pages', async () => {
+  const database = await storage();
+  const insert = database.sqlite.prepare('INSERT INTO account_activity_events (id,user_id,actor_name,created_at,entity_type,entity_id,action,before_data,after_data,source) VALUES (?,?,?,?,?,?,?,?,?,?)');
+  for (let index = 0; index < 64; index++) {
+    insert.run(`own-${index}`, 'owner', '=Alice', '2026-10-04T03:00:00+02:00', 'profile', 'owner', 'update', JSON.stringify({ displayName: `Old ${index}` }), JSON.stringify({ displayName: `New ${index}` }), index % 2 ? 'chatgpt' : 'web');
+    insert.run(`other-${index}`, 'joined', 'NEVER_EXPORT_OTHER_ACCOUNT', '2026-10-04T01:00:00Z', 'profile', 'joined', 'update', null, JSON.stringify({ displayName: 'NEVER_EXPORT_OTHER_CHANGE' }), 'web');
+  }
+  type PrivatePage = { events: AccountAuditEvent[]; nextCursor: number | null };
+  const own = await json<PrivatePage>(await accountRoute.GET(request('limit=7')));
+  assert.equal(own.events.length, 7);
+  assert.ok(own.events.every(event => event.userId === 'owner'));
+  assert.equal((await accountRoute.GET(request('', null))).status, 401);
+  for (const query of ['userId=joined', 'tripId=shared', 'limit=51', 'limit=0', 'limit=1&limit=2', 'before=0', 'before=9007199254740992']) assert.equal((await accountRoute.GET(request(query))).status, 400, query);
+  const joined = await json<PrivatePage>(await accountRoute.GET(request('limit=2', 'joined')));
+  assert.ok(joined.events.every(event => event.userId === 'joined'));
+  assert.equal((await accountRoute.GET(request())).headers.get('cache-control'), 'private, no-store');
+
+  const firstResponse = await route.GET(request('scope=account-activity'));
+  assert.equal(firstResponse.status, 200);
+  assert.equal(firstResponse.headers.get('cache-control'), 'private, no-store');
+  const first = await json<PrivatePage>(firstResponse);
+  assert.equal(first.events.length, 50);
+  assert.equal(firstResponse.headers.get('x-export-next-cursor'), String(first.nextCursor));
+  assert.ok(first.events.every(event => event.userId === 'owner' && event.createdAt === '2026-10-04T01:00:00.000Z'));
+  assert.deepEqual(first.events[0].before, { displayName: 'Old 63' });
+  assert.deepEqual(first.events[0].after, { displayName: 'New 63' });
+  assert.equal(first.events[0].source, 'chatgpt');
+  assert.doesNotMatch(JSON.stringify(first), /NEVER_EXPORT|password_hash|token_hash|oai_user_id/);
+  const older = await json<PrivatePage>(await route.GET(request(`scope=account-activity&before=${first.nextCursor}`)));
+  assert.equal(older.events.length, 14);
+  assert.equal(older.nextCursor, null);
+  assert.equal(new Set([...first.events, ...older.events].map(event => event.id)).size, 64);
+  const rows = parseCsv(await (await route.GET(request('scope=account-activity&format=csv'))).text());
+  assert.equal(rows[0][4], 'created_at_utc');
+  assert.equal(rows[1][3], "'=Alice");
+  assert.equal(rows[1][4], '2026-10-04T01:00:00.000Z');
+  assert.equal(rows[1][8], 'chatgpt');
+  assert.deepEqual(JSON.parse(rows[1][10]), { displayName: 'New 63' });
+  for (const query of ['scope=account-activity&tripId=shared', 'scope=account-activity&before=0', 'scope=account-activity&before=1&before=2', 'scope=account-activity&receipts=1']) assert.equal((await route.GET(request(query))).status, 400, query);
+  assert.equal((await route.GET(request('scope=account-activity', null))).status, 401);
+  assert.equal((await route.GET(request('scope=account-activity', 'owner', { origin: 'https://evil.test' }))).status, 403);
 });
 
 test('membership changes are rechecked in data queries and remove access to later exports', async () => {

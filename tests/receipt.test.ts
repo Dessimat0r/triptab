@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { readFile, readdir } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { DatabaseSync } from 'node:sqlite';
@@ -11,6 +12,8 @@ import {
   storeReceipt, sweepReceiptOrphans,
 } from '../lib/receipt-lifecycle';
 import type { Trip } from '../lib/model';
+import { ledgerEtag } from '../lib/ledger-freshness';
+import type { ActivityEvent } from '../lib/audit';
 
 class SQLiteStatement {
   private values: (string | number | null)[] = [];
@@ -29,13 +32,17 @@ class SQLiteStatement {
 class SQLiteD1 {
   readonly sqlite = new DatabaseSync(':memory:');
   beforeWriteBatch?: () => Promise<unknown> | unknown;
+  beforeReceiptBatch?: () => Promise<unknown> | unknown;
   private pending: Promise<unknown> = Promise.resolve();
   prepare(sql: string) { return new SQLiteStatement(this.sqlite, sql); }
-  batch(statements: SQLiteStatement[]) {
-    const operation = this.pending.then(async () => {
-      if (statements.some(statement => /^UPDATE sync_state/.test(statement.sql.trim()))) {
-        const hook = this.beforeWriteBatch; this.beforeWriteBatch = undefined; await hook?.();
-      }
+  async batch(statements: SQLiteStatement[]) {
+    if (statements.some(statement => /^UPDATE sync_state/.test(statement.sql.trim())) && this.beforeWriteBatch) {
+      const hook = this.beforeWriteBatch; this.beforeWriteBatch = undefined; await this.pending; await hook();
+    }
+    if (statements.some(statement => /^(INSERT(?: OR IGNORE)? INTO|UPDATE|DELETE FROM) receipts\b/.test(statement.sql.trim())) && this.beforeReceiptBatch) {
+      const hook = this.beforeReceiptBatch; this.beforeReceiptBatch = undefined; await this.pending; await hook();
+    }
+    const operation = this.pending.then(() => {
       this.sqlite.exec('BEGIN');
       try { const results = statements.map(statement => statement.runSync()); this.sqlite.exec('COMMIT'); return results; }
       catch (error) { this.sqlite.exec('ROLLBACK'); throw error; }
@@ -46,12 +53,14 @@ class SQLiteD1 {
 }
 class MemoryR2 {
   readonly objects = new Map<string, { bytes: Uint8Array; contentType: string }>();
+  readonly putCalls: string[] = [];
   readonly deleteCalls: string[] = [];
   failPut = false;
   failDelete = false;
   beforePut?: (key: string) => Promise<void>;
   beforeDelete?: (key: string) => Promise<void>;
   async put(key: string, bytes: Uint8Array, options: { httpMetadata: { contentType: string } }) {
+    this.putCalls.push(key);
     await this.beforePut?.(key);
     this.objects.set(key, { bytes: new Uint8Array(bytes), contentType: options.httpMetadata.contentType });
     if (this.failPut) throw new Error('Simulated ambiguous R2 put failure');
@@ -80,6 +89,7 @@ const storeCompiled = transpileModule(storeSource, { compilerOptions: { module: 
   .replace("'cloudflare:workers'", JSON.stringify(envUrl))
   .replace("'./model'", JSON.stringify(new URL('../lib/model.ts', import.meta.url).href))
   .replace("'./auth'", JSON.stringify(new URL('../lib/auth.ts', import.meta.url).href))
+  .replaceAll("'./audit'", JSON.stringify(new URL('../lib/audit.ts', import.meta.url).href))
   .replace("'./receipt-lifecycle'", JSON.stringify(lifecycleUrl))
   .replace("'./notifications'", JSON.stringify(dataUrl('export const activityNotification=()=>null; export const notifyMembers=async()=>{};')));
 const storeUrl = dataUrl(storeCompiled);
@@ -117,6 +127,19 @@ function seedReceipt(database: SQLiteD1, id = crypto.randomUUID(), options: { st
   return id;
 }
 function count(database: SQLiteD1, table = 'receipts') { return database.sqlite.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()?.count as number; }
+function receiptEvents(database: SQLiteD1, id?: string): ActivityEvent[] {
+  const rows = database.sqlite.prepare(`SELECT * FROM activity_events WHERE entity_type='receipt' ${id ? 'AND entity_id=?' : ''} ORDER BY sequence`).all(...(id ? [id] : []));
+  return rows.map(row => ({
+    id: String(row.id), sequence: Number(row.sequence), tripId: String(row.trip_id), entityType: 'receipt', entityId: String(row.entity_id),
+    actorId: String(row.actor_id), actorName: String(row.actor_name), createdAt: String(row.created_at), revision: Number(row.revision),
+    action: row.action as ActivityEvent['action'], source: row.source as ActivityEvent['source'],
+    before: row.before_data ? JSON.parse(String(row.before_data)) : null, after: row.after_data ? JSON.parse(String(row.after_data)) : null,
+  }));
+}
+function failReceiptAudit(database: SQLiteD1, condition: string) {
+  database.sqlite.exec(`CREATE TRIGGER reject_receipt_audit BEFORE INSERT ON activity_events
+    WHEN NEW.entity_type='receipt' AND (${condition}) BEGIN SELECT RAISE(ABORT, 'receipt audit unavailable'); END`);
+}
 function provider(user = actor) { return { 'oai-authenticated-user-id': user, 'oai-authenticated-user-email': `${user}@example.com`, 'oai-authenticated-user-full-name': user }; }
 function request(method: string, query: string, options: { user?: string | null; type?: string; body?: Uint8Array<ArrayBuffer>; origin?: string; length?: string } = {}) {
   const headers = { ...(options.user === null ? {} : provider(options.user || actor)), origin: options.origin || 'https://triptab.test', 'content-type': options.type || 'image/png', ...(options.length ? { 'content-length': options.length } : {}) };
@@ -137,11 +160,14 @@ test('receipt migration preserves old metadata, treating age as unknown and imag
   database.sqlite.exec(await readFile(new URL('../drizzle/0004_hot_old_lace.sql', import.meta.url), 'utf8'));
   assert.deepEqual({ ...database.sqlite.prepare('SELECT owner,trip_id,created_at,state FROM receipts WHERE id=?').get(id) }, { owner: actor, trip_id: 'trip-1', created_at: '', state: 'active' });
   assert.equal(database.sqlite.prepare('SELECT data FROM trips').get()?.data, before);
+  database.sqlite.exec(await readFile(new URL('../drizzle/0005_audit_coverage.sql', import.meta.url), 'utf8'));
+  assert.deepEqual({ ...database.sqlite.prepare('SELECT content_type,size_bytes,sha256 FROM receipts WHERE id=?').get(id) }, { content_type: '', size_bytes: 0, sha256: '' });
   assert.equal(await sweepReceiptOrphans(database.asD1(), actor, Date.now() + 10 * RECEIPT_LIMITS.orphanAgeMs), 0);
 });
 
 test('native receipt route uploads valid image, stores active metadata and protects image reads', async () => {
   const { database, bucket } = await storage();
+  const initialTag = await ledgerEtag(database.asD1(), actor);
   const response = await route.POST(request('POST', 'tripId=trip-1', { body: png }));
   assert.equal(response.status, 200);
   assert.equal(response.headers.get('cache-control'), 'private, no-store');
@@ -149,6 +175,21 @@ test('native receipt route uploads valid image, stores active metadata and prote
   assert.equal(count(database), 1); assert.ok(bucket.objects.has(imageKey(id)));
   const row = database.sqlite.prepare('SELECT state,created_at FROM receipts WHERE id=?').get(id);
   assert.equal(row?.state, 'active'); assert.ok(Number.isFinite(Date.parse(String(row?.created_at))));
+  const events = receiptEvents(database, id);
+  assert.equal(events.length, 2);
+  assert.deepEqual(events.map(event => [event.action, event.before?.state, event.after?.state, event.after?.reason]), [
+    ['create', undefined, 'pending', 'upload-started'], ['update', 'pending', 'active', 'upload-complete'],
+  ]);
+  for (const event of events) {
+    assert.equal(event.actorId, actor); assert.equal(event.actorName, actor); assert.equal(event.source, 'web'); assert.equal(event.revision, 0);
+    assert.ok(Number.isFinite(Date.parse(event.createdAt)));
+    assert.equal(event.after?.uploaderId, actor); assert.equal(event.after?.initiatorId, actor);
+    assert.equal(event.after?.sizeBytes, png.byteLength); assert.equal(event.after?.contentType, 'image/png');
+    assert.equal(event.after?.sha256, createHash('sha256').update(png).digest('hex'));
+    assert.deepEqual(Object.keys(event.after || {}).sort(), ['contentType', 'createdAt', 'id', 'initiatorId', 'initiatorName', 'reason', 'sha256', 'sizeBytes', 'state', 'uploaderId'].sort());
+  }
+  assert.equal((await store.readLedger(actor)).revision, 0, 'image metadata does not mutate the financial revision');
+  assert.notEqual(await ledgerEtag(database.asD1(), actor), initialTag, 'receipt activity changes visible freshness');
   const image = await route.GET(request('GET', `id=${id}`));
   assert.equal(image.status, 200); assert.equal(image.headers.get('content-type'), 'image/png'); assert.equal(image.headers.get('x-content-type-options'), 'nosniff');
   assert.deepEqual(new Uint8Array(await image.arrayBuffer()), png);
@@ -166,6 +207,7 @@ test('upload endpoint rejects unauthorized, cross-origin, oversized and disguise
   assert.equal((await route.POST(request('POST', 'tripId=trip-1', { body: new Uint8Array([1, 2, 3, 4]) }))).status, 400);
   assert.equal((await route.POST(request('POST', 'tripId=trip-1', { body: png, length: String(6 * 1024 * 1024) }))).status, 413);
   assert.equal(count(database), 0); assert.equal(bucket.objects.size, 0);
+  assert.equal(receiptEvents(database).length, 0); assert.equal(bucket.putCalls.length, 0);
 });
 
 test('atomic pending reservations enforce trip quota even when two uploads race for the final slot', async () => {
@@ -176,6 +218,7 @@ test('atomic pending reservations enforce trip quota even when two uploads race 
   const failure = (results.find(result => result.status === 'rejected') as PromiseRejectedResult).reason;
   assert.ok(failure instanceof ReceiptLifecycleError && failure.status === 409);
   assert.equal(count(database), RECEIPT_LIMITS.perTrip); assert.equal(bucket.objects.size, 1);
+  assert.equal(receiptEvents(database).length, 2, 'the rejected quota reservation creates no event');
 });
 
 test('account quota spans trips and rejects storage work before writing additional objects', async () => {
@@ -184,6 +227,7 @@ test('account quota spans trips and rejects storage work before writing addition
   const results = await Promise.allSettled([upload(database, bucket, actor, 'trip-3'), upload(database, bucket, actor, 'trip-3')]);
   assert.equal(results.filter(result => result.status === 'fulfilled').length, 1);
   assert.equal(count(database), RECEIPT_LIMITS.perUser); assert.equal(bucket.objects.size, 1);
+  assert.equal(receiptEvents(database).length, 2);
 });
 
 test('pending and deleting receipts cannot be read or attached to posted expenses or drafts', async () => {
@@ -197,7 +241,7 @@ test('pending and deleting receipts cannot be read or attached to posted expense
   database.sqlite.prepare("UPDATE receipts SET state='deleting' WHERE id=?").run(id);
   assert.equal(await store.receiptAccess(actor, id), null);
   await assert.rejects(activateReceipt(database.asD1(), actor, 'trip-1', id), /upload or your trip access changed/);
-  assert.equal(count(database, 'activity_events'), 0);
+  assert.equal(count(database, 'activity_events'), 1, 'only the successful pending reservation is audited');
 });
 
 test('shared image is retained until all expense/draft references are removed, then financial commit cleans it', async () => {
@@ -210,10 +254,14 @@ test('shared image is retained until all expense/draft references are removed, t
   state = await store.writeLedger(actor, state.data, state.revision);
   assert.equal(count(database), 1); assert.ok(bucket.objects.has(imageKey(id)));
   state.data.trips[0].drafts = [];
-  await store.writeLedger(actor, state.data, state.revision);
+  await store.writeLedger(actor, state.data, state.revision, { source: 'chatgpt' });
   assert.equal(count(database), 0); assert.equal(bucket.objects.size, 0);
   const events = await store.readActivity(actor, 'trip-1');
   assert.ok(events.events.some(event => event.entityType === 'draft' && event.action === 'delete' && event.before?.receiptId === id));
+  const receiptHistory = receiptEvents(database, id);
+  assert.equal(receiptHistory[2].source, 'chatgpt'); assert.equal(receiptHistory[2].actorId, actor);
+  assert.equal(receiptHistory[2].after?.reason, 'receipt-detached');
+  assert.equal(receiptHistory[3].source, 'system'); assert.equal(receiptHistory[3].before?.initiatorId, actor);
 });
 
 test('receipt DELETE enforces auth/origin/membership/reference protection and returns private responses', async context => {
@@ -223,23 +271,36 @@ test('receipt DELETE enforces auth/origin/membership/reference protection and re
   assert.equal((await route.DELETE(request('DELETE', `id=${id}`, { user: outsider }))).status, 404);
   assert.ok((await route.DELETE(request('DELETE', `id=${id}`, { origin: 'https://evil.test' }))).status >= 400);
   assert.equal((await route.DELETE(request('DELETE', `id=${id}&id=${id}`))).status, 400);
+  assert.equal(receiptEvents(database, id).length, 2, 'rejected deletion requests leave audit unchanged');
   const response = await route.DELETE(request('DELETE', `id=${id}`, { user: member }));
   assert.equal(response.status, 200); assert.equal(response.headers.get('cache-control'), 'private, no-store');
   assert.deepEqual(await response.json(), { receiptId: id, deleted: true, pending: false });
   assert.equal(count(database), 0); assert.equal(bucket.objects.size, 0);
   assert.equal((await route.GET(request('GET', `id=${id}`))).status, 404);
+  const events = receiptEvents(database, id);
+  assert.equal(events.length, 4);
+  assert.equal(events[2].actorId, member); assert.equal(events[2].source, 'web');
+  assert.equal(events[2].after?.reason, 'image-deletion'); assert.equal(events[2].after?.uploaderId, actor);
+  assert.equal(events[3].actorId, 'system'); assert.equal(events[3].actorName, 'TripTab'); assert.equal(events[3].source, 'system');
+  assert.equal(events[3].before?.initiatorId, member); assert.equal(events[3].before?.deletionReason, 'image-deletion');
+  assert.equal(events[3].action, 'delete'); assert.equal(events[3].after, null);
 });
 
 test('R2 deletion failure retains an inaccessible tombstone and later DELETE retries successfully', async () => {
   const { database, bucket } = await storage(); const id = await upload(database, bucket); bucket.failDelete = true;
-  const failed = await route.DELETE(request('DELETE', `id=${id}`));
+  const failed = await route.DELETE(request('DELETE', `id=${id}`, { user: member }));
   assert.equal(failed.status, 202);
   assert.deepEqual(await failed.json(), { receiptId: id, deleted: false, pending: true });
   assert.equal(database.sqlite.prepare('SELECT state FROM receipts WHERE id=?').get(id)?.state, 'deleting');
   assert.ok(bucket.objects.has(imageKey(id))); assert.equal((await route.GET(request('GET', `id=${id}`))).status, 404);
+  assert.equal(receiptEvents(database, id).length, 3, 'storage failure records intent, never completion');
   bucket.failDelete = false;
   assert.equal((await route.DELETE(request('DELETE', `id=${id}`))).status, 200);
   assert.equal(count(database), 0); assert.equal(bucket.objects.size, 0);
+  assert.equal(receiptEvents(database, id).length, 4);
+  assert.equal(receiptEvents(database, id)[3].before?.initiatorId, member, 'another participant retry retains the original initiator');
+  await maintainReceipts(database.asD1(), bucket.asR2(), actor);
+  assert.equal(receiptEvents(database, id).length, 4, 'completed cleanup produces no repeated events');
 });
 
 test('ambiguous upload failure plus deletion outage keeps cleanup metadata until maintenance succeeds', async () => {
@@ -274,11 +335,12 @@ test('orphan sweep is bounded and protects references, recent uploads, unknown h
 
 test('deletion mark winning after financial prevalidation makes the actual CAS reject reattachment with no audit/money changes', async () => {
   const { database, bucket } = await storage(); const id = await upload(database, bucket);
+  const initialAudit = count(database, 'activity_events');
   const state = await store.readLedger(actor); state.data.trips[0].expenses = [expense(id)];
   database.beforeWriteBatch = () => markRemovedReceipts(database.asD1(), actor, [id]);
   await assert.rejects(store.writeLedger(actor, state.data, state.revision), /CONFLICT/);
   assert.equal((await store.readLedger(actor)).data.trips[0].expenses.length, 0);
-  assert.equal((await store.readLedger(actor)).revision, 0); assert.equal(count(database, 'activity_events'), 0);
+  assert.equal((await store.readLedger(actor)).revision, 0); assert.equal(count(database, 'activity_events'), initialAudit + 1, 'only the winning deletion intent is recorded');
   assert.equal(database.sqlite.prepare('SELECT state FROM receipts WHERE id=?').get(id)?.state, 'deleting');
   await purgeDeletingReceipts(database.asD1(), bucket.asR2(), actor);
   assert.equal(count(database), 0); assert.equal(bucket.objects.size, 0);
@@ -327,4 +389,132 @@ test('orphan sweep cannot race a slow pending put; successful activation starts 
   assert.equal(await sweepReceiptOrphans(database.asD1(), actor), 0);
   await deleteReceipt(database.asD1(), bucket.asR2(), actor, id);
   assert.equal(count(database), 0); assert.equal(bucket.objects.size, 0);
+});
+
+test('reservation audit failure rolls back its quota slot before any R2 write', async context => {
+  context.mock.method(console, 'error', () => {});
+  const { database, bucket } = await storage();
+  failReceiptAudit(database, "NEW.action='create'");
+  const response = await route.POST(request('POST', 'tripId=trip-1', { body: png }));
+  assert.equal(response.status, 400);
+  assert.deepEqual(await response.json(), { error: 'Unable to complete this request. Check your entries and try again.' });
+  assert.equal(count(database), 0); assert.equal(receiptEvents(database).length, 0); assert.equal(bucket.putCalls.length, 0);
+  database.sqlite.exec('DROP TRIGGER reject_receipt_audit');
+  assert.equal((await route.POST(request('POST', 'tripId=trip-1', { body: png }))).status, 200);
+  assert.equal(receiptEvents(database).length, 2);
+});
+
+test('activation audit failure cannot fabricate success and records failed-upload cleanup', async () => {
+  const { database, bucket } = await storage(); const id = crypto.randomUUID();
+  failReceiptAudit(database, "json_extract(NEW.after_data,'$.state')='active'");
+  await assert.rejects(storeReceipt(database.asD1(), bucket.asR2(), actor, 'trip-1', id, png, 'image/png'), (error: unknown) => error instanceof ReceiptLifecycleError && error.status === 503);
+  assert.equal(count(database), 0); assert.equal(bucket.objects.size, 0); assert.equal(bucket.putCalls.length, 1);
+  const events = receiptEvents(database, id);
+  assert.deepEqual(events.map(event => [event.action, event.after?.state, event.source]), [
+    ['create', 'pending', 'web'], ['update', 'deleting', 'system'], ['delete', undefined, 'system'],
+  ]);
+  assert.equal(events[1].before?.state, 'pending'); assert.equal(events[1].after?.reason, 'upload-failed');
+  assert.equal(events[1].actorId, 'system'); assert.equal(events[1].after?.initiatorId, actor);
+  assert.equal(events[2].before?.deletionReason, 'upload-failed'); assert.equal(events[2].before?.initiatorId, actor);
+});
+
+test('deletion-intent audit failure rolls back the mark and prevents R2 deletion', async context => {
+  context.mock.method(console, 'error', () => {});
+  const { database, bucket } = await storage(); const id = await upload(database, bucket);
+  failReceiptAudit(database, "json_extract(NEW.after_data,'$.state')='deleting'");
+  const response = await route.DELETE(request('DELETE', `id=${id}`, { user: member }));
+  assert.equal(response.status, 400);
+  assert.deepEqual(await response.json(), { error: 'Unable to complete this request. Check your entries and try again.' });
+  assert.equal(database.sqlite.prepare('SELECT state FROM receipts WHERE id=?').get(id)?.state, 'active');
+  assert.equal(bucket.deleteCalls.length, 0); assert.ok(bucket.objects.has(imageKey(id))); assert.equal(receiptEvents(database, id).length, 2);
+  database.sqlite.exec('DROP TRIGGER reject_receipt_audit');
+  assert.equal((await route.DELETE(request('DELETE', `id=${id}`, { user: member }))).status, 200);
+  assert.equal(receiptEvents(database, id).length, 4);
+});
+
+test('completion audit failure retains metadata for an idempotent retry after R2 bytes are gone', async () => {
+  const { database, bucket } = await storage(); const id = await upload(database, bucket);
+  failReceiptAudit(database, "NEW.action='delete'");
+  const response = await route.DELETE(request('DELETE', `id=${id}`, { user: member }));
+  assert.equal(response.status, 202); assert.equal(bucket.objects.size, 0);
+  assert.equal(database.sqlite.prepare('SELECT state FROM receipts WHERE id=?').get(id)?.state, 'deleting');
+  assert.equal(receiptEvents(database, id).length, 3, 'metadata deletion and its completion event roll back together');
+  database.sqlite.exec('DROP TRIGGER reject_receipt_audit');
+  assert.equal((await route.DELETE(request('DELETE', `id=${id}`))).status, 200);
+  const events = receiptEvents(database, id);
+  assert.equal(events.length, 4); assert.equal(events[3].before?.initiatorId, member);
+  assert.equal(bucket.deleteCalls.length, 2); assert.equal(count(database), 0);
+});
+
+test('two cleanup workers deleting the same tombstone append only one completion event', async () => {
+  const { database, bucket } = await storage(); const id = await upload(database, bucket);
+  assert.equal(await markRemovedReceipts(database.asD1(), member, [id]), 1);
+  let entered = 0, release!: () => void;
+  const ready = new Promise<void>(resolve => { release = resolve; });
+  bucket.beforeDelete = async () => { entered++; if (entered === 2) release(); await ready; };
+  const results = await Promise.all([
+    purgeDeletingReceipts(database.asD1(), bucket.asR2(), actor),
+    purgeDeletingReceipts(database.asD1(), bucket.asR2(), member),
+  ]);
+  assert.equal(results.reduce((sum, result) => sum + result.deleted, 0), 1);
+  assert.equal(results.reduce((sum, result) => sum + result.failed, 0), 0);
+  assert.equal(bucket.deleteCalls.length, 2); assert.equal(count(database), 0);
+  const events = receiptEvents(database, id);
+  assert.equal(events.length, 4); assert.equal(events.filter(event => event.action === 'delete').length, 1);
+});
+
+test('a financial attachment winning after deletion preselection creates no deletion intent', async () => {
+  const { database, bucket } = await storage(); const id = await upload(database, bucket);
+  database.beforeReceiptBatch = async () => {
+    const state = await store.readLedger(actor); state.data.trips[0].expenses = [expense(id)];
+    await store.writeLedger(actor, state.data, state.revision);
+  };
+  assert.equal(await markRemovedReceipts(database.asD1(), member, [id]), 0);
+  assert.equal(database.sqlite.prepare('SELECT state FROM receipts WHERE id=?').get(id)?.state, 'active');
+  assert.ok(bucket.objects.has(imageKey(id))); assert.equal(receiptEvents(database, id).length, 2);
+  assert.equal((await store.readLedger(actor)).data.trips[0].expenses[0].receiptId, id);
+});
+
+test('membership revocation winning after deletion preselection creates no resource event', async () => {
+  const { database, bucket } = await storage(); const id = await upload(database, bucket);
+  database.beforeReceiptBatch = () => { database.sqlite.prepare('DELETE FROM memberships WHERE trip_id=? AND user_id=?').run('trip-1', member); };
+  assert.equal(await markRemovedReceipts(database.asD1(), member, [id]), 0);
+  assert.equal(database.sqlite.prepare('SELECT state FROM receipts WHERE id=?').get(id)?.state, 'active');
+  assert.ok(bucket.objects.has(imageKey(id))); assert.equal(receiptEvents(database, id).length, 2);
+});
+
+test('orphan cleanup is attributed to maintenance and records the expiry cause', async () => {
+  const { database, bucket } = await storage(); const id = await upload(database, bucket);
+  const old = new Date(Date.now() - 2 * RECEIPT_LIMITS.orphanAgeMs).toISOString();
+  database.sqlite.prepare('UPDATE receipts SET created_at=? WHERE id=?').run(old, id);
+  const result = await maintainReceipts(database.asD1(), bucket.asR2(), member);
+  assert.deepEqual(result, { marked: 1, deleted: 1, failed: 0 });
+  const events = receiptEvents(database, id);
+  assert.equal(events.length, 4); assert.equal(events[2].after?.reason, 'orphan-expired');
+  assert.equal(events[2].before?.createdAt, old); assert.equal(events[3].before?.deletionReason, 'orphan-expired');
+  for (const event of events.slice(2)) { assert.equal(event.actorId, 'system'); assert.equal(event.actorName, 'TripTab'); assert.equal(event.source, 'system'); }
+});
+
+test('a concurrent attachment protects an orphan selected by maintenance without a false cleanup event', async () => {
+  const { database, bucket } = await storage(); const id = await upload(database, bucket);
+  database.sqlite.prepare('UPDATE receipts SET created_at=? WHERE id=?').run(new Date(Date.now() - 2 * RECEIPT_LIMITS.orphanAgeMs).toISOString(), id);
+  database.beforeReceiptBatch = async () => {
+    const state = await store.readLedger(actor); state.data.trips[0].expenses = [expense(id)];
+    await store.writeLedger(actor, state.data, state.revision);
+  };
+  assert.equal(await sweepReceiptOrphans(database.asD1(), member), 0);
+  assert.equal(receiptEvents(database, id).length, 2); assert.ok(bucket.objects.has(imageKey(id)));
+  assert.equal(database.sqlite.prepare('SELECT state FROM receipts WHERE id=?').get(id)?.state, 'active');
+});
+
+test('competing activation requests record only the successful state transition', async () => {
+  const { database } = await storage(); const id = crypto.randomUUID();
+  await reserveReceipt(database.asD1(), actor, 'trip-1', id);
+  const results = await Promise.allSettled([
+    activateReceipt(database.asD1(), actor, 'trip-1', id), activateReceipt(database.asD1(), actor, 'trip-1', id),
+  ]);
+  assert.equal(results.filter(result => result.status === 'fulfilled').length, 1);
+  const failure = (results.find(result => result.status === 'rejected') as PromiseRejectedResult).reason;
+  assert.ok(failure instanceof ReceiptLifecycleError && failure.status === 409);
+  assert.equal(receiptEvents(database, id).length, 2);
 });

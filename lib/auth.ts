@@ -1,5 +1,6 @@
 // Authentication is independent of ChatGPT. Provider headers are supplied by the
 // Sites gateway; browser sessions are opaque tokens and are stored only hashed.
+import { accountAuditStatement } from './audit';
 const SESSION_LIFETIME = 30 * 24 * 60 * 60 * 1000;
 const RATE_WINDOW = 15 * 60 * 1000;
 const EMAIL_RATE_LIMIT = 8;
@@ -129,8 +130,15 @@ async function profileRow(identity: AuthIdentity, database: D1Database): Promise
   let row = await database.prepare('SELECT id, email, display_name, created_at FROM profiles WHERE id = ?').bind(identity.id).first<ProfileRow>();
   if (!row) {
     if (identity.kind !== 'chatgpt' || !identity.email) throw new Error('UNAUTHORIZED');
-    await database.prepare('INSERT OR IGNORE INTO profiles (id, email, display_name, created_at) VALUES (?, ?, ?, ?)')
-      .bind(identity.id, identity.email, displayNameValue(identity.displayName, identity.email), new Date().toISOString()).run();
+    const displayName = displayNameValue(identity.displayName, identity.email);
+    await database.batch([
+      database.prepare(`INSERT INTO profiles (id, email, display_name, created_at)
+        SELECT ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM auth_links WHERE oai_user_id = ? AND user_id <> ?)
+        ON CONFLICT(id) DO NOTHING`)
+        .bind(identity.id, identity.email, displayName, new Date().toISOString(), identity.id, identity.id),
+      accountAuditStatement(database, { userId: identity.id, actorName: displayName, entityType: 'profile', entityId: identity.id,
+        action: 'create', before: null, after: { displayName }, source: 'chatgpt' }, { sql: 'changes() > 0', bindings: [] }),
+    ]);
     row = await database.prepare('SELECT id, email, display_name, created_at FROM profiles WHERE id = ?').bind(identity.id).first<ProfileRow>();
   }
   if (!row) throw new Error('UNAUTHORIZED');
@@ -172,12 +180,18 @@ function cookie(request: Request, token: string, expired = false) {
 function signedOutCookie(request: Request, signedOut: boolean) {
   return cookie(request, signedOut ? '1' : '', !signedOut).replace(`${SESSION_COOKIE}=`, `${SIGNED_OUT_COOKIE}=`);
 }
-async function createSession(user: string, request: Request, database: D1Database) {
+type MutationGate = { sql: string; bindings: unknown[] };
+async function prepareSession(user: string, actorName: string, request: Request, database: D1Database, gate?: MutationGate) {
   const token = randomToken();
   const now = new Date();
-  await database.prepare('INSERT INTO auth_sessions (token_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)')
-    .bind(await hashToken(token), user, new Date(now.getTime() + SESSION_LIFETIME).toISOString(), now.toISOString()).run();
-  return { token, cookie: cookie(request, token) };
+  const statements = [
+    database.prepare(`INSERT INTO auth_sessions (token_hash, user_id, expires_at, created_at)
+      SELECT ?, ?, ?, ?${gate ? ` WHERE ${gate.sql}` : ''}`)
+      .bind(await hashToken(token), user, new Date(now.getTime() + SESSION_LIFETIME).toISOString(), now.toISOString(), ...(gate?.bindings || [])),
+    accountAuditStatement(database, { userId: user, actorName, entityType: 'session', entityId: 'browser', action: 'create',
+      before: null, after: { active: true } }, { sql: 'changes() > 0', bindings: [] }),
+  ];
+  return { token, cookie: cookie(request, token), statements };
 }
 function requestWithSession(request: Request, token: string) {
   const headers = new Headers(request.headers);
@@ -231,10 +245,16 @@ async function register(request: Request, body: Record<string, unknown>, databas
   const name = displayNameValue(body.displayName, email);
   const id = `local_${crypto.randomUUID()}`;
   const now = new Date().toISOString();
+  const session = await prepareSession(id, name, request, database);
   try {
     await database.batch([
       database.prepare('INSERT INTO profiles (id, email, display_name, created_at) VALUES (?, ?, ?, ?)').bind(id, email, name, now),
+      accountAuditStatement(database, { userId: id, actorName: name, entityType: 'profile', entityId: id,
+        action: 'create', before: null, after: { displayName: name } }, { sql: 'changes() > 0', bindings: [] }),
       database.prepare('INSERT INTO auth_credentials (user_id, email, password_hash, password_salt, iterations, created_at) VALUES (?, ?, ?, ?, ?, ?)').bind(id, email, digest.hash, digest.salt, digest.iterations, now),
+      accountAuditStatement(database, { userId: id, actorName: name, entityType: 'password', entityId: 'account', action: 'create',
+        before: { hasPassword: false }, after: { hasPassword: true } }, { sql: 'changes() > 0', bindings: [] }),
+      ...session.statements,
     ]);
   } catch (error) {
     if (await database.prepare('SELECT 1 AS found FROM auth_credentials WHERE email = ?').bind(email).first()) {
@@ -243,7 +263,6 @@ async function register(request: Request, body: Record<string, unknown>, databas
     throw error;
   }
   await clearEmailRateLimit(keys, database);
-  const session = await createSession(id, request, database);
   return { state: await readAuthState(requestWithSession(request, session.token), database), cookie: session.cookie, additionalCookies: [signedOutCookie(request, false)] };
 }
 async function login(request: Request, body: Record<string, unknown>, database: D1Database) {
@@ -255,10 +274,27 @@ async function login(request: Request, body: Record<string, unknown>, database: 
     : { hash: '0'.repeat(64), salt: base64url(new Uint8Array(32)), iterations: PASSWORD_ITERATIONS };
   const valid = await verifyPassword(body.password, digest);
   if (!credential || !valid) throw new AuthError('The email or password is incorrect.', 401);
-  await clearEmailRateLimit(keys, database);
+  const profile = await database.prepare('SELECT id,email,display_name,created_at FROM profiles WHERE id = ?').bind(credential.user_id).first<ProfileRow>();
+  if (!profile) throw new Error('UNAUTHORIZED');
+  const gate = { sql: 'EXISTS (SELECT 1 FROM auth_credentials WHERE user_id = ? AND password_hash = ? AND password_salt = ?)',
+    bindings: [credential.user_id, credential.password_hash, credential.password_salt] };
+  const statements: D1PreparedStatement[] = [];
   const oldToken = sessionToken(request);
-  if (oldToken) await database.prepare('DELETE FROM auth_sessions WHERE token_hash = ?').bind(await hashToken(oldToken)).run();
-  const session = await createSession(credential.user_id, request, database);
+  if (oldToken) {
+    const tokenHash = await hashToken(oldToken);
+    const previous = await database.prepare('SELECT p.id,p.display_name FROM auth_sessions s JOIN profiles p ON p.id = s.user_id WHERE s.token_hash = ? AND s.expires_at > ?')
+      .bind(tokenHash, new Date().toISOString()).first<{ id: string; display_name: string }>();
+    if (previous) statements.push(
+      database.prepare(`DELETE FROM auth_sessions WHERE token_hash = ? AND user_id = ? AND ${gate.sql}`).bind(tokenHash, previous.id, ...gate.bindings),
+      accountAuditStatement(database, { userId: previous.id, actorName: previous.display_name, entityType: 'session', entityId: 'browser',
+        action: 'delete', before: { active: true }, after: { active: false } }, { sql: 'changes() > 0', bindings: [] }),
+    );
+  }
+  const session = await prepareSession(credential.user_id, profile.display_name, request, database, gate);
+  const sessionIndex = statements.length;
+  const results = await database.batch([...statements, ...session.statements]);
+  if (!results[sessionIndex].meta.changes) throw new AuthError('Your password changed. Sign in again with your current password.', 409);
+  await clearEmailRateLimit(keys, database);
   return { state: await readAuthState(requestWithSession(request, session.token), database), cookie: session.cookie, additionalCookies: [signedOutCookie(request, false)] };
 }
 
@@ -283,10 +319,19 @@ async function setPassword(request: Request, body: Record<string, unknown>, data
       password_salt = excluded.password_salt, iterations = excluded.iterations
       WHERE auth_credentials.password_hash = ?
   `).bind(identity.id, email, digest.hash, digest.salt, digest.iterations, now, providerId, providerId, identity.id, existing?.password_hash || null)];
+  statements.push(accountAuditStatement(database, { userId: identity.id, actorName: profile.display_name, entityType: 'password', entityId: 'account',
+    action: existing ? 'update' : 'create', before: { hasPassword: !!existing }, after: { hasPassword: true } }, { sql: 'changes() > 0', bindings: [] }));
   if (identity.kind === 'chatgpt' && identity.chatgptId) {
     statements.push(database.prepare('INSERT INTO auth_links (oai_user_id, user_id, created_at) SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM auth_credentials WHERE user_id = ? AND password_salt = ?) ON CONFLICT(oai_user_id) DO NOTHING').bind(identity.chatgptId, identity.id, now, identity.id, digest.salt));
+    statements.push(accountAuditStatement(database, { userId: identity.id, actorName: profile.display_name, entityType: 'chatgpt', entityId: 'account',
+      action: 'create', before: { connected: false }, after: { connected: true } }, { sql: 'changes() > 0', bindings: [] }));
   }
   statements.push(database.prepare('DELETE FROM auth_sessions WHERE user_id = ? AND EXISTS (SELECT 1 FROM auth_credentials WHERE user_id = ? AND password_salt = ?)').bind(identity.id, identity.id, digest.salt));
+  statements.push(accountAuditStatement(database, { userId: identity.id, actorName: profile.display_name, entityType: 'session', entityId: 'account',
+    action: 'delete', before: { active: true }, after: { active: false } }, { sql: 'changes() > 0', bindings: [] }));
+  const session = await prepareSession(identity.id, profile.display_name, request, database,
+    { sql: 'EXISTS (SELECT 1 FROM auth_credentials WHERE user_id = ? AND password_salt = ?)', bindings: [identity.id, digest.salt] });
+  statements.push(...session.statements);
   try {
     const results = await database.batch(statements);
     if (!results[0].meta.changes) throw new AuthError('Your account connection or password changed. Sign in again before updating it.', 409);
@@ -297,7 +342,6 @@ async function setPassword(request: Request, body: Record<string, unknown>, data
     throw error;
   }
   await clearEmailRateLimit(keys, database);
-  const session = await createSession(identity.id, request, database);
   return { state: await readAuthState(requestWithSession(request, session.token), database), cookie: session.cookie, additionalCookies: [signedOutCookie(request, false)] };
 }
 async function linkChatGPT(request: Request, database: D1Database) {
@@ -306,7 +350,8 @@ async function linkChatGPT(request: Request, database: D1Database) {
   if (!local || !provider) throw new AuthError('Sign in with your password and ChatGPT before linking the accounts.', 401);
   const existing = await database.prepare('SELECT user_id FROM auth_links WHERE oai_user_id = ?').bind(provider.id).first<{ user_id: string }>();
   if (existing && existing.user_id !== local.id) throw new AuthError('This ChatGPT account is already linked to another TripTab account.', 409);
-  const result = await database.prepare(`
+  const profile = await profileRow(local, database);
+  const results = await database.batch([database.prepare(`
     INSERT INTO auth_links (oai_user_id, user_id, created_at)
     SELECT ?, ?, ? WHERE ? = ? OR (
       NOT EXISTS (SELECT 1 FROM trips WHERE owner = ?)
@@ -314,8 +359,10 @@ async function linkChatGPT(request: Request, database: D1Database) {
       AND NOT EXISTS (SELECT 1 FROM receipts WHERE owner = ?)
       AND NOT EXISTS (SELECT 1 FROM auth_credentials WHERE user_id = ?)
     ) ON CONFLICT(oai_user_id) DO NOTHING
-  `).bind(provider.id, local.id, new Date().toISOString(), provider.id, local.id, provider.id, provider.id, provider.id, provider.id).run();
-  if (!result.meta.changes && !existing) {
+  `).bind(provider.id, local.id, new Date().toISOString(), provider.id, local.id, provider.id, provider.id, provider.id, provider.id),
+  accountAuditStatement(database, { userId: local.id, actorName: profile.display_name, entityType: 'chatgpt', entityId: 'account',
+    action: 'create', before: { connected: false }, after: { connected: true } }, { sql: 'changes() > 0', bindings: [] })]);
+  if (!results[0].meta.changes && !existing) {
     throw new AuthError('This ChatGPT account already has TripTab data. Sign in with ChatGPT and add a password there to keep that data.', 409);
   }
   const linked = await database.prepare('SELECT user_id FROM auth_links WHERE oai_user_id = ?').bind(provider.id).first<{ user_id: string }>();
@@ -327,7 +374,12 @@ async function unlinkChatGPT(request: Request, database: D1Database) {
   if (!local || !await database.prepare('SELECT 1 AS found FROM auth_credentials WHERE user_id = ?').bind(local.id).first()) {
     throw new AuthError('Add a password and sign in with it before disconnecting ChatGPT.', 401);
   }
-  await database.prepare('DELETE FROM auth_links WHERE user_id = ?').bind(local.id).run();
+  const profile = await profileRow(local, database);
+  await database.batch([
+    database.prepare('DELETE FROM auth_links WHERE user_id = ?').bind(local.id),
+    accountAuditStatement(database, { userId: local.id, actorName: profile.display_name, entityType: 'chatgpt', entityId: 'account',
+      action: 'delete', before: { connected: true }, after: { connected: false } }, { sql: 'changes() > 0', bindings: [] }),
+  ]);
   return { state: await readAuthState(request, database) };
 }
 export async function performAuthAction(request: Request, body: Record<string, unknown>, database: D1Database): Promise<{ state: AuthState; cookie?: string; additionalCookies?: string[] }> {
@@ -341,11 +393,32 @@ export async function performAuthAction(request: Request, body: Record<string, u
     case 'chatgpt_login': {
       const headers = new Headers(request.headers);
       headers.set('cookie', (headers.get('cookie') || '').split(';').filter(value => !value.trim().startsWith(`${SIGNED_OUT_COOKIE}=`)).join(';'));
-      return { state: await readAuthState(new Request(request.url, { headers }), database), cookie: signedOutCookie(request, false) };
+      const resumed = new Request(request.url, { headers });
+      const state = await readAuthState(resumed, database);
+      const wasSignedOut = (request.headers.get('cookie') || '').split(';').some(value => value.trim() === `${SIGNED_OUT_COOKIE}=1`);
+      if (state.authenticated && state.profile && wasSignedOut && !await sessionIdentity(resumed, database)) {
+        await database.batch([accountAuditStatement(database, { userId: state.profile.id, actorName: state.profile.displayName,
+          entityType: 'session', entityId: 'browser', action: 'create', before: { active: false }, after: { active: true }, source: 'chatgpt' },
+        { sql: 'NOT EXISTS (SELECT 1 FROM auth_links WHERE oai_user_id = ? AND user_id <> ?)', bindings: [state.profile.id, state.profile.id] })]);
+      }
+      return { state, cookie: signedOutCookie(request, false) };
     }
     case 'logout': {
       const token = sessionToken(request);
-      if (token) await database.prepare('DELETE FROM auth_sessions WHERE token_hash = ?').bind(await hashToken(token)).run();
+      let actor: AuthIdentity | null = null;
+      try { actor = await resolveIdentity(request, {}, database); }
+      catch (error) { if (!(error instanceof Error) || error.message !== 'UNAUTHORIZED') throw error; }
+      if (actor) {
+        const profile = await profileRow(actor, database);
+        const event = { userId: actor.id, actorName: profile.display_name, entityType: 'session' as const, entityId: 'browser',
+          action: 'delete' as const, before: { active: true }, after: { active: false }, source: actor.kind === 'chatgpt' ? 'chatgpt' as const : 'web' as const };
+        if (actor.kind === 'session' && token) await database.batch([
+          database.prepare('DELETE FROM auth_sessions WHERE token_hash = ? AND user_id = ?').bind(await hashToken(token), actor.id),
+          accountAuditStatement(database, event, { sql: 'changes() > 0', bindings: [] }),
+        ]);
+        else await database.batch([accountAuditStatement(database, event,
+          { sql: 'NOT EXISTS (SELECT 1 FROM auth_links WHERE oai_user_id = ? AND user_id <> ?)', bindings: [actor.id, actor.id] })]);
+      }
       // The provider's own session belongs to ChatGPT; it cannot be signed out here.
       return { state: { authenticated: false, hasPassword: false, chatgptLinked: false, chatgptAvailable: !!trustedChatGPTIdentity(request), emailVerified: false }, cookie: cookie(request, '', true), additionalCookies: [signedOutCookie(request, true)] };
     }
@@ -355,7 +428,7 @@ export async function performAuthAction(request: Request, body: Record<string, u
 export function authFailure(error: unknown) {
   const unauthorized = error instanceof Error && error.message === 'UNAUTHORIZED';
   const status = error instanceof AuthError ? error.status : unauthorized ? 401 : 503;
-  if (!(error instanceof AuthError) && !unauthorized) console.error('TripTab authentication failed', error);
+  if (!(error instanceof AuthError) && !unauthorized) console.error('TripTab authentication failed', { kind: error instanceof Error ? error.name : 'UnknownError' });
   return Response.json({ error: error instanceof AuthError ? error.message : unauthorized ? 'Sign in to continue.' : 'Unable to sign in right now. Try again shortly.' }, {
     status, headers: { ...PRIVATE_HEADERS, ...(error instanceof AuthError && error.retryAfter ? { 'Retry-After': String(error.retryAfter) } : {}) },
   });

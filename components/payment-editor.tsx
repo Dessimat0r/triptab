@@ -5,12 +5,14 @@ import { X } from "lucide-react";
 import { balances, paymentSchema, type Payment, type Trip } from "@/lib/model";
 import { localDate } from "@/lib/dates";
 import ModalA11y from "./modal-accessibility";
+import RestorationNotice, { type RestorationInfo } from "./restoration-notice";
 
 export type PaymentEditorProps = {
   trip: Trip;
   initial: Payment;
   busy: boolean;
   error?: string;
+  restoredFrom?: RestorationInfo;
   onClose: () => void;
   onSave: (payment: Payment) => Promise<boolean>;
 };
@@ -24,7 +26,7 @@ function amountInMinorUnits(value: string): number {
   return Number(whole) * 100 + Number(fraction.padEnd(2, "0"));
 }
 
-export default function PaymentEditor({ trip, initial, busy, error, onClose, onSave }: PaymentEditorProps) {
+export default function PaymentEditor({ trip, initial, busy, error, restoredFrom, onClose, onSave }: PaymentEditorProps) {
   const id = useId();
   const [paymentId] = useState(initial.id);
   const [from, setFrom] = useState(initial.from);
@@ -92,6 +94,7 @@ export default function PaymentEditor({ trip, initial, busy, error, onClose, onS
           </div>
           <button type="button" className="iconbutton" aria-label="Close payment editor" disabled={locked} onClick={onClose}><X /></button>
         </div>
+        {restoredFrom && <RestorationNotice info={restoredFrom} />}
         <form onSubmit={async event => {
           event.preventDefault();
           if (locked) return;

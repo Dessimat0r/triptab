@@ -3,41 +3,145 @@
 import { useEffect, useRef, useState } from "react";
 import type { Currency } from "@/lib/model";
 import type { ActivityEvent } from "@/lib/store";
+import "./activity-details.css";
 
 export type ActivityPanelProps = {
   tripId: string;
   refreshKey?: number;
   currency?: Currency;
   memberNames?: Record<string, string>;
+  actorMemberNames?: Record<string, string>;
   onRestore?: (event: ActivityEvent) => void;
   busy?: boolean;
 };
 
-type Page = { events: ActivityEvent[]; nextCursor: number | null };
-type State = Page & { key: string; loading: boolean; error: string };
-type Change = { label: string; before: string; after: string };
+type SequencedEvent = { id: string; sequence: number };
+type Page<T> = { events: T[]; nextCursor: number | null };
+type State<T> = Page<T> & { key: string; loading: boolean; error: string };
+export type AuditChange = { label: string; before: string; after: string };
 
 class ActivityError extends Error {
   constructor(message: string, readonly status = 0) { super(message); }
 }
 
-async function activityPage(tripId: string, signal: AbortSignal, before?: number): Promise<Page> {
-  const params = new URLSearchParams({ tripId, limit: "20" });
-  if (before !== undefined) params.set("before", String(before));
-  const response = await fetch(`/api/activity?${params}`, { cache: "no-store", credentials: "same-origin", signal });
-  const body = await response.json() as Page & { error?: string };
-  if (!response.ok) throw new ActivityError(body.error || "Unable to load this holiday's activity.", response.status);
+async function activityPage<T extends SequencedEvent>(endpoint: string, signal: AbortSignal, before?: number): Promise<Page<T>> {
+  const url = new URL(endpoint, location.origin);
+  url.searchParams.set("limit", "20");
+  if (before !== undefined) url.searchParams.set("before", String(before));
+  const response = await fetch(url.pathname + url.search, { cache: "no-store", credentials: "same-origin", signal });
+  const body = await response.json() as Page<T> & { error?: string };
+  if (!response.ok) throw new ActivityError(body.error || "Unable to load activity. Please try again.", response.status);
   if (!Array.isArray(body.events) || body.events.length > 50 ||
+    body.events.some(event => !event || typeof event.id !== "string" || !event.id || !Number.isSafeInteger(event.sequence) || event.sequence < 1) ||
     (body.nextCursor !== null && (!Number.isSafeInteger(body.nextCursor) || body.nextCursor < 1))) {
     throw new ActivityError("The activity response was incomplete. Please try again.");
   }
   return { events: body.events, nextCursor: body.nextCursor };
 }
 
-function same(left: unknown, right: unknown) { return JSON.stringify(left) === JSON.stringify(right); }
-function text(value: unknown): string { return typeof value === "string" ? value : ""; }
-function record(value: unknown): Record<string, unknown> | null {
+/** Keep the reader's loaded range and open details while new immutable events arrive. */
+export function useActivityPages<T extends SequencedEvent>(endpoint: string, key: string, refreshKey = 0, ownerField?: keyof T) {
+  const [attempt, setAttempt] = useState(0);
+  const [state, setState] = useState<State<T>>({ key: "", events: [], nextCursor: null, loading: true, error: "" });
+  const saved = useRef(state);
+  const olderRequest = useRef<AbortController | null>(null);
+  const active: State<T> = state.key === key ? state : { key, events: [], nextCursor: null, loading: true, error: "" };
+  useEffect(() => { saved.current = state; }, [state]);
+  useEffect(() => {
+    const refresh = () => {
+      if (document.visibilityState === "visible") setAttempt(value => value + 1);
+    };
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    olderRequest.current?.abort();
+    let previous = saved.current.key === key ? saved.current : null;
+    setState(value => value.key === key ? { ...value, loading: true, error: "" } : { key, events: [], nextCursor: null, loading: true, error: "" });
+    async function refresh() {
+      let page = await activityPage<T>(endpoint, controller.signal);
+      // Account switching must never merge one person's private history with
+      // the newly authenticated account, even if its panel stayed mounted.
+      if (ownerField && previous?.events[0]?.[ownerField] !== page.events[0]?.[ownerField]) previous = null;
+      const owner = ownerField ? page.events[0]?.[ownerField] : undefined;
+      const known = new Set(previous?.events.map(event => event.id));
+      const events = [...page.events];
+      // More than one new page may have arrived. Reach the already loaded range
+      // before merging, so refreshing never leaves an inaccessible history gap.
+      let overlaps = page.events.some(event => known.has(event.id));
+      while (previous?.events.length && events.length && !overlaps && page.nextCursor !== null) {
+        const cursor = page.nextCursor;
+        page = await activityPage<T>(endpoint, controller.signal, cursor);
+        if (ownerField && page.events.some(event => event[ownerField] !== owner)) throw new ActivityError("Your account changed. Reload account activity.", 401);
+        if (page.nextCursor !== null && page.nextCursor >= cursor) throw new ActivityError("The activity page did not advance. Please try again.");
+        events.push(...page.events);
+        overlaps = page.events.some(event => known.has(event.id));
+      }
+      if (controller.signal.aborted) return;
+      // A now-empty authorized result must not retain previously visible data.
+      const combined = events.length ? [...events, ...(previous?.events || [])] : [];
+      const unique = [...new Map(combined.map(event => [event.id, event])).values()].sort((left, right) => right.sequence - left.sequence);
+      setState({ key, events: unique, nextCursor: overlaps && previous ? previous.nextCursor : page.nextCursor, loading: false, error: "" });
+    }
+    refresh().catch(cause => {
+      if (controller.signal.aborted) return;
+      setState(value => ({ ...(value.key === key ? value : { key, events: [], nextCursor: null }),
+        ...(cause instanceof ActivityError && [401, 403].includes(cause.status) ? { events: [], nextCursor: null } : {}),
+        loading: false, error: cause instanceof Error ? cause.message : "Unable to load activity." }));
+    });
+    return () => { controller.abort(); olderRequest.current?.abort(); };
+  }, [endpoint, key, refreshKey, attempt, ownerField]);
+
+  async function loadOlder() {
+    if (active.loading || active.nextCursor === null) return;
+    const controller = new AbortController();
+    olderRequest.current?.abort(); olderRequest.current = controller;
+    setState(previous => previous.key === key ? { ...previous, loading: true, error: "" } : previous);
+    try {
+      const page = await activityPage<T>(endpoint, controller.signal, active.nextCursor);
+      if (ownerField && page.events.some(event => event[ownerField] !== active.events[0]?.[ownerField])) throw new ActivityError("Your account changed. Reload account activity.", 401);
+      if (page.nextCursor !== null && page.nextCursor >= active.nextCursor) throw new ActivityError("The activity page did not advance. Please try again.");
+      if (!controller.signal.aborted) setState(previous => {
+        if (previous.key !== key) return previous;
+        const events = [...new Map([...previous.events, ...page.events].map(event => [event.id, event])).values()].sort((left, right) => right.sequence - left.sequence);
+        return { ...previous, events, nextCursor: page.nextCursor, loading: false, error: "" };
+      });
+    } catch (cause) {
+      if (!controller.signal.aborted) setState(previous => previous.key === key ? { ...previous,
+        ...(cause instanceof ActivityError && [401, 403].includes(cause.status) ? { events: [], nextCursor: null } : {}),
+        loading: false, error: cause instanceof Error ? cause.message : "Unable to load older changes." } : previous);
+    }
+  }
+  return { ...active, loadOlder, retry: () => setAttempt(value => value + 1) };
+}
+
+function same(left: unknown, right: unknown): boolean {
+  if (Array.isArray(left) && Array.isArray(right)) return left.length === right.length && left.every((value, index) => same(value, right[index]));
+  const a = auditRecord(left), b = auditRecord(right);
+  if (a && b) {
+    const keys = [...new Set([...Object.keys(a), ...Object.keys(b)])];
+    return keys.every(key => same(a[key], b[key]));
+  }
+  return Object.is(left, right);
+}
+export function auditText(value: unknown): string { return typeof value === "string" ? value : ""; }
+export function auditRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+export function auditTimestamp(value: unknown, exact = false): string {
+  const text = auditText(value);
+  const date = new Date(text);
+  if (!text || !Number.isFinite(date.getTime())) return "Date unavailable";
+  return exact ? date.toISOString() + " (UTC)" : new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "long" }).format(date);
+}
+export function auditSource(value: string): string {
+  return value === "chatgpt" ? "via ChatGPT/Codex" : value === "system" ? "by TripTab system" : "in TripTab";
 }
 function money(value: unknown, currency?: string): string {
   if (typeof value !== "number" || !Number.isFinite(value)) return "Not recorded";
@@ -46,204 +150,188 @@ function money(value: unknown, currency?: string): string {
   } catch {}
   return `${new Intl.NumberFormat("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value / 100)} (holiday currency)`;
 }
+function traveller(value: unknown, names: Record<string, string>): string {
+  const id = auditText(value);
+  return id ? `${names[id] || "Earlier traveller"} (traveller ${id})` : "Not recorded";
+}
+function reference(value: unknown, label: string): string { return auditText(value) ? `${label} ${auditText(value)}` : "Not recorded"; }
+function accountReference(value: unknown, names: Record<string, string>): string {
+  const id = auditText(value);
+  return id && names[id] ? `${names[id]} (account ${id})` : reference(value, "Account");
+}
 function percentages(value: unknown, names: Record<string, string>): string {
-  const entries = record(value);
-  if (!entries) return "Item shares";
-  return Object.entries(entries).map(([id, percent], index) => `${names[id] || `Person ${index + 1}`}: ${percent}%`).join("; ");
+  const entries = auditRecord(value);
+  if (!entries) return "By receipt item";
+  return Object.entries(entries).map(([id, percent]) => `${traveller(id, names)}: ${percent}%`).join("\n") || "No participants";
 }
 function quantity(value: unknown): string {
-  return typeof value === "number" && Number.isFinite(value)
-    ? new Intl.NumberFormat("en-GB", { maximumFractionDigits: 6 }).format(value)
-    : "Not recorded";
+  return typeof value === "number" && Number.isFinite(value) ? new Intl.NumberFormat("en-GB", { maximumFractionDigits: 6 }).format(value) : "Not recorded";
+}
+function itemName(snapshot: Record<string, unknown>, id: unknown): string {
+  const item = (Array.isArray(snapshot.items) ? snapshot.items : []).map(auditRecord).find(value => value?.id === id);
+  return auditText(item?.name) || "Earlier item";
+}
+function itemReference(snapshot: Record<string, unknown>, id: unknown): string {
+  return auditText(id) ? `${itemName(snapshot, id)} (item ${auditText(id)})` : "This receipt";
 }
 function itemDescription(value: unknown, currency: string | undefined, names: Record<string, string>): string {
-  const item = record(value);
+  const item = auditRecord(value);
   if (!item) return "Not recorded";
   const members = Array.isArray(item.members) ? item.members.filter((id): id is string => typeof id === "string") : [];
-  const units = record(item.units);
-  const allocations = record(units?.allocations);
-  const split = units ? `${quantity(units.total)} ${text(units.label) || "units"} total${allocations ? `; ${Object.entries(allocations).map(([id, amount], index) => `${names[id] || `Person ${index + 1}`}: ${quantity(amount)}`).join("; ")}` : ""}`
-    : item.percentages ? percentages(item.percentages, names) : members.length
-    ? members.every(id => names[id]) ? members.map(id => names[id]).join(", ") : `${members.length} ${members.length === 1 ? "person" : "people"}`
-    : "No participants";
-  return `${text(item.name) || "Item"}: ${money(item.amount, currency)} · ${split}`;
+  const units = auditRecord(item.units), allocations = auditRecord(units?.allocations);
+  const split = units ? `${quantity(units.total)} ${auditText(units.label) || "units"} in total${allocations ? `\n${Object.entries(allocations).map(([id, amount]) => `${traveller(id, names)}: ${quantity(amount)} ${auditText(units.label) || "units"}`).join("\n")}` : ""}`
+    : item.percentages ? percentages(item.percentages, names) : members.length ? `Shared equally by:\n${members.map(id => traveller(id, names)).join("\n")}` : "No participants";
+  const participantOrder = units || item.percentages ? `Participant order:\n${members.map(id => traveller(id, names)).join("\n")}\n` : "";
+  return `${auditText(item.name) || "Item"} (item ${auditText(item.id)})\nFull line total: ${money(item.amount, currency)}\n${participantOrder}${split}`;
 }
-
-function itemName(snapshot: Record<string, unknown>, id: unknown): string {
-  const item = (Array.isArray(snapshot.items) ? snapshot.items : []).map(record).find(value => value?.id === id);
-  return text(item?.name) || "an earlier item";
-}
-
 function memoryAliases(value: unknown, snapshot: Record<string, unknown>, names: Record<string, string>): string {
   if (!Array.isArray(value) || !value.length) return "No saved names";
   return value.map(value => {
-    const alias = record(value);
+    const alias = auditRecord(value);
     if (!alias) return "Earlier saved name";
-    const meaning = alias.itemId ? itemName(snapshot, alias.itemId)
-      : alias.memberId ? names[text(alias.memberId)] || "an earlier traveller" : "this receipt";
-    const scope = alias.scopeMemberId ? ` (for ${names[text(alias.scopeMemberId)] || "an earlier traveller"})` : "";
-    return `“${text(alias.name) || "Saved name"}” means ${meaning}${scope}`;
-  }).join("; ");
+    const meaning = alias.itemId ? itemReference(snapshot, alias.itemId) : alias.memberId ? traveller(alias.memberId, names) : "this receipt";
+    const scope = alias.scopeMemberId ? ` (used by ${traveller(alias.scopeMemberId, names)})` : "";
+    return `“${auditText(alias.name) || "Saved name"}” means ${meaning}${scope}`;
+  }).join("\n");
+}
+function entries(value: unknown) { return (Array.isArray(value) ? value : []).map(auditRecord).filter((entry): entry is Record<string, unknown> => !!entry); }
+function messageDescription(value: unknown, snapshot: Record<string, unknown>, names: Record<string, string>): string {
+  const message = auditRecord(value);
+  if (!message) return "Not recorded";
+  const question = message.replyTo ? entries(snapshot.conversation).find(entry => entry.id === message.replyTo) : null;
+  const author = auditText(message.authorName) || (message.role === "assistant" ? "ChatGPT/Codex" : names[auditText(message.authorMemberId)] || "Traveller");
+  const context = message.itemId || question?.itemId;
+  return `${message.role === "assistant" ? "Reply" : "Question"} by ${author}${message.authorMemberId ? ` · ${traveller(message.authorMemberId, names)}` : ""}\n${auditTimestamp(message.createdAt, true)}\n${context ? itemReference(snapshot, context) : "Whole receipt"}\nMessage ${auditText(message.id)}${message.replyTo ? ` · replying to message ${auditText(message.replyTo)}` : ""}\n\n${auditText(message.text)}`;
+}
+function order(value: unknown, describe: (id: string) => string): string {
+  if (!Array.isArray(value) || !value.length) return "No entries";
+  return value.map((id, index) => `${index + 1}. ${describe(auditText(id))}`).join("\n");
+}
+const REASONS: Record<string, string> = {
+  "upload-started": "Image upload started", "upload-complete": "Image upload completed", "receipt-detached": "Image detached from the receipt",
+  "image-deletion": "Image removal requested", "orphan-expired": "Unused image expired", "upload-failed": "Failed upload cleanup", "cleanup-retry": "Retrying image cleanup", "image-deleted": "Stored image deleted",
+  created: "Invitation created", replaced: "Invitation replaced", revoked: "Invitation revoked", accepted: "Invitation accepted", expired: "Invitation expired",
+};
+const STATES: Record<string, string> = { pending: "Upload pending", active: "Available", deleting: "Removal pending", waiting: "Waiting for review", review: "Ready for review", revoked: "Revoked", accepted: "Accepted", expired: "Expired" };
+const PRIVATE_FIELD = /(?:password|token|secret|credential|cookie|sessionhash|endpoint|authkey|p256dh)/i;
+function fieldLabel(key: string): string { return key.replace(/([a-z\d])([A-Z])/g, "$1 $2").replace(/[_-]/g, " ").replace(/^./, char => char.toUpperCase()); }
+function readable(value: unknown): string {
+  if (value === undefined || value === null || value === "") return "Not recorded";
+  if (typeof value === "boolean") return value ? "Yes" : "No";
+  if (typeof value === "number") return String(value);
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value.length ? value.map((entry, index) => `${index + 1}. ${readable(entry)}`).join("\n") : "No entries";
+  const object = auditRecord(value);
+  return object ? Object.entries(object).filter(([key]) => !PRIVATE_FIELD.test(key)).map(([key, value]) => `${fieldLabel(key)}: ${readable(value)}`).join("\n") || "No recorded details" : "Not recorded";
 }
 
-function changes(event: ActivityEvent, currency: Currency | undefined, names: Record<string, string>): Change[] {
-  const before = event.before || {};
-  const after = event.after || {};
-  const result: Change[] = [];
-  const labels: Record<string, string> = {
-    name: "Name", title: "Title", currency: "Currency", date: "Date", startDate: "Start date", endDate: "End date",
-    time: "Time", timezone: "Timezone", method: "Payment method", note: "Note", status: "Review status", source: "Entry source",
+function changes(event: ActivityEvent, currency: Currency | undefined, names: Record<string, string>, accountNames: Record<string, string>): AuditChange[] {
+  const before = event.before || {}, after = event.after || {}, result: AuditChange[] = [], handled = new Set(["id"]);
+  const add = (key: string, label: string, describe: (value: unknown, snapshot: Record<string, unknown>) => string = readable) => {
+    handled.add(key);
+    if (!same(before[key], after[key])) result.push({ label, before: describe(before[key], before), after: describe(after[key], after) });
   };
-  for (const [key, label] of Object.entries(labels)) {
-    if (!same(before[key], after[key])) result.push({ label, before: text(before[key]) || "Not recorded", after: text(after[key]) || "Not recorded" });
-  }
-  for (const [key, label] of Object.entries({ amount: "Amount", tax: "Tax", tip: "Tip", discount: "Discount", bankAmount: "Actual bank charge" })) {
-    if (!same(before[key], after[key])) result.push({
-      label,
-      before: money(before[key], key === "bankAmount" || event.entityType === "payment" ? currency : text(before.currency) || currency),
-      after: money(after[key], key === "bankAmount" || event.entityType === "payment" ? currency : text(after.currency) || currency),
-    });
-  }
-  for (const [key, label] of Object.entries({ from: "Paid by", to: "Paid to", payer: "Receipt payer" })) {
-    if (!same(before[key], after[key])) result.push({ label, before: before[key] ? names[text(before[key])] || "Previous traveller" : "Not recorded", after: after[key] ? names[text(after[key])] || "Selected traveller" : "Not recorded" });
-  }
-  if (!same(before.percentages, after.percentages)) result.push({ label: "Whole-receipt split", before: percentages(before.percentages, names), after: percentages(after.percentages, names) });
-  if (!same(before.adjustmentAllocation, after.adjustmentAllocation)) {
-    const policy = (value: unknown) => value === "selected-participants" ? "People selected on receipt items" : "Earlier rule: all travellers";
-    result.push({ label: "Adjustment split when item prices are zero", before: policy(before.adjustmentAllocation), after: policy(after.adjustmentAllocation) });
-  }
-  if (!same(before.fx, after.fx)) {
-    const rate = (value: unknown) => {
-      const fx = record(value);
-      return fx ? `${fx.rate} · ${text(fx.asOf)} · ${text(fx.source)}` : "No recorded rate";
+  for (const [key, label] of Object.entries({ name: "Name", title: "Title", currency: "Currency", date: "Transaction date", startDate: "Start date", endDate: "End date", time: "Transaction time", timezone: "Transaction timezone", method: "Payment method", note: "Note", email: "Traveller email" })) add(key, label);
+  add("source", "Entry source", value => value === "ai" ? "AI assisted" : value === "manual" ? "Entered manually" : readable(value));
+  add("status", String(event.entityType) === "invite" ? "Invitation status" : "Review status", value => String(event.entityType) === "invite" && value === "pending" ? "Waiting for the traveller to join" : STATES[auditText(value)] || readable(value));
+  add("memberName", "Invited traveller name");
+  add("emailRestricted", "Invitation email restriction", value => value === true ? "Only the invited email can join" : value === false ? "Anyone with the link can join as this traveller" : "Not recorded");
+  for (const [key, label] of Object.entries({ amount: "Amount", tax: "Tax", tip: "Tip", discount: "Discount", bankAmount: "Actual bank charge" })) add(key, label, (value, snapshot) => money(value, key === "bankAmount" || String(event.entityType) === "payment" ? currency : auditText(snapshot.currency) || currency));
+  for (const [key, label] of Object.entries({ from: "Paid by", to: "Paid to", payer: "Receipt payer", memberId: "Traveller" })) add(key, label, value => traveller(value, names));
+  add("percentages", "Whole-receipt split", value => percentages(value, names));
+  add("adjustmentAllocation", "Adjustment split when item prices are zero", value => value === "selected-participants" ? "People selected on receipt items" : "Earlier rule: all travellers");
+  add("fx", "Exchange rate", value => {
+    const fx = auditRecord(value); return fx ? `Rate: ${fx.rate}\nAs of: ${auditText(fx.asOf)}\nSource: ${auditText(fx.source)}` : "No recorded rate";
+  });
+  for (const [key, label, entity] of [["receiptId", "Receipt image", "Image"], ["expenseId", "Receipt review target", "Expense"], ["userId", "Traveller account", "Account"], ["ownerId", "Holiday organiser account", "Account"], ["uploaderId", "Image uploaded by", "Account"], ["initiatorId", "Cleanup initiated by account", "Account"]]) add(key, label, value => entity === "Account" ? accountReference(value, accountNames) : reference(value, entity));
+  for (const [key, label, entity] of [["memberOrder", "Traveller order", "Traveller"], ["expenseOrder", "Expense order", "Expense"], ["paymentOrder", "Payment order", "Payment"], ["draftOrder", "Receipt draft order", "Draft"]]) add(key, label, value => order(value, id => key === "memberOrder" ? traveller(id, names) : `${entity} ${id}`));
+  handled.add("items");
+  const oldItems = new Map(entries(before.items).map(item => [auditText(item.id), item])), newItems = new Map(entries(after.items).map(item => [auditText(item.id), item]));
+  for (const id of new Set([...oldItems.keys(), ...newItems.keys()])) if (!same(oldItems.get(id), newItems.get(id))) result.push({
+    label: oldItems.has(id) ? newItems.has(id) ? "Item changed" : "Item removed" : "Item added",
+    before: itemDescription(oldItems.get(id), auditText(before.currency) || currency, names), after: itemDescription(newItems.get(id), auditText(after.currency) || currency, names),
+  });
+  const oldItemOrder = [...oldItems.keys()], newItemOrder = [...newItems.keys()];
+  if (!same(oldItemOrder, newItemOrder)) result.push({ label: "Item order", before: order(oldItemOrder, id => itemReference(before, id)), after: order(newItemOrder, id => itemReference(after, id)) });
+  handled.add("conversation");
+  const oldMessages = new Map(entries(before.conversation).map(message => [auditText(message.id), message])), newMessages = new Map(entries(after.conversation).map(message => [auditText(message.id), message]));
+  for (const id of new Set([...oldMessages.keys(), ...newMessages.keys()])) if (!same(oldMessages.get(id), newMessages.get(id))) result.push({
+    label: oldMessages.has(id) ? newMessages.has(id) ? "Message changed" : "Message removed" : "Message added",
+    before: messageDescription(oldMessages.get(id), before, names), after: messageDescription(newMessages.get(id), after, names),
+  });
+  const oldMessageOrder = [...oldMessages.keys()], newMessageOrder = [...newMessages.keys()];
+  if (!same(oldMessageOrder, newMessageOrder)) {
+    const describe = (snapshot: Record<string, unknown>, map: Map<string, Record<string, unknown>>) => (id: string) => {
+      const message = map.get(id); return `${message?.role === "assistant" ? "Reply" : "Question"} ${id} · ${auditTimestamp(message?.createdAt, true)} · ${message?.itemId ? itemReference(snapshot, message.itemId) : "Whole receipt"}`;
     };
-    result.push({ label: "Exchange rate", before: rate(before.fx), after: rate(after.fx) });
+    result.push({ label: "Conversation order", before: order(oldMessageOrder, describe(before, oldMessages)), after: order(newMessageOrder, describe(after, newMessages)) });
   }
-  if (!same(before.receiptId, after.receiptId)) result.push({ label: "Receipt image", before: before.receiptId ? "Previous attached image" : "No image", after: after.receiptId ? "Attached image" : "No image" });
-  if (!same(before.expenseId, after.expenseId)) result.push({ label: "Receipt review", before: before.expenseId ? "Existing expense" : "New expense", after: after.expenseId ? "Existing expense" : "New expense" });
-  if (!same(before.userId, after.userId)) result.push({ label: "Traveller account", before: before.userId ? "Previously linked account" : "Not linked", after: after.userId ? "Linked account" : "Not linked" });
-  if (!same(before.memberOrder, after.memberOrder)) {
-    const order = (value: unknown) => Array.isArray(value) ? value.map((id, index) => names[text(id)] || `Person ${index + 1}`).join(", ") : "Not recorded";
-    result.push({ label: "Traveller order", before: order(before.memberOrder), after: order(after.memberOrder) });
-  }
-  if (!same(before.conversation, after.conversation)) {
-    const description = (value: unknown, snapshot: Record<string, unknown>) => {
-      if (!Array.isArray(value) || !value.length) return "No messages";
-      const latest = record(value[value.length - 1]);
-      const question = latest?.replyTo ? value.map(record).find(message => message?.id === latest.replyTo) : null;
-      const context = latest?.itemId || question?.itemId;
-      const author = text(latest?.authorName) || names[text(latest?.authorMemberId)] || (latest?.role === "assistant" ? "ChatGPT/Codex" : "Traveller");
-      return `${value.length} ${value.length === 1 ? "message" : "messages"}${latest ? ` · ${author}${context ? ` about ${itemName(snapshot, context)}` : " about this receipt"}: ${text(latest.text).slice(0, 300)}` : ""}`;
-    };
-    result.push({ label: "Receipt conversation", before: description(before.conversation, before), after: description(after.conversation, after) });
-  }
-  const oldMemory = record(before.memory);
-  const newMemory = record(after.memory);
-  if (text(oldMemory?.notes) !== text(newMemory?.notes)) {
-    result.push({ label: "Remembered receipt notes", before: text(oldMemory?.notes) || "No saved notes", after: text(newMemory?.notes) || "No saved notes" });
-  }
-  if (!same(oldMemory?.aliases || [], newMemory?.aliases || [])) {
-    result.push({ label: "Remembered names", before: memoryAliases(oldMemory?.aliases, before, names), after: memoryAliases(newMemory?.aliases, after, names) });
-  }
-  const oldItems = new Map((Array.isArray(before.items) ? before.items : []).map(value => { const item = record(value); return [text(item?.id), value]; }));
-  const newItems = new Map((Array.isArray(after.items) ? after.items : []).map(value => { const item = record(value); return [text(item?.id), value]; }));
-  let changedItems = 0;
-  for (const id of new Set([...oldItems.keys(), ...newItems.keys()])) {
-    if (same(oldItems.get(id), newItems.get(id))) continue;
-    changedItems++;
-    if (changedItems <= 12) result.push({
-      label: oldItems.has(id) ? newItems.has(id) ? "Item changed" : "Item removed" : "Item added",
-      before: itemDescription(oldItems.get(id), text(before.currency) || currency, names),
-      after: itemDescription(newItems.get(id), text(after.currency) || currency, names),
-    });
-  }
-  if (changedItems > 12) result.push({ label: "More items", before: "", after: `${changedItems - 12} further item changes` });
+  handled.add("memory");
+  const oldMemory = auditRecord(before.memory), newMemory = auditRecord(after.memory);
+  if (!same(oldMemory?.notes, newMemory?.notes)) result.push({ label: "Remembered receipt notes", before: auditText(oldMemory?.notes) || "No saved notes", after: auditText(newMemory?.notes) || "No saved notes" });
+  if (!same(oldMemory?.aliases || [], newMemory?.aliases || [])) result.push({ label: "Remembered names", before: memoryAliases(oldMemory?.aliases, before, names), after: memoryAliases(newMemory?.aliases, after, names) });
+  add("state", String(event.entityType) === "invite" ? "Invitation state" : "Image state", value => STATES[auditText(value)] || readable(value));
+  add("reason", "Reason", value => String(event.entityType) === "invite" && value === "owner" ? "Revoked by the holiday organiser" : REASONS[auditText(value)] || readable(value));
+  add("deletionReason", "Original image removal reason", value => REASONS[auditText(value)] || readable(value));
+  add("contentType", "Image format", value => ({ "image/jpeg": "JPEG image", "image/png": "PNG image", "image/webp": "WebP image" }[auditText(value)] || readable(value)));
+  add("sizeBytes", "Stored image size", value => typeof value === "number" ? `${value.toLocaleString("en-GB")} bytes` : "Not recorded");
+  add("sha256", "Image checksum (SHA-256)");
+  for (const [key, label] of Object.entries({ createdAt: "Created at", expiresAt: "Expires at", acceptedAt: "Accepted at", revokedAt: "Revoked at" })) add(key, label, value => value ? auditTimestamp(value, true) : "Not recorded");
+  add("initiatorName", "Cleanup initiated by");
+  for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) if (!handled.has(key) && !PRIVATE_FIELD.test(key) && !same(before[key], after[key])) result.push({ label: fieldLabel(key), before: readable(before[key]), after: readable(after[key]) });
   return result;
+}
+
+export function ActivityChanges({ fields, before, after }: { fields: AuditChange[]; before: boolean; after: boolean }) {
+  return fields.length ? <dl className="activity-changes">{fields.map((field, index) => <div key={`${field.label}-${index}`}>
+    <dt>{field.label}</dt><dd>{before && <span className="activity-before"><span className="muted">Before: </span>{field.before}</span>}{after && <span className="activity-after"><span className="muted">After: </span>{field.after}</span>}</dd>
+  </div>)}</dl> : <p className="footnote">No additional recorded field changes.</p>;
 }
 
 function eventLabel(event: ActivityEvent, currency?: Currency): string {
   const snapshot = event.after || event.before || {};
-  if (event.entityType === "payment") return `${money(snapshot.amount, currency)} payment`;
-  return text(snapshot.title) || text(snapshot.name) || ({ trip: "Holiday", expense: "Expense", member: "Traveller", draft: "Receipt draft" }[event.entityType]) || "Entry";
+  const entity = String(event.entityType);
+  if (entity === "payment") return `${money(snapshot.amount, currency)} payment`;
+  const labels: Record<string, string> = { trip: "Holiday", expense: "Expense", member: "Traveller", draft: "Receipt draft", invite: "Traveller invitation", receipt: "Receipt image" };
+  return auditText(snapshot.title) || auditText(snapshot.name) || labels[entity] || "Entry";
 }
 
-export default function ActivityPanel({ tripId, refreshKey = 0, currency, memberNames = {}, onRestore, busy = false }: ActivityPanelProps) {
-  const [attempt, setAttempt] = useState(0);
-  const key = `${tripId}:${refreshKey}:${attempt}`;
-  const [state, setState] = useState<State>({ key: "", events: [], nextCursor: null, loading: true, error: "" });
-  const olderRequest = useRef<AbortController | null>(null);
-  const active: State = state.key === key ? state : { key, events: [], nextCursor: null, loading: true, error: "" };
-
-  useEffect(() => {
-    const controller = new AbortController();
-    activityPage(tripId, controller.signal).then(page => {
-      if (!controller.signal.aborted) setState({ ...page, key, loading: false, error: "" });
-    }).catch(cause => {
-      if (!controller.signal.aborted) setState({ key, events: [], nextCursor: null, loading: false, error: cause instanceof Error ? cause.message : "Unable to load activity." });
-    });
-    return () => { controller.abort(); olderRequest.current?.abort(); };
-  }, [tripId, key]);
-
-  async function loadOlder() {
-    if (active.loading || active.nextCursor === null) return;
-    const controller = new AbortController();
-    olderRequest.current?.abort();
-    olderRequest.current = controller;
-    setState(previous => previous.key === key ? { ...previous, loading: true, error: "" } : previous);
-    try {
-      const page = await activityPage(tripId, controller.signal, active.nextCursor);
-      if (!controller.signal.aborted) setState(previous => {
-        if (previous.key !== key) return previous;
-        const ids = new Set(previous.events.map(event => event.id));
-        return { ...previous, events: [...previous.events, ...page.events.filter(event => !ids.has(event.id))], nextCursor: page.nextCursor, loading: false, error: "" };
-      });
-    } catch (cause) {
-      if (!controller.signal.aborted) setState(previous => previous.key === key ? {
-        ...previous,
-        ...(cause instanceof ActivityError && [401, 403].includes(cause.status) ? { events: [], nextCursor: null } : {}),
-        loading: false, error: cause instanceof Error ? cause.message : "Unable to load older changes.",
-      } : previous);
-    }
-  }
-
-  return (
-    <section className="activity-panel" aria-label="Holiday activity" aria-busy={active.loading}>
-      <h2 className="subheading">Activity</h2>
-      <p className="footnote">See who changed expenses, payments and travellers. Earlier snapshots remain in the history.</p>
-      {active.loading && !active.events.length && <p role="status">Loading activity…</p>}
-      {active.error && <p className="error" role="alert">{active.error}</p>}
-      {!active.loading && !active.error && !active.events.length && <p className="footnote">No recorded changes yet. Activity starts when this version of TripTab saves a change.</p>}
-      <ol className="activity-list">
-        {active.events.map(event => {
-          const fields = changes(event, currency, memberNames);
-          const parsedDate = new Date(event.createdAt);
-          return (
-            <li key={event.id} className="activity-event">
-              <p><strong>{event.actorName || "Traveller"}</strong> {({ create: "created", update: "updated", delete: "removed" }[event.action]) || "changed"} <strong>{eventLabel(event, currency)}</strong></p>
-              <p className="footnote"><time dateTime={event.createdAt}>{Number.isFinite(parsedDate.getTime()) ? parsedDate.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "Date unavailable"}</time>{event.source === "chatgpt" ? " · via ChatGPT/Codex" : " · in TripTab"}</p>
-              <details>
-                <summary>View {event.action === "update" ? "changes" : "details"}</summary>
-                {fields.length ? (
-                  <dl className="activity-changes">
-                    {fields.map((field, index) => (
-                      <div key={`${field.label}-${index}`}>
-                        <dt>{field.label}</dt>
-                        <dd>
-                          {event.before && field.before && <span className="activity-before"><span className="muted">Before: </span>{field.before}</span>}
-                          {event.after && field.after && <span className="activity-after"><span className="muted">After: </span>{field.after}</span>}
-                        </dd>
-                      </div>
-                    ))}
-                  </dl>
-                ) : <p className="footnote">Entry metadata changed.</p>}
-              </details>
-              {onRestore && event.action === "delete" && event.before && ["expense", "payment"].includes(event.entityType) && <button type="button" className="quiet" disabled={busy} onClick={() => onRestore(event)}>Review {event.entityType} to restore</button>}
-            </li>
-          );
-        })}
-      </ol>
-      {active.nextCursor !== null && <button type="button" className="quiet" disabled={active.loading} onClick={loadOlder}>{active.loading ? "Loading…" : "Load older changes"}</button>}
-      {active.error && !active.events.length && <button type="button" className="quiet" onClick={() => setAttempt(value => value + 1)}>Retry activity</button>}
-    </section>
-  );
+export default function ActivityPanel({ tripId, refreshKey = 0, currency, memberNames = {}, actorMemberNames = {}, onRestore, busy = false }: ActivityPanelProps) {
+  const history = useActivityPages<ActivityEvent>(`/api/activity?tripId=${encodeURIComponent(tripId)}`, tripId, refreshKey);
+  return <section className="activity-panel" aria-label="Holiday activity" aria-busy={history.loading}>
+    <h2 className="subheading">Activity</h2>
+    <p className="footnote">See who changed this holiday and the complete details before and after each change. Earlier records remain in the history.</p>
+    <button type="button" className="quiet" disabled={history.loading} onClick={history.retry}>{history.error ? "Retry activity" : "Refresh activity"}</button>
+    {history.loading && !history.events.length && <p role="status">Loading activity…</p>}
+    {history.loading && !!history.events.length && <p role="status">Checking for changes…</p>}
+    {history.error && <p className="error" role="alert">{history.error}</p>}
+    {!history.loading && !history.error && !history.events.length && <p className="footnote">No recorded changes yet. Activity starts when this version of TripTab saves a change.</p>}
+    <ol className="activity-list">{history.events.map(event => {
+      const actor = event.actorName || "Traveller", tripName = actorMemberNames[event.actorId];
+      const snapshot = event.after || event.before || {};
+      return <li key={event.id} className="activity-event">
+        <p><strong>{actor}{tripName && tripName !== actor ? ` (${tripName})` : ""}</strong> {({ create: "created", update: "updated", delete: "removed" }[event.action]) || "changed"} <strong>{eventLabel(event, currency)}</strong></p>
+        <p className="footnote"><time dateTime={event.createdAt}>{auditTimestamp(event.createdAt)}</time> · {auditSource(event.source)}</p>
+        <details>
+          <summary>View {event.action === "update" ? "changes" : "details"}</summary>
+          <dl className="activity-identifiers">
+            <div><dt>Recorded at</dt><dd><time dateTime={event.createdAt}>{auditTimestamp(event.createdAt, true)}</time></dd></div>
+            <div><dt>Changed by</dt><dd>{actor}{tripName ? ` · current traveller name: ${tripName}` : ""}<br />{event.source === "system" ? "System reference" : "Account"} {event.actorId}</dd></div>
+            <div><dt>Record</dt><dd>{eventLabel(event, currency)} · {event.entityId}</dd></div>
+            <div><dt>Change reference</dt><dd>{event.id} · holiday revision {event.revision}</dd></div>
+            {event.entityType === "invite" && <div><dt>Invitation for</dt><dd>{auditText(snapshot.memberName) || memberNames[auditText(snapshot.memberId)] || "Earlier traveller"} · traveller {auditText(snapshot.memberId)}</dd></div>}
+            {event.entityType === "receipt" && <>
+              {!!snapshot.uploaderId && <div><dt>Image uploaded by</dt><dd>{accountReference(snapshot.uploaderId, actorMemberNames)}</dd></div>}
+              {!!snapshot.initiatorId && <div><dt>Cleanup initiated by</dt><dd>{auditText(snapshot.initiatorName) || accountReference(snapshot.initiatorId, actorMemberNames)} · account {auditText(snapshot.initiatorId)}</dd></div>}
+              {!!snapshot.sha256 && <div><dt>Image checksum (SHA-256)</dt><dd>{auditText(snapshot.sha256)}</dd></div>}
+            </>}
+          </dl>
+          <p className="footnote">Traveller references use current holiday names with stable IDs. Message authors retain their recorded names.</p>
+          <ActivityChanges fields={changes(event, currency, memberNames, actorMemberNames)} before={!!event.before} after={!!event.after} />
+        </details>
+        {onRestore && event.action === "delete" && event.before && ["expense", "payment"].includes(event.entityType) && <button type="button" className="quiet" disabled={busy} onClick={() => onRestore(event)}>Review {event.entityType} to restore</button>}
+      </li>;
+    })}</ol>
+    {history.nextCursor !== null && <button type="button" className="quiet" disabled={history.loading} onClick={history.loadOlder}>{history.loading ? "Loading…" : "Load older changes"}</button>}
+  </section>;
 }
