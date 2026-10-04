@@ -91,7 +91,7 @@ The following eight dispositions cover the earlier inline comments on PRs #2 and
 
 ## Subsequent inline review at 18:24 UTC
 
-These eight dispositions address the 4 October 2026 follow-up comments on PRs #2 and #3. They supplement the earlier findings without rewriting historical evidence. Fix-branch coverage is identified below; final integrated regression counts, exact-head CI and native compiled checks for this follow-up remain pending.
+These eight dispositions address the 4 October 2026 follow-up comments on PRs #2 and #3. They supplement the earlier findings without rewriting historical evidence. Fix-branch coverage is identified below. The integrated PR #2 follow-up passes 296/296 tests and PR #3 passes 438/438, with TypeScript, lint and production builds. Exact-head CI and final compiled-stack checks remain pending.
 
 | Finding | Status | Disposition and remaining validation |
 |---|---|---|
@@ -115,15 +115,15 @@ Both commits exist in the expected repositories and match the current v6 tags; e
 
 ## Validation record
 
-The published PR #3 baseline on 4 October 2026 reported 317 passing regressions, including the earlier PR-review fixes, receipt context and expanded audit coverage. The R-09 through R-11 follow-up passed 338/338, the subsequent receipt-specific-history baseline passed 347/347, and the earlier integrated PR #3 inline-review run passed 367/367 with TypeScript, lint and production build. Those are historical results for the earlier versions, not the subsequent 18:24 follow-up. Final integrated counts, exact-head CI and native compiled checks for that follow-up are pending; earlier native/browser counts below describe the builds examined then.
+The published PR #3 baseline on 4 October 2026 reported 317 passing regressions, including the earlier PR-review fixes, receipt context and expanded audit coverage. The R-09 through R-11 follow-up passed 338/338, the subsequent receipt-specific-history baseline passed 347/347, and the earlier integrated PR #3 inline-review run passed 367/367 with TypeScript, lint and production build. Those are historical results for the earlier versions, not the subsequent 18:24 follow-up. The subsequent 18:24 follow-up passes 296/296 tests on PR #2 and 438/438 on PR #3, with TypeScript, lint and production builds. Exact-head CI and final compiled-stack checks remain pending; earlier native/browser counts below describe the builds examined then.
 
 | Check | Result |
 |---|---|
 | Clean locked installation (`npm run install:ci`) | Passed in an isolated clean directory; 687 packages installed |
-| Regression suite (`npm test`) | Historical baselines: PR #3 317/317; R-09–R-11 follow-up 338/338; receipt-specific history 347/347; earlier integrated PR #3 inline review 367/367. Subsequent 18:24 integrated run pending |
-| TypeScript (`npx --no-install tsc --noEmit`) | Earlier integrated PR #3 inline review passed with 0 errors; subsequent combined check pending |
-| ESLint (`npm run lint`) | Earlier integrated PR #3 inline review passed with 0 errors and the same 4 warnings; subsequent combined check pending |
-| Production build (`npm run build`) | Earlier integrated PR #3 inline-review build passed; subsequent combined build pending |
+| Regression suite (`npm test`) | Historical baselines: PR #3 317/317; R-09–R-11 follow-up 338/338; receipt-specific history 347/347; earlier integrated PR #3 inline review 367/367. Subsequent 18:24 integrated checks: PR #2 296/296; PR #3 438/438 |
+| TypeScript (`npx --no-install tsc --noEmit`) | Subsequent PR #2 and PR #3 integrated checks passed with 0 errors |
+| ESLint (`npm run lint`) | Subsequent PR #2 and PR #3 integrated checks passed with 0 errors and the same 4 warnings |
+| Production build (`npm run build`) | Subsequent PR #2 and PR #3 integrated builds passed |
 | CI workflow (`actionlint`) | Passed |
 | Native local HTTP checks | Earlier 22 HTTP and 4 invitation/activity checks passed; additional receipt route 13, export route 16 and MCP/push 4 checks passed. Invitation preview, stale-consent rejection and joining also passed native checks |
 | Native local browser checks | Earlier 20/20 passed; 6 additional checks passed for health/ETag, referenced-image deletion, image detachment/purge, expense restoration, payment restoration and phone CSV download. Re-review passed refresh races 3/3, restoration-concurrency 3/3, invitation/account-switch 2/2, concurrent matching-payment review 3/3 and sandboxed confirmations 8/8. Mounted 320/390/768-pixel layouts in light/dark mode showed no horizontal overflow |
@@ -135,7 +135,7 @@ The published PR #3 baseline on 4 October 2026 reported 317 passing regressions,
 | Earlier focused receipt-maintenance checks | 34/34 SQLite/HTTP receipt checks passed; scoped TypeScript and lint passed; historical integrated 338-test follow-up passed; hosted scheduling remains unverified |
 | Earlier focused registry/CAS/order/attribution checks | Fix-branch store/notification/receipt/export/profile/activity/invite run passed 182/182; full TypeScript and scoped lint passed. Independent registry checks verified one-time backfill preserves original trip/history bytes, indexed lookup, atomic rollback and immutable UPDATE/DELETE/replacement rejection |
 | Earlier focused MCP/schema/memory checks | 59/59 passed, including actual Ajv schemas for ordinary decimals, server precision rejection, other-speaker alias preservation and role-aware connected reads; TypeScript and scoped lint passed |
-| Subsequent focused History UI checks | Refresh/notification fix branch passed 22 targeted checks; actual React-renderer repair/diff/escaping tests passed 4/4. Scoped lint and fix-branch TypeScript passed. Combined follow-up validation, CI and native compiled checks remain pending |
+| Subsequent focused History UI checks | Refresh/notification fix branch passed 22 targeted checks; actual React-renderer repair/diff/escaping tests passed 4/4. Scoped lint and fix-branch TypeScript passed. Integrated PR #3 validation passed 438/438 tests, TypeScript, lint and build; exact-head CI and final compiled-stack checks remain pending |
 | Live migration and application deployment | Prior Sites migration-only release succeeded for 0003; remaining stacked PR app changes have not been deployed |
 | Production gateway verification and backup/restore drill | Not performed by this code change |
 
