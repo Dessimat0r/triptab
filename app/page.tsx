@@ -1,6 +1,6 @@
 "use client";
 import Link from "next/link";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ModalA11y from "@/components/modal-accessibility";
 import { useConfirmation } from "@/components/confirmation-dialog";
 import AccountPanel, { profileFromAuth, type Profile, type AuthResponse } from "@/components/account-panel";
@@ -9,10 +9,12 @@ import { TripSharing, JoinTrip } from "@/components/trip-sharing";
 import ShareSplit, { equalPercentages } from "@/components/share-split";
 import ReceiptCapture, { prepareReceiptImage } from "@/components/receipt-capture";
 import ReceiptChat from "@/components/receipt-chat";
+import ItemReceiptConversation from "@/components/item-receipt-conversation";
 import PaymentEditor from "@/components/payment-editor";
 import ActivityPanel from "@/components/activity-panel";
 import RestorationNotice, { type RestorationInfo } from "@/components/restoration-notice";
 import "@/components/receipt-history-view.css";
+import "@/components/receipt-editor-layout.css";
 import MemberStatement from "@/components/member-statement";
 import TripDetails from "@/components/trip-details";
 import DataExport from "@/components/data-export";
@@ -60,13 +62,28 @@ import {
 } from "@/lib/model";
 const uid = () => crypto.randomUUID();
 const today = () => localDate();
-const money = (n: number, c: string) =>
-  new Intl.NumberFormat("en-GB", {
-    style: "currency",
-    currency: c,
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(n / 100);
+const currencyFormatters = new Map<string, Intl.NumberFormat>();
+const money = (n: number, c: string) => {
+  let formatter = currencyFormatters.get(c);
+  if (!formatter) {
+    formatter = new Intl.NumberFormat("en-GB", { style: "currency", currency: c, minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    currencyFormatters.set(c, formatter);
+  }
+  return formatter.format(n / 100);
+};
+const expenseDateFormatter = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric" });
+function expenseDate(date: string) {
+  const value = new Date(date + "T12:00:00");
+  return Number.isNaN(value.getTime()) ? "Invalid Date" : expenseDateFormatter.format(value);
+}
+function previewShares(e: Expense, t: Trip) {
+  try { return total(e) > 0 ? expenseShares(e, t.members, t.currency) : null; }
+  catch { return null; }
+}
+function previewTotal(e: Expense, t: Trip) {
+  try { return expenseTotal(e, t.currency); }
+  catch { return null; }
+}
 function Amount({
   value,
   onChange,
@@ -157,6 +174,7 @@ export default function Home() {
   const savedEtag = useRef("");
   const latestSnapshot = useRef<{ data: Ledger; revision: number }>({ data: { trips: [] }, revision: 0 });
   const loadRequest = useRef(0);
+  const inFlightLoad = useRef<{ requestId: number; background: boolean; promise: Promise<{ data: Ledger; revision: number } | undefined> } | null>(null);
   const applySnapshot = useCallback((snapshot: { data: Ledger; revision: number }, etag = "", invalidateRefresh = false) => {
     if (snapshot.revision < latestSnapshot.current.revision) return false;
     latestSnapshot.current = snapshot;
@@ -168,56 +186,79 @@ export default function Home() {
   }, []);
   const trip = ledger.trips.find((t) => t.id === selected) || ledger.trips[0];
   const { confirm, dialog: confirmationDialog, confirming } = useConfirmation(`${trip?.id || ""}:${profile?.id || ""}`);
-  const load = useCallback(async () => {
-    const requestId = ++loadRequest.current;
-    setLoading(true);
-    try {
-      const r = await fetch("/api/ledger", { cache: "no-store" }),
-        b = (await r.json()) as {
-          data: Ledger;
-          revision: number;
-          error: string;
-        };
-      if (requestId !== loadRequest.current) return latestSnapshot.current;
-      if (!r.ok) {
-        if (r.status === 401) {
-          setAuth(true);
-          latestSnapshot.current = { data: { trips: [] }, revision: 0 };
-          savedEtag.current = "";
-          setLedger({ trips: [] });
-          setRevision(0);
-          setActivityRefreshKey(0);
-          setProfile(null);
-          return;
-        }
-        throw Error(b.error);
-      }
-      if (!applySnapshot(b, r.headers.get("etag") || "")) return latestSnapshot.current;
-      setAuth(false);
-      const baseline = editorBaseline.current;
-      if (baseline?.expense) {
-        const current = b.data.trips.find(value => value.id === baseline.tripId)?.expenses.find(value => value.id === baseline.expense?.id);
-        if (!equalFinancialValue(baseline.expense, current)) setEditorConflict({ latest: current || null });
-      }
-      return b;
-    } catch (e) {
-      if (requestId === loadRequest.current) setError(e instanceof Error ? e.message : "Unable to load your ledger");
-    } finally {
-      if (requestId === loadRequest.current) setLoading(false);
+  const load = useCallback(async (options?: { background?: boolean; signal?: AbortSignal }) => {
+    const pending = inFlightLoad.current;
+    // Background refreshes share the active request. A foreground action starts
+    // a fresh read if the pending request began before it in the background.
+    if (pending?.requestId === loadRequest.current && (!pending.background || options?.background)) {
+      if (!options?.background) setLoading(true);
+      return pending.promise;
     }
+    const requestId = ++loadRequest.current;
+    const requestedEtag = savedEtag.current;
+    if (!options?.background) setLoading(true);
+    const promise = (async () => {
+      try {
+        const r = await fetch("/api/ledger", { cache: "no-store", signal: options?.signal, headers: requestedEtag ? { "If-None-Match": requestedEtag } : {} });
+        if (requestId !== loadRequest.current) return latestSnapshot.current;
+        if (r.status === 304 && requestedEtag) {
+          if (r.headers.get("etag") !== requestedEtag) throw Error("The ledger refresh returned an inconsistent version. Refresh and try again.");
+          const revisionHeader = r.headers.get("X-Ledger-Revision");
+          const unchangedRevision = revisionHeader && /^\d+$/.test(revisionHeader) ? Number(revisionHeader) : NaN;
+          if (Number.isSafeInteger(unchangedRevision) && unchangedRevision >= latestSnapshot.current.revision) {
+            // Another holiday can advance the shared save token without changing
+            // this user's visible data. Keep the accepted ledger object intact.
+            latestSnapshot.current = { ...latestSnapshot.current, revision: unchangedRevision };
+            setRevision(unchangedRevision);
+          }
+          setLastRefreshed(new Date());
+          return latestSnapshot.current;
+        }
+        const b = (await r.json()) as { data: Ledger; revision: number; error: string };
+        if (requestId !== loadRequest.current) return latestSnapshot.current;
+        if (!r.ok) {
+          if (r.status === 401) {
+            setAuth(true);
+            latestSnapshot.current = { data: { trips: [] }, revision: 0 };
+            savedEtag.current = "";
+            setLedger({ trips: [] });
+            setRevision(0);
+            setActivityRefreshKey(0);
+            setProfile(null);
+            return;
+          }
+          throw Error(b.error);
+        }
+        if (!applySnapshot(b, r.headers.get("etag") || "")) return latestSnapshot.current;
+        setAuth(false);
+        const baseline = editorBaseline.current;
+        if (baseline?.expense) {
+          const current = b.data.trips.find(value => value.id === baseline.tripId)?.expenses.find(value => value.id === baseline.expense?.id);
+          if (!equalFinancialValue(baseline.expense, current)) setEditorConflict({ latest: current || null });
+        }
+        return b;
+      } catch (e) {
+        if (requestId === loadRequest.current && !options?.signal?.aborted) setError(e instanceof Error ? e.message : "Unable to load your ledger");
+      } finally {
+        if (requestId === loadRequest.current) setLoading(false);
+      }
+    })();
+    inFlightLoad.current = { requestId, background: !!options?.background, promise };
+    void promise.then(() => {
+      if (inFlightLoad.current?.requestId === requestId) inFlightLoad.current = null;
+    });
+    return promise;
   }, [applySnapshot]);
   useEffect(() => {
     if (auth || saving || uploading || loading) return;
-    const controller = new AbortController();
     const poll = async () => {
       if (document.visibilityState !== "visible" || !navigator.onLine) return;
       try {
-        const response = await fetch("/api/ledger", { method: "HEAD", cache: "no-store", signal: controller.signal, headers: savedEtag.current ? { "If-None-Match": savedEtag.current } : {} });
-        if (response.status === 401 || (response.ok && response.headers.get("etag") !== savedEtag.current)) await load();
+        await load({ background: true });
       } catch { /* Keep the current form; the online/focus refresh can retry. */ }
     };
     const timer = window.setInterval(() => void poll(), 30_000);
-    return () => { controller.abort(); window.clearInterval(timer); };
+    return () => { window.clearInterval(timer); };
   }, [auth, saving, uploading, loading, load]);
   useEffect(() => {
     Promise.resolve().then(() => {
@@ -248,7 +289,7 @@ export default function Home() {
     };
   }, [load]);
   useEffect(() => {
-    const refresh = () => { if (document.visibilityState === "visible" && !saving && !uploading) void load(); };
+    const refresh = () => { if (document.visibilityState === "visible" && !saving && !uploading) void load({ background: true }); };
     window.addEventListener("focus", refresh);
     document.addEventListener("visibilitychange", refresh);
     return () => { window.removeEventListener("focus", refresh); document.removeEventListener("visibilitychange", refresh); };
@@ -875,13 +916,6 @@ export default function Home() {
     if (saved) setPaymentEditor(null);
     return saved;
   }
-  function previewShares(e: Expense, t: Trip) {
-    try {
-      return total(e) > 0 ? expenseShares(e, t.members, t.currency) : null;
-    } catch {
-      return null;
-    }
-  }
   async function reviewRestore(event: ActivityEvent) {
     setReceiptHistoryOpen(false);
     if (!trip || !event.before || event.tripId !== trip.id) return;
@@ -916,24 +950,35 @@ export default function Home() {
     setRestoration({ actorName: event.actorName, createdAt: event.createdAt, adjustments });
     setEditing({ ...expense, adjustmentAllocation: "selected-participants", expenseId: undefined });
   }
-  function previewTotal(e: Expense, t: Trip) {
-    try {
-      return expenseTotal(e, t.currency);
-    } catch {
-      return null;
+  // Saved balances do not depend on form keystrokes or which panel is open.
+  const { balance, due, spent, calculationError } = useMemo(() => {
+    let balance: number[] = [], due: ReturnType<typeof settlements> = [], spent = 0, calculationError = "";
+    if (trip) {
+      try {
+        for (const expense of trip.expenses) {
+          try { spent += expenseTotal(expense, trip.currency); }
+          catch (cause) { throw Error(`Review “${expense.title}”: ${cause instanceof Error ? cause.message : "invalid saved total"}`); }
+        }
+        balance = balances(trip); due = settlements(trip);
+      } catch (cause) { calculationError = cause instanceof Error ? cause.message : "Review the saved receipts before settling up."; }
     }
-  }
-  let balance: number[] = [], due: ReturnType<typeof settlements> = [], spent = 0, calculationError = "";
-  if (trip) {
-    try {
-      for (const expense of trip.expenses) {
-        try { spent += expenseTotal(expense, trip.currency); }
-        catch (cause) { throw Error(`Review “${expense.title}”: ${cause instanceof Error ? cause.message : "invalid saved total"}`); }
-      }
-      balance = balances(trip); due = settlements(trip);
-    } catch (cause) { calculationError = cause instanceof Error ? cause.message : "Review the saved receipts before settling up."; }
-  }
-  const estimatedCharge = editing?.fx && trip ? previewTotal({ ...editing, bankAmount: undefined }, trip) : null;
+    return { balance, due, spent, calculationError };
+  }, [trip]);
+  const currentMemberIndex = trip?.members.findIndex(member => member.userId === profile?.id) ?? -1;
+  const memberNames = useMemo(() => Object.fromEntries(trip?.members.map(member => [member.id, member.name]) || []), [trip?.members]);
+  const actorMemberNames = useMemo(() => Object.fromEntries(trip?.members.filter(member => member.userId).map(member => [member.userId!, member.name]) || []), [trip?.members]);
+  const expensePreviews = useMemo(() => new Map(trip?.expenses.map(expense => [expense.id, {
+    total: previewTotal(expense, trip),
+    shares: currentMemberIndex >= 0 ? previewShares(expense, trip) : null,
+  }]) || []), [trip, currentMemberIndex]);
+  const editorShares = useMemo(() => editing && trip ? previewShares(editing, trip) : null, [editing, trip]);
+  const editorTotal = useMemo(() => editing && trip ? previewTotal(editing, trip) : null, [editing, trip]);
+  const editorOriginalTotal = useMemo(() => editing ? total(editing) : 0, [editing]);
+  const itemNames = useMemo(() => Object.fromEntries(editing?.items.map(item => [item.id, item.name]) || []), [editing?.items]);
+  const estimatedCharge = useMemo(() => editing?.fx && trip ? previewTotal({ ...editing, bankAmount: undefined }, trip) : null, [editing, trip]);
+  const receiptTimezones = useMemo(() => Array.from(new Set([
+    editing?.timezone || "Europe/London", "Europe/London", "Europe/Paris", "Europe/Berlin", "Europe/Rome", "Europe/Madrid", "Europe/Lisbon", "Europe/Prague", "Europe/Budapest", "Europe/Warsaw", "Europe/Athens", "Europe/Bucharest", "Europe/Zurich", "Europe/Stockholm", "Europe/Oslo", "Europe/Copenhagen", "Atlantic/Reykjavik", "Europe/Istanbul", "UTC", ...Intl.supportedValuesOf("timeZone"),
+  ])), [editing?.timezone]);
   const name = (id: string) =>
     trip?.members.find((m) => m.id === id)?.name || "Unknown";
   return (
@@ -1034,7 +1079,7 @@ export default function Home() {
           <button
             className="quiet"
             aria-label="Refresh ledger"
-            onClick={load}
+            onClick={() => void load()}
             disabled={saving || loading}
           >
             <RefreshCw size={16} className={loading ? "spin" : ""} />
@@ -1097,7 +1142,7 @@ export default function Home() {
                 <button className="textbutton" onClick={requestAccount}>Sign in to TripTab</button>
               )}
               {!auth && (
-                <button className="textbutton" onClick={load} disabled={saving}>
+                <button className="textbutton" onClick={() => void load()} disabled={saving}>
                   Refresh ledger
                 </button>
               )}
@@ -1200,7 +1245,7 @@ export default function Home() {
                     aria-selected={view === id}
                     className={view === id ? "selected" : ""}
                     key={id as string}
-                    onClick={async () => { if (id === "balances") await load(); setView(id as string); }}
+                    onClick={() => { setView(id as string); if (id === "balances") void load({ background: true }); }}
                   >
                     {typeof Icon !== "string" && <Icon size={17} />}
                     <span>{label as string}</span>
@@ -1239,13 +1284,7 @@ export default function Home() {
                                   {e.items.length === 1 ? "item" : "items"}
                                 </span>
                                 <small>
-                                  {new Date(
-                                    e.date + "T12:00:00",
-                                  ).toLocaleDateString("en-GB", {
-                                    day: "numeric",
-                                    month: "short",
-                                    year: "numeric",
-                                  })}{" "}
+                                  {expenseDate(e.date)}{" "}
                                   · {e.time} ·{" "}
                                   {e.bankAmount !== undefined
                                     ? "Bank charge"
@@ -1257,14 +1296,14 @@ export default function Home() {
                               </span>
                               <span className="expense-amount">
                                 <b>
-                                  {previewTotal(e, trip) === null ? "Needs review" : money(previewTotal(e, trip)!, trip.currency)}
+                                  {expensePreviews.get(e.id)?.total === null ? "Needs review" : money(expensePreviews.get(e.id)!.total!, trip.currency)}
                                 </b>
                                 <small>
                                   {e.currency !== trip.currency
                                     ? money(total(e), e.currency) + " original"
                                     : "Edit split"}
                                 </small>
-                                {trip.members.some(member => member.userId === profile?.id) && <small>Your share {previewShares(e, trip) ? money(previewShares(e, trip)![trip.members.findIndex(member => member.userId === profile?.id)], trip.currency) : "needs review"}</small>}
+                                {currentMemberIndex >= 0 && <small>Your share {expensePreviews.get(e.id)?.shares ? money(expensePreviews.get(e.id)!.shares![currentMemberIndex], trip.currency) : "needs review"}</small>}
                               </span>
                             </button>
                           ))
@@ -1362,7 +1401,7 @@ export default function Home() {
                       )}
                     </>
                   )}
-                  {view === "history" && <ActivityPanel tripId={trip.id} refreshKey={activityRefreshKey} currency={trip.currency} memberNames={Object.fromEntries(trip.members.map(member => [member.id, member.name]))} actorMemberNames={Object.fromEntries(trip.members.filter(member => member.userId).map(member => [member.userId!, member.name]))} busy={saving || loading} onRestore={event => void reviewRestore(event)} />}
+                  {view === "history" && <ActivityPanel tripId={trip.id} refreshKey={activityRefreshKey} currency={trip.currency} memberNames={memberNames} actorMemberNames={actorMemberNames} busy={saving || loading} onRestore={event => void reviewRestore(event)} />}
                   {view === "receipts" && (
                     <>
                       <div className="sectionheading">
@@ -1391,6 +1430,8 @@ export default function Home() {
                                 <img
                                   src={"/api/receipt?id=" + d.receiptId}
                                   alt={`Receipt image for ${d.title || "untitled receipt"}`}
+                                  loading="lazy"
+                                  decoding="async"
                                 />
                               ) : (
                                 <span className="expense-icon">
@@ -1570,7 +1611,7 @@ export default function Home() {
                       <Sparkles size={14} /> WITH YOUR ASSISTANT
                     </span>
                     <h3>
-                      Snap it.
+                      Snap it.{" "}
                       <br />
                       Check it. Split it.
                     </h3>
@@ -1941,30 +1982,7 @@ export default function Home() {
                         })
                       }
                     >
-                      {Array.from(
-                        new Set([
-                          editing.timezone,
-                          "Europe/London",
-                          "Europe/Paris",
-                          "Europe/Berlin",
-                          "Europe/Rome",
-                          "Europe/Madrid",
-                          "Europe/Lisbon",
-                          "Europe/Prague",
-                          "Europe/Budapest",
-                          "Europe/Warsaw",
-                          "Europe/Athens",
-                          "Europe/Bucharest",
-                          "Europe/Zurich",
-                          "Europe/Stockholm",
-                          "Europe/Oslo",
-                          "Europe/Copenhagen",
-                          "Atlantic/Reykjavik",
-                          "Europe/Istanbul",
-                          "UTC",
-                          ...Intl.supportedValuesOf("timeZone"),
-                        ]),
-                      ).map((z) => (
+                      {receiptTimezones.map((z) => (
                         <option value={z} key={z}>
                           {z.replaceAll("_", " ")}
                         </option>
@@ -2064,16 +2082,12 @@ export default function Home() {
                           ...prev,
                           items: prev.items.map(current => current.id === item.id ? { ...current, members, percentages, units } : current),
                         })} />}
-                        <details className="item-conversation">
-                          <summary>Discuss {item.name.trim() || `item ${i + 1}`}</summary>
-                          <ReceiptChat messages={editing.conversation || []} itemId={item.id}
-                            scopeLabel={item.name.trim() || `item ${i + 1}`} contextTitle={`Discuss ${item.name.trim() || `item ${i + 1}`}`}
-                            itemNames={Object.fromEntries(editing.items.map(value => [value.id, value.name]))}
-                            memberNames={Object.fromEntries(trip.members.map(value => [value.id, value.name]))}
-                            currentMemberId={trip.members.find(value => value.userId === profile?.id)?.id}
-                            memory={editing.memory} error={error} busy={uploading || saving || receiptChecking}
-                            onSend={sendReceiptQuestion} onRefresh={() => checkEditorReceipt(true)} />
-                        </details>
+                        <ItemReceiptConversation messages={editing.conversation || []} itemId={item.id}
+                          scopeLabel={item.name.trim() || `item ${i + 1}`}
+                          itemNames={itemNames} memberNames={memberNames}
+                          currentMemberId={trip.members[currentMemberIndex]?.id}
+                          memory={editing.memory} error={error} busy={uploading || saving || receiptChecking}
+                          onSend={sendReceiptQuestion} onRefresh={() => checkEditorReceipt(true)} />
                       </div>
                     ))}
                   </div>
@@ -2145,9 +2159,9 @@ export default function Home() {
                   <ReceiptChat
                     key={editing.draftId || editing.id}
                     messages={editing.conversation || []}
-                    itemNames={Object.fromEntries(editing.items.map(value => [value.id, value.name]))}
-                    memberNames={Object.fromEntries(trip.members.map(value => [value.id, value.name]))}
-                    currentMemberId={trip.members.find(value => value.userId === profile?.id)?.id}
+                    itemNames={itemNames}
+                    memberNames={memberNames}
+                    currentMemberId={trip.members[currentMemberIndex]?.id}
                     memory={editing.memory}
                     error={error}
                     busy={uploading || saving || receiptChecking}
@@ -2294,12 +2308,7 @@ export default function Home() {
                       <div key={m.id}>
                         <span>{m.name}</span>
                         <b>
-                          {previewShares(editing, trip)?.[i] === undefined
-                            ? "—"
-                            : money(
-                                previewShares(editing, trip)![i],
-                                trip.currency,
-                              )}
+                          {editorShares?.[i] === undefined ? "—" : money(editorShares[i], trip.currency)}
                         </b>
                       </div>
                     ))}
@@ -2345,11 +2354,11 @@ export default function Home() {
               <div className="editor-footer">
                 <div>
                   <small>Original receipt total</small>
-                  <strong>{money(total(editing), editing.currency)}</strong>
+                  <strong>{money(editorOriginalTotal, editing.currency)}</strong>
                   {editing.currency !== trip.currency &&
                     (editing.bankAmount !== undefined || editing.fx?.rate) && (
                       <small>
-                        {money(previewTotal(editing, trip) || 0, trip.currency)}{" "}
+                        {money(editorTotal || 0, trip.currency)}{" "}
                         to split
                       </small>
                     )}
@@ -2392,7 +2401,7 @@ export default function Home() {
                       (editing.bankAmount !== undefined && editing.currency === trip.currency) ||
                       !!receiptSplitError(editing) ||
                       editing.items.some((item) => !!itemSplitError(item)) ||
-                      total(editing) <= 0 ||
+                      editorOriginalTotal <= 0 ||
                       (editing.currency !== trip.currency &&
                         editing.bankAmount === undefined &&
                         !editing.fx?.rate)
@@ -2411,8 +2420,8 @@ export default function Home() {
                   title="Receipt history"
                   refreshKey={activityRefreshKey}
                   currency={trip.currency}
-                  memberNames={Object.fromEntries(trip.members.map(member => [member.id, member.name]))}
-                  actorMemberNames={Object.fromEntries(trip.members.filter(member => member.userId).map(member => [member.userId!, member.name]))}
+                  memberNames={memberNames}
+                  actorMemberNames={actorMemberNames}
                 />
               </div>}
             </form>

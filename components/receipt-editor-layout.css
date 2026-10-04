@@ -1,0 +1,44 @@
+/* The receipt dialog's own controls must fit the viewport at phone widths. */
+.editor-overlay,
+.editor,
+.editor form,
+.receipt-details-view,
+.editor-body,
+.editor-footer,
+.editor-footer > div,
+.editor .modalheading > div {
+  min-width: 0;
+  max-width: 100%;
+}
+.editor {
+  overflow-wrap: anywhere;
+}
+.editor input,
+.editor select,
+.editor textarea {
+  min-width: 0;
+  max-width: 100%;
+}
+.editor .modalheading > .iconbutton {
+  flex-shrink: 0;
+}
+.editor .footer-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.editor .footer-actions button {
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+}
+@media (max-width: 480px) {
+  .editor .fieldpair {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .editor-footer {
+    flex-wrap: wrap;
+  }
+  .editor-footer > div {
+    flex: 1 1 160px;
+  }
+}
