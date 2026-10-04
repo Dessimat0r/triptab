@@ -69,6 +69,21 @@ test("browser history restores owned sections without triggering server navigati
   } finally { unsubscribe(); }
 }));
 
+test("shared route subscriptions retain history handling until the last mounted view unsubscribes", () => browserFixture(browser => {
+  let firstUpdates = 0, secondUpdates = 0, frameworkNavigations = 0;
+  const unsubscribeFirst = subscribeTripTabLocation(() => firstUpdates++);
+  const unsubscribeSecond = subscribeTripTabLocation(() => secondUpdates++);
+  browser.addEventListener("popstate", () => frameworkNavigations++);
+  browser.dispatchEvent(new Event("popstate"));
+  assert.deepEqual([firstUpdates, secondUpdates, frameworkNavigations], [1, 1, 0]);
+  unsubscribeFirst();
+  browser.dispatchEvent(new Event("popstate"));
+  assert.deepEqual([firstUpdates, secondUpdates, frameworkNavigations], [1, 2, 0]);
+  unsubscribeSecond();
+  browser.dispatchEvent(new Event("popstate"));
+  assert.deepEqual([firstUpdates, secondUpdates, frameworkNavigations], [1, 2, 1]);
+}));
+
 test("section anchors retain normal modifier, new-tab, download and external-link behavior", () => browserFixture(browser => {
   function click(props: Parameters<typeof TripTabLink>[0], changes: Partial<MouseEvent<HTMLAnchorElement>> = {}) {
     let prevented = false;
