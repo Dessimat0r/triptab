@@ -249,7 +249,7 @@ function changes(event: ActivityEvent, currency: Currency | undefined, names: Re
   add("fx", "Exchange rate", value => {
     const fx = auditRecord(value); return fx ? `Rate: ${fx.rate}\nAs of: ${auditText(fx.asOf)}\nSource: ${auditText(fx.source)}` : "No recorded rate";
   });
-  for (const [key, label, entity] of [["receiptId", "Receipt image", "Image"], ["expenseId", "Receipt review target", "Expense"], ["userId", "Traveller account", "Account"], ["ownerId", "Holiday organiser account", "Account"], ["uploaderId", "Image uploaded by", "Account"], ["initiatorId", "Cleanup initiated by account", "Account"]]) add(key, label, value => entity === "Account" ? accountReference(value, accountNames) : reference(value, entity));
+  for (const [key, label, entity] of [["receiptId", "Receipt image", "Image"], ["sourceDraftId", "Linked receipt draft", "Draft"], ["expenseId", "Receipt review target", "Expense"], ["userId", "Traveller account", "Account"], ["ownerId", "Holiday organiser account", "Account"], ["uploaderId", "Image uploaded by", "Account"], ["initiatorId", "Cleanup initiated by account", "Account"]]) add(key, label, value => entity === "Account" ? accountReference(value, accountNames) : reference(value, entity));
   for (const [key, label, entity] of [["memberOrder", "Traveller order", "Traveller"], ["expenseOrder", "Expense order", "Expense"], ["paymentOrder", "Payment order", "Payment"], ["draftOrder", "Receipt draft order", "Draft"]]) add(key, label, value => order(value, id => key === "memberOrder" ? traveller(id, names) : `${entity} ${id}`));
   handled.add("items");
   const oldItems = new Map(entries(before.items).map(item => [auditText(item.id), item])), newItems = new Map(entries(after.items).map(item => [auditText(item.id), item]));
