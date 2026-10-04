@@ -356,12 +356,14 @@ export default function Home() {
   }
   function openExpense(expense: Expense) {
     if (!trip) return;
+    const pending = trip.drafts.find(draft => draft.expenseId === expense.id);
+    if (pending) {
+      openDraft(pending);
+      return;
+    }
     editorBaseline.current = { tripId: trip.id, expense: structuredClone(expense) };
     setEditorConflict(null); setReferenceRate(null); resetReceiptReview();
-    const pending = trip.drafts.find(draft => draft.expenseId === expense.id);
-    setProcessedReceipt(pending?.status === "review" ? pending : null);
-    setEditing({ ...structuredClone(expense), adjustmentAllocation: "selected-participants", expenseId: expense.id,
-      draftId: pending?.id, conversation: mergeReceiptConversation(expense.conversation, pending?.conversation), memory: pending?.memory ?? expense.memory });
+    setEditing({ ...structuredClone(expense), adjustmentAllocation: "selected-participants", expenseId: expense.id });
   }
   function keepExpenseEdits() {
     if (!editing || !editorConflict || !trip) return;
@@ -410,28 +412,33 @@ export default function Home() {
     });
   }
   function openDraft(d: Draft) {
+    if (!trip) return;
     resetReceiptReview();
     setPaste("");
     setFxError("");
-    editorBaseline.current = { tripId: trip!.id, expense: structuredClone(trip!.expenses.find(value => value.id === d.expenseId)) };
+    const existing = trip.expenses.find(value => value.id === d.expenseId);
+    const draft = structuredClone(d);
+    editorBaseline.current = { tripId: trip.id, expense: structuredClone(existing) };
     setEditorConflict(null); setReferenceRate(null);
     setEditing({
-      ...d,
+      ...draft,
       adjustmentAllocation: "selected-participants",
-      id: d.expenseId || d.id,
-      date: d.date || today(),
-      time: d.time || "12:00",
-      timezone: d.timezone || "Europe/London",
-      currency: d.currency || trip!.currency,
-      draftId: d.id,
-      items: d.items.length
-        ? d.items
+      id: draft.expenseId || draft.id,
+      date: draft.date || existing?.date || today(),
+      time: draft.time || existing?.time || "12:00",
+      timezone: draft.timezone || existing?.timezone || "Europe/London",
+      currency: draft.currency || trip.currency,
+      draftId: draft.id,
+      conversation: mergeReceiptConversation(existing?.conversation, draft.conversation),
+      memory: draft.memory ?? existing?.memory,
+      items: draft.items.length
+        ? draft.items
         : [
             {
               id: uid(),
               name: "",
               amount: 0,
-              members: trip!.members.map((m) => m.id),
+              members: trip.members.map((m) => m.id),
             },
           ],
     });
