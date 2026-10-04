@@ -50,6 +50,8 @@ const compiledStore = transpileModule(await readFile(new URL('../lib/store.ts', 
   .replace("'./auth'", JSON.stringify(new URL('../lib/auth.ts', import.meta.url).href))
   .replaceAll("'./audit'", JSON.stringify(auditURL))
   .replace("'./receipt-lifecycle'", JSON.stringify(new URL('../lib/receipt-lifecycle.ts', import.meta.url).href))
+  .replace("'./receipt-context'", JSON.stringify(new URL('../lib/receipt-context.ts', import.meta.url).href))
+  .replace("'./receipt-memory-ownership'", JSON.stringify(new URL('../lib/receipt-memory-ownership.ts', import.meta.url).href))
   .replace("'./notifications'", JSON.stringify(notificationURL));
 const storeURL = dataURL(compiledStore);
 const routeSource = transpileModule(await readFile(new URL('../app/api/profile/route.ts', import.meta.url), 'utf8'), { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
