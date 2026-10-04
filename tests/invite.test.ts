@@ -27,16 +27,19 @@ class SQLiteStatement {
 class SQLiteD1 {
   readonly sqlite = new DatabaseSync(':memory:');
   beforeWriteBatch?: () => void;
-  beforeInviteBatch?: () => void;
+  beforeInviteBatch?: () => void | Promise<void>;
   private pending: Promise<unknown> = Promise.resolve();
   prepare(sql: string) { return new SQLiteStatement(this.sqlite, sql); }
-  batch(statements: SQLiteStatement[]) {
+  batch(statements: SQLiteStatement[]): Promise<ReturnType<SQLiteStatement['runSync']>[]> {
+    if (statements.some(statement => /^(?:INSERT INTO|DELETE FROM) invites/.test(statement.sql.trim()))) {
+      const hook = this.beforeInviteBatch; this.beforeInviteBatch = undefined;
+      // Run before queuing this transaction, allowing a real competing ledger
+      // save to complete after the invite pre-read without a synthetic SQL save.
+      if (hook) return Promise.resolve(hook()).then(() => this.batch(statements));
+    }
     const operation = this.pending.then(() => {
       if (statements.some(statement => /^UPDATE sync_state/.test(statement.sql.trim()))) {
         const hook = this.beforeWriteBatch; this.beforeWriteBatch = undefined; hook?.();
-      }
-      if (statements.some(statement => /^INSERT INTO invites/.test(statement.sql.trim()))) {
-        const hook = this.beforeInviteBatch; this.beforeInviteBatch = undefined; hook?.();
       }
       this.sqlite.exec('BEGIN');
       try { const results = statements.map(statement => statement.runSync()); this.sqlite.exec('COMMIT'); return results; }
@@ -170,7 +173,7 @@ test('invitation create, replacement, revoke and accept use stable safe identiti
   assert.equal(firstEvent.id, firstStored.audit_id);
   assert.notEqual(firstEvent.id, token(first));
   assert.notEqual(firstEvent.id, firstStored.token_hash);
-  assert.equal(first.revision, baseline + 1);
+  assert.equal(first.revision, baseline);
   assert.deepEqual(firstEvent.after, { id: firstStored.audit_id, memberId: 'b', memberName: 'Traveller Bob', expiresAt: first.expiresAt, emailRestricted: true, status: 'pending' });
   assert.equal(firstEvent.before, null);
   const second = await create('b');
@@ -189,7 +192,7 @@ test('invitation create, replacement, revoke and accept use stable safe identiti
   events = inviteEvents(database);
   assert.equal(events.length, 4);
   assert.deepEqual(events[3].after, { ...events[2].after, status: 'revoked', reason: 'owner' });
-  assert.equal((await json<{ revision: number }>(revoked)).revision, baseline + 3);
+  assert.equal((await json<{ revision: number }>(revoked)).revision, baseline);
   const third = await create('b', 'bob@example.com');
   const accepted = await accept(third, await preview(third));
   assert.equal(accepted.status, 200);
@@ -200,7 +203,7 @@ test('invitation create, replacement, revoke and accept use stable safe identiti
   assert.deepEqual(events[5].after, { ...events[4].after, status: 'accepted' });
   assert.equal(events[5].actorId, users.bob);
   assert.equal(events[5].actorName, 'bob profile name');
-  assert.equal(events[5].revision, baseline + 5);
+  assert.equal(events[5].revision, baseline + 1);
   for (const event of events.slice(0, 5)) {
     assert.equal(event.actorId, users.owner);
     assert.equal(event.actorName, 'owner profile name');
@@ -232,10 +235,12 @@ test('replacement audits every earlier unused link including expired rollout row
   database.sqlite.prepare(`INSERT INTO invites (token_hash,audit_id,trip_id,member_id,email,expires_at,used_by,created_by)
     VALUES (?,?,?,?,?,?,NULL,?)`).run('7'.repeat(64), 'legacy-expired-audit-id', 'trip-1', 'b', 'private-pending@example.com', '2000-01-01T00:00:00Z', users.owner);
   const before = activityCount(database);
+  const inviteCountBefore = inviteEvents(database).length;
   const fresh = await create('b');
   assert.equal(activityCount(database), before + 3);
-  const events = inviteEvents(database).filter(event => event.revision === fresh.revision);
+  const events = inviteEvents(database).slice(inviteCountBefore);
   assert.equal(events.length, 3);
+  assert.ok(events.every(event => event.revision === fresh.revision));
   assert.equal(events.filter(event => event.after?.reason === 'replaced').length, 2);
   const expired = events.find(event => event.id === 'legacy-expired-audit-id')!;
   assert.equal(expired.before.status, 'expired');
@@ -289,24 +294,92 @@ test('unauthorized, invalid and duplicate revoke requests cannot fabricate lifec
   ]);
   assert.deepEqual(replies.map(response => response.status).sort(), [200, 409]);
   assert.equal(activityCount(database), before + 1);
-  assert.equal(revision(database), version + 1);
+  assert.equal(revision(database), version);
 });
 
 test('competing regeneration records only the committed winner and exactly its prior-link revocation', async () => {
   const database = await storage(); const invitation = await create();
   const previous = inviteEvents(database).at(-1)!;
   const before = activityCount(database); const version = revision(database);
-  const responses = await Promise.all([
-    post({ mode: 'create', tripId: 'trip-1', memberId: 'b' }),
-    post({ mode: 'create', tripId: 'trip-1', memberId: 'b' }),
-  ]);
+  let release!: () => void; let reached!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const atMutation = new Promise<void>(resolve => { reached = resolve; });
+  database.beforeInviteBatch = () => { reached(); return held; };
+  const first = post({ mode: 'create', tripId: 'trip-1', memberId: 'b' });
+  await atMutation;
+  const second = await post({ mode: 'create', tripId: 'trip-1', memberId: 'b' });
+  release();
+  const responses = [await first, second];
   assert.deepEqual(responses.map(response => response.status).sort(), [200, 409]);
   assert.equal(activityCount(database), before + 2);
-  assert.equal(revision(database), version + 1);
+  assert.equal(revision(database), version);
   assert.equal(inviteEvents(database).at(-2)!.id, previous.id);
   assert.equal(inviteEvents(database).at(-2)!.after.reason, 'replaced');
   assert.equal((await get('token=' + token(invitation))).status, 404);
   assert.equal(database.sqlite.prepare('SELECT COUNT(*) AS n FROM invites').get()?.n, 1);
+});
+
+test('creating, replacing and revoking links do not invalidate an already loaded financial ledger', async () => {
+  const database = await storage();
+  const loaded = await store.readLedger(users.owner);
+  const stateBefore = database.sqlite.prepare('SELECT * FROM sync_state').get();
+  const first = await create(); const replacement = await create();
+  assert.equal(first.revision, loaded.revision);
+  assert.equal(replacement.revision, loaded.revision);
+  const revoked = await post({ mode: 'revoke', tripId: 'trip-1', invitationId: replacement.invitationId });
+  assert.equal(revoked.status, 200);
+  assert.equal((await json<{ revision: number }>(revoked)).revision, loaded.revision);
+  assert.deepEqual(database.sqlite.prepare('SELECT * FROM sync_state').get(), stateBefore);
+  assert.ok(inviteEvents(database).every(event => event.revision === loaded.revision));
+  loaded.data.trips[0].name = 'Saved after managing invitations';
+  const saved = await store.writeLedger(users.owner, loaded.data, loaded.revision);
+  assert.equal(saved.revision, loaded.revision + 1);
+  assert.equal(saved.data.trips[0].name, 'Saved after managing invitations');
+});
+
+test('unrelated holiday saves between invitation snapshots and writes allow create, replacement and revoke', async context => {
+  for (const operation of ['create', 'replace', 'revoke'] as const) await context.test(operation, async () => {
+    const database = await storage();
+    const original = await store.readLedger(users.owner);
+    await store.writeLedger(users.owner, { trips: [...original.data.trips, holiday('other-trip')] }, original.revision);
+    const prior = operation === 'create' ? undefined : await create();
+    const tripBefore = database.sqlite.prepare('SELECT data FROM trips WHERE id=?').get('trip-1')?.data;
+    const revisionBefore = revision(database);
+    database.beforeInviteBatch = async () => {
+      const concurrent = await store.readLedger(users.owner);
+      concurrent.data.trips.find(trip => trip.id === 'other-trip')!.name = 'An unrelated holiday edit';
+      await store.writeLedger(users.owner, concurrent.data, concurrent.revision);
+      assert.equal(database.sqlite.prepare('SELECT data FROM trips WHERE id=?').get('trip-1')?.data, tripBefore);
+    };
+    const response = operation === 'revoke'
+      ? await post({ mode: 'revoke', tripId: 'trip-1', invitationId: prior!.invitationId })
+      : await post({ mode: 'create', tripId: 'trip-1', memberId: 'b' });
+    assert.equal(response.status, 200);
+    assert.equal((await json<{ revision: number }>(response)).revision, revisionBefore + 1);
+    assert.equal(revision(database), revisionBefore + 1, 'Only the concurrent financial save advances the ledger');
+    assert.equal(database.sqlite.prepare('SELECT data FROM trips WHERE id=?').get('trip-1')?.data, tripBefore);
+    const last = inviteEvents(database).at(-1)!;
+    assert.equal(last.revision, revisionBefore + 1, 'Audit captures the revision inside the invitation transaction');
+    assert.equal(last.after.status, operation === 'revoke' ? 'revoked' : 'pending');
+  });
+});
+
+test('revoke snapshot guards reject invitation and membership races without emitting stale activity', async context => {
+  for (const change of ['member', 'audit', 'claimed', 'membership'] as const) await context.test(change, async () => {
+    const database = await storage(); const invitation = await create();
+    const before = activityCount(database); const version = revision(database);
+    database.beforeInviteBatch = () => {
+      if (change === 'member') database.sqlite.exec("UPDATE invites SET member_id='c'");
+      if (change === 'audit') database.sqlite.exec("UPDATE invites SET audit_id='changed-audit'");
+      if (change === 'claimed') database.sqlite.prepare('UPDATE invites SET used_by=?').run(users.bob);
+      if (change === 'membership') database.sqlite.prepare('INSERT INTO memberships (trip_id,user_id,member_id) VALUES (?,?,?)').run('trip-1', users.bob, 'b');
+    };
+    const response = await post({ mode: 'revoke', tripId: 'trip-1', invitationId: invitation.invitationId });
+    assert.equal(response.status, 409);
+    assert.equal(database.sqlite.prepare('SELECT COUNT(*) AS n FROM invites').get()?.n, 1);
+    assert.equal(activityCount(database), before);
+    assert.equal(revision(database), version);
+  });
 });
 
 test('regeneration snapshot guard rejects an unversioned link replacement without logging stale revocations', async () => {

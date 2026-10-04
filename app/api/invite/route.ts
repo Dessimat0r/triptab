@@ -169,7 +169,6 @@ async function createInvite(request: Request, profile: Profile, body: Record<str
   const memberId = identifier(body.memberId, 'traveller');
   const email = targetEmail(body.email);
   const database = db();
-  const state = await invitationRevision(database);
   const { trip, data } = await ownerTrip(tripId, profile);
   const member = trip.members.find(value => value.id === memberId);
   if (!member) throw new RequestError('Choose a traveller who is already on this trip.');
@@ -188,12 +187,14 @@ async function createInvite(request: Request, profile: Profile, body: Record<str
     return { tripId, entityType: 'invite' as const, entityId: before.id, action: 'update' as const, before, after: { ...before, status: 'revoked', reason: 'replaced' } };
   }));
   const after = { id: auditId, memberId, memberName: member.name, expiresAt, emailRestricted: Boolean(email), status: 'pending' };
-  const marker = crypto.randomUUID();
+  // Issuing a link does not change the financial ledger. Its own snapshots
+  // guard the write, so an unrelated holiday save cannot invalidate this action.
+  const createdGate = { sql: 'EXISTS (SELECT 1 FROM invites WHERE token_hash = ? AND audit_id = ?)', bindings: [hash, auditId] };
   const results = await database.batch([
     database.prepare(`
-      UPDATE sync_state SET revision = revision + 1, last_write = ?
-      WHERE id = 1 AND revision = ?
-        AND NOT EXISTS (SELECT 1 FROM auth_links WHERE oai_user_id = ? AND user_id <> ?)
+      INSERT INTO invites (token_hash, audit_id, trip_id, member_id, email, expires_at, used_by, created_by)
+      SELECT ?, ?, ?, ?, ?, ?, NULL, ? WHERE
+        NOT EXISTS (SELECT 1 FROM auth_links WHERE oai_user_id = ? AND user_id <> ?)
         AND EXISTS (SELECT 1 FROM trips t WHERE t.id = ? AND t.owner = ? AND t.data = ?
           AND NOT EXISTS (SELECT 1 FROM memberships m WHERE m.trip_id = t.id AND m.member_id = ?)
           AND EXISTS (SELECT 1 FROM json_each(t.data, '$.members') j
@@ -201,29 +202,26 @@ async function createInvite(request: Request, profile: Profile, body: Record<str
         AND (SELECT json_group_array(json_array(i.token_hash, i.audit_id, i.email, i.expires_at, i.created_by))
           FROM (SELECT token_hash, audit_id, email, expires_at, created_by FROM invites
             WHERE trip_id = ? AND member_id = ? AND used_by IS NULL ORDER BY token_hash) i) = ?
-    `).bind(marker, state.revision, profile.id, profile.id, tripId, profile.id, data, memberId, memberId, tripId, memberId,
+    `).bind(hash, auditId, tripId, memberId, email, expiresAt, profile.id, profile.id, profile.id, tripId, profile.id, data, memberId, memberId, tripId, memberId,
       JSON.stringify(previous.map(row => [row.token_hash, row.audit_id, row.email, row.expires_at, row.created_by]))),
     database.prepare(`
-      INSERT INTO invites (token_hash, audit_id, trip_id, member_id, email, expires_at, used_by, created_by)
-      SELECT ?, ?, ?, ?, ?, ?, NULL, ? WHERE EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND last_write = ?)
-    `).bind(hash, auditId, tripId, memberId, email, expiresAt, profile.id, marker),
-    database.prepare(`
       DELETE FROM invites WHERE trip_id = ? AND member_id = ? AND used_by IS NULL AND token_hash <> ?
-        AND EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND last_write = ?)
-    `).bind(tripId, memberId, hash, marker),
+        AND ${createdGate.sql}
+    `).bind(tripId, memberId, hash, ...createdGate.bindings),
     ...activityStatements(database, [...changes, { tripId, entityType: 'invite', entityId: auditId, action: 'create', before: null, after }],
-      { id: profile.id, displayName: profile.displayName }, marker, state.revision + 1),
+      { id: profile.id, displayName: profile.displayName }, '', 'current', 'web', createdGate),
+    database.prepare('SELECT COALESCE((SELECT revision FROM sync_state WHERE id = 1), 0) AS revision'),
   ]);
   if (!results[0].meta.changes) throw new RequestError('This traveller changed or has already joined. Refresh the trip.', 409);
   const url = new URL('/', request.url);
   url.searchParams.set('invite', token);
-  return Response.json({ url: url.toString(), expiresAt, invitationId: await managementId(hash), revision: state.revision + 1 }, { headers: PRIVATE_HEADERS });
+  const revision = (results.at(-1)!.results[0] as { revision: number }).revision;
+  return Response.json({ url: url.toString(), expiresAt, invitationId: await managementId(hash), revision }, { headers: PRIVATE_HEADERS });
 }
 
 async function revokeInvitation(profile: Profile, body: Record<string, unknown>) {
   const tripId = identifier(body.tripId, 'trip');
   const database = db();
-  const state = await invitationRevision(database);
   const { data } = await ownerTrip(tripId, profile);
   if (typeof body.invitationId !== 'string' || !/^invite_[a-f0-9]{64}$/.test(body.invitationId)) throw new RequestError('Choose a valid invitation.');
   const rows = await activeInvitations(tripId, profile);
@@ -231,26 +229,26 @@ async function revokeInvitation(profile: Profile, body: Record<string, unknown>)
   const selected = references.find(value => value.id === body.invitationId)?.row;
   if (!selected) throw new RequestError('This invitation is no longer active. Refresh the invitations.', 409);
   const before = await invitationSnapshot(selected, selected.member_name, 'pending');
-  const marker = crypto.randomUUID();
   const results = await database.batch([
     database.prepare(`
-      UPDATE sync_state SET revision = revision + 1, last_write = ?
-      WHERE id = 1 AND revision = ?
+      DELETE FROM invites WHERE token_hash = ? AND audit_id = ? AND trip_id = ? AND member_id = ? AND created_by = ?
+        AND used_by IS NULL AND expires_at = ? AND expires_at > ? AND email IS ?
         AND NOT EXISTS (SELECT 1 FROM auth_links WHERE oai_user_id = ? AND user_id <> ?)
-        AND EXISTS (SELECT 1 FROM invites i JOIN trips t ON t.id = i.trip_id
-          WHERE i.token_hash = ? AND i.audit_id = ? AND i.trip_id = ? AND i.created_by = ?
-            AND i.used_by IS NULL AND i.expires_at = ? AND i.expires_at > ? AND i.email IS ?
-            AND t.owner = ? AND t.data = ?)
-    `).bind(marker, state.revision, profile.id, profile.id, selected.token_hash, selected.audit_id, tripId, profile.id,
-      selected.expires_at, new Date().toISOString(), selected.email, profile.id, data),
-    database.prepare(`DELETE FROM invites WHERE token_hash = ?
-      AND EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND last_write = ?)
-    `).bind(selected.token_hash, marker),
+        AND EXISTS (SELECT 1 FROM trips t WHERE t.id = invites.trip_id AND t.owner = ? AND t.data = ?
+          AND NOT EXISTS (SELECT 1 FROM memberships m WHERE m.trip_id = t.id AND m.member_id = invites.member_id)
+          AND EXISTS (SELECT 1 FROM json_each(t.data, '$.members') j
+            WHERE json_extract(j.value, '$.id') = invites.member_id AND json_extract(j.value, '$.userId') IS NULL))
+    `).bind(selected.token_hash, selected.audit_id, tripId, selected.member_id, profile.id, selected.expires_at, new Date().toISOString(), selected.email,
+      profile.id, profile.id, profile.id, data),
+    // This single lifecycle event immediately follows the conditional delete.
+    // Both statements roll back together if audit storage fails.
     ...activityStatements(database, [{ tripId, entityType: 'invite', entityId: before.id, action: 'update', before,
-      after: { ...before, status: 'revoked', reason: 'owner' } }], { id: profile.id, displayName: profile.displayName }, marker, state.revision + 1),
+      after: { ...before, status: 'revoked', reason: 'owner' } }], { id: profile.id, displayName: profile.displayName }, '', 'current', 'web', { sql: 'changes() > 0', bindings: [] }),
+    database.prepare('SELECT COALESCE((SELECT revision FROM sync_state WHERE id = 1), 0) AS revision'),
   ]);
   if (!results[0].meta.changes) throw new RequestError('This invitation changed or was already used. Refresh the invitations.', 409);
-  return Response.json({ revoked: true, revision: state.revision + 1 }, { headers: PRIVATE_HEADERS });
+  const revision = (results.at(-1)!.results[0] as { revision: number }).revision;
+  return Response.json({ revoked: true, revision }, { headers: PRIVATE_HEADERS });
 }
 
 async function acceptInvite(profile: Profile, body: Record<string, unknown>) {
