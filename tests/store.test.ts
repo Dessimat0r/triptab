@@ -559,7 +559,7 @@ test('receipt memory validates bounded notes and exact alias targets while retai
   }
 });
 
-test('new receipt messages ignore forged speakers and record the authenticated creator on user and assistant roles', async () => {
+test('new receipt messages stamp user speakers and never attribute assistant replies to a traveller', async () => {
   const database = await storage();
   const holiday = trip();
   holiday.expenses = [{ ...dinner(), conversation: [
@@ -568,14 +568,42 @@ test('new receipt messages ignore forged speakers and record the authenticated c
   ] }];
   const state = await create(database, holiday);
   const messages = state.data.trips[0].expenses[0].conversation!;
-  for (const message of messages) {
-    assert.equal(message.authorMemberId, 'a');
-    assert.equal(message.authorName, 'Original Owner');
-  }
+  assert.equal(messages[0].authorMemberId, 'a');
+  assert.equal(messages[0].authorName, 'Original Owner');
+  assert.equal(messages[1].authorMemberId, undefined);
+  assert.equal(messages[1].authorName, undefined);
   assert.equal(messages[0].role, 'user');
   assert.equal(messages[1].role, 'assistant');
   assert.equal(messages[0].itemId, 'food');
   assert.deepEqual(lastEntity(await history(), 'expense', 'dinner').after?.conversation, messages);
+});
+
+test('legacy assistant stamps are removed without changing words, historical evidence or unchanged invalid money', async () => {
+  const database = await storage();
+  const legacy = seedLegacy(database);
+  const messages = [
+    { id: 'legacy-user', role: 'user' as const, text: 'My meal?', createdAt: '2026-10-04T20:31:00Z', authorMemberId: 'b', authorName: 'Bob' },
+    { id: 'legacy-ai', role: 'assistant' as const, text: 'Check the receipt.', createdAt: '2026-10-04T20:32:00Z', replyTo: 'legacy-user', authorMemberId: 'a', authorName: 'Wrong human' },
+  ];
+  legacy.expenses[0].conversation = messages;
+  database.sqlite.prepare('UPDATE trips SET data=? WHERE id=?').run(JSON.stringify(legacy), legacy.id);
+  let state = await store.readLedger(actor);
+  assert.equal(state.data.trips[0].expenses[0].conversation![1].authorName, undefined);
+  assert.equal(state.data.trips[0].expenses[0].conversation![1].authorMemberId, undefined);
+  assert.equal(JSON.parse(database.sqlite.prepare('SELECT data FROM trips WHERE id=?').get(legacy.id)?.data as string)
+    .expenses[0].conversation[1].authorName, 'Wrong human', 'reading must not rewrite stored evidence');
+  state = await store.writeLedger(actor, state.data, state.revision);
+  const saved = state.data.trips[0].expenses[0];
+  assert.equal(saved.bankAmount, 0); assert.equal(saved.adjustmentAllocation, undefined);
+  assert.deepEqual(saved.conversation![0], messages[0]);
+  assert.deepEqual(saved.conversation![1], { id: 'legacy-ai', role: 'assistant', text: 'Check the receipt.',
+    createdAt: '2026-10-04T20:32:00Z', replyTo: 'legacy-user' });
+  const event = lastEntity(await history(actor, legacy.id), 'expense', saved.id);
+  assert.deepEqual(event.before?.conversation, messages, 'the repair audit retains its truthful before image');
+  assert.deepEqual(event.after?.conversation, saved.conversation);
+  const changed = structuredClone(state.data);
+  changed.trips[0].expenses[0].conversation![1].text = 'Rewritten reply';
+  await assert.rejects(store.writeLedger(actor, changed, state.revision), /Saved receipt messages cannot be edited/);
 });
 
 test('known Bob messages keep their original speakers when Alice copies a receipt into review and submits a new reply', async () => {
@@ -610,8 +638,8 @@ test('known Bob messages keep their original speakers when Alice copies a receip
   assert.deepEqual(alice.data.trips[0].drafts[0].conversation![0], savedQuestion);
   assert.deepEqual(alice.data.trips[0].expenses[0].conversation![0], savedQuestion);
   const reply = alice.data.trips[0].drafts[0].conversation![1];
-  assert.equal(reply.authorMemberId, 'a');
-  assert.equal(reply.authorName, 'Original Owner');
+  assert.equal(reply.authorMemberId, undefined);
+  assert.equal(reply.authorName, undefined);
   assert.equal(reply.replyTo, 'bob-question');
   assert.equal(lastEntity(await history(), 'draft', 'review-draft').source, 'chatgpt');
   // Posting the review may remove its container without dropping provenance.
@@ -619,7 +647,7 @@ test('known Bob messages keep their original speakers when Alice copies a receip
   alice.data.trips[0].drafts = [];
   alice = await store.writeLedger(actor, alice.data, alice.revision);
   assert.deepEqual(alice.data.trips[0].expenses[0].conversation![0], savedQuestion);
-  assert.equal(alice.data.trips[0].expenses[0].conversation![1].authorMemberId, 'a');
+  assert.equal(alice.data.trips[0].expenses[0].conversation![1].authorMemberId, undefined);
 });
 
 test('saved message IDs cannot be reused to rewrite another traveller’s words or item context', async context => {
