@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   allocate, balances, convertAmount, CURRENCIES, draftSchema, expenseSchema, expenseShares,
-  expenseTotal, settlements, shares, total, validateLedger,
+  expenseTotal, itemSchema, itemShares, itemSplitError, receiptSplitError, settlements, shares, total, validateLedger,
 } from '../lib/model';
-import type { Expense, Trip } from '../lib/model';
+import type { Expense, Item, Trip } from '../lib/model';
 
 const members = [{ id: 'a', name: 'Alice' }, { id: 'b', name: 'Bob' }, { id: 'c', name: 'Chloe' }];
 function expense(overrides: Partial<Expense> = {}): Expense {
@@ -134,4 +134,163 @@ test('preserves optional holiday dates and rejects invalid date ranges', () => {
   assert.throws(() => validateLedger({ trips: [{ ...holiday, endDate: '2027-06-02' }] }), /end date/);
   assert.throws(() => validateLedger({ trips: [{ ...holiday, startDate: '2027-02-30' }] }));
   validateLedger({ trips: [{ ...trip(), startDate: '2027-06-03' }] });
+});
+
+test('splits individual item costs 70/30 while crediting the sole receipt payer', () => {
+  const dinner = expense({
+    currency: 'GBP', fx: undefined, payer: 'c',
+    items: [{ id: 'food', name: 'Food', amount: 10000, members: ['a', 'b'], percentages: { a: 70, b: 30 } }],
+  });
+  assert.deepEqual(itemShares(dinner.items[0], members), [7000, 3000, 0]);
+  assert.deepEqual(shares(dinner, members), [7000, 3000, 0]);
+  assert.deepEqual(balances(trip([dinner])), [-7000, -3000, 10000]);
+});
+
+test('supports one person owing 100%, including an explicitly selected zero share', () => {
+  const single: Item = { id: 'coffee', name: 'Coffee', amount: 499, members: ['c'], percentages: { c: 100 } };
+  assert.deepEqual(itemShares(single, members), [0, 0, 499]);
+  const withZero: Item = { ...single, members: ['a', 'b'], percentages: { a: 0, b: 100 } };
+  assert.deepEqual(itemShares(withZero, members), [0, 499, 0]);
+  assert.equal(itemSchema.safeParse(withZero).success, true);
+  assert.deepEqual(itemShares({ ...withZero, amount: 0 }, members), [0, 0, 0]);
+});
+
+test('fractional percentages conserve cents and preserve selected-person remainder ordering', () => {
+  const fractional: Item = {
+    id: 'bread', name: 'Bread', amount: 100, members: ['a', 'b', 'c'],
+    percentages: { a: 33.33, b: 33.33, c: 33.34 },
+  };
+  assert.deepEqual(itemShares(fractional, members), [33, 33, 34]);
+  assert.deepEqual(itemShares({ ...fractional, amount: 1 }, members), [0, 0, 1]);
+  for (let amount = 0; amount < 1000; amount++) {
+    assert.equal(sum(itemShares({ ...fractional, amount }, members)), amount);
+  }
+  const tied: Item = { id: 'water', name: 'Water', amount: 1, members: ['b', 'a'], percentages: { a: 50, b: 50 } };
+  assert.deepEqual(itemShares(tied, members), [0, 1, 0]);
+  assert.deepEqual(itemShares({ ...tied, percentages: undefined }, members), [0, 1, 0]);
+});
+
+test('percentage costs flow through tax, tip, discount, conversion and actual bank fees', () => {
+  const dinner = expense({
+    payer: 'c', items: [{ id: 'food', name: 'Food', amount: 10000, members: ['a', 'b'], percentages: { a: 70, b: 30 } }],
+    tax: 1000, tip: 500, discount: 500,
+  });
+  assert.deepEqual(shares(dinner, members), [7700, 3300, 0]);
+  assert.equal(expenseTotal(dinner, 'GBP'), 9350);
+  assert.deepEqual(expenseShares(dinner, members, 'GBP'), [6545, 2805, 0]);
+  const bankCharged = { ...dinner, bankAmount: 9801 };
+  assert.deepEqual(expenseShares(bankCharged, members, 'GBP'), [6861, 2940, 0]);
+  assert.deepEqual(balances(trip([bankCharged])), [-6861, -2940, 9801]);
+  assert.equal(sum(balances(trip([bankCharged]))), 0);
+});
+
+test('rejects invalid explicit percentages in both the schema and share calculation', () => {
+  const base: Item = { id: 'food', name: 'Food', amount: 100, members: ['a', 'b'], percentages: { a: 70, b: 30 } };
+  const malformed: Item[] = [
+    { ...base, members: [], percentages: {} },
+    { ...base, members: ['a', 'a'], percentages: { a: 100 } },
+    { ...base, percentages: { a: 70, b: 20 } },
+    { ...base, percentages: { a: 0, b: 0 } },
+    { ...base, percentages: { a: 100 } },
+    { ...base, percentages: { a: 70, unknown: 30 } },
+    { ...base, percentages: { a: 70, b: 30, c: 0 } },
+    { ...base, percentages: { a: 33.333, b: 66.667 } },
+    { ...base, percentages: { a: -1, b: 101 } },
+    { ...base, percentages: { a: Number.NaN, b: 30 } },
+    { ...base, percentages: { a: Infinity, b: 30 } },
+  ];
+  for (const item of malformed) {
+    assert.ok(itemSplitError(item));
+    assert.equal(itemSchema.safeParse(item).success, false);
+    assert.throws(() => itemShares(item, members));
+    assert.throws(() => validateLedger(ledger([expense({ items: [item] })])));
+  }
+  const unknown: Item = { ...base, members: ['a', 'unknown'], percentages: { a: 70, unknown: 30 } };
+  assert.throws(() => itemShares(unknown, members), /Unknown member/);
+  assert.throws(() => validateLedger(ledger([expense({ items: [unknown] })])), /assignments/);
+  assert.throws(() => itemShares({ ...base, members: [] }, members), /at least one person/);
+});
+
+test('keeps percentage metadata in persisted expenses and review drafts without changing legacy receipts', () => {
+  const item: Item = { id: 'food', name: 'Food', amount: 10001, members: ['a', 'b'], percentages: { a: 33.33, b: 66.67 } };
+  const holiday = trip([expense({ items: [item] })]);
+  holiday.drafts = [{ ...expense({ id: 'review', items: [item] }), status: 'review' }];
+  const saved = validateLedger(JSON.parse(JSON.stringify({ trips: [holiday] })));
+  assert.deepEqual(saved.trips[0].expenses[0].items[0].percentages, { a: 33.33, b: 66.67 });
+  assert.deepEqual(saved.trips[0].drafts[0].items[0].percentages, { a: 33.33, b: 66.67 });
+  assert.deepEqual(shares(expense(), members), [3334, 3334, 3333]);
+  const oldSaved = validateLedger(ledger()).trips[0].expenses[0].items[0];
+  assert.equal(oldSaved.percentages, undefined);
+  assert.deepEqual(itemShares(oldSaved, members), [3334, 3334, 3333]);
+});
+
+test('receipt-wide percentages override item responsibilities and include tax, tip and discount', () => {
+  const dinner = expense({
+    payer: 'c', percentages: { a: 60, b: 40 },
+    items: [{ id: 'food', name: 'Food', amount: 10000, members: ['c'], percentages: { c: 100 } }],
+    tax: 1000, tip: 500, discount: 500,
+  });
+  assert.deepEqual(shares(dinner, members), [6600, 4400, 0]);
+  assert.deepEqual(expenseShares(dinner, members, 'GBP'), [5610, 3740, 0]);
+  assert.deepEqual(expenseShares({ ...dinner, bankAmount: 9801 }, members, 'GBP'), [5881, 3920, 0]);
+  assert.deepEqual(balances(trip([{ ...dinner, bankAmount: 9801 }])), [-5881, -3920, 9801]);
+  assert.equal(receiptSplitError(dinner), null);
+});
+
+test('converts receipt-wide percentages directly without reweighting rounded original pennies', () => {
+  const dinner = expense({
+    items: [{ id: 'small', name: 'Small charge', amount: 1, members: ['a'] }],
+    percentages: { a: 50, b: 50 }, fx: { rate: 2, asOf: '2026-08-15', source: 'manual' },
+  });
+  assert.deepEqual(shares(dinner, members), [1, 0, 0]);
+  assert.deepEqual(expenseShares(dinner, members, 'GBP'), [1, 1, 0]);
+  assert.deepEqual(expenseShares({ ...dinner, bankAmount: 3 }, members, 'GBP'), [2, 1, 0]);
+  assert.deepEqual(expenseShares({ ...dinner, currency: 'GBP', fx: undefined, bankAmount: 2 }, members, 'GBP'), [1, 1, 0]);
+});
+
+test('allows a selected subset of known people for receipt-wide percentages', () => {
+  const dinner = expense({
+    currency: 'GBP', fx: undefined,
+    items: [{ id: 'food', name: 'Food', amount: 10000, members: ['a', 'b', 'c'] }],
+    percentages: { b: 40, c: 60 },
+  });
+  validateLedger(ledger([dinner]));
+  assert.deepEqual(shares(dinner, members), [0, 4000, 6000]);
+  assert.deepEqual(balances(trip([dinner])), [10000, -4000, -6000]);
+  assert.deepEqual(shares({ ...dinner, percentages: { c: 100 } }, members), [0, 0, 10000]);
+  assert.deepEqual(shares({ ...dinner, percentages: { a: 0, c: 100 } }, members), [0, 0, 10000]);
+});
+
+test('rejects invalid receipt-wide percentages and checks hidden item splits independently', () => {
+  const malformed = [
+    {}, { a: 70, b: 20 }, { a: 0, b: 0 }, { a: 33.333, b: 66.667 },
+    { a: -1, b: 101 }, { a: Number.NaN }, { a: Infinity }, { '': 100 },
+    Object.fromEntries(Array.from({ length: 51 }, (_, index) => [`person-${index}`, index ? 0 : 100])),
+  ];
+  for (const percentages of malformed) {
+    const dinner = expense({ percentages });
+    assert.ok(receiptSplitError(dinner));
+    assert.equal(expenseSchema.safeParse(dinner).success, false);
+    assert.throws(() => shares(dinner, members));
+    assert.throws(() => expenseShares(dinner, members, 'GBP'));
+    assert.throws(() => validateLedger(ledger([dinner])));
+  }
+  const unknown = expense({ percentages: { a: 70, unknown: 30 } });
+  assert.throws(() => validateLedger(ledger([unknown])), /receipt percentage assignments/);
+  assert.throws(() => shares(unknown, members), /Unknown member/);
+  assert.throws(() => expenseShares(unknown, members, 'GBP'), /Unknown member/);
+  const malformedItem = expense({ percentages: { a: 100 }, items: [{ id: 'food', name: 'Food', amount: 100, members: ['b'], percentages: { b: 90 } }] });
+  assert.equal(expenseSchema.safeParse(malformedItem).success, false);
+  assert.throws(() => validateLedger(ledger([malformedItem])));
+});
+
+test('preserves receipt-wide percentages on saved expenses and review drafts', () => {
+  const dinner = expense({ percentages: { a: 60, c: 40 } });
+  const holiday = trip([dinner]);
+  holiday.drafts = [{ ...dinner, id: 'review', status: 'review' }];
+  const saved = validateLedger(JSON.parse(JSON.stringify({ trips: [holiday] })));
+  assert.deepEqual(saved.trips[0].expenses[0].percentages, { a: 60, c: 40 });
+  assert.deepEqual(saved.trips[0].drafts[0].percentages, { a: 60, c: 40 });
+  assert.equal(draftSchema.safeParse({ ...holiday.drafts[0], percentages: { a: 50 } }).success, false);
+  assert.equal(receiptSplitError(expense()), null);
 });

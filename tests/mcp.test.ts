@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { transpileModule, ModuleKind, ScriptTarget } from 'typescript';
-import { validateLedger } from '../lib/model';
+import { shares, validateLedger } from '../lib/model';
 import type { Ledger, Trip } from '../lib/model';
 
 const user = 'owner-1';
@@ -80,7 +80,7 @@ const compiled = transpileModule(source, { compilerOptions: { module: ModuleKind
   .replace("'@/lib/model'", JSON.stringify(new URL('../lib/model.ts', import.meta.url).href))
   .replace("'zod'", JSON.stringify(import.meta.resolve('zod')));
 const route = await import('data:text/javascript;base64,' + Buffer.from(compiled).toString('base64')) as { POST(request: Request): Promise<Response> };
-type Reply = { result: { isError?: boolean; content?: { type: string; text: string }[]; tools?: { name: string; inputSchema: { properties: Record<string, unknown> }; annotations: { readOnlyHint: boolean } }[] } };
+type Reply = { result: { isError?: boolean; content?: { type: string; text: string }[]; tools?: { name: string; description: string; inputSchema: { properties: Record<string, unknown> }; annotations: { readOnlyHint: boolean } }[] } };
 async function invoke(name: string, args: Record<string, unknown>, emailHeader = false) {
   const request = new Request('https://triptab.test/mcp', {
     method: 'POST', headers: { 'content-type': 'application/json', 'oai-authenticated-user-id': user, ...(emailHeader ? { 'oai-authenticated-user-email': profile.email } : {}) },
@@ -107,6 +107,14 @@ test('lists native holiday and natural-language expense tools with write annotat
     const tool = reply.result.tools!.find(tool => tool.name === name);
     assert.ok(tool);
     assert.equal(tool.annotations.readOnlyHint, false);
+    if (name !== 'create_holiday') {
+      const schema = tool.inputSchema.properties.draft as { properties: { percentages: { additionalProperties: Record<string, unknown> }; items: { items: { properties: Record<string, unknown> } } } };
+      const percentages = schema.properties.items.items.properties.percentages as { additionalProperties: Record<string, unknown> };
+      assert.deepEqual(percentages.additionalProperties, { type: 'number', minimum: 0, maximum: 100 });
+      assert.deepEqual(schema.properties.percentages.additionalProperties, { type: 'number', minimum: 0, maximum: 100 });
+      assert.match(tool.description, /who owes the cost/);
+      assert.match(tool.description, /never infer personal assignments or percentages/);
+    }
   }
 });
 
@@ -195,4 +203,137 @@ test('rejects invalid member assignments and malformed purchase timezones', asyn
     assert.equal(reply.result.isError, true);
   }
   assert.equal(state.writes, 0);
+});
+
+test('roundtrips natural-language item cost percentages without posting an expense or changing its payer', async () => {
+  reset();
+  const draftInput = {
+    ...expenseDraft,
+    items: [{ ...expenseDraft.items[0], percentages: { a: 70, b: 30 } }],
+  };
+  const reply = await invoke('create_expense_draft', { trip_id: 'trip-1', revision: 3, draft: draftInput });
+  assert.equal(reply.result.isError, undefined);
+  const holiday = content(reply).data.trips[0];
+  const draft = holiday.drafts.find(value => value.id === draftInput.id)!;
+  assert.deepEqual(draft.items[0].percentages, { a: 70, b: 30 });
+  assert.equal(draft.payer, 'a');
+  assert.equal(draft.status, 'review');
+  assert.equal(holiday.expenses.length, 0);
+  const reread = await invoke('get_trip_ledger', {});
+  assert.deepEqual(content(reread).data.trips[0].drafts.find(value => value.id === draftInput.id)!.items[0].percentages, { a: 70, b: 30 });
+  assert.equal(state.writes, 1);
+});
+
+test('accepts a whole item assigned to one person and percentages with two decimal places', async () => {
+  reset();
+  const draftInput = {
+    ...expenseDraft,
+    items: [
+      { ...expenseDraft.items[0], percentages: { a: 33.33, b: 66.67 } },
+      { id: 'solo-item', name: 'Alex’s coffee', amount: 350, members: ['b'], percentages: { b: 100 } },
+    ],
+  };
+  const reply = await invoke('create_expense_draft', { trip_id: 'trip-1', revision: 3, draft: draftInput });
+  assert.equal(reply.result.isError, undefined);
+  const items = content(reply).data.trips[0].drafts.find(value => value.id === draftInput.id)!.items;
+  assert.deepEqual(items.map(item => item.percentages), [{ a: 33.33, b: 66.67 }, { b: 100 }]);
+});
+
+test('rejects invalid percentages as business errors without writing or posting an expense', async () => {
+  reset();
+  for (const percentages of [
+    { a: 70, b: 20 },
+    { a: 100 },
+    { a: 70, b: 30, outsider: 0 },
+    { a: -10, b: 110 },
+    { a: 33.333, b: 66.667 },
+    {},
+  ]) {
+    const draft = { ...expenseDraft, items: [{ ...expenseDraft.items[0], percentages }] };
+    const reply = await invoke('create_expense_draft', { trip_id: 'trip-1', revision: 3, draft });
+    assert.equal(reply.result.isError, true, JSON.stringify(percentages));
+    assert.match(reply.result.content![0].text, /percentages/i);
+  }
+  assert.equal(state.writes, 0);
+  assert.equal(state.data.trips[0].expenses.length, 0);
+  assert.equal(state.data.trips[0].drafts.length, 1);
+});
+
+test('preserves saved custom shares when AI corrects the same receipt item without new percentages', async () => {
+  reset();
+  state.data.trips[0].drafts[0].items[0].percentages = { a: 70, b: 30 };
+  const original = state.data.trips[0].drafts[0];
+  const { status, ...draftInput } = original;
+  assert.equal(status, 'review');
+  const reply = await invoke('update_receipt_draft', {
+    trip_id: 'trip-1', revision: 3,
+    draft: { ...draftInput, items: [{ id: 'item-1', name: 'Corrected dinner', amount: 11000, members: ['b', 'a'] }] },
+  });
+  assert.equal(reply.result.isError, undefined);
+  const item = content(reply).data.trips[0].drafts[0].items[0];
+  assert.equal(item.name, 'Corrected dinner');
+  assert.equal(item.amount, 11000);
+  assert.deepEqual(item.percentages, { a: 70, b: 30 });
+});
+
+test('clears omitted stale percentages after reassignment and accepts explicit share overrides', async () => {
+  reset();
+  state.data.trips[0].drafts[0].items[0].percentages = { a: 70, b: 30 };
+  const { status, ...draftInput } = state.data.trips[0].drafts[0];
+  assert.equal(status, 'review');
+  const reassigned = await invoke('update_receipt_draft', {
+    trip_id: 'trip-1', revision: 3,
+    draft: { ...draftInput, items: [{ id: 'item-1', name: 'Dinner', amount: 10000, members: ['b'] }] },
+  });
+  assert.equal(reassigned.result.isError, undefined);
+  assert.equal(content(reassigned).data.trips[0].drafts[0].items[0].percentages, undefined);
+  const overridden = await invoke('update_receipt_draft', {
+    trip_id: 'trip-1', revision: 4,
+    draft: { ...draftInput, items: [{ ...draftInput.items[0], percentages: { a: 20, b: 80 } }] },
+  });
+  assert.equal(overridden.result.isError, undefined);
+  assert.deepEqual(content(overridden).data.trips[0].drafts[0].items[0].percentages, { a: 20, b: 80 });
+});
+
+test('roundtrips whole-receipt percentages with priority over item shares and tax or tip', async () => {
+  reset();
+  const draftInput = {
+    ...expenseDraft, percentages: { a: 60, b: 40 },
+    items: [{ ...expenseDraft.items[0], percentages: { a: 70, b: 30 } }],
+  };
+  const reply = await invoke('create_expense_draft', { trip_id: 'trip-1', revision: 3, draft: draftInput });
+  assert.equal(reply.result.isError, undefined);
+  const holiday = content(reply).data.trips[0];
+  const draft = holiday.drafts.find(value => value.id === draftInput.id)!;
+  assert.deepEqual(draft.percentages, { a: 60, b: 40 });
+  assert.deepEqual(draft.items[0].percentages, { a: 70, b: 30 });
+  assert.deepEqual(shares(draft, holiday.members), [2820, 1880]);
+  assert.equal(holiday.expenses.length, 0);
+  const reread = await invoke('get_trip_ledger', {});
+  assert.deepEqual(content(reread).data.trips[0].drafts.find(value => value.id === draftInput.id)!.percentages, { a: 60, b: 40 });
+});
+
+test('preserves whole-receipt percentages during AI corrections and accepts explicit replacements', async () => {
+  reset();
+  state.data.trips[0].drafts[0].percentages = { a: 60, b: 40 };
+  const reply = await invoke('update_receipt_draft', { trip_id: 'trip-1', revision: 3, draft: { ...expenseDraft, id: 'draft-1' } });
+  assert.equal(reply.result.isError, undefined);
+  assert.deepEqual(content(reply).data.trips[0].drafts[0].percentages, { a: 60, b: 40 });
+  const replaced = await invoke('update_receipt_draft', {
+    trip_id: 'trip-1', revision: 4, draft: { ...expenseDraft, id: 'draft-1', percentages: { b: 100 } },
+  });
+  assert.equal(replaced.result.isError, undefined);
+  assert.deepEqual(content(replaced).data.trips[0].drafts[0].percentages, { b: 100 });
+});
+
+test('rejects whole-receipt percentages with invalid totals or unknown participants without writing', async () => {
+  reset();
+  for (const percentages of [{ a: 60, b: 30 }, { a: 60, outsider: 40 }]) {
+    const reply = await invoke('create_expense_draft', {
+      trip_id: 'trip-1', revision: 3, draft: { ...expenseDraft, percentages },
+    });
+    assert.equal(reply.result.isError, true);
+  }
+  assert.equal(state.writes, 0);
+  assert.equal(state.data.trips[0].expenses.length, 0);
 });

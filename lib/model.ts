@@ -50,14 +50,59 @@ const fxSchema = z.object({
   source: z.enum(['reference', 'manual']),
 });
 
-export const itemSchema = z.object({
+function percentageError(percentages: Record<string, number>, label: string): string | null {
+  const keys = Object.keys(percentages);
+  if (!keys.length || keys.length > 50) return 'Choose between 1 and 50 people for the percentage split';
+  if (keys.some(key => !key || key.length > 100)) return 'Check percentage assignments';
+  let basisPoints = 0;
+  for (const key of keys) {
+    const value = percentages[key];
+    if (!Number.isFinite(value) || value < 0 || value > 100) {
+      return 'Percentages must be between 0 and 100';
+    }
+    const scaled = value * 100;
+    const rounded = Math.round(scaled);
+    if (Math.abs(scaled - rounded) > 1e-6) return 'Use at most two decimal places for percentages';
+    basisPoints += rounded;
+  }
+  return basisPoints === 10000 ? null : `${label} percentages must add up to 100%`;
+}
+
+const percentagesSchema = z.record(id, z.number().finite().min(0).max(100)).superRefine((percentages, context) => {
+  const message = percentageError(percentages, 'Receipt');
+  if (message) context.addIssue({ code: z.ZodIssueCode.custom, message });
+});
+
+const rawItemSchema = z.object({
   id, name: z.string().min(1).max(200), amount: cents, members: z.array(id).min(1).max(50),
+  percentages: z.record(id, z.number().finite().min(0).max(100)).optional(),
+});
+export type Item = z.infer<typeof rawItemSchema>;
+
+/** A receipt item's split describes who owes its cost, independently of the payer. */
+export function itemSplitError(item: Item): string | null {
+  if (!item.members.length) return 'Choose at least one person for each item';
+  if (new Set(item.members).size !== item.members.length || item.members.some(member => !member)) {
+    return 'Check item assignments';
+  }
+  if (item.percentages === undefined) return null;
+  const keys = Object.keys(item.percentages);
+  if (keys.length !== item.members.length || keys.some(key => !item.members.includes(key))) {
+    return 'Set a percentage for each selected person only';
+  }
+  return percentageError(item.percentages, 'Item');
+}
+
+export const itemSchema = rawItemSchema.superRefine((item, context) => {
+  const message = itemSplitError(item);
+  if (message) context.addIssue({ code: z.ZodIssueCode.custom, path: ['percentages'], message });
 });
 export const expenseSchema = z.object({
   id, title: z.string().min(1).max(200), date: dateSchema,
   time: timeSchema.default('12:00'), timezone: timezoneSchema.default('Europe/London'),
   currency: currencySchema.default('EUR'), fx: fxSchema.optional(), bankAmount: cents.optional(),
   payer: id, items: z.array(itemSchema).min(1).max(200),
+  percentages: percentagesSchema.optional(),
   tax: cents, tip: cents, discount: cents, receiptId: id.optional(),
 });
 export const draftSchema = z.object({
@@ -65,6 +110,7 @@ export const draftSchema = z.object({
   currency: currencySchema.default('EUR'),
   date: dateSchema.optional(), time: timeSchema.optional(), timezone: timezoneSchema.optional(),
   fx: fxSchema.optional(), bankAmount: cents.optional(),
+  percentages: percentagesSchema.optional(),
   items: z.array(itemSchema).max(200), tax: cents, tip: cents, discount: cents,
   payer: id, status: z.enum(['waiting', 'review']),
 });
@@ -76,11 +122,14 @@ export const tripSchema = z.object({
   payments: z.array(z.object({ id, from: id, to: id, amount: cents, date: dateSchema })).max(1000),
 });
 export const ledgerSchema = z.object({ trips: z.array(tripSchema).max(50) });
-export type Item = z.infer<typeof itemSchema>;
 export type Expense = z.infer<typeof expenseSchema>;
 export type Draft = z.infer<typeof draftSchema>;
 export type Trip = z.infer<typeof tripSchema>;
 export type Ledger = z.infer<typeof ledgerSchema>;
+
+export function receiptSplitError(expense: Pick<Expense, 'percentages'>): string | null {
+  return expense.percentages === undefined ? null : percentageError(expense.percentages, 'Receipt');
+}
 
 export function validateLedger(data: unknown): Ledger {
   const ledger = ledgerSchema.parse(data);
@@ -96,6 +145,9 @@ export function validateLedger(data: unknown): Ledger {
       || !unique(trip.payments.map(payment => payment.id))) throw new Error('Duplicate IDs');
     for (const expense of [...trip.expenses, ...trip.drafts]) {
       if (!memberIds.has(expense.payer)) throw new Error('Choose a trip member as payer');
+      if (expense.percentages && Object.keys(expense.percentages).some(member => !memberIds.has(member))) {
+        throw new Error('Check receipt percentage assignments');
+      }
       if (!unique(expense.items.map(item => item.id))) throw new Error('Duplicate item IDs');
       for (const item of expense.items) {
         if (!unique(item.members) || item.members.some(member => !memberIds.has(member))) {
@@ -149,21 +201,48 @@ export function allocate(amount: number, weights: number[]): number[] {
   return output;
 }
 
-type OriginalAmounts = Pick<Expense, 'items' | 'tax' | 'tip' | 'discount'>;
+type OriginalAmounts = Pick<Expense, 'items' | 'tax' | 'tip' | 'discount' | 'percentages'>;
 export function total(expense: OriginalAmounts): number {
   return expense.items.reduce((sum, item) => sum + item.amount, 0) + expense.tax + expense.tip - expense.discount;
 }
 
+/** Allocate an item's whole cents, with remainder ties following its selected-person order. */
+export function itemShares(item: Item, members: { id: string }[]): number[] {
+  const error = itemSplitError(item);
+  if (error) throw new Error(error);
+  const memberIndexes = item.members.map(id => {
+    const index = members.findIndex(member => member.id === id);
+    if (index < 0) throw new Error('Unknown member');
+    return index;
+  });
+  const weights = item.members.map(id => item.percentages === undefined ? 1 : Math.round(item.percentages[id] * 100));
+  const amounts = allocate(item.amount, weights);
+  const output = members.map(() => 0);
+  memberIndexes.forEach((memberIndex, index) => { output[memberIndex] = amounts[index]; });
+  return output;
+}
+
+function percentageShares(amount: number, percentages: Record<string, number>, members: { id: string }[]): number[] {
+  const error = receiptSplitError({ percentages });
+  if (error) throw new Error(error);
+  const selected = Object.keys(percentages);
+  const indexes = selected.map(id => {
+    const index = members.findIndex(member => member.id === id);
+    if (index < 0) throw new Error('Unknown member');
+    return index;
+  });
+  const amounts = allocate(amount, selected.map(id => Math.round(percentages[id] * 100)));
+  const output = members.map(() => 0);
+  indexes.forEach((memberIndex, index) => { output[memberIndex] = amounts[index]; });
+  return output;
+}
+
 /** Item assignments and proportional adjustments are always calculated in receipt currency first. */
 export function shares(expense: OriginalAmounts, members: { id: string }[]): number[] {
+  if (expense.percentages !== undefined) return percentageShares(total(expense), expense.percentages, members);
   const sums = members.map(() => 0);
   for (const item of expense.items) {
-    const amounts = allocate(item.amount, item.members.map(() => 1));
-    item.members.forEach((id, index) => {
-      const memberIndex = members.findIndex(member => member.id === id);
-      if (memberIndex < 0) throw new Error('Unknown member');
-      sums[memberIndex] += amounts[index];
-    });
+    itemShares(item, members).forEach((amount, index) => { sums[index] += amount; });
   }
   const adjustment = expense.tax + expense.tip - expense.discount;
   const amounts = allocate(Math.abs(adjustment), sums.some(Boolean) ? sums : members.map(() => 1));
@@ -200,6 +279,7 @@ export function expenseTotal(expense: Expense, baseCurrency: Currency): number {
 }
 
 export function expenseShares(expense: Expense, members: { id: string }[], baseCurrency: Currency): number[] {
+  if (expense.percentages !== undefined) return percentageShares(expenseTotal(expense, baseCurrency), expense.percentages, members);
   const originalShares = shares(expense, members);
   const convertedTotal = expenseTotal(expense, baseCurrency);
   return allocate(convertedTotal, originalShares.some(Boolean) ? originalShares : members.map(() => 1));

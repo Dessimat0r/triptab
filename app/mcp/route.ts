@@ -41,7 +41,7 @@ const tools = [
   },
   {
     name: 'update_receipt_draft',
-    description: 'Save an itemised receipt or expense details from the user’s conversation for human review in TripTab when requested. This never posts an expense. First read get_trip_ledger and use its existing trip/member IDs, draft ID and current revision. New conversational drafts need a new UUID id and do not need receiptId. Preserve the original receipt currency; do not convert line amounts to the trip currency. All amounts use integer hundredths: 1234 means 12.34. Each item amount is its full line total, not unit price. Optional date, time (HH:mm) and IANA timezone describe the purchase. Optional bankAmount is the actual card charge in the trip’s settlement currency; fx.rate is settlement currency per one unit of original currency, with its date and reference/manual source. Only include bankAmount or fx from the user’s stated details or existing verified app data; never guess card charges or exchange rates. Tax included in line totals must not be added again: set tax to zero for inclusive taxes. Only add an extra tax, tip or discount once. Flag unclear items in their name. Preserve receiptId when updating an uploaded receipt.',
+    description: 'Save an itemised receipt or expense details from the user’s conversation for human review in TripTab when requested. This never posts an expense. First read get_trip_ledger and use its existing trip/member IDs, draft ID and current revision. New conversational drafts need a new UUID id and do not need receiptId. Preserve the original receipt currency; do not convert line amounts to the trip currency. All amounts use integer hundredths: 1234 means 12.34. Each item amount is its full line total, not unit price. Item members are the people responsible for its cost. Optional item percentages specify each selected member’s share of that cost, with exactly the same member IDs as keys, values from 0 to 100 with at most two decimal places, and a total of exactly 100. Omitting percentages on a new item splits its cost equally. Optional draft percentages instead split the entire receipt total, including tax, tip and discount, among the selected trip member IDs and take priority over item shares. Whole-receipt percentages use the same 0 to 100 values, at most two decimal places and total 100. Use percentages only when the user specifies them; never infer personal assignments or percentages from a receipt image. Preserve existing item IDs and percentages when correcting itemisation unless the user asks to change the shares. Omitted draft percentages preserve any existing whole-receipt split; it can be cleared in the TripTab interface. These percentages describe who owes the cost; payer remains the one person who paid the receipt upfront. Optional date, time (HH:mm) and IANA timezone describe the purchase. Optional bankAmount is the actual card charge in the trip’s settlement currency; fx.rate is settlement currency per one unit of original currency, with its date and reference/manual source. Only include bankAmount or fx from the user’s stated details or existing verified app data; never guess card charges or exchange rates. Tax included in line totals must not be added again: set tax to zero for inclusive taxes. Only add an extra tax, tip or discount once. Flag unclear items in their name. Preserve receiptId when updating an uploaded receipt.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -53,6 +53,11 @@ const tools = [
             id: identifier,
             title: { type: 'string', maxLength: 200 },
             payer: identifier,
+            percentages: {
+              type: 'object', minProperties: 1, maxProperties: 50,
+              description: 'Optional whole-receipt cost shares keyed by the selected trip member IDs. Values have at most two decimal places and total 100. Includes tax, tip and discount, and overrides item shares. Use only user-stated or existing shares; omission preserves an existing whole-receipt split.',
+              additionalProperties: { type: 'number', minimum: 0, maximum: 100 },
+            },
             receiptId: identifier,
             currency: { type: 'string', enum: currencies },
             date: { type: 'string', format: 'date' },
@@ -73,6 +78,11 @@ const tools = [
                   name: { type: 'string', minLength: 1, maxLength: 200 },
                   amount: money,
                   members: { type: 'array', items: identifier, minItems: 1, maxItems: 50, uniqueItems: true },
+                  percentages: {
+                    type: 'object',
+                    description: 'Optional cost shares keyed by exactly the selected member IDs. Each value has at most two decimal places and all values must total 100. Use only percentages stated by the user or already saved for this item; this does not describe who paid upfront.',
+                    additionalProperties: { type: 'number', minimum: 0, maximum: 100 },
+                  },
                 },
                 required: ['id', 'name', 'amount', 'members'],
                 additionalProperties: false,
@@ -117,6 +127,7 @@ const updateArgs = z.object({
     id: idSchema,
     title: z.string().max(200),
     payer: idSchema,
+    percentages: z.record(z.number().finite().min(0).max(100)).optional(),
     receiptId: idSchema.optional(),
     currency: z.enum(currencies),
     date: draftSchema.shape.date,
@@ -129,6 +140,7 @@ const updateArgs = z.object({
       name: z.string().min(1).max(200),
       amount: z.number().int().min(0).max(100000000),
       members: z.array(idSchema).min(1).max(50),
+      percentages: z.record(z.number().finite().min(0).max(100)).optional(),
     }).strict()).min(1).max(200),
     tax: z.number().int().min(0).max(100000000),
     tip: z.number().int().min(0).max(100000000),
@@ -246,6 +258,16 @@ export async function POST(request: Request) {
         const draft = draftSchema.parse({
           ...existing,
           ...args.draft,
+          percentages: args.draft.percentages ?? existing?.percentages,
+          // AI receipt corrections retain explicit shares for an unchanged item.
+          // Changed membership resets an omitted share map to an equal split.
+          items: args.draft.items.map(item => {
+            if (item.percentages !== undefined) return item;
+            const percentages = existing?.items.find(value => value.id === item.id)?.percentages;
+            if (!percentages || Object.keys(percentages).length !== item.members.length
+              || !item.members.every(member => Object.hasOwn(percentages, member))) return item;
+            return { ...item, percentages };
+          }),
           // Purchase metadata entered in the app survives AI itemisation.
           fx: args.draft.fx ?? (existing?.currency === args.draft.currency ? existing.fx : undefined),
           receiptId: existing?.receiptId ?? args.draft.receiptId,
@@ -256,7 +278,8 @@ export async function POST(request: Request) {
       }
       return respond({ content: [{ type: 'text', text: JSON.stringify(result) }] });
     } catch (error) {
-      const message = error instanceof z.ZodError ? 'Invalid tool fields. Use the tool schema, valid dates and existing trip member IDs.' : error instanceof Error ? error.message : 'Unable to complete this tool call.';
+      const percentageIssue = error instanceof z.ZodError ? error.issues.find(issue => issue.path.includes('percentages')) : undefined;
+      const message = percentageIssue ? `Invalid percentages. ${percentageIssue.message}` : error instanceof z.ZodError ? 'Invalid tool fields. Use the tool schema, valid dates and existing trip member IDs.' : error instanceof Error ? error.message : 'Unable to complete this tool call.';
       return respond({ isError: true, content: [{ type: 'text', text: message === 'CONFLICT' ? 'Your ledger changed. Read get_trip_ledger again before retrying.' : message }] });
     }
   } catch (error) {

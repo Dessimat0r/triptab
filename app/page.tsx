@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import ModalA11y from "@/components/modal-accessibility";
 import AccountPanel, { type Profile } from "@/components/account-panel";
 import { TripSharing, JoinTrip } from "@/components/trip-sharing";
+import ShareSplit, { equalPercentages } from "@/components/share-split";
 import {
   Plus,
   Plane,
@@ -29,6 +30,9 @@ import {
   expenseTotal,
   expenseShares,
   convertAmount,
+  itemSchema,
+  itemSplitError,
+  receiptSplitError,
   CURRENCIES,
   type Currency,
   type Ledger,
@@ -284,6 +288,11 @@ export default function Home() {
   async function submitExpense(e: React.FormEvent) {
     e.preventDefault();
     if (!trip || !editing) return;
+    const splitError = receiptSplitError(editing) || editing.items.map(itemSplitError).find(Boolean);
+    if (splitError) {
+      setError(splitError);
+      return;
+    }
     if (
       editing.currency !== trip.currency &&
       !editing.bankAmount &&
@@ -328,7 +337,7 @@ export default function Home() {
       if (!Array.isArray(rows) || !rows.length || rows.length > 200)
         throw Error();
       const items = rows.map(
-        (r: { name: string; amount: number; members?: string[] }) => {
+        (r: { name: string; amount: number; members?: string[]; percentages?: Record<string, number> }) => {
           if (
             typeof r.name !== "string" ||
             !r.name.trim() ||
@@ -336,22 +345,22 @@ export default function Home() {
             r.amount < 0
           )
             throw Error();
-          return {
+          const members = r.members || (r.percentages ? Object.keys(r.percentages) : trip!.members.map((m) => m.id));
+          if (!Array.isArray(members) || members.some(id => !trip!.members.some(m => m.id === id))) throw Error();
+          return itemSchema.parse({
             id: uid(),
             name: r.name,
             amount: r.amount,
-            members:
-              r.members?.filter((id) =>
-                trip!.members.some((m) => m.id === id),
-              ) || trip!.members.map((m) => m.id),
-          };
+            members,
+            percentages: r.percentages,
+          });
         },
       );
       setEditing({ ...editing!, items });
       setPaste("");
     } catch {
       setError(
-        'Use a JSON array with name and amount in cents/pence, for example [{"name":"Lunch","amount":1250}].',
+        'Use a JSON array with name and amount in cents/pence. Optional percentages use traveller IDs and must total 100%. Example: [{"name":"Lunch","amount":1250}].',
       );
     }
   }
@@ -1188,7 +1197,7 @@ export default function Home() {
                 />
                 <small>Separate names with commas. List yourself first.</small>
               </label>
-              <div className="fieldpair">
+              <div className="fieldpair holiday-dates">
                 <label>
                   Start date <span className="muted">optional</span>
                   <input type="date" name="startDate" />
@@ -1462,6 +1471,30 @@ export default function Home() {
                       ))}
                     </select>
                   </label>
+                  <div className="receipt-split">
+                    <label>
+                      Split method
+                      <select value={editing.percentages === undefined ? "items" : "receipt"} onChange={event => {
+                        setEditing(prev => {
+                          if (!prev) return prev;
+                          if (event.target.value === "items") return { ...prev, percentages: undefined };
+                          const ids = trip.members.map(member => member.id);
+                          return {
+                            ...prev,
+                            percentages: equalPercentages(ids),
+                            items: prev.items.map(item => itemSplitError(item) ? { ...item, members: item.members.length ? item.members : ids, percentages: undefined } : item),
+                          };
+                        });
+                      }}>
+                        <option value="items">By item</option>
+                        <option value="receipt">Whole receipt percentages</option>
+                      </select>
+                    </label>
+                    {editing.percentages !== undefined && <>
+                      <p className="footnote">These shares apply to the entire receipt, including tax, tips, discounts and the amount charged by your bank.</p>
+                      <ShareSplit members={trip.members} selected={Object.keys(editing.percentages)} percentages={editing.percentages} scope="receipt" alwaysPercent onChange={(ids, percentages) => setEditing(prev => prev && { ...prev, percentages: percentages || equalPercentages(ids) })} />
+                    </>}
+                  </div>
                   <div className="itemsheading">
                     <h3>Items</h3>
                     <span className="muted">
@@ -1469,7 +1502,7 @@ export default function Home() {
                     </span>
                   </div>
                   <p className="itemhint">
-                    Tap the travellers who shared each item.
+                    {editing.percentages === undefined ? "Choose who shares each item, equally or by percentage." : "Enter the receipt items. The whole receipt percentages determine each person’s share."}
                   </p>
                   <div className="items">
                     {editing.items.map((item, i) => (
@@ -1527,48 +1560,10 @@ export default function Home() {
                             <X size={17} />
                           </button>
                         </div>
-                        <div className="personchips">
-                          {trip.members.map((m, n) => (
-                            <button
-                              type="button"
-                              key={m.id}
-                              className={
-                                item.members.includes(m.id) ? "chosen" : ""
-                              }
-                              aria-pressed={item.members.includes(m.id)}
-                              onClick={() =>
-                                setEditing({
-                                  ...editing,
-                                  items: editing.items.map((x) =>
-                                    x.id === item.id
-                                      ? {
-                                          ...x,
-                                          members: x.members.includes(m.id)
-                                            ? x.members.filter(
-                                                (id) => id !== m.id,
-                                              )
-                                            : [...x.members, m.id],
-                                        }
-                                      : x,
-                                  ),
-                                })
-                              }
-                            >
-                              <span className={"chipavatar color" + (n % 5)}>
-                                {m.name.slice(0, 1).toUpperCase()}
-                              </span>
-                              {m.name}
-                              {item.members.includes(m.id) && (
-                                <Check size={13} />
-                              )}
-                            </button>
-                          ))}
-                        </div>
-                        {!item.members.length && (
-                          <small className="negative">
-                            Choose at least one traveller.
-                          </small>
-                        )}
+                        {editing.percentages === undefined && <ShareSplit members={trip.members} selected={item.members} percentages={item.percentages} scope={`item ${i + 1}`} onChange={(members, percentages) => setEditing(prev => prev && {
+                          ...prev,
+                          items: prev.items.map(current => current.id === item.id ? { ...current, members, percentages } : current),
+                        })} />}
                       </div>
                     ))}
                   </div>
@@ -1612,9 +1607,7 @@ export default function Home() {
                     ))}
                   </div>
                   <p className="footnote">
-                    Tax, tip and discount are shared in proportion to each
-                    person’s items. Add tax only if it isn’t already in the item
-                    prices.
+                    {editing.percentages === undefined ? "Tax, tip and discount are shared in proportion to each person’s items." : "Tax, tip and discount follow the whole receipt percentages."} Add tax only if it isn’t already in the item prices.
                   </p>
                   <details className="import">
                     <summary>
@@ -1781,7 +1774,7 @@ export default function Home() {
                     </div>
                   )}
                   <div className="split-preview">
-                    <h3>Who pays what · {trip.currency}</h3>
+                    <h3>Each person’s share · {trip.currency}</h3>
                     {trip.members.map((m, i) => (
                       <div key={m.id}>
                         <span>{m.name}</span>
@@ -1843,7 +1836,8 @@ export default function Home() {
                       saving ||
                       fxLoading ||
                       editing.bankAmount === 0 ||
-                      editing.items.some((i) => !i.members.length) ||
+                      !!receiptSplitError(editing) ||
+                      editing.items.some((item) => !!itemSplitError(item)) ||
                       total(editing) <= 0 ||
                       (editing.currency !== trip.currency &&
                         editing.bankAmount === undefined &&

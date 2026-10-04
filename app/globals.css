@@ -902,8 +902,29 @@ label > small {
 }
 .fieldpair {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
+}
+.fieldpair > label {
+  min-width: 0;
+}
+input[type="date"],
+input[type="time"],
+input[type="datetime-local"] {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+input[type="date"]::-webkit-date-and-time-value,
+input[type="time"]::-webkit-date-and-time-value,
+input[type="datetime-local"]::-webkit-date-and-time-value {
+  min-width: 0;
+  text-align: left;
+}
+@media (max-width: 480px) {
+  .holiday-dates {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 .itemsheading {
   display: flex;
@@ -976,6 +997,99 @@ label > small {
 }
 .additem {
   margin: 17px 0 22px;
+}
+.receipt-split {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 16px;
+  margin: 18px 0 24px;
+}
+.receipt-split > label > select {
+  margin-bottom: 0;
+}
+.share-split {
+  min-width: 0;
+  border: 0;
+  padding: 0;
+  margin: 14px 0 0;
+}
+.share-split legend {
+  font-size: 0.8rem;
+  color: var(--muted);
+  padding: 0;
+  margin-bottom: 9px;
+}
+.split-modes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.split-modes button {
+  font-size: 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 8px 10px;
+  min-height: 44px;
+  color: var(--muted);
+}
+.split-modes button.chosen {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+.share-split .personchips {
+  padding-left: 0;
+}
+.share-split .personchips button {
+  min-height: 44px;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.single-share {
+  margin-top: 12px;
+}
+.single-share select {
+  margin-bottom: 0;
+}
+.percentage-rows {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+.percentage-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  margin: 0;
+}
+.percentage-row > span:first-child {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.percentage-input {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  width: 105px;
+}
+.percentage-input input {
+  min-width: 0;
+  margin: 0;
+  text-align: right;
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+}
+.percentage-input > span {
+  color: var(--muted);
+}
+.split-total {
+  display: grid;
+  gap: 4px;
+  font-size: 0.8rem;
+  margin-top: 12px;
+  line-height: 1.5;
 }
 .adjustments {
   display: grid;
