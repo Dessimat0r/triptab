@@ -11,7 +11,7 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     if (request.headers.get('origin') !== new URL(request.url).origin) throw new AuthError('This account request must come from TripTab.', 403);
-    if (!request.headers.get('content-type')?.toLowerCase().startsWith('application/json')) throw new AuthError('Send valid account details.', 415);
+    if (request.headers.get('content-type')?.split(';', 1)[0].trim().toLowerCase() !== 'application/json') throw new AuthError('Send valid account details.', 415);
     let body: unknown;
     try { body = JSON.parse(new TextDecoder().decode(await readBoundedBody(request, 4096))); }
     catch (error) {

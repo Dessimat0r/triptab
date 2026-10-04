@@ -68,6 +68,24 @@ export const syncState = sqliteTable('sync_state', {
   id: integer('id').primaryKey(), revision: integer('revision').notNull().default(0), lastWrite: text('last_write').notNull().default(''),
 });
 
+// History deliberately has no cascading trip/account foreign keys: deleting a
+// live record must never silently erase the record of who changed it.
+export const activityEvents = sqliteTable('activity_events', {
+  sequence: integer('sequence').primaryKey({ autoIncrement: true }),
+  id: text('id').notNull(), tripId: text('trip_id').notNull(),
+  actorId: text('actor_id').notNull(), actorName: text('actor_name').notNull(),
+  createdAt: text('created_at').notNull(),
+  entityType: text('entity_type', { enum: ['trip', 'member', 'expense', 'payment', 'draft'] }).notNull(),
+  entityId: text('entity_id').notNull(),
+  action: text('action', { enum: ['create', 'update', 'delete'] }).notNull(),
+  before: text('before_data'), after: text('after_data'),
+  revision: integer('revision').notNull(),
+  source: text('source', { enum: ['web', 'chatgpt'] }).notNull(),
+}, table => [
+  uniqueIndex('activity_events_id_idx').on(table.id),
+  index('activity_events_trip_sequence_idx').on(table.tripId, table.sequence),
+]);
+
 export const notifications = sqliteTable('notifications', {
   id: text('id').primaryKey(), userId: text('user_id').notNull(), title: text('title').notNull(), body: text('body').notNull(), url: text('url').notNull().default('/'), createdAt: text('created_at').notNull(),
 }, table => [index('notifications_user_created_idx').on(table.userId, table.createdAt)]);

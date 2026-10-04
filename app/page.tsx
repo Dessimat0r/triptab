@@ -1,13 +1,19 @@
 "use client";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import ModalA11y from "@/components/modal-accessibility";
 import AccountPanel, { profileFromAuth, type Profile, type AuthResponse } from "@/components/account-panel";
 import AuthPanel from "@/components/auth-panel";
 import { TripSharing, JoinTrip } from "@/components/trip-sharing";
 import ShareSplit, { equalPercentages } from "@/components/share-split";
-import ReceiptCapture from "@/components/receipt-capture";
+import ReceiptCapture, { prepareReceiptImage } from "@/components/receipt-capture";
 import ReceiptChat from "@/components/receipt-chat";
+import PaymentEditor from "@/components/payment-editor";
+import ActivityPanel from "@/components/activity-panel";
+import MemberStatement from "@/components/member-statement";
+import { PwaUpdatePrompt } from "@/components/pwa-controls";
+import { localDate, localTime } from "@/lib/dates";
+import { equalFinancialValue, equalSavedValue, rebaseLedger } from "@/lib/client-ledger";
 import {
   Plus,
   Plane,
@@ -25,6 +31,7 @@ import {
   Menu,
   CircleHelp,
   CheckCircle2,
+  History,
 } from "lucide-react";
 import {
   balances,
@@ -32,7 +39,6 @@ import {
   total,
   expenseTotal,
   expenseShares,
-  convertAmount,
   itemSchema,
   itemSplitError,
   receiptSplitError,
@@ -43,9 +49,10 @@ import {
   type Expense,
   type Draft,
   type ReceiptMessage,
+  type Payment,
 } from "@/lib/model";
 const uid = () => crypto.randomUUID();
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => localDate();
 const money = (n: number, c: string) =>
   new Intl.NumberFormat("en-GB", {
     style: "currency",
@@ -130,9 +137,15 @@ export default function Home() {
     [profile, setProfile] = useState<Profile | null>(null),
     [account, setAccount] = useState(false),
     [invite, setInvite] = useState(""),
-    [offline, setOffline] = useState(false);
+    [offline, setOffline] = useState(false),
+    [lastRefreshed, setLastRefreshed] = useState<Date | null>(null),
+    [editorConflict, setEditorConflict] = useState<{ latest: Expense | null } | null>(null),
+    [paymentEditor, setPaymentEditor] = useState<{ entry: Payment; original?: Payment; key: string } | null>(null),
+    [statement, setStatement] = useState(""),
+    [referenceRate, setReferenceRate] = useState<{ rate: number; currency: Currency; date: string; time: string; timezone: string } | null>(null);
+  const editorBaseline = useRef<{ tripId: string; expense?: Expense } | null>(null);
   const trip = ledger.trips.find((t) => t.id === selected) || ledger.trips[0];
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
@@ -155,12 +168,19 @@ export default function Home() {
       setLedger(b.data);
       setRevision(b.revision);
       setAuth(false);
+      setLastRefreshed(new Date());
+      const baseline = editorBaseline.current;
+      if (baseline?.expense) {
+        const current = b.data.trips.find(value => value.id === baseline.tripId)?.expenses.find(value => value.id === baseline.expense?.id);
+        if (!equalFinancialValue(baseline.expense, current)) setEditorConflict({ latest: current || null });
+      }
+      return b;
     } catch (e) {
       setError(e instanceof Error ? e.message : "Unable to load your ledger");
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
   useEffect(() => {
     Promise.resolve().then(() => {
       const params = new URLSearchParams(location.search);
@@ -188,11 +208,18 @@ export default function Home() {
       window.removeEventListener("offline", update);
       window.removeEventListener("online", update);
     };
-  }, []);
+  }, [load]);
+  useEffect(() => {
+    const refresh = () => { if (document.visibilityState === "visible" && !saving && !uploading) void load(); };
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => { window.removeEventListener("focus", refresh); document.removeEventListener("visibilitychange", refresh); };
+  }, [load, saving, uploading]);
+  useEffect(() => { if (!editing) editorBaseline.current = null; }, [editing]);
   function requestAccount() {
     setAuthMode("login");
     requestAnimationFrame(() => {
-      document.querySelector(".auth-panel")?.scrollIntoView({ behavior: "smooth", block: "center" });
+      document.querySelector(".auth-panel")?.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "center" });
     });
   }
   async function accountAuthenticated(p: Profile) {
@@ -238,21 +265,28 @@ export default function Home() {
     setSaving(true);
     setError("");
     try {
-      const r = await fetch("/api/ledger", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ data, revision }),
-      });
-      const b = (await r.json()) as {
-        data: Ledger;
-        revision: number;
-        error: string;
-        receiptId: string;
-      };
-      if (!r.ok) throw Error(b.error);
-      setLedger(b.data);
-      setRevision(b.revision);
-      return true;
+      let proposed = data, token = revision;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const response = await fetch("/api/ledger", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ data: proposed, revision: token }) });
+        const body = await response.json() as { data: Ledger; revision: number; error?: string };
+        if (response.ok) {
+          setLedger(body.data); setRevision(body.revision); setLastRefreshed(new Date());
+          return true;
+        }
+        if (response.status !== 409) throw Error(body.error || "Unable to save this change.");
+        const freshResponse = await fetch("/api/ledger", { cache: "no-store" });
+        const fresh = await freshResponse.json() as { data: Ledger; revision: number; error?: string };
+        if (!freshResponse.ok) throw Error(fresh.error || "Unable to refresh your ledger. Your edits are still here.");
+        setLedger(fresh.data); setRevision(fresh.revision); setLastRefreshed(new Date());
+        const rebased = rebaseLedger(ledger, data, fresh.data);
+        if (rebased.conflicts.length) {
+          const baseline = editorBaseline.current;
+          if (baseline?.expense) setEditorConflict({ latest: fresh.data.trips.find(t => t.id === baseline.tripId)?.expenses.find(e => e.id === baseline.expense?.id) || null });
+          throw Error("Another traveller changed the same entry. Your edits are still here; review the latest saved version before continuing.");
+        }
+        proposed = rebased.data; token = fresh.revision;
+      }
+      throw Error("Your ledger changed again. Your entry is still here—press Save to try again.");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Unable to save");
       return false;
@@ -265,20 +299,56 @@ export default function Home() {
       trips: ledger.trips.map((t) => (t.id === next.id ? next : t)),
     });
   }
+  function editorIsCurrent(current: Trip | undefined = trip) {
+    const baseline = editorBaseline.current;
+    if (baseline && current?.id !== baseline.tripId) { setError("This holiday is no longer available. Your edits are still here."); return false; }
+    if (!baseline?.expense) return true;
+    const latest = current?.expenses.find(value => value.id === baseline.expense?.id);
+    if (!equalFinancialValue(baseline.expense, latest)) {
+      setEditorConflict({ latest: latest || null });
+      setError("This expense changed while you were editing. Compare the versions below before saving.");
+      return false;
+    }
+    return true;
+  }
+  function openExpense(expense: Expense) {
+    if (!trip) return;
+    editorBaseline.current = { tripId: trip.id, expense: structuredClone(expense) };
+    setEditorConflict(null); setReferenceRate(null); resetReceiptReview();
+    setEditing({ ...structuredClone(expense), expenseId: expense.id });
+  }
+  function keepExpenseEdits() {
+    if (!editing || !editorConflict || !trip) return;
+    if (editorBaseline.current?.tripId !== trip.id) { setError("This holiday is no longer available."); return; }
+    const latest = editorConflict.latest;
+    if (latest) {
+      editorBaseline.current = { tripId: trip.id, expense: structuredClone(latest) };
+      const messages = [...latest.conversation || []];
+      for (const message of editing.conversation || []) if (!messages.some(value => value.id === message.id)) messages.push(message);
+      setEditing({ ...editing, conversation: messages });
+    } else {
+      editorBaseline.current = { tripId: trip.id };
+      setEditing({ ...editing, id: uid(), expenseId: undefined, draftId: undefined });
+    }
+    setEditorConflict(null); setError("");
+  }
   function newExpense() {
     if (!trip) return;
     resetReceiptReview();
     setPaste("");
     setFxError("");
+    editorBaseline.current = { tripId: trip.id };
+    setEditorConflict(null); setReferenceRate(null);
     setEditing({
       id: uid(),
       title: "",
+      source: "manual",
       date: today(),
-      time: new Date().toTimeString().slice(0, 5),
+      time: localTime(),
       timezone:
         Intl.DateTimeFormat().resolvedOptions().timeZone || "Europe/London",
       currency: trip.currency,
-      payer: trip.members[0].id,
+      payer: trip.members.find(member => member.userId === profile?.id)?.id || trip.members[0].id,
       items: [
         {
           id: uid(),
@@ -296,6 +366,8 @@ export default function Home() {
     resetReceiptReview();
     setPaste("");
     setFxError("");
+    editorBaseline.current = { tripId: trip!.id, expense: structuredClone(trip!.expenses.find(value => value.id === d.expenseId)) };
+    setEditorConflict(null); setReferenceRate(null);
     setEditing({
       ...d,
       id: d.expenseId || d.id,
@@ -324,6 +396,7 @@ export default function Home() {
   }
   async function storeEditorReceipt(entry: Expense & { draftId?: string; expenseId?: string }, receiptId?: string, keepProposal = false) {
     if (!trip) return null;
+    if (!editorIsCurrent()) return null;
     const target = trip.expenses.find(expense => expense.id === entry.id);
     if (entry.expenseId && !target) {
       setError("This expense was removed. Your current receipt edits are still here.");
@@ -353,6 +426,7 @@ export default function Home() {
       discount: source.discount,
       bankAmount: source.bankAmount,
       fx: source.fx,
+      source: source.source || "manual",
       status: keepProposal && previous ? previous.status : "waiting",
     };
     const saved = await updateTrip({
@@ -400,9 +474,9 @@ export default function Home() {
   }
   async function copyEditorReceiptPrompt(draft: Draft, question?: ReceiptMessage) {
     if (!trip) return;
-    const context = draft.receiptId ? `receipt ${draft.receiptId}. Use get_receipt_image to read its original native image` : "the manually entered receipt details";
+    const context = draft.receiptId ? `receipt ${draft.receiptId}. Use get_receipt_image to read its stored receipt image` : "the manually entered receipt details";
     const request = question ? `Resolve question ${question.id}: ${JSON.stringify(question.text)}. Save a reply in the receipt conversation with reply_to_receipt_chat, using this questionId and a new UUID responseId. Explain discrepancies and uncertainty. If a correction is justified, propose it with update_receipt_draft for my review; preserve conversation history.` : "Read and itemise this receipt with update_receipt_draft for my review.";
-    const prompt = `Use my connected TripTab plugin for only trip ${trip.id}, draft ${draft.id}, ${context}. Read get_trip_ledger for its current revision, conversation and member IDs. ${request} Preserve personal cost shares, percentages, payer and purchase details unless I explicitly ask to change them. Keep any read-only expenseId target and receiptId. Use full line totals in integer cents/pence, identify the printed currency, and do not add tax already included in prices. Flag unreadable text and prices rather than guessing. Never guess exchange rates or bank charges. Do not post or duplicate an expense: I will review and save it in TripTab.`;
+    const prompt = `Use my connected TripTab plugin for only trip ${trip.id}, draft ${draft.id}, ${context}. Call get_trip_ledger with trip_id ${trip.id} for its current revision, conversation and member IDs. ${request} Preserve personal cost shares, percentages, payer and purchase details unless I explicitly ask to change them. Keep any read-only expenseId target and receiptId. Use full line totals in integer cents/pence, identify the printed currency, and do not add tax already included in prices. Flag unreadable text and prices rather than guessing. Never guess exchange rates or bank charges. Do not post or duplicate an expense: I will review and save it in TripTab.`;
     setReceiptPrompt(prompt);
     try {
       await navigator.clipboard.writeText(prompt);
@@ -445,6 +519,8 @@ export default function Home() {
       if (!response.ok) throw Error(body.error || "Unable to check this receipt.");
       setLedger(body.data);
       setRevision(body.revision);
+      setLastRefreshed(new Date());
+      editorIsCurrent(body.data.trips.find(value => value.id === trip.id));
       const draft = body.data.trips.find(value => value.id === trip.id)?.drafts.find(value => value.id === draftId);
       if (!draft || draft.receiptId !== receiptId) throw Error("This receipt draft has changed or is no longer available. Your current edits are still here.");
       setEditing(prev => prev?.draftId === draftId ? { ...prev, conversation: draft.conversation } : prev);
@@ -458,6 +534,7 @@ export default function Home() {
   }
   function reviewProcessedReceipt() {
     if (!trip || !editing || !processedReceipt) return;
+    if (!editorIsCurrent()) return;
     const latest = trip.drafts.find(draft => draft.id === processedReceipt.id && draft.receiptId === editing.receiptId && draft.status === "review");
     if (!latest) {
       setError("Check for the latest processed receipt before reviewing it.");
@@ -470,6 +547,7 @@ export default function Home() {
     setUploading(true);
     setError("");
     try {
+      file = await prepareReceiptImage(file);
       if (
         !["image/jpeg", "image/png", "image/webp"].includes(file.type) ||
         file.size > 5 * 1024 * 1024
@@ -490,12 +568,13 @@ export default function Home() {
         id: uid(),
         currency: trip.currency,
         title: file.name,
+        source: "manual",
         receiptId: b.receiptId,
         items: [],
         tax: 0,
         tip: 0,
         discount: 0,
-        payer: trip.members[0].id,
+        payer: trip.members.find(member => member.userId === profile?.id)?.id || trip.members[0].id,
         status: "waiting",
       };
       if (await updateTrip({ ...trip, drafts: [...trip.drafts, d] })) {
@@ -512,7 +591,7 @@ export default function Home() {
     const pending = trip?.drafts
       .filter((d) => d.status === "waiting" && d.receiptId)
       .map((d) => ({ draftId: d.id, receiptId: d.receiptId, title: d.title }));
-    const prompt = `Pending receipts: ${JSON.stringify(pending)}. Use the connected TripTab plugin. Call get_trip_ledger, then get_receipt_image for each pending receipt in trip ${trip?.id}. Read the native image and save its items with update_receipt_draft for me to review. Amounts must be integers in hundredths of the original currency, full line totals. Use the currency printed on the receipt. Do not invent unreadable prices or double-count tax included in prices. Preserve existing assignments, personal cost percentages, purchase details and conversation history. Split only new unassigned items equally among all trip members and flag uncertain text. Keep receiptId, draft ID and any read-only expenseId target. Never post this as an expense.`;
+    const prompt = `Pending receipts: ${JSON.stringify(pending)}. Use the connected TripTab plugin. Call get_trip_ledger with trip_id ${trip?.id}, then get_receipt_image for each pending receipt in trip ${trip?.id}. Read the stored receipt image and save its items with update_receipt_draft for me to review. Amounts must be integers in hundredths of the original currency, full line totals. Use the currency printed on the receipt. Do not invent unreadable prices or double-count tax included in prices. Preserve existing assignments, personal cost percentages, purchase details and conversation history. Split only new unassigned items equally among all trip members and flag uncertain text. Keep receiptId, draft ID and any read-only expenseId target. Never post this as an expense.`;
     try {
       await navigator.clipboard.writeText(prompt);
     } catch {
@@ -522,6 +601,12 @@ export default function Home() {
   async function submitExpense(e: React.FormEvent) {
     e.preventDefault();
     if (!trip || !editing || uploading || receiptChecking || saving) return;
+    if (!editorIsCurrent()) return;
+    if (editing.fx?.source === "manual" && editing.bankAmount === undefined) {
+      const matchingReference = referenceRate && referenceRate.currency === editing.currency && referenceRate.date === editing.date && referenceRate.time === editing.time && referenceRate.timezone === editing.timezone ? referenceRate.rate : undefined;
+      const suspicious = matchingReference ? Math.abs(editing.fx.rate / matchingReference - 1) > 0.1 : (["GBP", "EUR", "CHF", "USD"].includes(trip.currency) && (editing.fx.rate > 100 || editing.fx.rate < 0.0001));
+      if (suspicious && !window.confirm(`Check this manual rate: 1 ${editing.currency} = ${editing.fx.rate.toPrecision(8)} ${trip.currency}. The converted receipt is ${money(previewTotal(editing, trip) || 0, trip.currency)}. ${matchingReference ? "It differs by more than 10% from the reference rate." : "This conversion factor is unusually large or small."} Use this rate?`)) return;
+    }
     const splitError = receiptSplitError(editing) || editing.items.map(itemSplitError).find(Boolean);
     if (splitError) {
       setError(splitError);
@@ -642,11 +727,40 @@ export default function Home() {
           ? { ...prev, fx: { rate: b.rate, asOf: b.asOf, source: "reference" } }
           : prev,
       );
+      setReferenceRate({ rate: b.rate, currency: transaction.currency, date: transaction.date, time: transaction.time, timezone: transaction.timezone });
     } catch (e) {
       setFxError(e instanceof Error ? e.message : "Rate lookup failed.");
     } finally {
       setFxLoading(false);
     }
+  }
+  async function openPayment(suggestion?: { from: string; to: string; amount: number }, existing?: Payment) {
+    if (!trip || saving || loading) return;
+    const tripId = trip.id;
+    const fresh = await load();
+    const current = fresh?.data.trips.find(value => value.id === tripId);
+    if (!current) { setError("This holiday is no longer available."); return; }
+    const original = existing && current.payments.find(value => value.id === existing.id);
+    if (existing && !original) { setError("This payment was removed. The current balances have been refreshed."); return; }
+    let updatedSuggestion;
+    try { updatedSuggestion = suggestion && settlements(current).find(value => value.from === suggestion.from && value.to === suggestion.to); }
+    catch { setError("Review the flagged receipts before recording a suggested payment."); return; }
+    if (suggestion && !updatedSuggestion) { setError("The balances changed and this transfer is no longer suggested. Check the refreshed balances before recording a payment."); return; }
+    const from = current.members.find(member => member.userId === profile?.id)?.id || current.members[0].id;
+    const entry: Payment = original || { id: uid(), from: updatedSuggestion?.from || from, to: updatedSuggestion?.to || current.members.find(member => member.id !== from)?.id || from, amount: updatedSuggestion?.amount || 0, date: today(), time: localTime(), timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "Europe/London" };
+    setPaymentEditor({ entry: structuredClone(entry), original: original && structuredClone(original), key: uid() });
+    setError("");
+  }
+  async function savePayment(payment: Payment) {
+    if (!trip || !paymentEditor || saving) return false;
+    const current = trip.payments.find(value => value.id === payment.id);
+    if (paymentEditor.original && !current) { setError("This payment was removed. Your entered details are still here; record it as a new payment if needed."); return false; }
+    if (paymentEditor.original && !equalSavedValue(paymentEditor.original, current)) {
+      if (!window.confirm(`The saved payment changed to ${name(current!.from)} paid ${name(current!.to)} ${money(current!.amount, trip.currency)} on ${current!.date}. Your version records ${name(payment.from)} paid ${name(payment.to)} ${money(payment.amount, trip.currency)} on ${payment.date}. Replace the saved payment with your version?`)) return false;
+    }
+    const saved = await updateTrip({ ...trip, payments: current ? trip.payments.map(value => value.id === payment.id ? payment : value) : [...trip.payments, payment] });
+    if (saved) setPaymentEditor(null);
+    return saved;
   }
   function previewShares(e: Expense, t: Trip) {
     try {
@@ -662,11 +776,17 @@ export default function Home() {
       return null;
     }
   }
-  const balance = trip ? balances(trip) : [],
-    due = trip ? settlements(trip) : [],
-    spent =
-      trip?.expenses.reduce((s, e) => s + expenseTotal(e, trip.currency), 0) ||
-      0;
+  let balance: number[] = [], due: ReturnType<typeof settlements> = [], spent = 0, calculationError = "";
+  if (trip) {
+    try {
+      for (const expense of trip.expenses) {
+        try { spent += expenseTotal(expense, trip.currency); }
+        catch (cause) { throw Error(`Review “${expense.title}”: ${cause instanceof Error ? cause.message : "invalid saved total"}`); }
+      }
+      balance = balances(trip); due = settlements(trip);
+    } catch (cause) { calculationError = cause instanceof Error ? cause.message : "Review the saved receipts before settling up."; }
+  }
+  const estimatedCharge = editing?.fx && trip ? previewTotal({ ...editing, bankAmount: undefined }, trip) : null;
   const name = (id: string) =>
     trip?.members.find((m) => m.id === id)?.name || "Unknown";
   return (
@@ -781,6 +901,7 @@ export default function Home() {
               here. Reconnect before saving.
             </p>
           )}
+          <PwaUpdatePrompt canUpdate={!editing && !paymentEditor && !create && !account && !linkRequested && !saving && !uploading && view !== "settings"} />
           {invite && (
             <JoinTrip
               key={profile?.id || "anonymous"}
@@ -810,6 +931,7 @@ export default function Home() {
                   ? `${trip.members.length} travellers · Settle in ${trip.currency}${trip.startDate ? " · " + new Date(trip.startDate + "T12:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : ""}`
                   : "Create a holiday, add your people, and keep the tabs fair."}
               </p>
+              {trip && lastRefreshed && <small className="muted">Refreshed {lastRefreshed.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}</small>}
             </div>
             {trip && (
               <button
@@ -875,12 +997,13 @@ export default function Home() {
             </div>
           ) : (
             <>
+              {calculationError && <p className="error" role="alert">Balances are unavailable until the flagged receipt is corrected. {calculationError} Your saved receipt details have been kept.</p>}
               <div className="stats">
                 <div className="stat">
                   <span>
                     Total trip spend <Receipt size={17} />
                   </span>
-                  <strong>{money(spent, trip.currency)}</strong>
+                  <strong>{calculationError ? "Unavailable" : money(spent, trip.currency)}</strong>
                   <small>
                     {trip.expenses.length}{" "}
                     {trip.expenses.length === 1 ? "expense" : "expenses"}{" "}
@@ -892,7 +1015,7 @@ export default function Home() {
                     Average per traveller <Users size={17} />
                   </span>
                   <strong>
-                    {money(
+                    {calculationError ? "Unavailable" : money(
                       Math.round(spent / trip.members.length),
                       trip.currency,
                     )}
@@ -904,13 +1027,13 @@ export default function Home() {
                     Still to settle <Wallet size={17} />
                   </span>
                   <strong>
-                    {money(
+                    {calculationError ? "Unavailable" : money(
                       due.reduce((s, d) => s + d.amount, 0),
                       trip.currency,
                     )}
                   </strong>
                   <small>
-                    {due.length
+                    {calculationError ? "Review flagged receipts" : due.length
                       ? `${due.length} suggested ${due.length === 1 ? "payment" : "payments"}`
                       : "Everyone is square"}
                   </small>
@@ -922,6 +1045,7 @@ export default function Home() {
                   ["balances", "Balances", Wallet],
                   ["receipts", "Receipts", Sparkles],
                   ["settings", "Travellers", Users],
+                  ["history", "History", History],
                 ].map(([id, label, Icon]) => (
                   <button
                     role="tab"
@@ -929,7 +1053,7 @@ export default function Home() {
                     aria-selected={view === id}
                     className={view === id ? "selected" : ""}
                     key={id as string}
-                    onClick={() => setView(id as string)}
+                    onClick={async () => { if (id === "balances") await load(); setView(id as string); }}
                   >
                     {typeof Icon !== "string" && <Icon size={17} />}
                     <span>{label as string}</span>
@@ -958,8 +1082,7 @@ export default function Home() {
                                 const pending = trip.drafts.find(draft => draft.expenseId === e.id);
                                 if (pending) openDraft(pending);
                                 else {
-                                  resetReceiptReview();
-                                  setEditing(e);
+                                  openExpense(e);
                                 }
                               }}
                             >
@@ -984,22 +1107,21 @@ export default function Home() {
                                   {e.bankAmount !== undefined
                                     ? "Bank charge"
                                     : e.currency !== trip.currency
-                                      ? "Reference estimate"
+                                      ? e.fx?.source === "manual" ? "Manual rate" : "Reference estimate"
                                       : "Paid"}
+                                  {e.source === "ai" ? " · AI assisted" : ""}
                                 </small>
                               </span>
                               <span className="expense-amount">
                                 <b>
-                                  {money(
-                                    expenseTotal(e, trip.currency),
-                                    trip.currency,
-                                  )}
+                                  {previewTotal(e, trip) === null ? "Needs review" : money(previewTotal(e, trip)!, trip.currency)}
                                 </b>
                                 <small>
                                   {e.currency !== trip.currency
                                     ? money(total(e), e.currency) + " original"
                                     : "Edit split"}
                                 </small>
+                                {trip.members.some(member => member.userId === profile?.id) && <small>Your share {previewShares(e, trip) ? money(previewShares(e, trip)![trip.members.findIndex(member => member.userId === profile?.id)], trip.currency) : "needs review"}</small>}
                               </span>
                             </button>
                           ))
@@ -1020,10 +1142,11 @@ export default function Home() {
                     <>
                       <div className="sectionheading">
                         <h2>Settle up</h2>
-                        <span className="muted">Suggested transfers</span>
+                        <button className="quiet" disabled={saving || loading || trip.members.length < 2} onClick={() => void openPayment()}><Plus size={16} /> Record payment</button>
                       </div>
+                      <p className="footnote">Suggested transfers simplify the balances. Record what was actually transferred; partial payments and different pairs are supported.</p>
                       <div className="panel">
-                        {due.length ? (
+                        {calculationError ? <p className="error">Review the flagged receipts before using settlement suggestions.</p> : due.length ? (
                           due.map((d, i) => (
                             <div className="settlement" key={i}>
                               <div>
@@ -1034,15 +1157,7 @@ export default function Home() {
                               <button
                                 className="quiet"
                                 disabled={saving}
-                                onClick={() =>
-                                  updateTrip({
-                                    ...trip,
-                                    payments: [
-                                      ...trip.payments,
-                                      { id: uid(), ...d, date: today() },
-                                    ],
-                                  })
-                                }
+                                onClick={() => void openPayment(d)}
                               >
                                 <Check size={16} /> Record paid
                               </button>
@@ -1063,6 +1178,10 @@ export default function Home() {
                         Record a payment after the money has been transferred.
                         TripTab does not move money.
                       </p>
+                      <h2 className="subheading">Traveller statements</h2>
+                      <div className="panel">
+                        {trip.members.map(member => <button key={member.id} className="statement-link" onClick={() => setStatement(member.id)}><span>{member.name}</span><span>View statement</span></button>)}
+                      </div>
                       {trip.payments.length > 0 && (
                         <>
                           <h2 className="subheading">Recorded payments</h2>
@@ -1072,20 +1191,24 @@ export default function Home() {
                                 <span>
                                   {name(p.from)} paid {name(p.to)}
                                   <small>{p.date}</small>
+                                  {p.method && <small>{p.method}</small>}
+                                  {p.note && <small>{p.note}</small>}
                                 </span>
                                 <b>{money(p.amount, trip.currency)}</b>
+                                <button className="quiet" disabled={saving || loading} onClick={() => void openPayment(undefined, p)}>Edit</button>
                                 <button
                                   aria-label="Undo recorded payment"
                                   className="iconbutton"
                                   disabled={saving}
-                                  onClick={() =>
-                                    updateTrip({
+                                  onClick={() => {
+                                    if (!window.confirm(`Remove the recorded payment of ${money(p.amount, trip.currency)} from ${name(p.from)} to ${name(p.to)}? It will remain in activity history.`)) return;
+                                    void updateTrip({
                                       ...trip,
                                       payments: trip.payments.filter(
                                         (x) => x.id !== p.id,
                                       ),
-                                    })
-                                  }
+                                    });
+                                  }}
                                 >
                                   <Trash2 size={17} />
                                 </button>
@@ -1096,6 +1219,7 @@ export default function Home() {
                       )}
                     </>
                   )}
+                  {view === "history" && <ActivityPanel tripId={trip.id} refreshKey={revision} currency={trip.currency} memberNames={Object.fromEntries(trip.members.map(member => [member.id, member.name]))} />}
                   {view === "receipts" && (
                     <>
                       <div className="sectionheading">
@@ -1105,7 +1229,7 @@ export default function Home() {
                           {uploading ? "Uploading…" : "Add receipt"}
                           <input
                             type="file"
-                            accept="image/jpeg,image/png,image/webp"
+                            accept="image/*,.heic,.heif"
                             capture="environment"
                             disabled={uploading || saving}
                             onChange={(e) => {
@@ -1123,7 +1247,7 @@ export default function Home() {
                               {d.receiptId ? (
                                 <img
                                   src={"/api/receipt?id=" + d.receiptId}
-                                  alt="Receipt thumbnail"
+                                  alt={`Receipt image for ${d.title || "untitled receipt"}`}
                                 />
                               ) : (
                                 <span className="expense-icon">
@@ -1153,14 +1277,15 @@ export default function Home() {
                                 className="iconbutton"
                                 aria-label="Remove draft"
                                 disabled={saving}
-                                onClick={() =>
-                                  updateTrip({
+                                onClick={() => {
+                                  if (!window.confirm(`Remove the receipt draft “${d.title}”? Its removal will appear in activity history.`)) return;
+                                  void updateTrip({
                                     ...trip,
                                     drafts: trip.drafts.filter(
                                       (x) => x.id !== d.id,
                                     ),
-                                  })
-                                }
+                                  });
+                                }}
                               >
                                 <X size={17} />
                               </button>
@@ -1300,7 +1425,7 @@ export default function Home() {
                         <span>
                           {m.name}
                           <small>
-                            {balance[i] > 0
+                            {calculationError ? "Needs review" : balance[i] > 0
                               ? "Gets back"
                               : balance[i] < 0
                                 ? "Owes"
@@ -1316,7 +1441,7 @@ export default function Home() {
                                 : "muted"
                           }
                         >
-                          {money(Math.abs(balance[i]), trip.currency)}
+                          {calculationError ? "—" : money(Math.abs(balance[i]), trip.currency)}
                         </b>
                       </div>
                     ))}
@@ -1365,7 +1490,7 @@ export default function Home() {
           )}
           <footer>
             <span>TripTab</span>
-            <span>
+            <span role="status" aria-live="polite">
               {saving
                 ? "Saving…"
                 : trip
@@ -1375,6 +1500,8 @@ export default function Home() {
           </footer>
         </main>
       </div>
+      {paymentEditor && trip && <PaymentEditor key={paymentEditor.key} trip={trip} initial={paymentEditor.entry} busy={saving || loading} error={error} onClose={() => setPaymentEditor(null)} onSave={savePayment} />}
+      {statement && trip && <MemberStatement trip={trip} memberId={statement} onClose={() => setStatement("")} />}
       {create && (
         <ModalA11y className="overlay" onClose={() => setCreate(false)}>
           <section
@@ -1518,7 +1645,7 @@ export default function Home() {
                 <strong>Upload your receipt here</strong>
                 <p>
                   Use a clear JPEG, PNG or WebP. Your assistant can read it
-                  through the plugin, or you can attach the original image in
+                  through the plugin, or you can attach the stored receipt image in
                   chat.
                 </p>
               </li>
@@ -1595,6 +1722,7 @@ export default function Home() {
                   prompt={receiptPrompt}
                   ready={!!processedReceipt}
                   onCapture={captureEditorReceipt}
+                  onPreparingChange={setUploading}
                   onPrepare={prepareEditorReceipt}
                   onRefresh={() => checkEditorReceipt()}
                   onUseProcessed={reviewProcessedReceipt}
@@ -1715,6 +1843,7 @@ export default function Home() {
                           "Atlantic/Reykjavik",
                           "Europe/Istanbul",
                           "UTC",
+                          ...Intl.supportedValuesOf("timeZone"),
                         ]),
                       ).map((z) => (
                         <option value={z} key={z}>
@@ -1890,6 +2019,7 @@ export default function Home() {
                     onSend={sendReceiptQuestion}
                     onRefresh={() => checkEditorReceipt(true)}
                   />
+                  {editing.bankAmount !== undefined && (editing.currency === trip.currency || editing.bankAmount <= 0) && <div className="error" role="alert"><p>The saved bank charge is {money(editing.bankAmount, trip.currency)}. {editing.currency === trip.currency ? "A receipt already in the holiday currency cannot use a currency-conversion bank charge." : "A bank charge must be greater than zero."} Review it before saving.</p><button type="button" className="quiet" onClick={() => setEditing({ ...editing, bankAmount: undefined })}>Remove bank charge</button></div>}
                   {editing.currency !== trip.currency && (
                     <div className="fx-panel">
                       <div className="sectionheading">
@@ -1920,7 +2050,7 @@ export default function Home() {
                       {editing.fx && (
                         <div className="rate-result">
                           <span>
-                            1 {editing.currency} = {editing.fx.rate.toFixed(5)}{" "}
+                            1 {editing.currency} = {editing.fx.rate.toPrecision(8)}{" "}
                             {trip.currency}
                           </span>
                           <small>
@@ -1931,10 +2061,7 @@ export default function Home() {
                           </small>
                           <strong>
                             Estimated charge{" "}
-                            {money(
-                              convertAmount(total(editing), editing.fx.rate),
-                              trip.currency,
-                            )}
+                            {estimatedCharge === null ? "Outside the supported amount range" : money(estimatedCharge, trip.currency)}
                           </strong>
                         </div>
                       )}
@@ -1993,29 +2120,18 @@ export default function Home() {
                           />
                         </label>
                       )}
-                      {editing.bankAmount !== undefined && editing.fx && (
+                      {editing.bankAmount !== undefined && editing.fx && estimatedCharge !== null && (
                         <p className="bank-diff">
                           Conversion cost vs reference:{" "}
                           <b>
                             {money(
                               editing.bankAmount -
-                                convertAmount(total(editing), editing.fx.rate),
+                                estimatedCharge,
                               trip.currency,
                             )}{" "}
                             ·{" "}
-                            {total(editing) * editing.fx.rate > 0
-                              ? (
-                                  ((editing.bankAmount -
-                                    convertAmount(
-                                      total(editing),
-                                      editing.fx.rate,
-                                    )) /
-                                    convertAmount(
-                                      total(editing),
-                                      editing.fx.rate,
-                                    )) *
-                                  100
-                                ).toFixed(2)
+                            {estimatedCharge > 0
+                              ? (((editing.bankAmount - estimatedCharge) / estimatedCharge) * 100).toFixed(2)
                               : "0.00"}
                             %
                           </b>
@@ -2055,6 +2171,37 @@ export default function Home() {
                   {error}
                 </div>
               )}
+              {editorConflict && <section className="conflict-review" role="region" aria-labelledby="expense-conflict-title">
+                <h3 id="expense-conflict-title">Expense changed</h3>
+                <p>Another traveller changed this expense while you were editing. Compare the saved details with your edits before continuing.</p>
+                <div className="conflict-versions">
+                  {[{ label: "Your edits", value: editing }, { label: "Latest saved", value: editorConflict.latest }].map(version => {
+                    const value = version.value;
+                    const costs = value && previewShares(value, trip);
+                    return <div key={version.label}>
+                      <h4>{version.label}</h4>
+                      {value ? <>
+                        <strong>{value.title || "Untitled expense"}</strong>
+                        <p>{value.date} · {value.time} · {value.timezone}</p>
+                        <p>{name(value.payer)} paid · {money(total(value), value.currency)}</p>
+                        <ul>{value.items.map(item => <li key={item.id}>
+                          {item.name || "Unnamed item"} · {money(item.amount, value.currency)}
+                          <small>{item.members.map(member => `${name(member)}${item.percentages ? ` ${item.percentages[member]}%` : ""}`).join(", ")}</small>
+                        </li>)}</ul>
+                        <p>Tax {money(value.tax, value.currency)} · Tip {money(value.tip, value.currency)} · Discount {money(value.discount, value.currency)}</p>
+                        {value.percentages && <p>Whole receipt: {Object.entries(value.percentages).map(([member, percent]) => `${name(member)} ${percent}%`).join(", ")}</p>}
+                        <small>{value.bankAmount !== undefined ? `Bank charge: ${money(value.bankAmount, trip.currency)}` : value.fx ? `Exchange rate: ${value.fx.rate} ${trip.currency} per ${value.currency}` : "No currency conversion"}</small>
+                        {costs && <p>Cost shares: {trip.members.map((member, index) => `${member.name} ${money(costs[index], trip.currency)}`).join(", ")}</p>}
+                      </> : <p>This expense has been removed.</p>}
+                    </div>;
+                  })}
+                </div>
+                <div className="conflict-actions">
+                  <button type="button" className="quiet" onClick={() => { if (editorConflict.latest) openExpense(editorConflict.latest); else setEditing(null); setError(""); }}>{editorConflict.latest ? "Use latest saved" : "Discard my edits"}</button>
+                  <button type="button" className="primary" onClick={keepExpenseEdits}>{editorConflict.latest ? "Continue with my edits" : "Save as a new expense"}</button>
+                </div>
+                <p className="footnote">Review your split and press Save expense to commit your choice.</p>
+              </section>}
               <div className="editor-footer">
                 <div>
                   <small>Original receipt total</small>
@@ -2071,9 +2218,12 @@ export default function Home() {
                   {trip.expenses.some((e) => e.id === editing.id) && (
                     <button
                       type="button"
+                      aria-label="Delete expense"
                       className="danger quiet"
                       disabled={saving}
                       onClick={async () => {
+                        if (!editorIsCurrent()) return;
+                        if (!window.confirm(`Delete “${editing.title}” (${money(previewTotal(editing, trip) || 0, trip.currency)})? Its previous details will remain in activity history.`)) return;
                         if (
                           await updateTrip({
                             ...trip,
@@ -2094,10 +2244,12 @@ export default function Home() {
                     className="primary"
                     disabled={
                       saving ||
+                      !!editorConflict ||
                       uploading ||
                       receiptChecking ||
                       fxLoading ||
                       editing.bankAmount === 0 ||
+                      (editing.bankAmount !== undefined && editing.currency === trip.currency) ||
                       !!receiptSplitError(editing) ||
                       editing.items.some((item) => !!itemSplitError(item)) ||
                       total(editing) <= 0 ||

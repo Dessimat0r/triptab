@@ -1,4 +1,4 @@
-const CACHE_NAME = 'triptab-public-v1';
+const CACHE_NAME = 'triptab-public-v2';
 const OFFLINE_URL = '/offline.html';
 const PUBLIC_ASSETS = [
   OFFLINE_URL,
@@ -9,6 +9,8 @@ const PUBLIC_ASSETS = [
 ];
 
 self.addEventListener('install', (event) => {
+  // Updates stay waiting until a traveller explicitly requests activation.
+  // Never reload an open expense editor automatically.
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => cache.addAll(PUBLIC_ASSETS)),
   );

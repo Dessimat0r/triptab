@@ -1,4 +1,4 @@
-import { db, ensureProfile, failure, readBoundedBody, RequestError, sameOrigin } from '@/lib/store';
+import { activityStatements, db, ensureProfile, failure, readBoundedBody, RequestError, sameOrigin } from '@/lib/store';
 import { notifyMembers } from '@/lib/notifications';
 
 export const dynamic = 'force-dynamic';
@@ -162,11 +162,12 @@ async function acceptInvite(profile: Profile, body: Record<string, unknown>) {
         WHERE i.token_hash = ? AND i.used_by IS NULL AND i.expires_at > ?
           AND (i.email IS NULL OR lower(i.email) = ?)
           AND t.owner = i.created_by AND t.owner <> ?
+          AND t.data = ?
           AND NOT EXISTS (SELECT 1 FROM memberships m WHERE m.trip_id = t.id AND (m.user_id = ? OR m.member_id = i.member_id))
           AND EXISTS (SELECT 1 FROM json_each(t.data, '$.members') j
             WHERE json_extract(j.value, '$.id') = i.member_id AND json_extract(j.value, '$.userId') IS NULL)
       )
-    `).bind(marker, state.revision, profile.id, profile.id, hash, now, verifiedEmail, profile.id, profile.id),
+    `).bind(marker, state.revision, profile.id, profile.id, hash, now, verifiedEmail, profile.id, invite.data, profile.id),
     database.prepare(`
       UPDATE invites SET used_by = ? WHERE token_hash = ? AND used_by IS NULL
         AND EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND last_write = ?)
@@ -183,6 +184,7 @@ async function acceptInvite(profile: Profile, body: Record<string, unknown>) {
       WHERE id = ? AND EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND last_write = ?)
         AND EXISTS (SELECT 1 FROM invites WHERE token_hash = ? AND used_by = ? AND trip_id = trips.id)
     `).bind(invite.member_id, profile.id, invite.member_id, verifiedEmail, invite.trip_id, marker, hash, profile.id),
+    ...activityStatements(database, [{ tripId: invite.trip_id, entityType: 'member', entityId: invite.member_id, action: 'update', before: { ...member }, after: { ...member, userId: profile.id, email: verifiedEmail } }], { id: profile.id, displayName: profile.displayName }, marker, state.revision + 1),
   ]);
   if (!results[0].meta.changes) {
     // Simultaneous clicks from the same account can safely return the first claim.

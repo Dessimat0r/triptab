@@ -3,6 +3,8 @@ import test from 'node:test';
 import {
   allocate, balances, convertAmount, CURRENCIES, draftSchema, expenseSchema, expenseShares,
   expenseTotal, itemSchema, itemShares, itemSplitError, receiptSplitError, settlements, shares, total, validateLedger,
+  MAX_AMOUNT, paymentSchema, validExchangeRate,
+  parseLedgerStructure, parseStoredTrip,
 } from '../lib/model';
 import type { Expense, Item, ReceiptMessage, Trip } from '../lib/model';
 
@@ -50,10 +52,115 @@ test('same-currency receipts need no rate and ignore an irrelevant rate', () => 
   assert.deepEqual(expenseShares(expense({ currency: 'GBP' }), members, 'GBP'), [3334, 3334, 3333]);
 });
 
-test('a zero actual charge remains zero rather than falling back to an estimate', () => {
+test('rejects a zero actual charge instead of zeroing a posted expense', () => {
   const dinner = expense({ bankAmount: 0 });
-  assert.equal(expenseTotal(dinner, 'GBP'), 0);
-  assert.deepEqual(expenseShares(dinner, members, 'GBP'), [0, 0, 0]);
+  assert.throws(() => expenseTotal(dinner, 'GBP'), /greater than zero/);
+  assert.throws(() => expenseShares(dinner, members, 'GBP'), /greater than zero/);
+  assert.equal(expenseSchema.safeParse(dinner).success, false);
+  assert.equal(draftSchema.safeParse({ ...dinner, status: 'review' }).success, false);
+  assert.throws(() => validateLedger(ledger([dinner])));
+});
+
+test('a bank charge cannot override a receipt in its settlement currency, including review drafts', () => {
+  const dinner = expense({ currency: 'GBP', bankAmount: 8700 });
+  assert.throws(() => expenseTotal(dinner, 'GBP'), /currencies are the same/);
+  assert.throws(() => validateLedger(ledger([dinner])), /currencies are the same/);
+  const holiday = trip([]);
+  holiday.drafts = [{ ...dinner, items: [], status: 'waiting' }];
+  assert.throws(() => validateLedger({ trips: [holiday] }), /currencies are the same/);
+});
+
+test('posted original and converted receipt totals must be positive while incomplete drafts remain valid', () => {
+  const zero = expense({ items: [{ id: 'zero', name: 'Free', amount: 0, members: ['a'] }] });
+  assert.throws(() => validateLedger(ledger([zero])), /Receipt total must be greater than zero/);
+  assert.throws(() => validateLedger(ledger([expense({ discount: 10001 })])), /Receipt total must be greater than zero/);
+  const roundedToZero = expense({ items: [{ id: 'small', name: 'Small', amount: 1, members: ['a'] }], fx: { rate: 0.001, asOf: '2026-08-15', source: 'manual' } });
+  assert.throws(() => validateLedger(ledger([roundedToZero])), /Converted receipt total must be greater than zero/);
+  const holiday = trip([]);
+  holiday.drafts = [{ ...zero, id: 'waiting', status: 'waiting', items: [], fx: undefined }];
+  assert.equal(validateLedger({ trips: [holiday] }).trips[0].drafts.length, 1);
+});
+
+test('caps converted totals at the money-field limit and refuses unsafe intermediate sums', () => {
+  const boundary = expense({ currency: 'GBP', fx: undefined, items: [{ id: 'large', name: 'Large', amount: MAX_AMOUNT, members: ['a'] }] });
+  assert.equal(expenseTotal(boundary, 'GBP'), MAX_AMOUNT);
+  validateLedger(ledger([boundary]));
+  assert.throws(() => expenseTotal({ ...boundary, tax: 1 }, 'GBP'), /out of range/);
+  assert.throws(() => validateLedger(ledger([expense({ fx: { rate: 1e11, asOf: '2026-08-15', source: 'manual' } })])), /out of range/);
+  assert.throws(() => expenseTotal(expense({ bankAmount: MAX_AMOUNT + 1 }), 'GBP'), /out of range/);
+  assert.throws(() => total(expense({ items: [{ id: 'unsafe', name: 'Unsafe', amount: Number.MAX_SAFE_INTEGER, members: ['a'] }], tax: 1 })), /out of range/);
+  assert.throws(() => total(expense({ tax: 0.5 })), /out of range/);
+  for (const rate of [0, -1, NaN, Infinity, '0.85', null]) assert.equal(validExchangeRate(rate), false);
+  for (const rate of [0.00214, 0.85, 450, Number.MIN_VALUE]) assert.equal(validExchangeRate(rate), true);
+});
+
+test('structural stored-data parsing preserves historical bank charges and raw traveller names', () => {
+  const legacy = trip([expense({ currency: 'GBP', bankAmount: 8700 })]);
+  legacy.members = [{ id: 'a', name: ' Alice ' }, { id: 'b', name: 'alice' }, { id: 'c', name: '   ' }];
+  legacy.drafts = [{ ...expense({ id: 'old-draft', bankAmount: 0 }), items: [], status: 'waiting' }];
+  const stored = parseStoredTrip(JSON.parse(JSON.stringify(legacy)));
+  assert.equal(stored.expenses[0].bankAmount, 8700);
+  assert.equal(stored.drafts[0].bankAmount, 0);
+  assert.deepEqual(stored.members.map(member => member.name), [' Alice ', 'alice', '   ']);
+  assert.deepEqual(parseLedgerStructure({ trips: [legacy] }).trips[0], stored);
+  assert.throws(() => validateLedger({ trips: [legacy] }));
+});
+
+test('only unchanged records from a trusted prior snapshot retain legacy financial values', () => {
+  const legacy = trip([expense({ currency: 'GBP', bankAmount: 8700 })]);
+  legacy.members = [{ id: 'a', name: ' Alice ' }, { id: 'b', name: 'alice' }, { id: 'c', name: 'Chloe' }];
+  legacy.drafts = [{ ...expense({ id: 'old-draft', bankAmount: 0 }), items: [], status: 'waiting' }];
+  const clean = { ...trip(), id: 'other-trip' };
+  const previous = { trips: [legacy, clean] };
+  const incoming = structuredClone(previous);
+  incoming.trips[1].expenses[0].title = 'Updated dinner';
+  const saved = validateLedger(incoming, { previous });
+  assert.deepEqual(saved.trips[0], parseStoredTrip(legacy));
+  assert.equal(saved.trips[1].expenses[0].title, 'Updated dinner');
+  const modifiedExpense = structuredClone(incoming);
+  modifiedExpense.trips[0].expenses[0].title = 'Changed old dinner';
+  assert.throws(() => validateLedger(modifiedExpense, { previous }), /currencies are the same/);
+  const modifiedDraft = structuredClone(incoming);
+  modifiedDraft.trips[0].drafts[0].title = 'Changed old draft';
+  assert.throws(() => validateLedger(modifiedDraft, { previous }), /greater than zero/);
+  const addedDraft = structuredClone(incoming);
+  addedDraft.trips[0].drafts.push({ ...addedDraft.trips[0].drafts[0], id: 'new-invalid-draft' });
+  assert.throws(() => validateLedger(addedDraft, { previous }), /greater than zero/);
+  assert.throws(() => validateLedger(incoming, { previous: { trips: [clean] } }), /Traveller names must be unique/);
+  const changedCurrency = structuredClone(incoming);
+  changedCurrency.trips[0].currency = 'EUR';
+  assert.throws(() => validateLedger(changedCurrency, { previous }), /greater than zero/);
+});
+
+test('legacy zero bank charges and duplicate names can be repaired without changing other financial values', () => {
+  const legacy = trip([expense({ bankAmount: 0 })]);
+  legacy.members = [{ id: 'a', name: ' Alice ' }, { id: 'b', name: 'alice' }, { id: 'c', name: 'Chloe' }];
+  legacy.drafts = [{ ...expense({ id: 'old-draft', bankAmount: 0 }), items: [], status: 'waiting' }];
+  const repaired = structuredClone(legacy);
+  repaired.expenses[0].bankAmount = 8501;
+  repaired.drafts = [];
+  repaired.members[1].name = 'Alice Smith';
+  const saved = validateLedger({ trips: [repaired] }, { previous: { trips: [legacy] } }).trips[0];
+  assert.equal(saved.members[0].name, ' Alice ', 'unchanged historical name must not be silently trimmed');
+  assert.equal(saved.members[1].name, 'Alice Smith');
+  assert.equal(saved.expenses[0].bankAmount, 8501);
+  assert.deepEqual(saved.expenses[0].items, legacy.expenses[0].items);
+  assert.equal(saved.drafts.length, 0);
+  assert.equal(expenseTotal(saved.expenses[0], 'GBP'), 8501);
+});
+
+test('unchanged historical zero or oversized totals do not block repairs elsewhere, but modified amounts remain strict', () => {
+  const zero = expense({ id: 'old-zero', items: [{ id: 'zero-item', name: 'Free', amount: 0, members: ['a'] }] });
+  const oversized = expense({ id: 'old-large', fx: { rate: 1e11, asOf: '2026-08-15', source: 'manual' } });
+  const legacy = trip([zero, oversized]);
+  const saved = validateLedger({ trips: [legacy] }, { previous: { trips: [legacy] } });
+  assert.deepEqual(saved.trips[0].expenses, legacy.expenses);
+  const changedZero = structuredClone(legacy);
+  changedZero.expenses[0].title = 'Updated zero';
+  assert.throws(() => validateLedger({ trips: [changedZero] }, { previous: { trips: [legacy] } }), /Receipt total must be greater than zero/);
+  const changedLarge = structuredClone(legacy);
+  changedLarge.expenses[1].title = 'Updated large';
+  assert.throws(() => validateLedger({ trips: [changedLarge] }, { previous: { trips: [legacy] } }), /out of range/);
 });
 
 test('rounds decimal half cents up and supports scientific notation rates', () => {
@@ -124,6 +231,90 @@ test('supports Europe currencies and rejects duplicate item IDs', () => {
   assert.ok(['GBP', 'EUR', 'CHF', 'CZK', 'DKK', 'HUF', 'ISK', 'NOK', 'PLN', 'RON', 'SEK', 'TRY', 'ALL', 'BAM', 'MKD', 'MDL', 'RSD', 'UAH'].every(code => CURRENCIES.some(currency => currency.code === code)));
   const duplicate = { id: 'food', name: 'Food', amount: 10, members: ['a'] };
   assert.throws(() => validateLedger(ledger([expense({ items: [duplicate, duplicate] })])), /Duplicate item/);
+});
+
+test('trims traveller names and requires distinct names independent of case and edge spaces', () => {
+  const holiday = trip([]);
+  holiday.members = [{ id: 'a', name: ' Alice ' }, { id: 'b', name: 'alice' }];
+  assert.throws(() => validateLedger({ trips: [holiday] }), /Traveller names must be unique.*surname or nickname/);
+  holiday.members[1].name = 'Alice Smith';
+  assert.deepEqual(validateLedger({ trips: [holiday] }).trips[0].members.map(member => member.name), ['Alice', 'Alice Smith']);
+  holiday.members[0].name = '   ';
+  assert.throws(() => validateLedger({ trips: [holiday] }));
+});
+
+test('preserves manual payment details and AI provenance without changing legacy records', () => {
+  const holiday = trip();
+  holiday.payments = [{ id: 'partial', from: 'b', to: 'a', amount: 200, date: '2026-08-16', time: '09:35', timezone: 'Europe/Paris', method: ' Bank transfer ', note: ' First part ' }];
+  holiday.expenses[0].source = 'ai';
+  holiday.drafts = [{ ...expense({ id: 'draft' }), source: 'ai', status: 'review' }];
+  const parsed = validateLedger(JSON.parse(JSON.stringify({ trips: [holiday] }))).trips[0];
+  assert.deepEqual(parsed.payments[0], { ...holiday.payments[0], method: 'Bank transfer', note: 'First part' });
+  assert.equal(parsed.expenses[0].source, 'ai');
+  assert.equal(parsed.drafts[0].source, 'ai');
+  assert.equal(expenseSchema.parse(expense()).source, undefined);
+  assert.equal(paymentSchema.safeParse({ ...holiday.payments[0], time: '24:00' }).success, false);
+  assert.equal(paymentSchema.safeParse({ ...holiday.payments[0], timezone: 'Imaginary/Zone' }).success, false);
+  assert.equal(paymentSchema.safeParse({ ...holiday.payments[0], method: 'x'.repeat(81) }).success, false);
+  assert.equal(paymentSchema.safeParse({ ...holiday.payments[0], note: 'x'.repeat(501) }).success, false);
+  assert.equal(paymentSchema.safeParse({ id: 'legacy', from: 'b', to: 'a', amount: 200, date: '2026-08-16' }).success, true);
+});
+
+test('settles equal opposite balances first and makes remaining greedy transfers deterministic by member id', () => {
+  const holiday: Trip = { ...trip([]), members: [...members, { id: 'd', name: 'Daniel' }] };
+  holiday.expenses = [
+    expense({ id: 'couple-one', currency: 'GBP', fx: undefined, payer: 'd', items: [{ id: 'one', name: 'One', amount: 300, members: ['a'] }] }),
+    expense({ id: 'couple-two', currency: 'GBP', fx: undefined, payer: 'c', items: [{ id: 'two', name: 'Two', amount: 700, members: ['b'] }] }),
+  ];
+  assert.deepEqual(balances(holiday), [-300, -700, 700, 300]);
+  const paired = [{ from: 'a', to: 'd', amount: 300 }, { from: 'b', to: 'c', amount: 700 }];
+  assert.deepEqual(settlements(holiday), paired);
+  assert.deepEqual(settlements({ ...holiday, members: [...holiday.members].reverse() }), paired);
+  holiday.expenses[0].items[0].amount = 500;
+  holiday.expenses[1].items[0].amount = 500;
+  assert.deepEqual(settlements(holiday), [{ from: 'a', to: 'c', amount: 500 }, { from: 'b', to: 'd', amount: 500 }]);
+  holiday.expenses.push(expense({ id: 'extra', currency: 'GBP', fx: undefined, payer: 'c', items: [{ id: 'extra', name: 'Extra', amount: 101, members: ['a'] }] }));
+  const transfers = settlements(holiday);
+  assert.deepEqual(settlements({ ...holiday, members: [...holiday.members].reverse() }), transfers);
+  holiday.payments = transfers.map((payment, index) => ({ ...payment, id: `settled-${index}`, date: '2026-08-16' }));
+  assert.deepEqual(balances(holiday), [0, 0, 0, 0]);
+});
+
+test('seeded mixed-currency trips conserve every penny through allocation, JSON persistence and settlement', () => {
+  let seed = 0x515babe;
+  const random = (limit: number) => {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    return seed % limit;
+  };
+  const currencies = ['GBP', 'EUR', 'PLN', 'HUF', 'ISK'] as const;
+  for (let iteration = 0; iteration < 800; iteration++) {
+    const travellers = Array.from({ length: 2 + random(7) }, (_, index) => ({ id: `person-${index}`, name: `Person ${index}` }));
+    const expenses = Array.from({ length: 1 + random(8) }, (_, index) => {
+      const currency = currencies[random(currencies.length)];
+      const ids = travellers.map(member => member.id);
+      const items: Item[] = Array.from({ length: 1 + random(5) }, (_, itemIndex) => ({
+        id: `item-${itemIndex}`, name: 'Item', amount: 500 + random(50000),
+        members: random(2) ? ids : [ids[random(ids.length)]],
+      }));
+      const percentages = random(3) === 0 ? { [ids[0]]: 60, [ids[1]]: 40 } : undefined;
+      if (random(2)) items[0] = { ...items[0], members: [ids[0], ids[1]], percentages: { [ids[0]]: 33.33, [ids[1]]: 66.67 } };
+      return expense({ id: `expense-${index}`, currency, payer: ids[random(ids.length)], items, tax: random(200), tip: random(200), discount: random(400), percentages,
+        fx: currency === 'GBP' ? undefined : { rate: currency === 'HUF' || currency === 'ISK' ? 0.00214 : 0.85327, asOf: '2026-08-15', source: 'manual' },
+        bankAmount: currency !== 'GBP' && random(3) === 0 ? 1 + random(80000) : undefined,
+      });
+    });
+    const holiday: Trip = { ...trip(expenses), members: travellers };
+    for (const receipt of expenses) {
+      assert.equal(sum(shares(receipt, travellers)), total(receipt));
+      assert.equal(sum(expenseShares(receipt, travellers, 'GBP')), expenseTotal(receipt, 'GBP'));
+    }
+    const persisted = validateLedger(JSON.parse(JSON.stringify({ trips: [holiday] }))).trips[0];
+    assert.deepEqual(balances(persisted), balances(holiday));
+    assert.equal(sum(balances(persisted)), 0);
+    persisted.payments = settlements(persisted).map((payment, index) => ({ ...payment, id: `payment-${index}`, date: '2026-08-16' }));
+    assert.ok(balances(persisted).every(value => value === 0));
+    assert.deepEqual(settlements(persisted), []);
+  }
 });
 
 test('preserves optional holiday dates and rejects invalid date ranges', () => {
@@ -245,7 +436,7 @@ test('converts receipt-wide percentages directly without reweighting rounded ori
   assert.deepEqual(shares(dinner, members), [1, 0, 0]);
   assert.deepEqual(expenseShares(dinner, members, 'GBP'), [1, 1, 0]);
   assert.deepEqual(expenseShares({ ...dinner, bankAmount: 3 }, members, 'GBP'), [2, 1, 0]);
-  assert.deepEqual(expenseShares({ ...dinner, currency: 'GBP', fx: undefined, bankAmount: 2 }, members, 'GBP'), [1, 1, 0]);
+  assert.deepEqual(expenseShares({ ...dinner, fx: undefined, bankAmount: 2 }, members, 'GBP'), [1, 1, 0]);
 });
 
 test('allows a selected subset of known people for receipt-wide percentages', () => {

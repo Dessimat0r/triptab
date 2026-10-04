@@ -5,7 +5,7 @@ import test from 'node:test';
 import { ModuleKind, ScriptTarget, transpileModule } from 'typescript';
 import {
   AuthError, hashPassword, hashToken, performAuthAction, readAuthState,
-  resolveIdentity, sessionIdentity, verifyPassword, consumeAuthRateLimit,
+  resolveIdentity, sessionIdentity, verifyPassword, consumeAuthRateLimit, cleanupExpiredAuthData,
 } from '../lib/auth';
 
 class SQLiteStatement {
@@ -91,7 +91,7 @@ test('registration requires no provider connection and never merges by email', a
   await assert.rejects(register(database), (error: unknown) => error instanceof AuthError && error.status === 409);
 });
 
-test('login rotates opaque sessions, normalizes only email and clears failed attempt counts', async () => {
+test('login rotates opaque sessions, normalizes only email and clears only email attempt counts', async () => {
   const database = await storage();
   const original = await register(database);
   await assert.rejects(performAuthAction(request(), { action: 'login', email: 'traveller@example.com', password: `${password} ` }, database.asD1()), /email or password/);
@@ -99,7 +99,10 @@ test('login rotates opaque sessions, normalizes only email and clears failed att
   assert.notEqual(loggedIn.cookie, original.cookie);
   assert.equal(await sessionIdentity(sessionRequest(original.cookie!), database.asD1()), null);
   assert.equal(loggedIn.state.profile!.id, original.state.profile!.id);
-  assert.equal(database.sqlite.prepare('SELECT COUNT(*) AS count FROM auth_rate_limits').get()?.count, 0);
+  const emailKey = await hashToken('auth:login:email:traveller@example.com');
+  const ipKey = await hashToken('auth:login:ip:203.0.113.9');
+  assert.equal(database.sqlite.prepare('SELECT attempts FROM auth_rate_limits WHERE key_hash = ?').get(emailKey), undefined);
+  assert.equal(database.sqlite.prepare('SELECT attempts FROM auth_rate_limits WHERE key_hash = ?').get(ipKey)?.attempts, 2);
   const local = await performAuthAction(request({}, 'http://localhost:5173/api/auth'), { action: 'login', email: 'traveller@example.com', password }, database.asD1());
   assert.doesNotMatch(local.cookie!, /Secure/);
 });
@@ -126,13 +129,84 @@ test('expired sessions and ambiguous cookies grant no access; logout also suppre
 test('rate limits are atomic, expire after fifteen minutes and store only hashed IP/email keys', async () => {
   const database = await storage();
   for (let index = 0; index < 8; index++) await consumeAuthRateLimit(request(), 'target@example.com', database.asD1());
-  await assert.rejects(consumeAuthRateLimit(request(), 'target@example.com', database.asD1()), (error: unknown) => error instanceof AuthError && error.status === 429 && !!error.retryAfter);
   const rows = database.sqlite.prepare('SELECT * FROM auth_rate_limits').all();
   assert.equal(rows.length, 2);
   assert.ok(rows.every(row => /^[a-f0-9]{64}$/.test(String(row.key_hash)) && row.attempts === 8));
+  await assert.rejects(consumeAuthRateLimit(request(), 'target@example.com', database.asD1()), (error: unknown) => error instanceof AuthError && error.status === 429 && !!error.retryAfter);
   database.sqlite.prepare('UPDATE auth_rate_limits SET window_start = ?').run(Date.now() - 16 * 60 * 1000);
   await consumeAuthRateLimit(request(), 'target@example.com', database.asD1());
   assert.ok(database.sqlite.prepare('SELECT attempts FROM auth_rate_limits').all().every(row => row.attempts === 1));
+});
+
+test('successful own-account logins cannot reset the IP budget for credential stuffing', async () => {
+  const database = await storage();
+  await register(database);
+  const ipKey = await hashToken('auth:login:ip:203.0.113.9');
+  for (let attempt = 0; attempt < 40; attempt++) {
+    const ownLogin = attempt % 7 === 6;
+    const action = performAuthAction(request(), {
+      action: 'login', email: ownLogin ? 'traveller@example.com' : `victim-${attempt}@example.com`, password,
+    }, database.asD1());
+    if (ownLogin) assert.equal((await action).state.authenticated, true);
+    else await assert.rejects(action, (error: unknown) => error instanceof AuthError && error.status === 401);
+    assert.equal(database.sqlite.prepare('SELECT attempts FROM auth_rate_limits WHERE key_hash = ?').get(ipKey)?.attempts, attempt + 1);
+  }
+  await assert.rejects(performAuthAction(request(), { action: 'login', email: 'traveller@example.com', password }, database.asD1()),
+    (error: unknown) => error instanceof AuthError && error.status === 429);
+  assert.equal(database.sqlite.prepare('SELECT attempts FROM auth_rate_limits WHERE key_hash = ?').get(ipKey)?.attempts, 40);
+});
+
+test('registration, login and password setup have independent IP and email budgets', async () => {
+  const database = await storage();
+  const local = await register(database);
+  for (let attempt = 0; attempt < 8; attempt++) await consumeAuthRateLimit(request(), 'owner@example.com', database.asD1(), 'register');
+  await assert.rejects(consumeAuthRateLimit(request(), 'owner@example.com', database.asD1(), 'register'),
+    (error: unknown) => error instanceof AuthError && error.status === 429);
+  await consumeAuthRateLimit(request(), 'owner@example.com', database.asD1(), 'login');
+  await consumeAuthRateLimit(request(), 'owner@example.com', database.asD1(), 'set_password');
+  const updated = await performAuthAction(sessionRequest(local.cookie!), {
+    action: 'set_password', currentPassword: password, password: 'replacement password',
+  }, database.asD1());
+  assert.equal(updated.state.authenticated, true);
+  const setupIP = await hashToken('auth:set_password:ip:203.0.113.9');
+  const setupEmail = await hashToken('auth:set_password:email:traveller@example.com');
+  assert.equal(database.sqlite.prepare('SELECT attempts FROM auth_rate_limits WHERE key_hash = ?').get(setupIP)?.attempts, 2);
+  assert.equal(database.sqlite.prepare('SELECT attempts FROM auth_rate_limits WHERE key_hash = ?').get(setupEmail), undefined);
+  const registrationIP = await hashToken('auth:register:ip:203.0.113.9');
+  assert.equal(database.sqlite.prepare('SELECT attempts FROM auth_rate_limits WHERE key_hash = ?').get(registrationIP)?.attempts, 10);
+});
+
+test('successful registrations keep the registration IP cap without exhausting login', async () => {
+  const database = await storage();
+  const ipKey = await hashToken('auth:register:ip:203.0.113.9');
+  for (let index = 0; index < 24; index++) {
+    await register(database, `traveller-${index}@example.com`);
+    assert.equal(database.sqlite.prepare('SELECT attempts FROM auth_rate_limits WHERE key_hash = ?').get(ipKey)?.attempts, index + 1);
+  }
+  await assert.rejects(register(database, 'one-too-many@example.com'), (error: unknown) => error instanceof AuthError && error.status === 429);
+  const loggedIn = await performAuthAction(request(), { action: 'login', email: 'traveller-0@example.com', password }, database.asD1());
+  assert.equal(loggedIn.state.authenticated, true);
+});
+
+test('auth cleanup is bounded and preserves active sessions, live rate windows and all accounts', async () => {
+  const database = await storage();
+  await readAuthState(request(provider()), database.asD1());
+  const now = Date.now();
+  const insertSession = database.sqlite.prepare('INSERT INTO auth_sessions (token_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)');
+  const insertRate = database.sqlite.prepare('INSERT INTO auth_rate_limits (key_hash, window_start, attempts) VALUES (?, ?, ?)');
+  for (let index = 0; index < 150; index++) {
+    insertSession.run(`expired-${index}`, 'legacy-owner', new Date(now - 1).toISOString(), new Date(now - 1000).toISOString());
+    insertRate.run(`old-${index}`, now - 16 * 60 * 1000, 8);
+  }
+  insertSession.run('live-session', 'legacy-owner', new Date(now + 1000).toISOString(), new Date(now).toISOString());
+  insertRate.run('live-window', now, 8);
+  await cleanupExpiredAuthData(database.asD1(), now);
+  assert.equal(database.sqlite.prepare('SELECT COUNT(*) AS count FROM auth_sessions').get()?.count, 51);
+  assert.equal(database.sqlite.prepare('SELECT COUNT(*) AS count FROM auth_rate_limits').get()?.count, 51);
+  await cleanupExpiredAuthData(database.asD1(), now);
+  assert.deepEqual(database.sqlite.prepare('SELECT token_hash FROM auth_sessions').all().map(row => row.token_hash), ['live-session']);
+  assert.deepEqual(database.sqlite.prepare('SELECT key_hash FROM auth_rate_limits').all().map(row => row.key_hash), ['live-window']);
+  assert.equal(database.sqlite.prepare('SELECT COUNT(*) AS count FROM profiles').get()?.count, 1);
 });
 
 test('legacy users can add a password without changing any data owner or receipt path', async () => {
@@ -152,6 +226,21 @@ test('legacy users can add a password without changing any data owner or receipt
   await assert.rejects(resolveIdentity(request(provider()), { allowSession: false }, database.asD1()), /UNAUTHORIZED/);
   assert.equal((await resolveIdentity(sessionRequest(nativeLogin.cookie!), {}, database.asD1())).id, 'legacy-owner');
   await performAuthAction(sessionRequest(nativeLogin.cookie!, provider()), { action: 'link_chatgpt' }, database.asD1());
+  assert.equal((await resolveIdentity(request(provider()), { allowSession: false }, database.asD1())).id, 'legacy-owner');
+});
+
+test('an unverified email collision cannot claim or replace a legacy provider account', async () => {
+  const database = await storage();
+  const claimant = await register(database, 'owner@example.com');
+  await readAuthState(request(provider()), database.asD1());
+  database.sqlite.prepare('INSERT INTO trips (id, owner, data) VALUES (?, ?, ?)').run('legacy-trip', 'legacy-owner', '{}');
+  database.sqlite.prepare('INSERT INTO receipts (id, owner, trip_id) VALUES (?, ?, ?)').run('legacy-receipt', 'legacy-owner', 'legacy-trip');
+  await assert.rejects(performAuthAction(request(provider()), { action: 'set_password', password }, database.asD1()),
+    (error: unknown) => error instanceof AuthError && error.status === 409);
+  assert.equal(database.sqlite.prepare('SELECT user_id FROM auth_credentials WHERE email = ?').get('owner@example.com')?.user_id, claimant.state.profile!.id);
+  assert.equal(database.sqlite.prepare('SELECT COUNT(*) AS count FROM auth_links').get()?.count, 0);
+  assert.equal(database.sqlite.prepare('SELECT owner FROM trips WHERE id = ?').get('legacy-trip')?.owner, 'legacy-owner');
+  assert.equal(database.sqlite.prepare('SELECT owner FROM receipts WHERE id = ?').get('legacy-receipt')?.owner, 'legacy-owner');
   assert.equal((await resolveIdentity(request(provider()), { allowSession: false }, database.asD1())).id, 'legacy-owner');
 });
 
@@ -216,11 +305,15 @@ test('adding or changing passwords requires identity proof and current password 
   const database = await storage();
   await assert.rejects(performAuthAction(request(), { action: 'set_password', password, email: 'other@example.com' }, database.asD1()), /UNAUTHORIZED/);
   const local = await register(database);
+  const otherSession = await performAuthAction(request(), { action: 'login', email: 'traveller@example.com', password }, database.asD1());
   await assert.rejects(performAuthAction(sessionRequest(local.cookie!), { action: 'set_password', password: 'different password' }, database.asD1()), /current password/);
   const changed = await performAuthAction(sessionRequest(local.cookie!), { action: 'set_password', currentPassword: password, password: 'different password' }, database.asD1());
   assert.equal(await sessionIdentity(sessionRequest(local.cookie!), database.asD1()), null);
+  assert.equal(await sessionIdentity(sessionRequest(otherSession.cookie!), database.asD1()), null);
   assert.equal((await sessionIdentity(sessionRequest(changed.cookie!), database.asD1()))!.id, local.state.profile!.id);
   await assert.rejects(performAuthAction(request(), { action: 'login', email: 'traveller@example.com', password }, database.asD1()), /email or password/);
+  const loggedIn = await performAuthAction(request(), { action: 'login', email: 'traveller@example.com', password: 'different password' }, database.asD1());
+  assert.equal(loggedIn.state.profile!.id, local.state.profile!.id);
 });
 
 test('HTTP auth endpoint enforces same origin, JSON, body bounds and private responses', async () => {
@@ -246,6 +339,7 @@ test('HTTP auth endpoint enforces same origin, JSON, body bounds and private res
   }
   assert.equal((await route.POST(post('https://evil.test', '{}'))).status, 403);
   assert.equal((await route.POST(post('https://triptab.test', '{}', 'text/plain'))).status, 415);
+  assert.equal((await route.POST(post('https://triptab.test', '{}', 'application/json-untrusted'))).status, 415);
   assert.equal((await route.POST(post('https://triptab.test', 'x'.repeat(4097)))).status, 413);
   const response = await route.POST(post('https://triptab.test', JSON.stringify({ action: 'register', email: 'native@example.com', password, displayName: 'Native' })));
   assert.equal(response.status, 200);

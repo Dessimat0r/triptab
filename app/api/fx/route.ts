@@ -1,4 +1,6 @@
 import { owner } from '@/lib/store';
+import { localTimestamp, validCalendarDate } from '@/lib/dates';
+import { validExchangeRate } from '@/lib/model';
 
 export const dynamic = 'force-dynamic';
 
@@ -13,22 +15,6 @@ class FxError extends Error {
   constructor(message: string, readonly status: number) {
     super(message);
   }
-}
-
-function localTimestamp(date: Date, timezone: string): string {
-  const parts = new Intl.DateTimeFormat('en-GB', {
-    timeZone: timezone,
-    year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
-  }).formatToParts(date);
-  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find(p => p.type === type)!.value;
-  return `${part('year')}-${part('month')}-${part('day')}T${part('hour')}:${part('minute')}`;
-}
-
-function validDate(date: string): boolean {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
-  const parsed = new Date(`${date}T00:00:00Z`);
-  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === date;
 }
 
 export async function GET(request: Request) {
@@ -47,7 +33,7 @@ export async function GET(request: Request) {
     if (!CURRENCIES.has(from) || !CURRENCIES.has(to)) {
       throw new FxError(`Reference rates are unavailable for this currency. ${BANK_FALLBACK}`, 422);
     }
-    if (!validDate(date) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) {
+    if (!validCalendarDate(date) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) {
       throw new FxError('Use a valid transaction date (YYYY-MM-DD) and time (HH:mm).', 400);
     }
     if (timezone.length > 80 || !/^[A-Za-z0-9_+\-/]+$/.test(timezone)) {
@@ -105,8 +91,8 @@ export async function GET(request: Request) {
     }
     const rate = result?.rates?.[to];
     if (result?.base !== from || typeof result.date !== 'string' ||
-        !validDate(result.date) || result.date > date ||
-        typeof rate !== 'number' || !Number.isFinite(rate) || rate <= 0) {
+        !validCalendarDate(result.date) || result.date > date || result.date < '1999-01-04' ||
+        !validExchangeRate(rate)) {
       throw new FxError(`No valid daily reference rate is available for this currency and date. ${BANK_FALLBACK}`, 502);
     }
     return Response.json({

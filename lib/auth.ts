@@ -2,7 +2,11 @@
 // Sites gateway; browser sessions are opaque tokens and are stored only hashed.
 const SESSION_LIFETIME = 30 * 24 * 60 * 60 * 1000;
 const RATE_WINDOW = 15 * 60 * 1000;
-const RATE_LIMIT = 8;
+const EMAIL_RATE_LIMIT = 8;
+// Actions have independent budgets so a group signing up on hotel Wi-Fi does
+// not exhaust sign-in or password-change attempts for that same network.
+const IP_RATE_LIMITS = { login: 40, register: 24, set_password: 24 };
+const AUTH_CLEANUP_BATCH = 100;
 const PASSWORD_ITERATIONS = 100_000;
 const SESSION_COOKIE = 'tt_session';
 const SIGNED_OUT_COOKIE = 'tt_signed_out';
@@ -180,32 +184,49 @@ function requestWithSession(request: Request, token: string) {
   headers.set('cookie', `${SESSION_COOKIE}=${token}`);
   return new Request(request.url, { headers });
 }
-export async function consumeAuthRateLimit(request: Request, email: string, database: D1Database) {
+type RateLimitedAction = keyof typeof IP_RATE_LIMITS;
+type RateLimitKeys = { ip: string; email: string };
+
+export async function cleanupExpiredAuthData(database: D1Database, now = Date.now()) {
+  // Delete a bounded number per request; active sessions and current rate
+  // windows are never eligible. No account or ledger data is removed here.
+  await database.batch([
+    database.prepare('DELETE FROM auth_sessions WHERE token_hash IN (SELECT token_hash FROM auth_sessions WHERE expires_at <= ? ORDER BY expires_at LIMIT ?)')
+      .bind(new Date(now).toISOString(), AUTH_CLEANUP_BATCH),
+    database.prepare('DELETE FROM auth_rate_limits WHERE key_hash IN (SELECT key_hash FROM auth_rate_limits WHERE window_start <= ? LIMIT ?)')
+      .bind(now - RATE_WINDOW, AUTH_CLEANUP_BATCH),
+  ]);
+}
+
+export async function consumeAuthRateLimit(request: Request, email: string, database: D1Database, action: RateLimitedAction = 'login'): Promise<RateLimitKeys> {
   const ip = request.headers.get('cf-connecting-ip') || 'unknown';
-  const keys = await Promise.all([`auth:ip:${ip}`, `auth:email:${email}`].map(hashToken));
+  const [ipKey, emailKey] = await Promise.all([`auth:${action}:ip:${ip}`, `auth:${action}:email:${email}`].map(hashToken));
+  const keys = [ipKey, emailKey];
   const now = Date.now();
   const cutoff = now - RATE_WINDOW;
-  const results = await database.batch(keys.map(key => database.prepare(`
+  const results = await database.batch(keys.map((key, index) => database.prepare(`
     INSERT INTO auth_rate_limits (key_hash, window_start, attempts) VALUES (?, ?, 1)
     ON CONFLICT(key_hash) DO UPDATE SET
       window_start = CASE WHEN auth_rate_limits.window_start <= ? THEN ? ELSE auth_rate_limits.window_start END,
       attempts = CASE WHEN auth_rate_limits.window_start <= ? THEN 1 ELSE auth_rate_limits.attempts + 1 END
     WHERE auth_rate_limits.window_start <= ? OR auth_rate_limits.attempts < ?
     RETURNING window_start, attempts
-  `).bind(key, now, cutoff, now, cutoff, cutoff, RATE_LIMIT)));
+  `).bind(key, now, cutoff, now, cutoff, cutoff, index === 0 ? IP_RATE_LIMITS[action] : EMAIL_RATE_LIMIT)));
   if (results.some(result => !result.results.length)) {
     const blocked = await database.prepare('SELECT MAX(window_start) AS window_start FROM auth_rate_limits WHERE key_hash IN (?, ?)').bind(...keys).first<{ window_start: number }>();
     throw new AuthError('Too many sign-in attempts. Try again in a few minutes.', 429, Math.max(1, Math.ceil(((blocked?.window_start || now) + RATE_WINDOW - now) / 1000)));
   }
-  return keys;
+  return { ip: ipKey, email: emailKey };
 }
-async function clearRateLimit(keys: string[], database: D1Database) {
-  await database.prepare('DELETE FROM auth_rate_limits WHERE key_hash IN (?, ?)').bind(...keys).run();
+async function clearEmailRateLimit(keys: RateLimitKeys, database: D1Database) {
+  // A valid password must never reset the network's abuse budget: an attacker
+  // can always interleave their own successful logins with other guesses.
+  await database.prepare('DELETE FROM auth_rate_limits WHERE key_hash = ?').bind(keys.email).run();
 }
 
 async function register(request: Request, body: Record<string, unknown>, database: D1Database) {
   const email = normalizeEmail(body.email);
-  await consumeAuthRateLimit(request, email, database);
+  const keys = await consumeAuthRateLimit(request, email, database, 'register');
   const digest = await hashPassword(body.password);
   const name = displayNameValue(body.displayName, email);
   const id = `local_${crypto.randomUUID()}`;
@@ -221,6 +242,7 @@ async function register(request: Request, body: Record<string, unknown>, databas
     }
     throw error;
   }
+  await clearEmailRateLimit(keys, database);
   const session = await createSession(id, request, database);
   return { state: await readAuthState(requestWithSession(request, session.token), database), cookie: session.cookie, additionalCookies: [signedOutCookie(request, false)] };
 }
@@ -233,7 +255,7 @@ async function login(request: Request, body: Record<string, unknown>, database: 
     : { hash: '0'.repeat(64), salt: base64url(new Uint8Array(32)), iterations: PASSWORD_ITERATIONS };
   const valid = await verifyPassword(body.password, digest);
   if (!credential || !valid) throw new AuthError('The email or password is incorrect.', 401);
-  await clearRateLimit(keys, database);
+  await clearEmailRateLimit(keys, database);
   const oldToken = sessionToken(request);
   if (oldToken) await database.prepare('DELETE FROM auth_sessions WHERE token_hash = ?').bind(await hashToken(oldToken)).run();
   const session = await createSession(credential.user_id, request, database);
@@ -245,7 +267,7 @@ async function setPassword(request: Request, body: Record<string, unknown>, data
   const profile = await profileRow(identity, database);
   const email = normalizeEmail(profile.email);
   if (body.email !== undefined && normalizeEmail(body.email) !== email) throw new AuthError('Use the email address shown on your profile.');
-  const keys = await consumeAuthRateLimit(request, email, database);
+  const keys = await consumeAuthRateLimit(request, email, database, 'set_password');
   const existing = await database.prepare('SELECT user_id, email, password_hash, password_salt, iterations FROM auth_credentials WHERE user_id = ?').bind(identity.id).first<Credential>();
   if (existing && !await verifyPassword(body.currentPassword, { hash: existing.password_hash, salt: existing.password_salt, iterations: existing.iterations })) {
     throw new AuthError('Enter your current password to change it.', 401);
@@ -271,10 +293,10 @@ async function setPassword(request: Request, body: Record<string, unknown>, data
   }
   catch (error) {
     const collision = await database.prepare('SELECT user_id FROM auth_credentials WHERE email = ?').bind(email).first<{ user_id: string }>();
-    if (collision && collision.user_id !== identity.id) throw new AuthError('This email already has a password account. Sign in to that account, or use your current ChatGPT account.', 409);
+    if (collision && collision.user_id !== identity.id) throw new AuthError('A password account already uses this email. Your current ChatGPT sign-in still works. Email ownership verification is not available yet, so TripTab cannot combine these accounts.', 409);
     throw error;
   }
-  await clearRateLimit(keys, database);
+  await clearEmailRateLimit(keys, database);
   const session = await createSession(identity.id, request, database);
   return { state: await readAuthState(requestWithSession(request, session.token), database), cookie: session.cookie, additionalCookies: [signedOutCookie(request, false)] };
 }
@@ -309,6 +331,7 @@ async function unlinkChatGPT(request: Request, database: D1Database) {
   return { state: await readAuthState(request, database) };
 }
 export async function performAuthAction(request: Request, body: Record<string, unknown>, database: D1Database): Promise<{ state: AuthState; cookie?: string; additionalCookies?: string[] }> {
+  if (['register', 'login', 'set_password', 'logout'].includes(String(body.action))) await cleanupExpiredAuthData(database);
   switch (body.action) {
     case 'register': return register(request, body, database);
     case 'login': return login(request, body, database);
