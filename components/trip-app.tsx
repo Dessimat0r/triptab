@@ -217,21 +217,19 @@ export default function Home({ children }: { children: ReactNode }) {
           setLastRefreshed(new Date());
           return latestSnapshot.current;
         }
+        if (r.status === 401) {
+          setAuth(true);
+          latestSnapshot.current = { data: { trips: [] }, revision: 0 };
+          savedEtag.current = "";
+          setLedger({ trips: [] });
+          setRevision(0);
+          setActivityRefreshKey(0);
+          setProfile(null);
+          return;
+        }
         const b = (await r.json()) as { data: Ledger; revision: number; error: string };
         if (requestId !== loadRequest.current) return latestSnapshot.current;
-        if (!r.ok) {
-          if (r.status === 401) {
-            setAuth(true);
-            latestSnapshot.current = { data: { trips: [] }, revision: 0 };
-            savedEtag.current = "";
-            setLedger({ trips: [] });
-            setRevision(0);
-            setActivityRefreshKey(0);
-            setProfile(null);
-            return;
-          }
-          throw Error(b.error);
-        }
+        if (!r.ok) throw Error(b.error);
         if (!applySnapshot(b, r.headers.get("etag") || "")) return latestSnapshot.current;
         setAuth(false);
         const baseline = editorBaseline.current;
@@ -241,7 +239,9 @@ export default function Home({ children }: { children: ReactNode }) {
         }
         return b;
       } catch (e) {
-        if (requestId === loadRequest.current && !options?.signal?.aborted) setError(e instanceof Error ? e.message : "Unable to load your ledger");
+        // Silent refreshes must preserve local validation and editor messages.
+        // A foreground refresh still reports a failed user-requested operation.
+        if (requestId === loadRequest.current && !options?.background && !options?.signal?.aborted) setError(e instanceof Error ? e.message : "Unable to load your ledger");
       } finally {
         if (requestId === loadRequest.current) setLoading(false);
       }

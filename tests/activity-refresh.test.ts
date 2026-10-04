@@ -31,18 +31,18 @@ function findPanel(node: import('typescript').Node) {
 findPanel(syntax);
 assert(panelKeys.length);
 const controllerSource = `return function controller(fetch) {
-  let ledger = {trips: []}, revision = 0, activityRefreshKey = 0, loading = false, error = '';
+  let ledger = {trips: []}, revision = 0, activityRefreshKey = 0, loading = false, error = '', auth = false, profile = {id: 'current-account'};
   const latestSnapshot = {current: {data: ledger, revision}}, savedEtag = {current: ''}, loadRequest = {current: 0}, inFlightLoad = {current: null}, editorBaseline = {current: null};
   const setLedger = next => {ledger = next}, setRevision = next => {revision = next}, setActivityRefreshKey = next => {activityRefreshKey = next};
   const setLoading = next => {loading = next}, setError = next => {error = next};
-  const setLastRefreshed = () => {}, setAuth = () => {}, setProfile = () => {}, setEditorConflict = () => {};
+  const setLastRefreshed = () => {}, setAuth = next => {auth = next}, setProfile = next => {profile = next}, setEditorConflict = () => {};
   ${callbacks}
   ${accountAuthenticated.getText(syntax)}
-  return {load,applySnapshot,accountAuthenticated,get revision(){return revision},get ledger(){return ledger},get refreshKey(){return ${panelKeys[0]}},get panelKeys(){return [${panelKeys.join(',')}]},get loading(){return loading},get error(){return error}};
+  return {load,applySnapshot,accountAuthenticated,setError,get revision(){return revision},get ledger(){return ledger},get refreshKey(){return ${panelKeys[0]}},get panelKeys(){return [${panelKeys.join(',')}]},get loading(){return loading},get error(){return error},get auth(){return auth},get profile(){return profile}};
 }`;
 const compiled = transpileModule(controllerSource, { compilerOptions: { module: ModuleKind.CommonJS, target: ScriptTarget.ES2022 } }).outputText;
 type Snapshot = {data: Ledger; revision: number};
-type Controller = {load(options?: {background?: boolean; signal?: AbortSignal}): Promise<unknown>; applySnapshot(snapshot: Snapshot, etag?: string, invalidateRefresh?: boolean): boolean; accountAuthenticated(profile: object): Promise<void>; revision: number; ledger: Ledger; refreshKey: string | number; panelKeys: (string | number)[]; loading: boolean; error: string};
+type Controller = {load(options?: {background?: boolean; signal?: AbortSignal}): Promise<unknown>; applySnapshot(snapshot: Snapshot, etag?: string, invalidateRefresh?: boolean): boolean; accountAuthenticated(profile: object): Promise<void>; setError(message: string): void; revision: number; ledger: Ledger; refreshKey: string | number; panelKeys: (string | number)[]; loading: boolean; error: string; auth: boolean; profile: {id: string} | null};
 const controller = new Function(compiled)() as (fetch: (url: string, options: RequestInit) => Promise<Response>) => Controller;
 
 test('an invitation event refreshes the History panel with no ledger revision change', async () => {
@@ -221,4 +221,77 @@ test('a failed request clears the shared promise so a later refresh can retry', 
   await editor.load();
   assert.equal(requests, 2);
   assert.equal(editor.revision, 1);
+});
+
+test('a failed background refresh followed by an unchanged success leaves no stale error banner', async () => {
+  let requests = 0;
+  const editor = controller(async () => {
+    if (++requests === 1) throw TypeError('Failed to fetch');
+    return new Response(null, {status: 304, headers: {ETag: '"saved"', 'X-Ledger-Revision': '6'}});
+  });
+  const saved: Ledger = {trips: []};
+  editor.applySnapshot({data: saved, revision: 5}, '"saved"');
+  await editor.load({background: true});
+  assert.equal(editor.error, '');
+  assert.equal(editor.ledger, saved);
+  assert.equal(editor.revision, 5);
+  assert.equal(editor.loading, false);
+  await editor.load({background: true});
+  assert.equal(requests, 2);
+  assert.equal(editor.error, '');
+  assert.equal(editor.ledger, saved);
+  assert.equal(editor.revision, 6);
+});
+
+test('background server failures and later success preserve an existing editor validation message', async () => {
+  for (const failure of [Response.json({error: 'Temporary upstream failure'}, {status: 503}), new Response('<h1>Bad Gateway</h1>', {status: 502})]) {
+    let requests = 0;
+    const editor = controller(async () => ++requests === 1 ? failure
+      : Response.json({data: {trips: []}, revision: 6}, {headers: {ETag: '"new"'}}));
+    editor.applySnapshot({data: {trips: []}, revision: 5}, '"saved"');
+    const message = 'Choose at least one person for receipt adjustments.';
+    editor.setError(message);
+    await editor.load({background: true});
+    assert.equal(editor.error, message);
+    assert.equal(editor.revision, 5);
+    assert.equal(editor.auth, false);
+    await editor.load({background: true});
+    assert.equal(editor.error, message, 'a successful refresh must not clear unrelated local validation');
+    assert.equal(editor.revision, 6);
+  }
+});
+
+test('a foreground request still reports its failure when a background refresh joins it', async () => {
+  let reject!: (error: Error) => void;
+  const editor = controller(() => new Promise((_resolve, failed) => {reject = failed;}));
+  editor.applySnapshot({data: {trips: []}, revision: 5}, '"saved"');
+  const manual = editor.load();
+  const focus = editor.load({background: true});
+  reject(Error('Manual refresh could not connect'));
+  await Promise.all([manual, focus]);
+  assert.equal(editor.error, 'Manual refresh could not connect');
+  assert.equal(editor.loading, false);
+});
+
+test('a background 401 clears saved account data even if its response body is empty or invalid', async () => {
+  const saved: Ledger = {trips: [{
+    id: 'private-holiday', name: 'Private holiday', currency: 'GBP',
+    members: [{id: 'traveller', name: 'Alice', userId: 'current-account'}], drafts: [], payments: [],
+    expenses: [{id: 'private-expense', title: 'Private receipt', date: '2026-10-04', time: '12:00', timezone: 'Europe/London', currency: 'GBP', payer: 'traveller', receiptId: 'private-photo',
+      items: [{id: 'private-item', name: 'Lunch', amount: 1000, members: ['traveller']}], tax: 0, tip: 0, discount: 0}],
+  }]};
+  for (const response of [Response.json({error: 'Sign in'}, {status: 401}), new Response(null, {status: 401}), new Response('Sign in', {status: 401})]) {
+    const editor = controller(async () => response);
+    editor.applySnapshot({data: saved, revision: 5}, '"saved"');
+    assert.equal(editor.ledger.trips[0].expenses[0].receiptId, 'private-photo');
+    editor.setError('My unsaved receipt still needs review');
+    await editor.load({background: true});
+    assert.equal(editor.auth, true);
+    assert.equal(editor.profile, null);
+    assert.deepEqual(editor.ledger, {trips: []});
+    assert.equal(editor.revision, 0);
+    assert.equal(editor.refreshKey, 0);
+    assert.equal(editor.error, 'My unsaved receipt still needs review');
+    assert.equal(editor.loading, false);
+  }
 });
