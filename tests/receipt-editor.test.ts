@@ -13,7 +13,7 @@ const pageSource = await readFile(new URL('../app/page.tsx', import.meta.url), '
 const syntax = createSourceFile('page.tsx', pageSource, ScriptTarget.Latest, true, ScriptKind.TSX);
 const home = syntax.statements.find(statement => isFunctionDeclaration(statement) && statement.name?.text === 'Home');
 assert(home && isFunctionDeclaration(home) && home.body);
-const names = ['openExpense', 'openDraft', 'newExpense', 'keepExpenseEdits', 'editorIsCurrent', 'resetReceiptReview', 'storeEditorReceipt', 'submitExpense'];
+const names = ['openExpense', 'openDraft', 'newExpense', 'keepExpenseEdits', 'editorIsCurrent', 'resetReceiptReview', 'storeEditorReceipt', 'submitExpense', 'checkEditorReceipt', 'reviewProcessedReceipt'];
 const declarations = [...syntax.statements, ...home.body.statements].filter(isFunctionDeclaration);
 const handlers = ['mergeReceiptConversation', 'hasPendingReceiptQuestions', ...names].map(name => {
   const declaration = declarations.find(statement => statement.name?.text === name);
@@ -24,7 +24,8 @@ const controllerSource = `return function createController(initial, boundary) {
   let trip = structuredClone(initial), editing = null, processedReceipt = null, error = '', editorConflict = null;
   let receiptPending = false, receiptCopied = false, receiptPrompt = '', receiptHistoryOpen = false, restoration = null;
   let paste = '', fxError = '', referenceRate = null;
-  const uploading = false, receiptChecking = false, saving = false, profile = {id:'owner'};
+  let receiptChecking = false;
+  const uploading = false, saving = false, profile = {id:'owner'};
   const updates = [], editorBaseline = {current:null};
   const latestSnapshot = {current:{data:{trips:[trip]},revision:0}};
   const {itemSchema,itemSplitError,receiptSplitError,total,equalFinancialValue} = boundary;
@@ -34,7 +35,10 @@ const controllerSource = `return function createController(initial, boundary) {
   const confirm = async () => true;
   const setEditing = next => {editing = typeof next === 'function' ? next(editing) : next};
   const setError = next => {error=next};
-  const setProcessedReceipt = next => {processedReceipt=next};
+  const setProcessedReceipt = next => {processedReceipt=typeof next === 'function' ? next(processedReceipt) : next};
+  const setReceiptChecking = next => {receiptChecking=next};
+  const fetch = async () => ({ok:true,headers:{get:()=>''},json:async()=>({data:{trips:[structuredClone(trip)]},revision:updates.length})});
+  const applySnapshot = snapshot => {latestSnapshot.current=snapshot;trip=snapshot.data.trips[0]};
   const setReceiptPending = next => {receiptPending=next};
   const setReceiptCopied = next => {receiptCopied=next};
   const setReceiptPrompt = next => {receiptPrompt=next};
@@ -58,10 +62,11 @@ const controllerSource = `return function createController(initial, boundary) {
 const compiled = transpileModule(controllerSource, { compilerOptions: { module: ModuleKind.CommonJS, target: ScriptTarget.ES2022 } }).outputText;
 type Editing = Expense & { draftId?: string; expenseId?: string };
 type Controller = {
-  openExpense(expense: Expense): void; openDraft(draft: Draft): void; newExpense(): void; keepExpenseEdits(): void;
+  openExpense(expense: Expense, resumeDraft?: boolean): void; openDraft(draft: Draft): void; newExpense(): void; keepExpenseEdits(): void;
   editorIsCurrent(): boolean; resetReceiptReview(): void;
   storeEditorReceipt(entry: Editing, receiptId?: string, keepProposal?: boolean): Promise<Draft | null>;
   submitExpense(event: { preventDefault(): void }): Promise<void>;
+  checkEditorReceipt(repliesOnly?:boolean):Promise<void>; reviewProcessedReceipt():void;
   editing: Editing | null; trip: Trip; error: string; updates: Trip[]; baseline: { tripId: string; expense?: Expense } | null;
   processed: Draft | null; edit(next: Partial<Editing>): void; remote(next: Trip): void; conflict(next: Expense | null): void;
   restoring(): void; restoration: unknown;
@@ -121,4 +126,32 @@ test('unrelated drafts are not attached and a concurrent posted financial change
   assert.equal(direct.editing?.draftId,undefined); assert.equal(direct.editing?.receiptId,'old-photo');
   const initial=fixture(); const editor=controller(initial); editor.openExpense(initial.expenses[0]); const changed=structuredClone(initial); changed.expenses[0].payer='b'; editor.remote(changed);
   await submit(editor); assert.match(editor.error,/changed while you were editing/); assert.equal(editor.updates.length,0); assert.equal(editor.editing?.receiptId,'replacement-photo');
+});
+
+
+test('choosing the latest saved expense after a conflict does not reopen its older pending proposal', async () => {
+  const initial=fixture(); const editor=controller(initial); editor.openExpense(initial.expenses[0]);
+  const changed=structuredClone(initial); changed.expenses[0]={...changed.expenses[0],title:'Latest traveller correction',payer:'b',receiptId:'latest-saved-photo'}; editor.remote(changed);
+  assert.equal(editor.editorIsCurrent(),false); editor.openExpense(changed.expenses[0],false);
+  assert.equal(editor.editing?.title,'Latest traveller correction'); assert.equal(editor.editing?.receiptId,'latest-saved-photo'); assert.equal(editor.editing?.draftId,undefined);
+  assert.deepEqual(editor.editing?.items,changed.expenses[0].items); assert.deepEqual(editor.baseline?.expense,changed.expenses[0]);
+  await submit(editor); assert.equal(editor.trip.expenses[0].title,'Latest traveller correction'); assert.equal(editor.trip.expenses[0].receiptId,'latest-saved-photo');
+  assert.equal(editor.trip.drafts[0].receiptId,'replacement-photo','pending proposal remains available separately');
+});
+
+test('checking and reviewing a replacement draft retains posted and local receipt context', async () => {
+  const draft=pending('review'); delete draft.memory;
+  const initial=fixture(draft); const postedQuestion={...question,id:'posted-question',text:'Already saved on the posted expense'};
+  initial.expenses[0].conversation=[postedQuestion]; initial.expenses[0].memory={notes:'Memory retained on the posted expense',aliases:[]};
+  const editor=controller(initial); editor.openExpense(initial.expenses[0]); const localQuestion={...question,id:'local-question',text:'Local question retained while checking'};
+  editor.edit({conversation:[...editor.editing!.conversation!,localQuestion]});
+  await editor.checkEditorReceipt(); assert.equal(editor.error,''); assert.equal(editor.processed?.id,draft.id);
+  assert.deepEqual(editor.editing?.conversation?.map(message=>message.id),['posted-question','question','reply','local-question']);
+  assert.equal(editor.editing?.memory?.notes,'Memory retained on the posted expense'); assert.equal(editor.editing?.receiptId,'replacement-photo');
+  editor.reviewProcessedReceipt(); assert.equal(editor.editing?.receiptId,'replacement-photo');
+  assert.deepEqual(new Set(editor.editing?.conversation?.map(message=>message.id)),new Set(['posted-question','question','reply','local-question']));
+  assert.equal(editor.editing?.memory?.notes,'Memory retained on the posted expense'); assert.equal(editor.processed,null);
+  const saved=await editor.storeEditorReceipt({...editor.editing!,title:'Reviewed replacement with retained context'},editor.editing!.receiptId,true);
+  assert.equal(saved?.receiptId,'replacement-photo'); assert.equal(saved?.title,'Reviewed replacement with retained context');
+  assert.equal(saved?.memory?.notes,'Memory retained on the posted expense');
 });

@@ -354,9 +354,9 @@ export default function Home() {
     }
     return true;
   }
-  function openExpense(expense: Expense) {
+  function openExpense(expense: Expense, resumeDraft = true) {
     if (!trip) return;
-    const pending = trip.drafts.find(draft => draft.expenseId === expense.id);
+    const pending = resumeDraft ? trip.drafts.find(draft => draft.expenseId === expense.id) : undefined;
     if (pending) {
       openDraft(pending);
       return;
@@ -600,7 +600,11 @@ export default function Home() {
       editorIsCurrent(currentData.trips.find(value => value.id === trip.id));
       const draft = currentData.trips.find(value => value.id === trip.id)?.drafts.find(value => value.id === draftId);
       if (!draft || draft.receiptId !== receiptId) throw Error("This receipt draft has changed or is no longer available. Your current edits are still here.");
-      setEditing(prev => prev?.draftId === draftId ? { ...prev, conversation: draft.conversation, memory: draft.memory } : prev);
+      const target = currentData.trips.find(value => value.id === trip.id)?.expenses.find(value => value.id === editing.id);
+      setEditing(prev => prev?.draftId === draftId ? { ...prev,
+        conversation: mergeReceiptConversation(mergeReceiptConversation(target?.conversation, draft.conversation), prev.conversation),
+        memory: draft.memory ?? target?.memory ?? prev.memory,
+      } : prev);
       setProcessedReceipt(draft.status === "review" ? draft : null);
       if (draft.status !== "review" && !repliesOnly) setError("No processed items yet. Ask your connected ChatGPT or Codex to use the receipt prompt, then check again.");
     } catch (cause) {
@@ -2294,7 +2298,7 @@ export default function Home() {
                   })}
                 </div>
                 <div className="conflict-actions">
-                  <button type="button" className="quiet" onClick={() => { if (editorConflict.latest) openExpense(editorConflict.latest); else setEditing(null); setError(""); }}>{editorConflict.latest ? "Use latest saved" : "Discard my edits"}</button>
+                  <button type="button" className="quiet" onClick={() => { if (editorConflict.latest) openExpense(editorConflict.latest, false); else setEditing(null); setError(""); }}>{editorConflict.latest ? "Use latest saved" : "Discard my edits"}</button>
                   <button type="button" className="primary" onClick={keepExpenseEdits}>{editorConflict.latest ? "Continue with my edits" : "Save as a new expense"}</button>
                 </div>
                 <p className="footnote">Review your split and press Save expense to commit your choice.</p>
