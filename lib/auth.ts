@@ -136,7 +136,13 @@ function providerIdentity(provider: AuthIdentity, row: ProviderStateRow): AuthId
   return row.legacy_disconnected ? null : provider;
 }
 export async function sessionIdentity(request: Request, database: D1Database): Promise<AuthIdentity | null> {
-  const row = await sessionRow(request, database);
+  const token = sessionToken(request);
+  if (!token) return null;
+  // Identity-only consumers, including exports, do not need credential or
+  // provider flags. Keep their authorization read confined to the session.
+  const row = await database.prepare(`SELECT p.id,p.email,p.display_name
+    FROM auth_sessions s JOIN profiles p ON p.id = s.user_id WHERE s.token_hash = ? AND s.expires_at > ?`)
+    .bind(await hashToken(token), new Date().toISOString()).first<Pick<ProfileRow, 'id' | 'email' | 'display_name'>>();
   return row ? { id: row.id, email: row.email, displayName: row.display_name, kind: 'session' } : null;
 }
 export async function resolveIdentity(request: Request, options: { allowSession?: boolean } = {}, database: D1Database): Promise<AuthIdentity> {

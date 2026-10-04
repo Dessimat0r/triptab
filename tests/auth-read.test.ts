@@ -5,7 +5,7 @@ import test from 'node:test';
 import { Log, LogLevel, Miniflare } from 'miniflare';
 import { ModuleKind, ScriptTarget, transpileModule } from 'typescript';
 import { unstable_splitSqlQuery } from 'wrangler';
-import { hashToken, readAuthState } from '../lib/auth';
+import { hashToken, readAuthState, sessionIdentity } from '../lib/auth';
 
 class SQLiteStatement {
   values: (string | number | null)[] = [];
@@ -113,6 +113,18 @@ test('auth status reads the canonical profile and flags in one read-only indexed
     assert.ok(plan.some(detail => /auth_links_user_idx/.test(detail)));
   }
   assert.equal(database.sqlite.prepare('SELECT COUNT(*) AS count FROM account_activity_events').get()!.count, 0);
+});
+
+test('session identity authorization reads only its session and profile without account flags', async () => {
+  const database = await storage();
+  assert.deepEqual(await sessionIdentity(request({ cookie: 'tt_session=' + token }), database.asD1()), {
+    id: 'local-a', email: 'a@example.com', displayName: 'Saved A', kind: 'session',
+  });
+  assert.equal(database.calls.length, 1);
+  assert.equal(database.calls[0].kind, 'read');
+  assert.doesNotMatch(database.calls[0].sql[0], /auth_credentials|auth_links|account_activity_events/);
+  assert.equal(await sessionIdentity(request({ cookie: 'tt_session=' + token + '; tt_session=' + tokenB }), database.asD1()), null);
+  assert.equal(database.calls.length, 1, 'ambiguous session cookies are rejected before database access');
 });
 
 test('fast auth preserves session precedence, signed-out suppression and provider-only cookie bypass', async () => {
