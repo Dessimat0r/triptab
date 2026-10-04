@@ -77,3 +77,14 @@ test('receipt history cannot report ready without transactional projection and v
     const response = await GET(); assert.equal(response.status, 503); assert.deepEqual(await response.json(), { status: 'unavailable' });
   });
 });
+
+test('partial registry migrations cannot report ready without their indexed identity maintenance', async context => {
+  for (const [type, name] of [['INDEX', 'receipt_messages_trip_message_idx'],
+    ['TRIGGER', 'receipt_messages_from_activity'], ['TRIGGER', 'receipt_messages_no_update'],
+    ['TRIGGER', 'receipt_messages_no_delete'], ['TRIGGER', 'receipt_messages_no_replace']]) await context.test(name, async () => {
+    sqlite = new DatabaseSync(':memory:'); receiptBinding = true;
+    for (const file of (await readdir(new URL('../drizzle/', import.meta.url))).filter(file => file.endsWith('.sql')).sort()) sqlite.exec(await readFile(new URL('../drizzle/' + file, import.meta.url), 'utf8'));
+    sqlite.exec(`DROP ${type} ${name}`);
+    const response = await GET(); assert.equal(response.status, 503); assert.deepEqual(await response.json(), { status: 'unavailable' });
+  });
+});
