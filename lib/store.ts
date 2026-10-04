@@ -261,24 +261,43 @@ export async function ensureProfile(request: Request, options: { allowSession?: 
   return { id: profile.id, email: profile.email, displayName: profile.display_name, createdAt: profile.created_at, authMethod: identity.kind === 'session' ? 'password' : 'chatgpt', hasPassword: state.hasPassword, chatgptConnected: state.chatgptLinked, chatgptAvailable: state.chatgptAvailable, emailVerified: state.emailVerified };
 }
 
-export async function readLedger(id: string): Promise<{ data: Ledger; revision: number }> {
+/** Body, revision and freshness metadata from the same D1 transaction. */
+export async function readLedgerSnapshot(id: string) {
+  // Drive these reads from the indexed owner/member ID sets rather than scanning
+  // every trip (or every membership) in the database.
+  const visibleIds = 'SELECT id FROM trips WHERE owner = ? UNION SELECT trip_id FROM memberships WHERE user_id = ?';
   const results = await db().batch([
-    db().prepare('SELECT t.id, t.owner, t.data FROM trips t WHERE t.owner = ? OR EXISTS (SELECT 1 FROM memberships m WHERE m.trip_id = t.id AND m.user_id = ?) ORDER BY t.id').bind(id, id),
+    db().prepare(`SELECT t.id, t.owner, t.data,
+      COALESCE((SELECT e.sequence FROM activity_events e WHERE e.trip_id = t.id ORDER BY e.sequence DESC LIMIT 1), 0) AS latest
+      FROM trips t WHERE t.id IN (${visibleIds}) ORDER BY t.id`).bind(id, id),
     db().prepare('SELECT COALESCE((SELECT revision FROM sync_state WHERE id = 1), 0) AS revision'),
-    db().prepare('SELECT m.trip_id, m.user_id, m.member_id, p.email FROM memberships m LEFT JOIN profiles p ON p.id = m.user_id JOIN trips t ON t.id = m.trip_id WHERE t.owner = ? OR EXISTS (SELECT 1 FROM memberships access WHERE access.trip_id = t.id AND access.user_id = ?)').bind(id, id),
+    db().prepare(`SELECT m.trip_id, m.user_id, m.member_id, p.email FROM memberships m JOIN trips t ON t.id = m.trip_id
+      LEFT JOIN profiles p ON p.id = m.user_id WHERE m.trip_id IN (${visibleIds})
+      ORDER BY m.trip_id, m.member_id, m.user_id`).bind(id, id),
   ]);
   const links = results[2].results as MembershipRow[];
-  const trips = (results[0].results as StoredTrip[]).map(row => {
+  const linksByTrip = new Map<string, Map<string, MembershipRow>>();
+  for (const link of links) {
+    const members = linksByTrip.get(link.trip_id) || new Map<string, MembershipRow>();
+    members.set(link.member_id, link); linksByTrip.set(link.trip_id, members);
+  }
+  const rows = results[0].results as (StoredTrip & { latest: number })[];
+  const trips = rows.map(row => {
     const trip = { ...JSON.parse(row.data), ownerId: row.owner } as Trip;
     for (const member of trip.members) {
-      const link = links.find(value => value.trip_id === trip.id && value.member_id === member.id);
+      const link = linksByTrip.get(trip.id)?.get(member.id);
       if (link) { member.userId = link.user_id; member.email = link.email || member.email; }
     }
     for (const entry of [...trip.expenses, ...trip.drafts]) clearAssistantAuthors(entry);
     return trip;
   });
   const revision = (results[1].results as { revision: number }[])[0]?.revision || 0;
-  return { data: { trips }, revision };
+  return { data: { trips }, revision, freshness: { versions: rows.map(row => ({ id: row.id, latest: row.latest })), links } };
+}
+
+export async function readLedger(id: string): Promise<{ data: Ledger; revision: number }> {
+  const { data, revision } = await readLedgerSnapshot(id);
+  return { data, revision };
 }
 
 export async function tripAccess(user: string, tripId: string): Promise<boolean> {

@@ -8,6 +8,9 @@ import { ModuleKind, ScriptTarget, transpileModule } from 'typescript';
 import { parseLedgerStructure, type Trip } from '../lib/model';
 import type { ActivityEvent } from '../lib/store';
 import { receiptMemorySchema } from '../lib/receipt-context';
+import { ledgerEtag, ledgerEtagForSnapshot, readLedgerFreshness } from '../lib/ledger-freshness';
+import { Log, LogLevel, Miniflare } from 'miniflare';
+import { unstable_splitSqlQuery } from 'wrangler';
 
 // Execute the real store SQL in SQLite. Only the Worker binding and background
 // notification delivery are replaced; authorization, CAS, diffs and batches are real.
@@ -132,7 +135,7 @@ async function ledgerRoute() {
   const routeCompiled = transpileModule(routeSource, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
     .replace("'@/lib/store'", JSON.stringify(storeUrl))
     .replace("'@/lib/ledger-freshness'", JSON.stringify(new URL('../lib/ledger-freshness.ts', import.meta.url).href));
-  return import('data:text/javascript;base64,' + Buffer.from(routeCompiled).toString('base64')) as Promise<{ POST(request: Request): Promise<Response> }>;
+  return import('data:text/javascript;base64,' + Buffer.from(routeCompiled).toString('base64')) as Promise<{ GET(request: Request): Promise<Response>; HEAD(request: Request): Promise<Response>; POST(request: Request): Promise<Response> }>;
 }
 function saveRequest(data: unknown, revision: number) {
   return new Request('https://triptab.test/api/ledger', {
@@ -1710,4 +1713,162 @@ test('message registry insertion and failed audit projections roll back with the
   const saved = await store.writeLedger(actor, state.data, state.revision);
   assert.equal(database.sqlite.prepare('SELECT COUNT(*) AS count FROM receipt_messages').get()?.count, 1);
   assert.equal(saved.data.trips[0].expenses[0].conversation![0].authorName, 'Original Owner');
+});
+
+function ledgerReadRequest(condition?: string, user = actor) {
+  return new Request('https://triptab.test/api/ledger', { headers: {
+    'oai-authenticated-user-id': user,
+    'oai-authenticated-user-email': user === actor ? 'owner@example.com' : 'member@example.com',
+    'oai-authenticated-user-full-name': user === actor ? 'Original%20Owner' : 'Bob',
+    ...(condition ? { 'If-None-Match': condition } : {}),
+  } });
+}
+
+test('ledger reads seek only indexed accessible trips and memberships, retaining legacy money and authoritative links', async () => {
+  const database = await storage();
+  const legacy = seedLegacy(database);
+  const shared = trip('shared-trip');
+  shared.ownerId = 'forged'; shared.members[0].userId = 'forged'; shared.members[0].email = 'forged@example.test';
+  database.sqlite.prepare('INSERT INTO trips(id,owner,data) VALUES(?,?,?)').run(shared.id,member,JSON.stringify(shared));
+  database.sqlite.prepare('INSERT INTO memberships(trip_id,user_id,member_id) VALUES(?,?,?)').run(shared.id,actor,'a');
+  database.sqlite.exec('BEGIN');
+  const addTrip = database.sqlite.prepare('INSERT INTO trips(id,owner,data) VALUES(?,?,?)');
+  const addMember = database.sqlite.prepare('INSERT INTO memberships(trip_id,user_id,member_id) VALUES(?,?,?)');
+  for(let index=0;index<3000;index++) {
+    addTrip.run(`private-${index}`,member,'{}');
+    addMember.run(`private-${index}`,member,'private');
+  }
+  database.sqlite.exec('COMMIT');
+  const batches: SQLiteStatement[][] = [];
+  database.beforeBatch = statements => { batches.push(statements); };
+  const snapshot = await store.readLedgerSnapshot(actor);
+  assert.equal(batches.length,1); assert.equal(batches[0].length,3);
+  assert.deepEqual(snapshot.data.trips.map(value=>value.id),[legacy.id,shared.id]);
+  assert.deepEqual(snapshot.data.trips[0].expenses,legacy.expenses,'legacy bank charges are preserved');
+  assert.equal(snapshot.data.trips[1].ownerId,member);
+  assert.equal(snapshot.data.trips[1].members[0].userId,actor);
+  assert.equal(snapshot.data.trips[1].members[0].email,'owner@example.com');
+  assert.deepEqual(Object.keys(await store.readLedger(actor)).sort(),['data','revision']);
+  for(const statement of batches[0].filter(value=>value.sql.includes('FROM trips WHERE owner'))) {
+    const plan=database.sqlite.prepare('EXPLAIN QUERY PLAN '+statement.sql).all(actor,actor).map(row=>String(row.detail));
+    assert.ok(plan.some(line=>line.includes('trips_owner_idx') && line.includes('SEARCH')),JSON.stringify(plan));
+    assert.ok(plan.some(line=>line.includes('memberships_user_idx') && line.includes('SEARCH')),JSON.stringify(plan));
+    assert.ok(!plan.some(line=>/^SCAN (t|m|e)\b/.test(line)),JSON.stringify(plan));
+  }
+});
+
+test('full ledger GET body, authoritative email, revision and ETag share one database snapshot', async () => {
+  const database = await storage(); await create(database);
+  database.sqlite.prepare('UPDATE profiles SET email=? WHERE id=?').run('updated@example.test',actor);
+  const batches: SQLiteStatement[][] = [];
+  database.beforeBatch = statements => { batches.push(statements); };
+  const route = await ledgerRoute();
+  const response = await route.GET(ledgerReadRequest());
+  assert.equal(response.status,200);
+  const body=await response.json() as Awaited<ReturnType<typeof store.readLedger>>;
+  assert.equal(body.data.trips[0].members[0].email,'updated@example.test');
+  assert.equal(response.headers.get('x-ledger-revision'),String(body.revision));
+  assert.equal(response.headers.get('etag'),await ledgerEtag(database.asD1(),actor));
+  const bodyBatches=batches.filter(statements=>statements.some(statement=>statement.sql.includes('t.data')));
+  assert.equal(bodyBatches.length,1); assert.equal(bodyBatches[0].length,3);
+  assert.ok(bodyBatches[0].some(statement=>statement.sql.includes('FROM sync_state')));
+  assert.ok(bodyBatches[0].some(statement=>statement.sql.includes('p.email')));
+  assert.equal(batches.filter(statements=>statements[0].sql.includes('SELECT t.id,') && !statements[0].sql.includes('t.data')).length,1,'only the explicit verification reads freshness metadata');
+});
+
+test('unchanged conditional ledger GET avoids receipt JSON and updates the unrelated global CAS revision', async () => {
+  const database = await storage(); await create(database);
+  const tag=await ledgerEtag(database.asD1(),actor);
+  // Another holiday advanced the global optimistic-lock token; this actor's body
+  // and tag are unchanged and can retain their existing data.
+  database.sqlite.prepare('UPDATE sync_state SET revision=revision+1').run();
+  const batches: SQLiteStatement[][]=[];
+  database.beforeBatch=statements=>{
+    batches.push(statements);
+    assert.ok(!statements.some(statement=>statement.sql.includes('t.data')),'304 must not select receipt JSON');
+  };
+  const response=await (await ledgerRoute()).GET(ledgerReadRequest(tag));
+  assert.equal(response.status,304); assert.equal(response.body,null);
+  assert.equal(response.headers.get('etag'),tag); assert.equal(response.headers.get('x-ledger-revision'),'2');
+  assert.equal(batches.filter(statements=>statements[0].sql.includes('SELECT t.id,')).length,1);
+  assert.equal(count(database),3,'an unchanged read adds no audit events');
+});
+
+test('changed conditional GET derives its tag from the later complete snapshot when a writer races metadata', async () => {
+  const database=await storage(); const saved=await create(database);
+  const changed=structuredClone(saved.data.trips[0]); changed.name='Concurrent name';
+  let bodyReads=0;
+  database.beforeBatch=statements=>{
+    if(!statements.some(statement=>statement.sql.includes('t.data'))) return;
+    bodyReads++;
+    database.sqlite.prepare('UPDATE trips SET data=? WHERE id=?').run(JSON.stringify(changed),changed.id);
+    database.sqlite.prepare('UPDATE sync_state SET revision=revision+1').run();
+    database.sqlite.prepare(`INSERT INTO activity_events(id,trip_id,revision,actor_id,actor_name,entity_type,entity_id,action,before_data,after_data,source,created_at)
+      VALUES('concurrent-name-change',?,2,?,?,'trip',?,'update',?,?,'web',?)`).run(changed.id,actor,'Original Owner',changed.id,JSON.stringify({name:'Lisbon'}),JSON.stringify({name:changed.name}),'2026-10-04T12:00:00Z');
+  };
+  const response=await (await ledgerRoute()).GET(ledgerReadRequest('W/"stale"'));
+  database.beforeBatch=undefined;
+  const body=await response.json() as Awaited<ReturnType<typeof store.readLedger>>;
+  assert.equal(bodyReads,1); assert.equal(body.data.trips[0].name,'Concurrent name'); assert.equal(body.revision,2);
+  assert.equal(response.headers.get('x-ledger-revision'),'2');
+  assert.equal(response.headers.get('etag'),await ledgerEtag(database.asD1(),actor));
+});
+
+test('a membership revoked between conditional metadata and full read never reveals the lost trip', async () => {
+  const database=await storage(); await create(database);
+  database.sqlite.prepare('INSERT INTO memberships(trip_id,user_id,member_id) VALUES(?,?,?)').run('trip-1',member,'b');
+  database.beforeBatch=statements=>{
+    if(statements.some(statement=>statement.sql.includes('t.data'))) {
+      database.sqlite.prepare('DELETE FROM memberships WHERE trip_id=? AND user_id=?').run('trip-1',member);
+      database.sqlite.prepare('UPDATE sync_state SET revision=revision+1').run();
+    }
+  };
+  const response=await (await ledgerRoute()).GET(ledgerReadRequest('W/"stale"',member));
+  database.beforeBatch=undefined;
+  assert.equal(response.status,200);
+  const body=await response.json() as Awaited<ReturnType<typeof store.readLedger>>;
+  assert.deepEqual(body.data.trips,[]); assert.equal(body.revision,2);
+  assert.equal(response.headers.get('etag'),await ledgerEtag(database.asD1(),member));
+});
+
+test('native D1 ledger snapshots and conditional freshness agree without rewriting stored legacy receipts', async () => {
+  const worker=new Miniflare({ modules:true, script:'export default {fetch(){return new Response("Ledger read test")}}',
+    compatibilityDate:'2026-05-15',d1Databases:{DB:'ledger-read-native'},d1Persist:false,log:new Log(LogLevel.NONE) });
+  try {
+    const database=await worker.getD1Database('DB');
+    for(const file of (await readdir(new URL('../drizzle/',import.meta.url))).filter(file=>file.endsWith('.sql')).sort()) {
+      const sql=unstable_splitSqlQuery(await readFile(new URL('../drizzle/'+file,import.meta.url),'utf8'));
+      await database.batch(sql.map(statement=>database.prepare(statement)));
+    }
+    binding.DB=database as unknown as D1Database;
+    const holiday=trip('native-shared'); holiday.ownerId='forged';
+    holiday.expenses=[{...dinner(),bankAmount:0,conversation:[{id:'old-answer',role:'assistant',text:'Earlier reply',createdAt:'2026-10-04T20:31:00Z',authorMemberId:'a',authorName:'Wrong legacy attribution'}]}];
+    const raw=JSON.stringify(holiday);
+    await database.batch([
+      database.prepare('INSERT INTO profiles(id,email,display_name,created_at) VALUES(?,?,?,?)').bind(actor,'owner@example.com','Original Owner','2026-10-04T00:00:00Z'),
+      database.prepare('INSERT INTO profiles(id,email,display_name,created_at) VALUES(?,?,?,?)').bind(member,'member@example.com','Bob','2026-10-04T00:00:00Z'),
+      database.prepare('INSERT INTO trips(id,owner,data) VALUES(?,?,?)').bind(holiday.id,actor,raw),
+      database.prepare('INSERT INTO memberships(trip_id,user_id,member_id) VALUES(?,?,?)').bind(holiday.id,actor,'a'),
+      database.prepare('INSERT INTO memberships(trip_id,user_id,member_id) VALUES(?,?,?)').bind(holiday.id,member,'b'),
+      database.prepare('INSERT INTO sync_state(id,revision,last_write) VALUES(1,4,?)').bind('native-fixture'),
+    ]);
+    const initial=await store.readLedgerSnapshot(actor);
+    const current=await readLedgerFreshness(database as unknown as D1Database,actor);
+    assert.equal(await ledgerEtagForSnapshot(initial.freshness),current.etag);
+    assert.equal(initial.revision,current.revision); assert.equal(initial.revision,4);
+    assert.equal(initial.data.trips[0].ownerId,actor); assert.equal(initial.data.trips[0].expenses[0].bankAmount,0);
+    assert.equal(initial.data.trips[0].expenses[0].conversation![0].authorName,undefined);
+    await database.prepare('UPDATE profiles SET email=? WHERE id=?').bind('current@example.com',actor).run();
+    const updated=await store.readLedgerSnapshot(actor);
+    assert.equal(updated.data.trips[0].members[0].email,'current@example.com');
+    assert.notEqual(await ledgerEtagForSnapshot(updated.freshness),current.etag);
+    assert.equal(await ledgerEtagForSnapshot(updated.freshness),await ledgerEtag(database as unknown as D1Database,actor));
+    assert.equal((await database.prepare('SELECT data FROM trips WHERE id=?').bind(holiday.id).first<{data:string}>())!.data,raw);
+    assert.equal((await database.prepare('SELECT COUNT(*) AS count FROM activity_events').first<{count:number}>())!.count,0);
+    assert.equal((await store.readLedgerSnapshot(member)).data.trips.length,1);
+    await database.prepare('DELETE FROM memberships WHERE trip_id=? AND user_id=?').bind(holiday.id,member).run();
+    const outsider=await store.readLedgerSnapshot(member);
+    assert.deepEqual(outsider.data.trips,[]);
+    assert.equal(await ledgerEtagForSnapshot(outsider.freshness),await ledgerEtag(database as unknown as D1Database,member));
+  } finally { binding.DB=undefined; await worker.dispose(); }
 });

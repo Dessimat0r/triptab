@@ -1,13 +1,22 @@
-import { db, readLedger, writeLedger, sameOrigin, failure, readBoundedBody, ensureProfile } from '@/lib/store';
-import { ledgerEtag } from '@/lib/ledger-freshness';
+import { db, readLedgerSnapshot, writeLedger, sameOrigin, failure, readBoundedBody, ensureProfile } from '@/lib/store';
+import { ledgerEtagForSnapshot, ledgerTagMatches, readLedgerFreshness } from '@/lib/ledger-freshness';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(r: Request) {
   try {
     const profile = await ensureProfile(r);
-    const tag = await ledgerEtag(db(), profile.id);
-    return Response.json(await readLedger(profile.id), { headers: { 'Cache-Control': 'private, no-store', ETag: tag } });
+    const condition = r.headers.get('if-none-match');
+    if (condition) {
+      const current = await readLedgerFreshness(db(), profile.id);
+      if (ledgerTagMatches(condition, current.etag)) return new Response(null, { status: 304,
+        headers: { 'Cache-Control': 'private, no-store', ETag: current.etag, 'X-Ledger-Revision': String(current.revision) } });
+    }
+    // A changed conditional request takes a new complete snapshot: never attach
+    // an earlier metadata tag to data that another writer changed in between.
+    const { data, revision, freshness } = await readLedgerSnapshot(profile.id);
+    const tag = await ledgerEtagForSnapshot(freshness);
+    return Response.json({ data, revision }, { headers: { 'Cache-Control': 'private, no-store', ETag: tag, 'X-Ledger-Revision': String(revision) } });
   } catch (e) {
     return failure(e);
   }
@@ -16,8 +25,9 @@ export async function GET(r: Request) {
 export async function HEAD(request: Request) {
   try {
     const profile = await ensureProfile(request);
-    const tag = await ledgerEtag(db(), profile.id);
-    return new Response(null, { status: request.headers.get('if-none-match') === tag ? 304 : 200, headers: { 'Cache-Control': 'private, no-store', ETag: tag } });
+    const current = await readLedgerFreshness(db(), profile.id);
+    return new Response(null, { status: ledgerTagMatches(request.headers.get('if-none-match'), current.etag) ? 304 : 200,
+      headers: { 'Cache-Control': 'private, no-store', ETag: current.etag, 'X-Ledger-Revision': String(current.revision) } });
   } catch (error) {
     const result = failure(error);
     return new Response(null, { status: result.status, headers: result.headers });
