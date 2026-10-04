@@ -34,8 +34,8 @@ export function TripSharing({
     <div className="panel sharing-panel">
       <h3>Invite a traveller</h3>
       <p className="footnote">
-        Share a one-use link. They sign in with ChatGPT, set up their profile,
-        and join the same holiday.
+        Share a one-use link. They create a TripTab account with their email or
+        sign in, then join the same holiday. ChatGPT is optional.
       </p>
       {available.length ? (
         <form
@@ -84,7 +84,7 @@ export function TripSharing({
             </select>
           </label>
           <label>
-            Email restriction <span className="muted">optional</span>
+            Invitee email <span className="muted">optional</span>
             <input
               type="email"
               value={email}
@@ -92,6 +92,10 @@ export function TripSharing({
               placeholder="traveller@example.com"
               autoComplete="off"
             />
+            <small>
+              If supplied, use a TripTab account with this email. Only share the
+              link with the intended traveller.
+            </small>
           </label>
           <button className="quiet" disabled={busy}>
             <Link size={16} />
@@ -140,9 +144,11 @@ export function TripSharing({
 export function JoinTrip({
   token,
   onJoined,
+  onAuthenticate,
 }: {
   token: string;
   onJoined: (id: string) => void;
+  onAuthenticate?: () => void;
 }) {
   const [info, setInfo] = useState<{
       tripId: string;
@@ -190,15 +196,22 @@ export function JoinTrip({
         </p>
       )}
       {auth ? (
-        <a
-          className="primary"
-          href={
-            "/signin-with-chatgpt?return_to=" +
-            encodeURIComponent("/?invite=" + token)
-          }
-        >
-          Sign in with ChatGPT
-        </a>
+        onAuthenticate ? (
+          <button
+            className="primary"
+            type="button"
+            onClick={onAuthenticate}
+          >
+            Create an account or sign in
+          </button>
+        ) : (
+          <a
+            className="primary"
+            href={"/?account=login&invite=" + encodeURIComponent(token)}
+          >
+            Create an account or sign in
+          </a>
+        )
       ) : info?.alreadyMember ? (
         <button className="primary" onClick={() => onJoined(info.tripId)}>
           Open holiday

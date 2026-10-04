@@ -1,6 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { validateLedger, tripSchema, type Ledger, type Trip } from './model';
 import { notifyMembers } from './notifications';
+import { AuthError, resolveIdentity, readAuthState } from './auth';
 
 export class RequestError extends Error {
   constructor(message: string, public readonly status = 400) {
@@ -8,10 +9,8 @@ export class RequestError extends Error {
   }
 }
 
-export function owner(request: Request) {
-  const id = request.headers.get('oai-authenticated-user-id');
-  if (!id || id.length > 512) throw new Error('UNAUTHORIZED');
-  return id;
+export async function owner(request: Request) {
+  return (await resolveIdentity(request, { allowSession: true }, db())).id;
 }
 
 export function receiptKey(user: string, id: string) {
@@ -66,24 +65,22 @@ export function bucket() {
 }
 
 type ProfileRow = { id: string; email: string; display_name: string; created_at: string };
-export type Profile = { id: string; email: string; displayName: string; createdAt: string };
+export type Profile = { id: string; email: string; displayName: string; createdAt: string; authMethod: 'password' | 'chatgpt'; hasPassword: boolean; chatgptConnected: boolean; chatgptAvailable: boolean; emailVerified: boolean };
 type StoredTrip = { id: string; owner: string; data: string };
 type MembershipRow = { trip_id: string; user_id: string; member_id: string; email: string | null };
 
-export async function ensureProfile(request: Request): Promise<Profile> {
-  const id = owner(request);
-  const email = request.headers.get('oai-authenticated-user-email')?.trim().toLowerCase();
+export async function ensureProfile(request: Request, options: { allowSession?: boolean } = { allowSession: true }): Promise<Profile> {
+  const identity = await resolveIdentity(request, options, db());
+  const id = identity.id;
+  const email = identity.email?.trim().toLowerCase();
   if (!email || email.length > 320 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('UNAUTHORIZED');
-  let name = email.split('@')[0];
-  const fullName = request.headers.get('oai-authenticated-user-full-name');
-  if (fullName) {
-    try { name = decodeURIComponent(fullName).trim() || name; } catch { /* Fall back to verified email. */ }
-  }
+  const name = identity.displayName || email.split('@')[0];
   const createdAt = new Date().toISOString();
-  await db().prepare('INSERT INTO profiles (id, email, display_name, created_at) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET email = excluded.email').bind(id, email, name.slice(0, 80), createdAt).run();
+  await db().prepare('INSERT INTO profiles (id, email, display_name, created_at) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO NOTHING').bind(id, email, name.slice(0, 80), createdAt).run();
   const profile = await db().prepare('SELECT id, email, display_name, created_at FROM profiles WHERE id = ?').bind(id).first<ProfileRow>();
   if (!profile) throw new Error('Storage unavailable');
-  return { id: profile.id, email: profile.email, displayName: profile.display_name, createdAt: profile.created_at };
+  const state = await readAuthState(request, db(), options);
+  return { id: profile.id, email: profile.email, displayName: profile.display_name, createdAt: profile.created_at, authMethod: identity.kind === 'session' ? 'password' : 'chatgpt', hasPassword: state.hasPassword, chatgptConnected: state.chatgptLinked, chatgptAvailable: state.chatgptAvailable, emailVerified: state.emailVerified };
 }
 
 export async function readLedger(id: string): Promise<{ data: Ledger; revision: number }> {
@@ -173,7 +170,7 @@ export async function writeLedger(id: string, data: unknown, revision: unknown) 
   const marker = crypto.randomUUID();
   const statements: D1PreparedStatement[] = [
     db().prepare("INSERT OR IGNORE INTO sync_state (id, revision, last_write) VALUES (1, 0, '')"),
-    db().prepare('UPDATE sync_state SET revision = revision + 1, last_write = ? WHERE id = 1 AND revision = ?').bind(marker, revision),
+    db().prepare('UPDATE sync_state SET revision = revision + 1, last_write = ? WHERE id = 1 AND revision = ? AND NOT EXISTS (SELECT 1 FROM auth_links WHERE oai_user_id = ? AND user_id <> ?)').bind(marker, revision, id, id),
   ];
   for (const trip of ledger.trips) {
     statements.push(db().prepare('INSERT INTO trips (id, owner, data) SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND last_write = ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data WHERE EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND last_write = ?) AND (trips.owner = ? OR EXISTS (SELECT 1 FROM memberships m WHERE m.trip_id = trips.id AND m.user_id = ?))').bind(trip.id, trip.ownerId!, JSON.stringify(trip), marker, marker, id, id));
@@ -195,11 +192,11 @@ export async function writeLedger(id: string, data: unknown, revision: unknown) 
 export function failure(e: unknown) {
   console.error('TripTab request failed', e);
   const m = e instanceof Error ? e.message : '';
-  const error = e instanceof RequestError ? e.message
-    : m === 'UNAUTHORIZED' ? 'Sign in with ChatGPT to open your ledger.'
+  const error = e instanceof RequestError || e instanceof AuthError ? (m === 'UNAUTHORIZED' ? 'Sign in to TripTab to open your ledger.' : e.message)
+    : m === 'UNAUTHORIZED' ? 'Sign in to TripTab to open your ledger.'
     : m === 'CONFLICT' ? 'Your ledger changed in another tab or in ChatGPT. Refresh before saving again.'
     : 'Unable to complete this request. Check your entries and try again.';
-  const status = e instanceof RequestError ? e.status : m === 'UNAUTHORIZED' ? 401 : m === 'CONFLICT' ? 409 : 400;
+  const status = e instanceof RequestError || e instanceof AuthError ? e.status : m === 'UNAUTHORIZED' ? 401 : m === 'CONFLICT' ? 409 : 400;
   return Response.json({ error }, { status, headers: { 'Cache-Control': 'private, no-store' } });
 }
 

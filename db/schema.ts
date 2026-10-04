@@ -9,6 +9,37 @@ export const profiles = sqliteTable('profiles', {
   id: text('id').primaryKey(), email: text('email').notNull(), displayName: text('display_name').notNull(), createdAt: text('created_at').notNull(),
 });
 
+export const authCredentials = sqliteTable('auth_credentials', {
+  userId: text('user_id').primaryKey().references(() => profiles.id, { onDelete: 'cascade' }),
+  email: text('email').notNull(),
+  passwordHash: text('password_hash').notNull(),
+  passwordSalt: text('password_salt').notNull(),
+  iterations: integer('iterations').notNull(),
+  createdAt: text('created_at').notNull(),
+}, table => [uniqueIndex('auth_credentials_email_idx').on(table.email)]);
+
+export const authSessions = sqliteTable('auth_sessions', {
+  tokenHash: text('token_hash').primaryKey(),
+  userId: text('user_id').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
+  expiresAt: text('expires_at').notNull(),
+  createdAt: text('created_at').notNull(),
+}, table => [
+  index('auth_sessions_user_idx').on(table.userId),
+  index('auth_sessions_expiry_idx').on(table.expiresAt),
+]);
+
+export const authLinks = sqliteTable('auth_links', {
+  oaiUserId: text('oai_user_id').primaryKey(),
+  userId: text('user_id').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
+  createdAt: text('created_at').notNull(),
+}, table => [index('auth_links_user_idx').on(table.userId)]);
+
+export const authRateLimits = sqliteTable('auth_rate_limits', {
+  keyHash: text('key_hash').primaryKey(),
+  windowStart: integer('window_start').notNull(),
+  attempts: integer('attempts').notNull(),
+});
+
 export const trips = sqliteTable('trips', {
   id: text('id').primaryKey(), owner: text('owner').notNull(), data: text('data').notNull(),
 }, table => [index('trips_owner_idx').on(table.owner)]);

@@ -25,6 +25,10 @@ const state = {
   writes: 0,
   profileAvailable: true,
   profileHeadersRead: 0,
+  ledgerReaders: [] as string[],
+  ledgerWriters: [] as string[],
+  providerLinks: new Map<string, string>(),
+  identitySessionFlags: [] as boolean[],
 };
 function reset() {
   state.data = { trips: [structuredClone(initialTrip)] };
@@ -32,14 +36,16 @@ function reset() {
   state.writes = 0;
   state.profileAvailable = true;
   state.profileHeadersRead = 0;
+  state.ledgerReaders = [];
+  state.ledgerWriters = [];
+  state.providerLinks = new Map();
+  state.identitySessionFlags = [];
 }
 const mockStore = {
-  owner(request: Request) {
-    const value = request.headers.get('oai-authenticated-user-id');
-    if (!value) throw new Error('UNAUTHORIZED');
-    return value;
+  async readLedger(actor: string) {
+    state.ledgerReaders.push(actor);
+    return { data: actor === user ? structuredClone(state.data) : { trips: [] }, revision: state.revision };
   },
-  async readLedger() { return { data: structuredClone(state.data), revision: state.revision }; },
   async writeLedger(actor: string, data: unknown, revision: number) {
     if (revision !== state.revision) throw new Error('CONFLICT');
     const ledger = validateLedger(data);
@@ -50,12 +56,14 @@ const mockStore = {
       }
     }
     state.data = structuredClone(ledger);
+    state.ledgerWriters.push(actor);
     state.revision++;
     state.writes++;
     return { data: structuredClone(ledger), revision: state.revision };
   },
-  async ensureProfile(request: Request) {
+  async ensureProfile(request: Request, options: { allowSession: boolean }) {
     state.profileHeadersRead++;
+    assert.equal(options.allowSession, false, 'MCP profile creation must exclude browser sessions');
     if (!request.headers.get('oai-authenticated-user-email')) throw new Error('UNAUTHORIZED');
     return profile;
   },
@@ -66,7 +74,17 @@ const mockStore = {
   receiptKey: (actor: string, id: string) => `${actor}/${id}`,
   receiptAccess: async () => null,
 };
+const mockAuth = {
+  async resolveIdentity(request: Request, options: { allowSession: boolean }) {
+    state.identitySessionFlags.push(options.allowSession);
+    if (options.allowSession) throw new Error('MCP must not authorize browser sessions');
+    const providerId = request.headers.get('oai-authenticated-user-id');
+    if (!providerId) throw new Error('UNAUTHORIZED');
+    return { id: state.providerLinks.get(providerId) ?? providerId };
+  },
+};
 Object.defineProperty(globalThis, Symbol.for('triptab.mcp-test-store'), { value: mockStore, configurable: true });
+Object.defineProperty(globalThis, Symbol.for('triptab.mcp-test-auth'), { value: mockAuth, configurable: true });
 
 // Compile the real route and substitute only its external storage boundary.
 // Schemas, authorization branches, tool dispatch and ledger validation remain real.
@@ -75,8 +93,12 @@ const storeUrl = 'data:text/javascript;base64,' + Buffer.from(`
 const store = globalThis[Symbol.for('triptab.mcp-test-store')];
 ${Object.keys(mockStore).map(name => `export const ${name} = store.${name};`).join('\n')}
 `).toString('base64');
+const authUrl = 'data:text/javascript;base64,' + Buffer.from(`
+export const resolveIdentity = globalThis[Symbol.for('triptab.mcp-test-auth')].resolveIdentity;
+`).toString('base64');
 const compiled = transpileModule(source, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
   .replace("'@/lib/store'", JSON.stringify(storeUrl))
+  .replace("'@/lib/auth'", JSON.stringify(authUrl))
   .replace("'@/lib/model'", JSON.stringify(new URL('../lib/model.ts', import.meta.url).href))
   .replace("'zod'", JSON.stringify(import.meta.resolve('zod')));
 const route = await import('data:text/javascript;base64,' + Buffer.from(compiled).toString('base64')) as { POST(request: Request): Promise<Response> };
@@ -106,6 +128,75 @@ const receiptChatReply = {
   tripId: 'trip-1', draftId: 'draft-1', questionId: receiptQuestion.id,
   responseId: 'a744f349-86c7-4a57-aa13-0db6aebc6e22', text: 'The listed total includes service.', revision: 3,
 };
+
+test('browser-session cookies alone cannot authorize private AI tools', async () => {
+  reset();
+  for (const name of ['get_trip_ledger', 'create_holiday', 'get_receipt_image', 'reply_to_receipt_chat', 'update_receipt_draft', 'create_expense_draft']) {
+    const response = await route.POST(new Request('https://triptab.test/mcp', {
+      method: 'POST', headers: { cookie: 'triptab_session=valid-local-session' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: {} } }),
+    }));
+    const reply = await response.json() as { error: { code: number; message: string } };
+    assert.equal(response.status, 401, name);
+    assert.equal(reply.error.code, -32001);
+    assert.match(reply.error.message, /Manual features work with your TripTab account/);
+  }
+  assert.deepEqual(state.identitySessionFlags, Array(6).fill(false));
+  assert.deepEqual(state.ledgerReaders, []);
+  assert.equal(state.writes, 0);
+});
+
+test('a linked ChatGPT identity reads and writes the existing TripTab ledger without creating a second account ledger', async () => {
+  reset();
+  const providerId = 'chatgpt-linked-identity';
+  state.providerLinks.set(providerId, user);
+  const call = async (name: string, args: Record<string, unknown>) => {
+    const response = await route.POST(new Request('https://triptab.test/mcp', {
+      method: 'POST',
+      headers: { 'oai-authenticated-user-id': providerId, cookie: 'triptab_session=another-account' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }),
+    }));
+    assert.equal(response.status, 200);
+    return await response.json() as Reply;
+  };
+  const read = await call('get_trip_ledger', {});
+  assert.equal(content(read).data.trips[0].id, initialTrip.id);
+  const created = await call('create_holiday', create);
+  assert.equal(created.result.isError, undefined);
+  const newTrip = content(created).data.trips.find(trip => trip.id === content(created).trip_id)!;
+  assert.equal(newTrip.ownerId, user);
+  assert.equal(newTrip.members[0].userId, user);
+  assert.equal(newTrip.members[0].email, profile.email);
+  // The old gateway identity and its explicit connection use the same scoped
+  // retry key, so reconnecting cannot create a duplicate holiday.
+  const retry = await invoke('create_holiday', create);
+  assert.equal(content(retry).trip_id, newTrip.id);
+  assert.equal(state.data.trips.length, 2);
+  assert.equal(state.writes, 1);
+  assert.deepEqual(state.ledgerReaders, [user, user, user]);
+  assert.deepEqual(state.ledgerWriters, [user]);
+  assert.deepEqual(state.identitySessionFlags, [false, false, false]);
+});
+
+test('a linked provider’s profile lookup excludes an unrelated browser session', async () => {
+  reset();
+  state.providerLinks.set('chatgpt-linked-identity', user);
+  const response = await route.POST(new Request('https://triptab.test/mcp', {
+    method: 'POST', headers: {
+      'oai-authenticated-user-id': 'chatgpt-linked-identity',
+      'oai-authenticated-user-email': 'different-ai-email@example.com',
+      cookie: 'triptab_session=another-account',
+    },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'create_holiday', arguments: create } }),
+  }));
+  const reply = await response.json() as Reply;
+  assert.equal(reply.result.isError, undefined);
+  const holiday = content(reply).data.trips.find(trip => trip.id === content(reply).trip_id)!;
+  assert.equal(holiday.ownerId, user);
+  assert.equal(holiday.members[0].email, profile.email);
+  assert.equal(state.profileHeadersRead, 1);
+  assert.deepEqual(state.ledgerWriters, [user]);
+});
 
 test('lists native holiday and natural-language expense tools with write annotations', async () => {
   const response = await route.POST(new Request('https://triptab.test/mcp', { method: 'POST', body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }) }));

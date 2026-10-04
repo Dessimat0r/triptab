@@ -2,7 +2,8 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import ModalA11y from "@/components/modal-accessibility";
-import AccountPanel, { type Profile } from "@/components/account-panel";
+import AccountPanel, { profileFromAuth, type Profile, type AuthResponse } from "@/components/account-panel";
+import AuthPanel from "@/components/auth-panel";
 import { TripSharing, JoinTrip } from "@/components/trip-sharing";
 import ShareSplit, { equalPercentages } from "@/components/share-split";
 import ReceiptCapture from "@/components/receipt-capture";
@@ -108,6 +109,9 @@ export default function Home() {
     [saving, setSaving] = useState(false),
     [error, setError] = useState(""),
     [auth, setAuth] = useState(false),
+    [authMode, setAuthMode] = useState<"register" | "login">("register"),
+    [linkRequested, setLinkRequested] = useState(false),
+    [linkBusy, setLinkBusy] = useState(false),
     [menu, setMenu] = useState(false),
     [create, setCreate] = useState(false),
     [help, setHelp] = useState(false),
@@ -139,7 +143,13 @@ export default function Home() {
           error: string;
         };
       if (!r.ok) {
-        setAuth(r.status === 401);
+        if (r.status === 401) {
+          setAuth(true);
+          setLedger({ trips: [] });
+          setRevision(0);
+          setProfile(null);
+          return;
+        }
         throw Error(b.error);
       }
       setLedger(b.data);
@@ -153,7 +163,10 @@ export default function Home() {
   }
   useEffect(() => {
     Promise.resolve().then(() => {
-      setInvite(new URLSearchParams(location.search).get("invite") || "");
+      const params = new URLSearchParams(location.search);
+      setInvite(params.get("invite") || "");
+      if (params.get("account") === "login") setAuthMode("login");
+      setLinkRequested(params.get("connect") === "chatgpt");
       load();
     });
     fetch("/api/profile")
@@ -176,6 +189,51 @@ export default function Home() {
       window.removeEventListener("online", update);
     };
   }, []);
+  function requestAccount() {
+    setAuthMode("login");
+    requestAnimationFrame(() => {
+      document.querySelector(".auth-panel")?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+  }
+  async function accountAuthenticated(p: Profile) {
+    setProfile(p);
+    setAuth(false);
+    setError("");
+    await load();
+    const response = await fetch("/api/profile", { cache: "no-store" });
+    if (response.ok) setProfile(await response.json() as Profile);
+  }
+  async function openExistingChatGPTAccount() {
+    try {
+      const response = await fetch("/api/auth", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "chatgpt_login" }) });
+      if (!response.ok) throw Error("Unable to open your existing account. Try again.");
+      location.assign("/signin-with-chatgpt?return_to=" + encodeURIComponent(invite ? "/?invite=" + invite : "/"));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Unable to open your existing account.");
+    }
+  }
+  function dismissChatGPTLink() {
+    setLinkRequested(false);
+    const url = new URL(location.href);
+    url.searchParams.delete("connect");
+    history.replaceState(null, "", url.pathname + url.search);
+  }
+  async function confirmChatGPTLink() {
+    setLinkBusy(true);
+    setError("");
+    try {
+      const response = await fetch("/api/auth", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "link_chatgpt" }) });
+      const body = await response.json() as AuthResponse;
+      if (!response.ok) throw Error(body.error || "Unable to connect ChatGPT.");
+      const next = profileFromAuth(body);
+      if (next) setProfile(next);
+      dismissChatGPTLink();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Unable to connect ChatGPT.");
+    } finally {
+      setLinkBusy(false);
+    }
+  }
   async function save(data: Ledger) {
     setSaving(true);
     setError("");
@@ -669,7 +727,7 @@ export default function Home() {
               How to connect <CircleHelp size={15} />
             </button>
           </div>
-          <button className="personal" onClick={() => setAccount(true)}>
+          <button className="personal" onClick={() => { if (auth) requestAccount(); else setAccount(true); }}>
             <span className="avatar">
               {profile?.displayName.slice(0, 1).toUpperCase() || "Y"}
             </span>
@@ -700,7 +758,7 @@ export default function Home() {
           <button
             className="mobile-account iconbutton"
             aria-label="Profile and app settings"
-            onClick={() => setAccount(true)}
+            onClick={() => { if (auth) requestAccount(); else setAccount(true); }}
           >
             <span className="avatar">
               {profile?.displayName.slice(0, 1).toUpperCase() || "Y"}
@@ -725,7 +783,9 @@ export default function Home() {
           )}
           {invite && (
             <JoinTrip
+              key={profile?.id || "anonymous"}
               token={invite}
+              onAuthenticate={requestAccount}
               onJoined={async (id) => {
                 setInvite("");
                 history.replaceState(null, "", "/");
@@ -765,14 +825,7 @@ export default function Home() {
             <div className="error" role="alert">
               {error}
               {auth && (
-                <a
-                  href={
-                    "/signin-with-chatgpt?return_to=" +
-                    encodeURIComponent(invite ? "/?invite=" + invite : "/")
-                  }
-                >
-                  Sign in with ChatGPT
-                </a>
+                <button className="textbutton" onClick={requestAccount}>Sign in to TripTab</button>
               )}
               {!auth && (
                 <button className="textbutton" onClick={load} disabled={saving}>
@@ -785,6 +838,11 @@ export default function Home() {
             <div className="empty panel">
               <RefreshCw className="spin" />
               <h2>Opening your holiday ledger…</h2>
+            </div>
+          ) : auth ? (
+            <div className="panel standalone-account">
+              <AuthPanel key={authMode} initialMode={authMode} onAuthenticated={accountAuthenticated} />
+              <p className="footnote">Already have trips under ChatGPT sign-in? <button className="textbutton" onClick={openExistingChatGPTAccount}>Open my existing ChatGPT account</button>, then add a TripTab password in your profile to keep using those trips without ChatGPT.</p>
             </div>
           ) : !trip ? (
             <div className="onboarding panel">
@@ -2053,6 +2111,17 @@ export default function Home() {
                 </div>
               </div>
             </form>
+          </section>
+        </ModalA11y>
+      )}
+      {linkRequested && (
+        <ModalA11y className="overlay" onClose={() => { if (!linkBusy) dismissChatGPTLink(); }}>
+          <section className="modal small" role="dialog" aria-modal="true" aria-labelledby="chatgpt-link-title">
+            <div className="modalheading"><h2 id="chatgpt-link-title">Connect ChatGPT for AI assistance</h2><button className="iconbutton" aria-label="Cancel ChatGPT connection" disabled={linkBusy} onClick={dismissChatGPTLink}><X /></button></div>
+            <p className="footnote">Connect the ChatGPT account you just signed in with to your current TripTab account. This lets your connected ChatGPT or Codex assist with receipts and questions. All other TripTab features work without this connection.</p>
+            {error && <p className="error" role="alert">{error}</p>}
+            <button className="primary wide" disabled={linkBusy || auth || !profile?.hasPassword} onClick={confirmChatGPTLink}>{linkBusy ? "Connecting…" : "Connect this ChatGPT account"}</button>
+            {(auth || !profile?.hasPassword) && <p className="footnote">Sign in with your TripTab email and password before connecting ChatGPT.</p>}
           </section>
         </ModalA11y>
       )}

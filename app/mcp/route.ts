@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import { owner, readLedger, writeLedger, bucket, receiptKey, receiptAccess, ensureProfile, db } from '@/lib/store';
+import { readLedger, writeLedger, bucket, receiptKey, receiptAccess, ensureProfile, db } from '@/lib/store';
+import { resolveIdentity } from '@/lib/auth';
 import { draftSchema, tripSchema, CURRENCIES, type Currency, type Trip } from '@/lib/model';
 
 export const dynamic = 'force-dynamic';
@@ -16,7 +17,7 @@ const tools = [
   },
   {
     name: 'create_holiday',
-    description: 'Create a holiday when the user explicitly asks to create one from their conversation. First read get_trip_ledger and use its current revision. Generate one UUID request_id for this creation and reuse it if retrying, to avoid duplicates. travellers includes the authenticated user first, followed by the other travellers; the first name is replaced with their verified profile name. currency is the settlement currency, usually GBP; individual expenses may use other currencies. Optional startDate and endDate are calendar dates; endDate must not precede startDate. The user must first have a verified TripTab profile, created by opening the app or by the authenticated gateway’s email headers.',
+    description: 'Create a holiday when the user explicitly asks to create one from their conversation. First read get_trip_ledger and use its current revision. Generate one UUID request_id for this creation and reuse it if retrying, to avoid duplicates. travellers includes the authenticated user first, followed by the other travellers; the first name is replaced with their verified profile name. currency is the settlement currency, usually GBP; individual expenses may use other currencies. Optional startDate and endDate are calendar dates; endDate must not precede startDate. The user needs a TripTab profile and an optional ChatGPT connection to use this AI tool. TripTab accounts and manual expense entry work without connecting ChatGPT.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -212,10 +213,12 @@ export async function POST(request: Request) {
     if (req.method === 'tools/list') return respond({ tools });
     if (req.method !== 'tools/call') throw new RpcError(-32601, 'Method not found.');
 
-    // Sites injects this identity at its authenticated gateway. Never take it
-    // from tool arguments; every private read and write is scoped to it.
+    // AI tools require a trusted provider identity, mapped to its TripTab
+    // profile. Browser sessions alone never authorize MCP calls, even when a
+    // browser cookie and an authenticated provider header are both present.
     let user: string;
-    try { user = owner(request); } catch { throw new RpcError(-32001, 'Sign in to access your TripTab ledger.', 401); }
+    try { user = (await resolveIdentity(request, { allowSession: false }, db())).id; }
+    catch { throw new RpcError(-32001, 'Connect ChatGPT to use TripTab’s AI tools. Manual features work with your TripTab account.', 401); }
     const call = callSchema.safeParse(req.params);
     if (!call.success) throw new RpcError(-32602, 'Invalid tool call parameters.');
     const { name, arguments: args } = call.data;
@@ -280,7 +283,7 @@ export async function POST(request: Request) {
           if (values.revision !== ledger.revision) throw new Error('Your ledger changed. Read get_trip_ledger again before creating this holiday.');
           let profile: { email: string; displayName: string };
           if (request.headers.get('oai-authenticated-user-email')) {
-            try { profile = await ensureProfile(request); }
+            try { profile = await ensureProfile(request, { allowSession: false }); }
             catch { throw new Error('Open TripTab and sign in to create your verified profile before creating a holiday.'); }
           } else {
             const stored = await db().prepare('SELECT email, display_name FROM profiles WHERE id = ?').bind(user).first<{ email: string; display_name: string }>();

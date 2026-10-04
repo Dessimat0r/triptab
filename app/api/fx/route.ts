@@ -34,7 +34,7 @@ function validDate(date: string): boolean {
 export async function GET(request: Request) {
   try {
     // The hosting edge supplies this trusted identity. Authenticate even identity conversions.
-    owner(request);
+    await owner(request);
     const params = new URL(request.url).searchParams;
     const values = Object.fromEntries(['from', 'to', 'date', 'time', 'timezone'].map(key => {
       const all = params.getAll(key);
@@ -117,7 +117,7 @@ export async function GET(request: Request) {
   } catch (error) {
     const unauthorized = error instanceof Error && error.message === 'UNAUTHORIZED';
     return Response.json({
-      error: unauthorized ? 'Sign in with ChatGPT to request exchange rates.'
+      error: unauthorized ? 'Sign in to TripTab to request exchange rates.'
         : error instanceof FxError ? error.message : 'Unable to process this exchange-rate request.',
     }, {
       status: unauthorized ? 401 : error instanceof FxError ? error.status : 500,

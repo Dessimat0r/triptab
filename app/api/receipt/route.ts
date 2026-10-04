@@ -45,7 +45,7 @@ export async function POST(r: Request) {
 
 export async function GET(r: Request) {
   try {
-    const user = owner(r);
+    const user = await owner(r);
     const id = new URL(r.url).searchParams.get('id');
     if (!id || !RECEIPT_ID.test(id)) throw new RequestError('Invalid receipt.');
     const access = await receiptAccess(user, id);

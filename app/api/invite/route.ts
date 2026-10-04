@@ -62,7 +62,7 @@ function checkInvite(invite: Invite, profile: Profile, allowUsedBySelf = true) {
     throw new RequestError('This invitation has expired. Ask the trip owner for a new link.', 410);
   }
   if (invite.email && invite.email.toLowerCase() !== profile.email.toLowerCase()) {
-    throw new RequestError('Sign in with the ChatGPT account whose verified email was invited.', 403);
+    throw new RequestError('Sign in to a TripTab account with the invited email address.', 403);
   }
 }
 
@@ -157,7 +157,7 @@ async function acceptInvite(profile: Profile, body: Record<string, unknown>) {
   const results = await database.batch([
     database.prepare(`
       UPDATE sync_state SET revision = revision + 1, last_write = ?
-      WHERE id = 1 AND revision = ? AND EXISTS (
+      WHERE id = 1 AND revision = ? AND NOT EXISTS (SELECT 1 FROM auth_links WHERE oai_user_id = ? AND user_id <> ?) AND EXISTS (
         SELECT 1 FROM invites i JOIN trips t ON t.id = i.trip_id
         WHERE i.token_hash = ? AND i.used_by IS NULL AND i.expires_at > ?
           AND (i.email IS NULL OR lower(i.email) = ?)
@@ -166,7 +166,7 @@ async function acceptInvite(profile: Profile, body: Record<string, unknown>) {
           AND EXISTS (SELECT 1 FROM json_each(t.data, '$.members') j
             WHERE json_extract(j.value, '$.id') = i.member_id AND json_extract(j.value, '$.userId') IS NULL)
       )
-    `).bind(marker, state.revision, hash, now, verifiedEmail, profile.id, profile.id),
+    `).bind(marker, state.revision, profile.id, profile.id, hash, now, verifiedEmail, profile.id, profile.id),
     database.prepare(`
       UPDATE invites SET used_by = ? WHERE token_hash = ? AND used_by IS NULL
         AND EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND last_write = ?)
