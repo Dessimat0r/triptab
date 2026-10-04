@@ -117,6 +117,7 @@ function hasPendingReceiptQuestions(messages?: ReceiptMessage[]) {
 export default function Home() {
   const [ledger, setLedger] = useState<Ledger>({ trips: [] }),
     [revision, setRevision] = useState(0),
+    [activityRefreshKey, setActivityRefreshKey] = useState<string | number>(0),
     [selected, setSelected] = useState(""),
     [view, setView] = useState("expenses"),
     [loading, setLoading] = useState(true),
@@ -160,6 +161,7 @@ export default function Home() {
     if (snapshot.revision < latestSnapshot.current.revision) return false;
     latestSnapshot.current = snapshot;
     savedEtag.current = etag;
+    setActivityRefreshKey(etag || snapshot.revision);
     setLedger(snapshot.data); setRevision(snapshot.revision); setLastRefreshed(new Date());
     if (invalidateRefresh) { loadRequest.current++; setLoading(false); }
     return true;
@@ -184,6 +186,7 @@ export default function Home() {
           savedEtag.current = "";
           setLedger({ trips: [] });
           setRevision(0);
+          setActivityRefreshKey(0);
           setProfile(null);
           return;
         }
@@ -262,6 +265,7 @@ export default function Home() {
     latestSnapshot.current = { data: { trips: [] }, revision: 0 };
     savedEtag.current = "";
     setLedger({ trips: [] }); setRevision(0);
+    setActivityRefreshKey(0);
     setProfile(p);
     setAuth(false);
     setError("");
@@ -362,14 +366,17 @@ export default function Home() {
     setReceiptHistoryOpen(false);
     setRestoration(null);
     if (!trip) return;
-    const pending = resumeDraft ? trip.drafts.find(draft => draft.expenseId === expense.id) : undefined;
-    if (pending) {
+    const pending = trip.drafts.find(draft => draft.expenseId === expense.id);
+    if (pending && resumeDraft) {
       openDraft(pending);
       return;
     }
     editorBaseline.current = { tripId: trip.id, expense: structuredClone(expense) };
     setEditorConflict(null); setReferenceRate(null); resetReceiptReview();
-    setEditing({ ...structuredClone(expense), adjustmentAllocation: "selected-participants", expenseId: expense.id });
+    setEditing(structuredClone({ ...expense, adjustmentAllocation: "selected-participants", expenseId: expense.id,
+      draftId: pending?.id, conversation: mergeReceiptConversation(expense.conversation, pending?.conversation),
+      memory: pending?.memory ?? expense.memory,
+    }));
   }
   function keepExpenseEdits() {
     if (!editing || !editorConflict || !trip) return;
@@ -469,7 +476,8 @@ export default function Home() {
       return null;
     }
     const previous = trip.drafts.find(draft => draft.id === entry.draftId || (target && draft.expenseId === target.id));
-    const source = keepProposal && previous?.status === "review" && processedReceipt?.id === previous.id ? previous : entry;
+    const source = keepProposal && previous?.status === "review" && processedReceipt?.id === previous.id
+      && previous.receiptId === receiptId && processedReceipt.receiptId === receiptId ? previous : entry;
     const messages = mergeReceiptConversation(mergeReceiptConversation(target?.conversation, previous?.conversation), entry.conversation);
     const draft: Draft = {
       id: previous?.id || entry.draftId || uid(),
@@ -599,7 +607,13 @@ export default function Home() {
       return;
     }
     const draftId = editing.draftId;
-    const receiptId = editing.receiptId;
+    const previous = trip.drafts.find(draft => draft.id === draftId);
+    if (!previous || (editing.expenseId && previous.expenseId !== editing.expenseId)) {
+      setError("This receipt draft has changed or is no longer available. Your current edits are still here.");
+      return;
+    }
+    const receiptId = previous.receiptId;
+    const expenseId = previous.expenseId;
     setReceiptChecking(true);
     setError("");
     try {
@@ -610,14 +624,15 @@ export default function Home() {
       const currentData = latestSnapshot.current.data;
       editorIsCurrent(currentData.trips.find(value => value.id === trip.id));
       const draft = currentData.trips.find(value => value.id === trip.id)?.drafts.find(value => value.id === draftId);
-      if (!draft || draft.receiptId !== receiptId) throw Error("This receipt draft has changed or is no longer available. Your current edits are still here.");
+      if (!draft || draft.receiptId !== receiptId || draft.expenseId !== expenseId) throw Error("This receipt draft has changed or is no longer available. Your current edits are still here.");
       const target = currentData.trips.find(value => value.id === trip.id)?.expenses.find(value => value.id === editing.id);
       setEditing(prev => prev?.draftId === draftId ? { ...prev,
         conversation: mergeReceiptConversation(mergeReceiptConversation(target?.conversation, draft.conversation), prev.conversation),
         memory: draft.memory ?? target?.memory ?? prev.memory,
       } : prev);
-      setProcessedReceipt(draft.status === "review" ? draft : null);
-      if (draft.status !== "review" && !repliesOnly) setError("No processed items yet. Ask your connected ChatGPT or Codex to use the receipt prompt, then check again.");
+      const matchingProposal = draft.status === "review" && draft.receiptId === editing.receiptId;
+      setProcessedReceipt(matchingProposal ? draft : null);
+      if (!matchingProposal && !repliesOnly) setError("No processed items yet. Ask your connected ChatGPT or Codex to use the receipt prompt, then check again.");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Unable to check this receipt.");
     } finally {
@@ -1347,7 +1362,7 @@ export default function Home() {
                       )}
                     </>
                   )}
-                  {view === "history" && <ActivityPanel tripId={trip.id} refreshKey={revision} currency={trip.currency} memberNames={Object.fromEntries(trip.members.map(member => [member.id, member.name]))} actorMemberNames={Object.fromEntries(trip.members.filter(member => member.userId).map(member => [member.userId!, member.name]))} busy={saving || loading} onRestore={event => void reviewRestore(event)} />}
+                  {view === "history" && <ActivityPanel tripId={trip.id} refreshKey={activityRefreshKey} currency={trip.currency} memberNames={Object.fromEntries(trip.members.map(member => [member.id, member.name]))} actorMemberNames={Object.fromEntries(trip.members.filter(member => member.userId).map(member => [member.userId!, member.name]))} busy={saving || loading} onRestore={event => void reviewRestore(event)} />}
                   {view === "receipts" && (
                     <>
                       <div className="sectionheading">

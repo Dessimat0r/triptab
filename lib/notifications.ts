@@ -142,28 +142,9 @@ type NotificationChange = {
   after?: Record<string, unknown> | null;
 };
 
-function derivedCollectionOrder(change: NotificationChange, changes: readonly NotificationChange[]): boolean {
-  if (change.entityType !== 'trip' || change.action !== 'update' || !change.before || !change.after) return false;
-  const before = change.before, after = change.after;
-  const fields = [...new Set([...Object.keys(before), ...Object.keys(after)])].filter(key => JSON.stringify(before[key]) !== JSON.stringify(after[key]));
-  const collections: Record<string, ActivityEntity> = { expenseOrder: 'expense', paymentOrder: 'payment', draftOrder: 'draft' };
-  return fields.length > 0 && fields.every(key => {
-    const type = collections[key];
-    const oldOrder = before[key], newOrder = after[key];
-    if (!type || !Array.isArray(oldOrder) || !Array.isArray(newOrder) || [...oldOrder, ...newOrder].some(id => typeof id !== 'string')) return false;
-    const oldIds = new Set(oldOrder), newIds = new Set(newOrder);
-    const retainedBefore = oldOrder.filter(id => newIds.has(id)), retainedAfter = newOrder.filter(id => oldIds.has(id));
-    if (JSON.stringify(retainedBefore) !== JSON.stringify(retainedAfter)) return false; // Keep deliberate reorders visible.
-    const added = newOrder.filter(id => !oldIds.has(id)), removed = oldOrder.filter(id => !newIds.has(id));
-    return added.length + removed.length > 0
-      && added.every(id => changes.some(event => event.entityType === type && event.entityId === id && event.action === 'create'))
-      && removed.every(id => changes.some(event => event.entityType === type && event.entityId === id && event.action === 'delete'));
-  });
-}
-
 /** Lock-screen summaries describe the action without exposing holiday contents. */
 export function activityNotification(actorName: string, changes: readonly NotificationChange[]) {
-  const events = changes.filter(change => change.entityType !== 'draft' && !derivedCollectionOrder(change, changes));
+  const events = changes.filter(change => change.entityType !== 'draft');
   if (!events.length) return null;
   const actor = actorName.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80) || 'A traveller';
   const types = new Set(events.map(event => event.entityType));

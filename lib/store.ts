@@ -7,6 +7,8 @@ import { markRemovedReceipts, purgeDeletingReceipts, ReceiptLifecycleError } fro
 import { activityStatements, accountAuditStatement, type ActivityEntity, type ActivitySource, type ActivityChange, type ActivityEvent } from './audit';
 import { receiptActivityScope, type ReceiptActivityScope } from './activity-scope';
 export { activityStatements, type ActivityEntity, type ActivitySource, type ActivityChange, type ActivityEvent } from './audit';
+import { receiptMemorySchema, type ReceiptMemory } from './receipt-context';
+import { receiptAliasIdentity, ReceiptMemoryOwnershipError, validateReceiptMemoryOwnership } from './receipt-memory-ownership';
 
 export class RequestError extends Error {
   constructor(message: string, public readonly status = 400) {
@@ -103,6 +105,12 @@ function tripMetadata(trip: Trip): Record<string, unknown> {
   };
 }
 
+/** Legacy assistant attribution is a display repair, not a participant edit. */
+function meaningfulEntry(entry: Record<string, unknown> | undefined) {
+  if (!entry || !Array.isArray(entry.conversation)) return entry;
+  return clearAssistantAuthors({ ...entry, conversation: entry.conversation.map(message => ({ ...message })) });
+}
+
 function tripChanges(previous: Trip | undefined, next: Trip): ActivityChange[] {
   const changes: ActivityChange[] = [];
   const before = previous ? tripMetadata(previous) : null;
@@ -128,7 +136,7 @@ function tripChanges(previous: Trip | undefined, next: Trip): ActivityChange[] {
     const current = new Map(entries.map(entry => [entry.id, entry]));
     for (const entry of entries) {
       const prior = old.get(entry.id) as Record<string, unknown> | undefined;
-      if (canonical(prior ?? null) !== canonical(entry)) changes.push({ tripId: next.id, entityType, entityId: entry.id, action: prior ? 'update' : 'create', before: prior ?? null, after: entry });
+      if (canonical(meaningfulEntry(prior) ?? null) !== canonical(meaningfulEntry(entry))) changes.push({ tripId: next.id, entityType, entityId: entry.id, action: prior ? 'update' : 'create', before: prior ?? null, after: entry });
     }
     for (const entry of oldEntries) {
       if (!current.has(entry.id)) changes.push({ tripId: next.id, entityType, entityId: entry.id, action: 'delete', before: entry, after: null });
@@ -197,7 +205,9 @@ export async function readActivity(user: string, tripId: string, options: { befo
   `).bind(tripId, JSON.stringify(selected.map(event => event.id)), user, user).all<ActivityRow>();
   if (rows.results.length !== selected.length) throw new RequestError('Your access to this trip changed. Refresh before viewing its history.', 403);
   const result = {
-    events: rows.results.map(row => ({ id: row.id, sequence: row.sequence, tripId: row.trip_id, actorId: row.actor_id, actorName: row.actor_name, createdAt: row.created_at, entityType: row.entity_type, entityId: row.entity_id, action: row.action, before: row.before_data ? clearAssistantAuthors(JSON.parse(row.before_data)) : null, after: row.after_data ? clearAssistantAuthors(JSON.parse(row.after_data)) : null, revision: row.revision, source: row.source })),
+    // Audit evidence is immutable. Role-first UI labels handle legacy mistaken
+    // assistant attribution without rewriting either historical snapshot.
+    events: rows.results.map(row => ({ id: row.id, sequence: row.sequence, tripId: row.trip_id, actorId: row.actor_id, actorName: row.actor_name, createdAt: row.created_at, entityType: row.entity_type, entityId: row.entity_id, action: row.action, before: row.before_data ? JSON.parse(row.before_data) : null, after: row.after_data ? JSON.parse(row.after_data) : null, revision: row.revision, source: row.source })),
     nextCursor: candidates.results.length > selected.length ? selected[selected.length - 1].sequence : null,
   };
   if (new TextEncoder().encode(JSON.stringify(result)).byteLength > MAX_ACTIVITY_BYTES) {
@@ -349,6 +359,97 @@ function checkLedgerSize(ledger: Ledger) {
   }
 }
 
+/** A proposal may carry saved aliases from its posted target and vice versa. */
+function mergedReceiptMemory(entries: { memory?: ReceiptMemory }[], corrections: { memory?: ReceiptMemory }[]): ReceiptMemory | undefined {
+  if (!entries.some(entry => entry.memory)) return undefined;
+  const corrected = new Map<string, Set<string>>();
+  for (const entry of corrections) for (const alias of entry.memory?.aliases || []) {
+    const identity = receiptAliasIdentity(alias);
+    const variants = corrected.get(identity) || new Set<string>();
+    variants.add(canonical(alias)); corrected.set(identity, variants);
+  }
+  const aliases = new Map<string, { alias: ReceiptMemory['aliases'][number]; count: number }>();
+  for (const entry of entries) {
+    const frequencies = new Map<string, { alias: ReceiptMemory['aliases'][number]; count: number }>();
+    for (const alias of entry.memory?.aliases || []) {
+      const key = canonical(alias);
+      // Only an already linked, trusted proposal can supersede a target alias.
+      // Missing identities still survive; copied photos/chat cannot authorize it.
+      const variants = corrected.get(receiptAliasIdentity(alias));
+      if (variants && !variants.has(key)) continue;
+      const saved = frequencies.get(key);
+      frequencies.set(key, { alias, count: (saved?.count || 0) + 1 });
+    }
+    for (const [key, value] of frequencies) if (value.count > (aliases.get(key)?.count || 0)) aliases.set(key, value);
+  }
+  return { notes: '', aliases: [...aliases.values()].flatMap(({ alias, count }) => Array.from({ length: count }, () => alias)) };
+}
+
+/** Enforce ownership for every writer, using only stored receipt/history provenance. */
+async function validateTripReceiptMemory(trip: Trip, previous: Trip | undefined, actorMemberId: string | undefined) {
+  const savedEntries = [...(previous?.expenses || []), ...(previous?.drafts || [])];
+  const incomingEntries = [...trip.expenses, ...trip.drafts];
+  const sources = new Map<string, { memory?: ReceiptMemory }[]>();
+  const corrections = new Map<string, { memory?: ReceiptMemory }[]>();
+  for (const entry of incomingEntries) {
+    const saved = savedEntries.find(candidate => candidate.id === entry.id);
+    const matching = saved ? [saved] : [];
+    // An untouched copy does not consume another receipt's newer proposal.
+    if (!saved || canonical(saved.memory) !== canonical(entry.memory)) {
+      if ('expenseId' in entry && entry.expenseId) {
+        const target = previous?.expenses.find(candidate => candidate.id === entry.expenseId);
+        if (target && !matching.includes(target)) matching.push(target);
+      }
+      for (const draft of previous?.drafts || []) {
+        const retained = trip.drafts.find(candidate => candidate.id === draft.id);
+        const transfer = draft.expenseId === entry.id && (!retained || canonical(retained.memory) === canonical(entry.memory));
+        const newTarget = retained?.expenseId === entry.id && canonical(retained.memory) === canonical(entry.memory);
+        if ((transfer || newTarget) && !matching.includes(draft)) matching.push(draft);
+        if (transfer && !('status' in entry)) corrections.set(entry.id, [...(corrections.get(entry.id) || []), draft]);
+      }
+      if (!saved) for (const candidate of savedEntries) {
+        const sameImage = !!entry.receiptId && entry.receiptId === candidate.receiptId;
+        const sameConversation = entry.conversation?.some(message => candidate.conversation?.some(original => original.id === message.id
+          && canonical(receiptMessageBody(original)) === canonical(receiptMessageBody(message))));
+        if ((sameImage || sameConversation) && !matching.includes(candidate)) matching.push(candidate);
+      }
+    }
+    sources.set(entry.id, matching);
+  }
+
+  // Deleted receipts retain their original alias ownership when restored under
+  // their stable ID. Filter metadata first and extract only the latest matching
+  // aliases, never materializing unrelated financial snapshots or chat history.
+  const restored = previous ? incomingEntries.filter(entry => !savedEntries.some(saved => saved.id === entry.id)).map(entry => entry.id) : [];
+  for (let offset = 0; offset < restored.length; offset += 100) {
+    const history = await db().prepare(`WITH latest AS (
+      SELECT entity_id, MAX(sequence) AS sequence
+      FROM activity_events WHERE trip_id = ? AND entity_type IN ('expense', 'draft')
+        AND entity_id IN (SELECT value FROM json_each(?))
+      GROUP BY entity_id
+    ) SELECT latest.entity_id, json_extract(COALESCE(e.after_data, e.before_data), '$.memory.aliases') AS aliases
+      FROM latest JOIN activity_events e ON e.sequence = latest.sequence`)
+      .bind(trip.id, JSON.stringify(restored.slice(offset, offset + 100))).all<{ entity_id: string; aliases: string | null }>();
+    for (const row of history.results) if (row.aliases !== null) {
+      sources.set(row.entity_id, [...(sources.get(row.entity_id) || []), { memory: receiptMemorySchema.parse({ aliases: JSON.parse(row.aliases) }) }]);
+    }
+  }
+
+  const activeMemberIds = new Set(trip.members.map(member => member.id));
+  let changed = false;
+  for (const entry of incomingEntries) {
+    const saved = savedEntries.find(candidate => candidate.id === entry.id);
+    if (canonical(saved?.memory) !== canonical(entry.memory)) changed = true;
+    try {
+      validateReceiptMemoryOwnership(mergedReceiptMemory(sources.get(entry.id) || [], corrections.get(entry.id) || []), entry.memory, actorMemberId, activeMemberIds);
+    } catch (error) {
+      if (error instanceof ReceiptMemoryOwnershipError) throw new RequestError(error.message);
+      throw error;
+    }
+  }
+  return changed;
+}
+
 export async function writeLedger(id: string, data: unknown, revision: unknown, options: { source?: ActivitySource } = {}) {
   // Parse bounded structure first. New financial rules are applied after access
   // checks, with trusted stored snapshots allowing unchanged legacy entries to
@@ -425,7 +526,8 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
       }
     }
     const actorMemberId = stored ? links.find(link => link.user_id === id)?.member_id : trip.members[0].id;
-    if (await stampReceiptAuthors(trip, previousTrips.get(trip.id), actorMemberId, profile?.display_name.trim().slice(0, 80) || 'Traveller') && stored) {
+    const memoryChanged = await validateTripReceiptMemory(trip, previousTrips.get(trip.id), actorMemberId);
+    if ((await stampReceiptAuthors(trip, previousTrips.get(trip.id), actorMemberId, profile?.display_name.trim().slice(0, 80) || 'Traveller') || memoryChanged) && stored) {
       conversationAuthors.push({ tripId: trip.id, memberId: actorMemberId });
     }
   }
@@ -444,7 +546,7 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
     const previous = previousTrips.get(trip.id);
     changes.push(...tripChanges(previous, trip));
     if (!previous) newTrips.push(trip);
-    else if (canonical(trip) !== canonical(previous)) changedTrips.push(trip);
+    else if (changes.some(change => change.tripId === trip.id)) changedTrips.push(trip);
   }
   const receiptReferences = ledger.trips.flatMap(trip => [...trip.expenses, ...trip.drafts].flatMap(entry => entry.receiptId ? [{ id: entry.receiptId, tripId: trip.id }] : []));
   const retainedReceiptIds = new Set(receiptReferences.map(reference => reference.id));

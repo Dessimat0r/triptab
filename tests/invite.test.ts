@@ -15,6 +15,7 @@ class SQLiteStatement {
   private values: (string | number | null)[] = [];
   constructor(private readonly sqlite: DatabaseSync, readonly sql: string) {}
   bind(...values: (string | number | null)[]) { this.values = values; return this; }
+  boundValues() { return this.values; }
   async first<T>() { return (this.sqlite.prepare(this.sql).get(...this.values) || null) as T | null; }
   async all<T>() { return { results: this.sqlite.prepare(this.sql).all(...this.values) as T[] }; }
   runSync() {
@@ -28,10 +29,12 @@ class SQLiteD1 {
   readonly sqlite = new DatabaseSync(':memory:');
   beforeWriteBatch?: () => void;
   beforeInviteBatch?: () => void | Promise<void>;
+  readonly invitationBatches: SQLiteStatement[][] = [];
   private pending: Promise<unknown> = Promise.resolve();
   prepare(sql: string) { return new SQLiteStatement(this.sqlite, sql); }
   batch(statements: SQLiteStatement[]): Promise<ReturnType<SQLiteStatement['runSync']>[]> {
     if (statements.some(statement => /^(?:INSERT INTO|DELETE FROM) invites/.test(statement.sql.trim()))) {
+      this.invitationBatches.push(statements);
       const hook = this.beforeInviteBatch; this.beforeInviteBatch = undefined;
       // Run before queuing this transaction, allowing a real competing ledger
       // save to complete after the invite pre-read without a synthetic SQL save.
@@ -61,6 +64,8 @@ const compiled = transpileModule(source, { compilerOptions: { module: ModuleKind
   .replace("'zod'", JSON.stringify(pathToFileURL(createRequire(import.meta.url).resolve('zod').replace(/\.cjs$/, '.js')).href))
   .replace("'cloudflare:workers'", JSON.stringify(envUrl))
   .replace("'./model'", JSON.stringify(new URL('../lib/model.ts', import.meta.url).href))
+  .replace("'./receipt-memory-ownership'", JSON.stringify(new URL('../lib/receipt-memory-ownership.ts', import.meta.url).href))
+  .replace("'./receipt-context'", JSON.stringify(new URL('../lib/receipt-context.ts', import.meta.url).href))
   .replace("'./auth'", JSON.stringify(new URL('../lib/auth.ts', import.meta.url).href))
   .replace("'./activity-scope'", JSON.stringify(new URL('../lib/activity-scope.ts', import.meta.url).href))
   .replace("'./receipt-lifecycle'", JSON.stringify(new URL('../lib/receipt-lifecycle.ts', import.meta.url).href))
@@ -362,6 +367,123 @@ test('unrelated holiday saves between invitation snapshots and writes allow crea
     const last = inviteEvents(database).at(-1)!;
     assert.equal(last.revision, revisionBefore + 1, 'Audit captures the revision inside the invitation transaction');
     assert.equal(last.after.status, operation === 'revoke' ? 'revoked' : 'pending');
+  });
+});
+
+test('same-holiday expense and receipt-chat saves do not invalidate invitation snapshots', async context => {
+  for (const operation of ['create', 'replace', 'revoke'] as const) {
+    for (const edit of ['expense', 'receipt chat'] as const) await context.test(`${operation}: ${edit}`, async () => {
+      const database = await storage(true);
+      const prior = operation === 'create' ? undefined : await create();
+      const eventCount = inviteEvents(database).length;
+      const beforeRevision = revision(database);
+      let concurrentData: unknown; let concurrentState: unknown;
+      database.beforeInviteBatch = async () => {
+        const concurrent = await store.readLedger(users.owner);
+        const expense = concurrent.data.trips[0].expenses[0];
+        if (edit === 'expense') expense.items[0].amount += 123;
+        else expense.conversation = [{ id: 'concurrent-question', role: 'user', text: 'Was the service charge included?', createdAt: '2026-10-04T12:30:00Z' }];
+        await store.writeLedger(users.owner, concurrent.data, concurrent.revision);
+        concurrentData = database.sqlite.prepare('SELECT data FROM trips WHERE id=?').get('trip-1')?.data;
+        concurrentState = database.sqlite.prepare('SELECT * FROM sync_state').get();
+      };
+      const response = operation === 'revoke'
+        ? await post({ mode: 'revoke', tripId: 'trip-1', invitationId: prior!.invitationId })
+        : await post({ mode: 'create', tripId: 'trip-1', memberId: 'b' });
+      assert.equal(response.status, 200);
+      assert.equal((await json<{ revision: number }>(response)).revision, beforeRevision + 1);
+      assert.equal(database.sqlite.prepare('SELECT data FROM trips WHERE id=?').get('trip-1')?.data, concurrentData);
+      assert.deepEqual(database.sqlite.prepare('SELECT * FROM sync_state').get(), concurrentState);
+      const events = inviteEvents(database).slice(eventCount);
+      assert.equal(events.length, operation === 'replace' ? 2 : 1);
+      assert.ok(events.every(event => event.revision === beforeRevision + 1));
+      assert.equal(events.at(-1)!.after.status, operation === 'revoke' ? 'revoked' : 'pending');
+    });
+  }
+});
+
+test('invitation management binds only a bounded traveller identity even when receipt history is large', async () => {
+  const database = await storage(true);
+  const loaded = await store.readLedger(users.owner);
+  loaded.data.trips[0].expenses[0].conversation = Array.from({ length: 50 }, (_, index) => ({
+    id: `large-chat-${index}`, role: 'user', text: 'é'.repeat(3900), createdAt: '2026-10-04T12:30:00Z',
+  }));
+  await store.writeLedger(users.owner, loaded.data, loaded.revision);
+  const fullTrip = String(database.sqlite.prepare('SELECT data FROM trips WHERE id=?').get('trip-1')?.data);
+  assert.ok(Buffer.byteLength(fullTrip) > 390_000);
+  const assertSmallBindings = () => {
+    const values = database.invitationBatches.flatMap(batch => batch.flatMap(statement => statement.boundValues()));
+    assert.ok(values.length > 0);
+    const stringValues = values.filter((value): value is string => typeof value === 'string');
+    assert.ok(stringValues.every(value => Buffer.byteLength(value) < 4096));
+    assert.equal(stringValues.includes(fullTrip), false);
+  };
+  database.invitationBatches.length = 0;
+  const invitation = await create(); assertSmallBindings();
+  database.invitationBatches.length = 0;
+  const replacement = await create(); assertSmallBindings();
+  assert.equal((await get('token=' + token(invitation))).status, 404);
+  database.invitationBatches.length = 0;
+  assert.equal((await post({ mode: 'revoke', tripId: 'trip-1', invitationId: replacement.invitationId })).status, 200);
+  assertSmallBindings();
+});
+
+test('traveller rename, removal, email, join and owner races still reject create and revoke without stale audit', async context => {
+  for (const operation of ['create', 'revoke'] as const) {
+    for (const change of ['rename', 'remove', 'email', 'join', 'owner'] as const) await context.test(`${operation}: ${change}`, async () => {
+      const database = await storage();
+      const invitation = await create();
+      const info = change === 'join' ? await preview(invitation) : undefined;
+      let eventCount = inviteEvents(database).length;
+      let revisionAfterRace = revision(database);
+      let invitationsAfterRace: unknown;
+      database.beforeInviteBatch = async () => {
+        if (change === 'rename' || change === 'remove') {
+          const concurrent = await store.readLedger(users.owner);
+          if (change === 'rename') concurrent.data.trips[0].members.find(member => member.id === 'b')!.name = 'Renamed traveller';
+          else concurrent.data.trips[0].members = concurrent.data.trips[0].members.filter(member => member.id !== 'b');
+          await store.writeLedger(users.owner, concurrent.data, concurrent.revision);
+        } else if (change === 'email') {
+          // Unlinked email metadata is server-owned: an independent trusted
+          // update must be detected even if it does not advance the ledger.
+          database.sqlite.exec("UPDATE trips SET data=json_set(data,'$.members[1].email','new-invitee@example.com') WHERE id='trip-1'");
+        } else if (change === 'join') {
+          assert.equal((await accept(invitation, info!)).status, 200);
+        } else database.sqlite.prepare('UPDATE trips SET owner=? WHERE id=?').run(users.outsider, 'trip-1');
+        eventCount = inviteEvents(database).length;
+        revisionAfterRace = revision(database);
+        invitationsAfterRace = database.sqlite.prepare('SELECT * FROM invites ORDER BY token_hash').all();
+      };
+      const response = operation === 'revoke'
+        ? await post({ mode: 'revoke', tripId: 'trip-1', invitationId: invitation.invitationId })
+        : await post({ mode: 'create', tripId: 'trip-1', memberId: 'b' });
+      assert.equal(response.status, 409);
+      assert.equal(inviteEvents(database).length, eventCount);
+      assert.equal(revision(database), revisionAfterRace);
+      assert.deepEqual(database.sqlite.prepare('SELECT * FROM invites ORDER BY token_hash').all(), invitationsAfterRace);
+    });
+  }
+});
+
+test('actual revoke or replacement winning after an invitation pre-read leaves only the winner’s audit', async context => {
+  for (const operation of ['create', 'revoke'] as const) await context.test(operation, async () => {
+    const database = await storage(); const invitation = await create();
+    const eventCount = inviteEvents(database).length; const version = revision(database);
+    let invitationsAfterWinner: unknown;
+    database.beforeInviteBatch = async () => {
+      const winner = operation === 'create'
+        ? await post({ mode: 'revoke', tripId: 'trip-1', invitationId: invitation.invitationId })
+        : await post({ mode: 'create', tripId: 'trip-1', memberId: 'b' });
+      assert.equal(winner.status, 200);
+      invitationsAfterWinner = database.sqlite.prepare('SELECT * FROM invites ORDER BY token_hash').all();
+    };
+    const response = operation === 'create'
+      ? await post({ mode: 'create', tripId: 'trip-1', memberId: 'b' })
+      : await post({ mode: 'revoke', tripId: 'trip-1', invitationId: invitation.invitationId });
+    assert.equal(response.status, 409);
+    assert.deepEqual(database.sqlite.prepare('SELECT * FROM invites ORDER BY token_hash').all(), invitationsAfterWinner);
+    assert.equal(inviteEvents(database).length, eventCount + (operation === 'create' ? 1 : 2));
+    assert.equal(revision(database), version);
   });
 });
 

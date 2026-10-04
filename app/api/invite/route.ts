@@ -88,18 +88,42 @@ async function historySnapshot(invite: Invite) {
   return tokenHash(`triptab-invite-history:${JSON.stringify([invite.token_hash, invite.trip_id, invite.member_id, invite.data])}`);
 }
 
-async function ownerTrip(tripId: string, profile: Profile) {
-  const row = await db().prepare('SELECT owner, data FROM trips WHERE id = ?')
-    .bind(tripId).first<{ owner: string; data: string }>();
+async function checkTripOwner(tripId: string, profile: Profile) {
+  const row = await db().prepare('SELECT owner FROM trips WHERE id = ?')
+    .bind(tripId).first<{ owner: string }>();
   if (!row || row.owner !== profile.id) throw new RequestError('Only the trip owner can manage invitations.', 403);
-  return { ...row, trip: parseStoredTrip(JSON.parse(row.data)) };
 }
 
-type InvitationRow = { token_hash: string; audit_id: string; member_id: string; email: string | null; expires_at: string; member_name: string };
+type TravellerSnapshot = { id: string; name: string; email: string | null };
+function travellerSnapshot(id: string, name: unknown, email: unknown): TravellerSnapshot {
+  // Invitation gates bind only this small identity, never the receipt/chat JSON.
+  if (typeof name !== 'string' || !name || name.length > 50
+    || (email !== null && (typeof email !== 'string' || email.length > 320))) {
+    throw new RequestError('This traveller’s profile needs updating before managing invitations.', 409);
+  }
+  return { id, name, email: email as string | null };
+}
+
+async function ownerTraveller(tripId: string, memberId: string, profile: Profile) {
+  const row = await db().prepare(`
+    SELECT t.owner, json_extract(j.value, '$.id') AS member_id,
+      json_extract(j.value, '$.name') AS member_name, json_extract(j.value, '$.email') AS member_email,
+      json_extract(j.value, '$.userId') AS member_user_id
+    FROM trips t LEFT JOIN json_each(t.data, '$.members') j ON json_extract(j.value, '$.id') = ?
+    WHERE t.id = ?
+  `).bind(memberId, tripId).first<{ owner: string; member_id: string | null; member_name: unknown; member_email: unknown; member_user_id: string | null }>();
+  if (!row || row.owner !== profile.id) throw new RequestError('Only the trip owner can manage invitations.', 403);
+  if (!row.member_id) throw new RequestError('Choose a traveller who is already on this trip.');
+  if (row.member_user_id !== null) throw new RequestError('This traveller is already linked to an account.', 409);
+  return travellerSnapshot(row.member_id, row.member_name, row.member_email);
+}
+
+type InvitationRow = { token_hash: string; audit_id: string; member_id: string; email: string | null; expires_at: string; member_name: string; member_email: string | null };
 async function activeInvitations(tripId: string, profile: Profile) {
   const now = new Date().toISOString();
   return (await db().prepare(`
-    SELECT i.token_hash, i.audit_id, i.member_id, i.email, i.expires_at, json_extract(j.value, '$.name') AS member_name
+    SELECT i.token_hash, i.audit_id, i.member_id, i.email, i.expires_at,
+      json_extract(j.value, '$.name') AS member_name, json_extract(j.value, '$.email') AS member_email
     FROM invites i JOIN trips t ON t.id = i.trip_id JOIN json_each(t.data, '$.members') j
     WHERE i.trip_id = ? AND t.owner = ? AND i.created_by = t.owner
       AND i.used_by IS NULL AND i.expires_at > ?
@@ -110,7 +134,7 @@ async function activeInvitations(tripId: string, profile: Profile) {
 }
 
 async function listInvitations(tripId: string, profile: Profile) {
-  await ownerTrip(tripId, profile);
+  await checkTripOwner(tripId, profile);
   const rows = await activeInvitations(tripId, profile);
   const invitations = await Promise.all(rows.slice(0, 200).map(async row => ({
     id: await managementId(row.token_hash), memberId: row.member_id, memberName: row.member_name,
@@ -169,10 +193,7 @@ async function createInvite(request: Request, profile: Profile, body: Record<str
   const memberId = identifier(body.memberId, 'traveller');
   const email = targetEmail(body.email);
   const database = db();
-  const { trip, data } = await ownerTrip(tripId, profile);
-  const member = trip.members.find(value => value.id === memberId);
-  if (!member) throw new RequestError('Choose a traveller who is already on this trip.');
-  if (member.userId) throw new RequestError('This traveller is already linked to an account.', 409);
+  const member = await ownerTraveller(tripId, memberId, profile);
   const token = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))))
     .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
   const hash = await tokenHash(token);
@@ -188,21 +209,22 @@ async function createInvite(request: Request, profile: Profile, body: Record<str
   }));
   const after = { id: auditId, memberId, memberName: member.name, expiresAt, emailRestricted: Boolean(email), status: 'pending' };
   // Issuing a link does not change the financial ledger. Its own snapshots
-  // guard the write, so an unrelated holiday save cannot invalidate this action.
+  // guard the write, so unrelated expenses or chat cannot invalidate this action.
   const createdGate = { sql: 'EXISTS (SELECT 1 FROM invites WHERE token_hash = ? AND audit_id = ?)', bindings: [hash, auditId] };
   const results = await database.batch([
     database.prepare(`
       INSERT INTO invites (token_hash, audit_id, trip_id, member_id, email, expires_at, used_by, created_by)
       SELECT ?, ?, ?, ?, ?, ?, NULL, ? WHERE
         NOT EXISTS (SELECT 1 FROM auth_links WHERE oai_user_id = ? AND user_id <> ?)
-        AND EXISTS (SELECT 1 FROM trips t WHERE t.id = ? AND t.owner = ? AND t.data = ?
+        AND EXISTS (SELECT 1 FROM trips t WHERE t.id = ? AND t.owner = ?
           AND NOT EXISTS (SELECT 1 FROM memberships m WHERE m.trip_id = t.id AND m.member_id = ?)
           AND EXISTS (SELECT 1 FROM json_each(t.data, '$.members') j
-            WHERE json_extract(j.value, '$.id') = ? AND json_extract(j.value, '$.userId') IS NULL))
+            WHERE json_extract(j.value, '$.id') = ? AND json_extract(j.value, '$.userId') IS NULL
+              AND json_extract(j.value, '$.name') = ? AND json_extract(j.value, '$.email') IS ?))
         AND (SELECT json_group_array(json_array(i.token_hash, i.audit_id, i.email, i.expires_at, i.created_by))
           FROM (SELECT token_hash, audit_id, email, expires_at, created_by FROM invites
             WHERE trip_id = ? AND member_id = ? AND used_by IS NULL ORDER BY token_hash) i) = ?
-    `).bind(hash, auditId, tripId, memberId, email, expiresAt, profile.id, profile.id, profile.id, tripId, profile.id, data, memberId, memberId, tripId, memberId,
+    `).bind(hash, auditId, tripId, memberId, email, expiresAt, profile.id, profile.id, profile.id, tripId, profile.id, memberId, memberId, member.name, member.email, tripId, memberId,
       JSON.stringify(previous.map(row => [row.token_hash, row.audit_id, row.email, row.expires_at, row.created_by]))),
     database.prepare(`
       DELETE FROM invites WHERE trip_id = ? AND member_id = ? AND used_by IS NULL AND token_hash <> ?
@@ -222,24 +244,26 @@ async function createInvite(request: Request, profile: Profile, body: Record<str
 async function revokeInvitation(profile: Profile, body: Record<string, unknown>) {
   const tripId = identifier(body.tripId, 'trip');
   const database = db();
-  const { data } = await ownerTrip(tripId, profile);
+  await checkTripOwner(tripId, profile);
   if (typeof body.invitationId !== 'string' || !/^invite_[a-f0-9]{64}$/.test(body.invitationId)) throw new RequestError('Choose a valid invitation.');
   const rows = await activeInvitations(tripId, profile);
   const references = await Promise.all(rows.map(async row => ({ row, id: await managementId(row.token_hash) })));
   const selected = references.find(value => value.id === body.invitationId)?.row;
   if (!selected) throw new RequestError('This invitation is no longer active. Refresh the invitations.', 409);
+  const member = travellerSnapshot(selected.member_id, selected.member_name, selected.member_email);
   const before = await invitationSnapshot(selected, selected.member_name, 'pending');
   const results = await database.batch([
     database.prepare(`
       DELETE FROM invites WHERE token_hash = ? AND audit_id = ? AND trip_id = ? AND member_id = ? AND created_by = ?
         AND used_by IS NULL AND expires_at = ? AND expires_at > ? AND email IS ?
         AND NOT EXISTS (SELECT 1 FROM auth_links WHERE oai_user_id = ? AND user_id <> ?)
-        AND EXISTS (SELECT 1 FROM trips t WHERE t.id = invites.trip_id AND t.owner = ? AND t.data = ?
+        AND EXISTS (SELECT 1 FROM trips t WHERE t.id = invites.trip_id AND t.owner = ?
           AND NOT EXISTS (SELECT 1 FROM memberships m WHERE m.trip_id = t.id AND m.member_id = invites.member_id)
           AND EXISTS (SELECT 1 FROM json_each(t.data, '$.members') j
-            WHERE json_extract(j.value, '$.id') = invites.member_id AND json_extract(j.value, '$.userId') IS NULL))
+            WHERE json_extract(j.value, '$.id') = invites.member_id AND json_extract(j.value, '$.userId') IS NULL
+              AND json_extract(j.value, '$.name') = ? AND json_extract(j.value, '$.email') IS ?))
     `).bind(selected.token_hash, selected.audit_id, tripId, selected.member_id, profile.id, selected.expires_at, new Date().toISOString(), selected.email,
-      profile.id, profile.id, profile.id, data),
+      profile.id, profile.id, profile.id, member.name, member.email),
     // This single lifecycle event immediately follows the conditional delete.
     // Both statements roll back together if audit storage fails.
     ...activityStatements(database, [{ tripId, entityType: 'invite', entityId: before.id, action: 'update', before,

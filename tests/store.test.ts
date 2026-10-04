@@ -74,6 +74,8 @@ const compiled = transpileModule(source, { compilerOptions: { module: ModuleKind
   .replace("'./activity-scope'", JSON.stringify(new URL('../lib/activity-scope.ts', import.meta.url).href))
   .replace("'./receipt-lifecycle'", JSON.stringify(new URL('../lib/receipt-lifecycle.ts', import.meta.url).href))
   .replaceAll("'./audit'", JSON.stringify(new URL('../lib/audit.ts', import.meta.url).href))
+  .replace("'./receipt-context'", JSON.stringify(new URL('../lib/receipt-context.ts', import.meta.url).href))
+  .replace("'./receipt-memory-ownership'", JSON.stringify(new URL('../lib/receipt-memory-ownership.ts', import.meta.url).href))
   .replace("'./notifications'", JSON.stringify(notificationUrl));
 const storeUrl = 'data:text/javascript;base64,' + Buffer.from(compiled).toString('base64');
 const store = await import(storeUrl) as typeof import('../lib/store');
@@ -1075,14 +1077,81 @@ test('legacy assistant stamps are removed without changing words, historical evi
   assert.deepEqual(saved.conversation![0], messages[0]);
   assert.deepEqual(saved.conversation![1], { id: 'legacy-ai', role: 'assistant', text: 'Check the receipt.',
     createdAt: '2026-10-04T20:32:00Z', replyTo: 'legacy-user' });
-  const event = lastEntity(await history(actor, legacy.id), 'expense', saved.id);
-  assert.equal((event.before?.conversation as typeof messages)[1].authorName, undefined, 'assistant views never return human attribution');
-  const evidence = database.sqlite.prepare('SELECT before_data FROM activity_events WHERE id=?').get(event.id)?.before_data as string;
-  assert.deepEqual(JSON.parse(evidence).conversation, messages, 'immutable raw evidence retains its truthful before image');
-  assert.deepEqual(event.after?.conversation, saved.conversation);
+  assert.equal(count(database), 0, 'a display-only repair must not be attributed to the participant');
+  assert.equal(notifications.length, 0);
   const changed = structuredClone(state.data);
   changed.trips[0].expenses[0].conversation![1].text = 'Rewritten reply';
   await assert.rejects(store.writeLedger(actor, changed, state.revision), /Saved receipt messages cannot be edited/);
+});
+
+test('a draft-only question silently clears legacy assistant stamps without invented expense edits or pushes', async () => {
+  const database = await storage();
+  const holiday = trip();
+  holiday.expenses = Array.from({ length: 12 }, (_, index) => ({ ...dinner(), id: `legacy-${index}`, conversation: [
+    { id: `answer-${index}`, role: 'assistant' as const, text: 'Check the receipt.', createdAt: '2026-10-04T20:32:00Z' },
+  ] }));
+  const initial = await create(database, holiday);
+  const raw = structuredClone(initial.data.trips[0]);
+  for (const expense of raw.expenses) Object.assign(expense.conversation![0], { authorMemberId: 'a', authorName: 'Wrong human' });
+  database.sqlite.prepare('UPDATE trips SET data=? WHERE id=?').run(JSON.stringify(raw), raw.id);
+  database.sqlite.prepare('INSERT INTO memberships (trip_id,user_id,member_id) VALUES (?,?,?)').run(raw.id, member, 'b');
+  const beforeEvents = count(database);
+  const bob = await store.readLedger(member);
+  bob.data.trips[0].drafts = [{ ...dinner(), id: 'question-draft', expenseId: 'legacy-0', status: 'waiting', conversation: [
+    { id: 'bob-question', role: 'user', text: 'Was this my meal?', createdAt: '2026-10-04T20:35:00Z' },
+  ] }];
+  const saved = await store.writeLedger(member, bob.data, bob.revision);
+  assert.equal(count(database), beforeEvents + 1);
+  const added = (await history()).filter(event => event.revision === saved.revision);
+  assert.deepEqual(added.map(event => [event.entityType, event.actorId]), [['draft', member]]);
+  assert.equal(notifications.length, 0);
+  const stored = JSON.parse(database.sqlite.prepare('SELECT data FROM trips WHERE id=?').get(raw.id)?.data as string) as Trip;
+  for (const expense of stored.expenses) {
+    assert.equal(expense.conversation![0].authorName, undefined);
+    assert.equal(expense.conversation![0].authorMemberId, undefined);
+  }
+});
+
+test('a genuine financial edit keeps the raw legacy assistant before image and only notifies the actual edit', async () => {
+  const database = await storage();
+  const holiday = trip();
+  holiday.expenses = [{ ...dinner(), conversation: [{ id: 'old-answer', role: 'assistant', text: 'Check this total.', createdAt: '2026-10-04T20:32:00Z' }] }];
+  const initial = await create(database, holiday);
+  const raw = structuredClone(initial.data.trips[0]);
+  Object.assign(raw.expenses[0].conversation![0], { authorMemberId: 'a', authorName: 'Wrong human' });
+  database.sqlite.prepare('UPDATE trips SET data=? WHERE id=?').run(JSON.stringify(raw), raw.id);
+  const state = await store.readLedger(actor);
+  state.data.trips[0].expenses[0].tip = 100;
+  const saved = await store.writeLedger(actor, state.data, state.revision);
+  const event = lastEntity(await history(), 'expense', 'dinner');
+  assert.deepEqual(event.before?.conversation, raw.expenses[0].conversation);
+  assert.deepEqual(event.after, saved.data.trips[0].expenses[0]);
+  assert.equal(event.before?.tip, 0); assert.equal(event.after?.tip, 100);
+  assert.equal(notifications.length, 1);
+  assert.match(String(notifications[0][3]), /updated an expense/);
+});
+
+test('history preserves raw pre-existing assistant-attribution corrections instead of hiding their before/after difference', async () => {
+  const database = await storage();
+  await create(database);
+  const before = { ...dinner(), conversation: [{ id: 'historic-assistant', role: 'assistant', text: 'Check the receipt.',
+    createdAt: '2026-10-04T20:32:00Z', authorMemberId: 'b', authorName: 'Mistaken Bob' }] };
+  const after = { ...before, conversation: before.conversation.map(({ id, role, text, createdAt }) => ({ id, role, text, createdAt })) };
+  database.sqlite.prepare(`INSERT INTO activity_events
+    (id,trip_id,actor_id,actor_name,created_at,entity_type,entity_id,action,before_data,after_data,revision,source)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).run('old-attribution-repair', 'trip-1', member, 'Bob', '2026-10-04T21:00:00Z',
+      'expense', before.id, 'update', JSON.stringify(before), JSON.stringify(after), 1, 'web');
+  const event = (await store.readActivity(actor, 'trip-1')).events.find(candidate => candidate.id === 'old-attribution-repair')!;
+  assert.deepEqual(event.before, before);
+  assert.deepEqual(event.after, after);
+  assert.notDeepEqual(event.before, event.after, 'a historical correction must retain visible evidence');
+  const evidence = database.sqlite.prepare('SELECT before_data,after_data FROM activity_events WHERE id=?').get(event.id) as { before_data: string; after_data: string };
+  assert.deepEqual(event.before, JSON.parse(evidence.before_data));
+  assert.deepEqual(event.after, JSON.parse(evidence.after_data));
+  (event.before!.conversation as { text: string }[])[0].text = 'Changed in the browser';
+  const fresh = (await store.readActivity(actor, 'trip-1')).events.find(candidate => candidate.id === event.id)!;
+  assert.deepEqual(fresh.before, before, 'view mutations cannot alter immutable history');
+  assert.deepEqual(database.sqlite.prepare('SELECT before_data,after_data FROM activity_events WHERE id=?').get(event.id), evidence);
 });
 
 test('known Bob messages keep their original speakers when Alice copies a receipt into review and submits a new reply', async () => {
@@ -1223,6 +1292,250 @@ test('receipt memory persists through financial saves and bounds failures cannot
     assert.equal(count(database), initialEvents);
   }
   assert.equal(errors.mock.callCount(), 0);
+});
+
+async function memoryHoliday(database: SQLiteD1) {
+  const holiday = trip();
+  holiday.expenses = [{ ...dinner(), memory: { notes: 'Receipt context', aliases: [
+    { name: 'My dinner', itemId: 'food', scopeMemberId: 'a' },
+    { name: 'Dinner', itemId: 'food' },
+  ] } }];
+  await create(database, holiday);
+  database.sqlite.prepare('INSERT INTO memberships (trip_id,user_id,member_id) VALUES (?,?,?)').run(holiday.id, member, 'b');
+  const bob = await store.readLedger(member);
+  bob.data.trips[0].expenses[0].memory!.aliases.push({ name: 'My meal', itemId: 'food', scopeMemberId: 'b' });
+  await store.writeLedger(member, bob.data, bob.revision);
+  notifications.length = 0;
+  return store.readLedger(actor);
+}
+
+test('ledger HTTP alias ownership rejects foreign removals, rewrites and claims atomically on expenses and drafts', async context => {
+  const database = await storage();
+  let state = await memoryHoliday(database);
+  state.data.trips[0].drafts = [{ ...state.data.trips[0].expenses[0], id: 'memory-draft', expenseId: 'dinner', status: 'review' }];
+  state = await store.writeLedger(actor, state.data, state.revision);
+  const original = database.sqlite.prepare('SELECT data FROM trips WHERE id=?').get('trip-1')?.data;
+  const initialEvents = count(database);
+  const route = await ledgerRoute();
+  for (const kind of ['expenses', 'drafts'] as const) for (const mutation of ['remove', 'rewrite', 'new claim', 'duplicate claim', 'clear memory'] as const) {
+    await context.test(`${kind}: ${mutation}`, async () => {
+      const changed = structuredClone(state.data);
+      const receipt = changed.trips[0][kind][0];
+      const memory = receipt.memory!;
+      if (mutation === 'remove') memory.aliases = memory.aliases.filter(alias => alias.scopeMemberId !== 'b');
+      if (mutation === 'rewrite') memory.aliases.find(alias => alias.scopeMemberId === 'b')!.name = 'A different Bob alias';
+      if (mutation === 'new claim') memory.aliases.push({ name: 'Bob means Alice', memberId: 'a', scopeMemberId: 'b' });
+      if (mutation === 'duplicate claim') memory.aliases.push({ ...memory.aliases.find(alias => alias.scopeMemberId === 'b')! });
+      if (mutation === 'clear memory') delete receipt.memory;
+      const response = await route.POST(saveRequest(changed, state.revision));
+      assert.equal(response.status, 400);
+      assert.match((await response.json() as { error: string }).error, /speaker-scoped aliases/);
+      assert.equal(database.sqlite.prepare('SELECT data FROM trips WHERE id=?').get('trip-1')?.data, original);
+      assert.equal(database.sqlite.prepare('SELECT revision FROM sync_state WHERE id=1').get()?.revision, state.revision);
+      assert.equal(count(database), initialEvents);
+      assert.equal(notifications.length, 0);
+    });
+  }
+});
+
+test('ledger writers may change their own and shared aliases and remove an inactive speaker alias', async () => {
+  const database = await storage();
+  let state = await memoryHoliday(database);
+  const raw = structuredClone(state.data.trips[0]);
+  raw.expenses[0].memory!.aliases.push({ name: 'Former meal', itemId: 'removed-item', scopeMemberId: 'removed-traveller' });
+  database.sqlite.prepare('UPDATE trips SET data=? WHERE id=?').run(JSON.stringify(raw), raw.id);
+  state = await store.readLedger(actor);
+  const aliases = state.data.trips[0].expenses[0].memory!.aliases;
+  aliases.find(alias => alias.scopeMemberId === 'a')!.name = 'My pudding';
+  aliases.find(alias => alias.scopeMemberId === undefined)!.memberId = 'b';
+  delete aliases.find(alias => alias.scopeMemberId === undefined)!.itemId;
+  state.data.trips[0].expenses[0].memory!.aliases = aliases.filter(alias => alias.scopeMemberId !== 'removed-traveller');
+  state.data.trips[0].expenses[0].memory!.notes = 'Everyone agrees on the terminology.';
+  const saved = await store.writeLedger(actor, state.data, state.revision);
+  assert.deepEqual(saved.data.trips[0].expenses[0].memory!.aliases, [
+    { name: 'My pudding', itemId: 'food', scopeMemberId: 'a' },
+    { name: 'Dinner', memberId: 'b' },
+    { name: 'My meal', itemId: 'food', scopeMemberId: 'b' },
+  ]);
+  assert.equal(lastEntity(await history(), 'expense', 'dinner').actorId, actor);
+});
+
+test('posting a consumed proposal preserves foreign aliases from both the target expense and saved draft', async () => {
+  const database = await storage();
+  let state = await memoryHoliday(database);
+  state.data.trips[0].drafts = [{ ...state.data.trips[0].expenses[0], id: 'memory-draft', expenseId: 'dinner', status: 'review' }];
+  state = await store.writeLedger(actor, state.data, state.revision);
+  const bob = await store.readLedger(member);
+  bob.data.trips[0].drafts[0].memory!.aliases.push({ name: 'My starter', itemId: 'food', scopeMemberId: 'b' });
+  await store.writeLedger(member, bob.data, bob.revision);
+  state = await store.readLedger(actor);
+  const proposalMemory = structuredClone(state.data.trips[0].drafts[0].memory);
+  const invalid = structuredClone(state.data);
+  invalid.trips[0].drafts = [];
+  invalid.trips[0].expenses[0].memory = { ...proposalMemory!, aliases: proposalMemory!.aliases.filter(alias => alias.name !== 'My meal') };
+  const beforeEvents = count(database);
+  await assert.rejects(store.writeLedger(actor, invalid, state.revision), /Keep active other travellers/);
+  assert.equal(count(database), beforeEvents);
+  state.data.trips[0].drafts = [];
+  state.data.trips[0].expenses[0].memory = proposalMemory;
+  const saved = await store.writeLedger(actor, state.data, state.revision);
+  assert.deepEqual(saved.data.trips[0].expenses[0].memory, proposalMemory);
+  assert.equal(saved.data.trips[0].drafts.length, 0);
+});
+
+test('new expense IDs may inherit a saved draft’s foreign aliases via retained target or immutable conversation', async context => {
+  for (const retained of [true, false]) await context.test(retained ? 'waiting draft gets the posted target ID' : 'consumed draft shares immutable conversation', async () => {
+    const database = await storage();
+    const holiday = trip();
+    holiday.drafts = [{ ...dinner(), id: 'source-draft', status: 'review' }];
+    await create(database, holiday);
+    database.sqlite.prepare('INSERT INTO memberships (trip_id,user_id,member_id) VALUES (?,?,?)').run(holiday.id, member, 'b');
+    const bob = await store.readLedger(member);
+    bob.data.trips[0].drafts[0].memory = { notes: 'Bob established this alias.', aliases: [{ name: 'My dinner', itemId: 'food', scopeMemberId: 'b' }] };
+    bob.data.trips[0].drafts[0].conversation = [{ id: 'bob-source-question', role: 'user', text: 'My dinner was this item.', createdAt: '2026-10-04T20:35:00Z' }];
+    await store.writeLedger(member, bob.data, bob.revision);
+    const alice = await store.readLedger(actor);
+    const source = alice.data.trips[0].drafts[0];
+    alice.data.trips[0].expenses = [{ ...dinner(), id: 'posted-from-draft', memory: source.memory, conversation: source.conversation }];
+    alice.data.trips[0].drafts = retained ? [{ ...source, expenseId: 'posted-from-draft', status: 'waiting' }] : [];
+    const saved = await store.writeLedger(actor, alice.data, alice.revision);
+    assert.deepEqual(saved.data.trips[0].expenses[0].memory, source.memory);
+    assert.equal(saved.data.trips[0].expenses[0].conversation![0].authorMemberId, 'b');
+  });
+});
+
+test('whole receipt deletion is allowed and historic restores retain saved foreign alias ownership', async () => {
+  const database = await storage();
+  let state = await memoryHoliday(database);
+  const receipt = structuredClone(state.data.trips[0].expenses[0]);
+  state.data.trips[0].expenses = [];
+  state = await store.writeLedger(actor, state.data, state.revision);
+  assert.equal(state.data.trips[0].expenses.length, 0);
+  const initialEvents = count(database);
+  const missing = structuredClone(state.data);
+  missing.trips[0].expenses = [{ ...receipt, memory: undefined }];
+  await assert.rejects(store.writeLedger(actor, missing, state.revision), /Keep active other travellers/);
+  assert.equal(count(database), initialEvents);
+  state.data.trips[0].expenses = [receipt];
+  const restored = await store.writeLedger(actor, state.data, state.revision);
+  assert.deepEqual(restored.data.trips[0].expenses[0].memory, receipt.memory);
+  const event = lastEntity(await history(), 'expense', receipt.id);
+  assert.equal(event.action, 'create');
+  assert.equal(event.actorId, actor);
+});
+
+test('alias edits reject future baselines and recheck the trusted actor’s membership before committing', async () => {
+  const database = await storage();
+  const state = await memoryHoliday(database);
+  state.data.trips[0].expenses[0].memory!.aliases.find(alias => alias.scopeMemberId === 'a')!.name = 'My corrected dinner';
+  const original = database.sqlite.prepare('SELECT data FROM trips WHERE id=?').get('trip-1')?.data;
+  const initialEvents = count(database);
+  await assert.rejects(store.writeLedger(actor, state.data, state.revision + 1), /CONFLICT/);
+  database.beforeWriteBatch = () => {
+    database.sqlite.prepare('DELETE FROM memberships WHERE trip_id=? AND user_id=?').run('trip-1', actor);
+  };
+  await assert.rejects(store.writeLedger(actor, state.data, state.revision), /CONFLICT/);
+  assert.equal(database.sqlite.prepare('SELECT data FROM trips WHERE id=?').get('trip-1')?.data, original);
+  assert.equal(database.sqlite.prepare('SELECT revision FROM sync_state WHERE id=1').get()?.revision, state.revision);
+  assert.equal(count(database), initialEvents);
+  assert.equal(notifications.length, 0);
+});
+
+test('Bob may approve Alice’s saved linked-draft alias retarget while preserving unrelated target aliases', async () => {
+  const database = await storage();
+  let state = await memoryHoliday(database);
+  state.data.trips[0].drafts = [{ ...structuredClone(state.data.trips[0].expenses[0]), id: 'alice-proposal', expenseId: 'dinner', status: 'review' }];
+  const correction = state.data.trips[0].drafts[0].memory!.aliases.find(alias => alias.scopeMemberId === 'a')!;
+  delete correction.itemId; correction.memberId = 'b';
+  await store.writeLedger(actor, state.data, state.revision);
+  state = await store.readLedger(actor);
+  state.data.trips[0].expenses[0].memory!.aliases.push({ name: 'My drink', itemId: 'food', scopeMemberId: 'a' });
+  await store.writeLedger(actor, state.data, state.revision);
+  const bob = await store.readLedger(member);
+  const proposal = structuredClone(bob.data.trips[0].drafts[0].memory!);
+  const invalid = structuredClone(bob.data);
+  invalid.trips[0].drafts = [];
+  invalid.trips[0].expenses[0].memory = proposal;
+  await assert.rejects(store.writeLedger(member, invalid, bob.revision), /Keep active other travellers/);
+  proposal.aliases.push(bob.data.trips[0].expenses[0].memory!.aliases.find(alias => alias.name === 'My drink')!);
+  bob.data.trips[0].drafts = [];
+  bob.data.trips[0].expenses[0].memory = proposal;
+  const saved = await store.writeLedger(member, bob.data, bob.revision);
+  assert.deepEqual(saved.data.trips[0].expenses[0].memory, proposal);
+  assert.deepEqual(saved.data.trips[0].expenses[0].memory!.aliases.find(alias => alias.name === 'My dinner'),
+    { name: 'My dinner', memberId: 'b', scopeMemberId: 'a' });
+  assert.equal(lastEntity(await history(), 'expense', 'dinner').actorId, member);
+});
+
+test('a client-created draft link cannot authorize retargeting another speaker’s posted alias', async () => {
+  const database = await storage();
+  const state = await memoryHoliday(database);
+  state.data.trips[0].drafts = [{ ...dinner(), id: 'unlinked-proposal', status: 'review', memory: { notes: '', aliases: [
+    { name: 'My dinner', memberId: 'b', scopeMemberId: 'a' },
+  ] } }];
+  await store.writeLedger(actor, state.data, state.revision);
+  const bob = await store.readLedger(member);
+  bob.data.trips[0].drafts[0].expenseId = 'dinner';
+  const aliases = bob.data.trips[0].expenses[0].memory!.aliases;
+  bob.data.trips[0].expenses[0].memory = {
+    notes: '', aliases: [...aliases.filter(alias => alias.scopeMemberId !== 'a'), ...bob.data.trips[0].drafts[0].memory!.aliases],
+  };
+  // Matching the new target's memory is a caller claim, not a saved proposal link.
+  bob.data.trips[0].drafts[0].memory = bob.data.trips[0].expenses[0].memory;
+  const beforeEvents = count(database);
+  await assert.rejects(store.writeLedger(member, bob.data, bob.revision), /Keep active other travellers/);
+  assert.equal(count(database), beforeEvents);
+  assert.equal(database.sqlite.prepare('SELECT revision FROM sync_state WHERE id=1').get()?.revision, bob.revision);
+});
+
+test('restoration cannot bypass protected historical aliases by borrowing a current image or conversation', async context => {
+  const database = await storage();
+  let state = await memoryHoliday(database);
+  const deleted = structuredClone(state.data.trips[0].expenses[0]);
+  database.sqlite.prepare('INSERT INTO receipts (id,owner,trip_id,created_at,state) VALUES (?,?,?,?,?)')
+    .run('current-image', actor, 'trip-1', '2026-10-04T00:00:00Z', 'active');
+  state.data.trips[0].expenses.push({ ...dinner(), id: 'current-context', receiptId: 'current-image', memory: { notes: '', aliases: [
+    { name: 'My current meal', itemId: 'food', scopeMemberId: 'a' },
+  ] }, conversation: [{ id: 'current-question', role: 'user', text: 'This is my current meal.', createdAt: '2026-10-04T20:35:00Z' }] });
+  state = await store.writeLedger(actor, state.data, state.revision);
+  state.data.trips[0].expenses = state.data.trips[0].expenses.filter(expense => expense.id !== deleted.id);
+  state = await store.writeLedger(actor, state.data, state.revision);
+  const current = state.data.trips[0].expenses[0];
+  const original = database.sqlite.prepare('SELECT data FROM trips WHERE id=?').get('trip-1')?.data;
+  const beforeEvents = count(database);
+  for (const hint of ['image', 'conversation'] as const) await context.test(hint, async () => {
+    const changed = structuredClone(state.data);
+    const restored = { ...deleted, memory: structuredClone(current.memory), ...(hint === 'image' ? { receiptId: current.receiptId } : { conversation: current.conversation }) };
+    changed.trips[0].expenses.push(restored);
+    await assert.rejects(store.writeLedger(actor, changed, state.revision), /Keep active other travellers/);
+    assert.equal(database.sqlite.prepare('SELECT data FROM trips WHERE id=?').get('trip-1')?.data, original);
+    assert.equal(database.sqlite.prepare('SELECT revision FROM sync_state WHERE id=1').get()?.revision, state.revision);
+    assert.equal(count(database), beforeEvents);
+  });
+});
+
+test('historical alias restoration selects latest metadata before extracting a bounded alias snapshot', async context => {
+  const database = await storage();
+  let state = await memoryHoliday(database);
+  const receipt = structuredClone(state.data.trips[0].expenses[0]);
+  for (let index = 0; index < 5; index++) database.sqlite.prepare(`INSERT INTO activity_events
+    (id,trip_id,actor_id,actor_name,created_at,entity_type,entity_id,action,before_data,after_data,revision,source)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).run(`large-old-${index}`, 'trip-1', actor, 'Owner', '2026-10-04T20:00:00Z',
+      'expense', receipt.id, 'update', null, JSON.stringify({ padding: 'x'.repeat(1_800_000) }), state.revision, 'web');
+  state.data.trips[0].expenses = [];
+  state = await store.writeLedger(actor, state.data, state.revision);
+  const queries: string[] = [];
+  const prepare = database.prepare.bind(database);
+  context.mock.method(database, 'prepare', (sql: string) => { queries.push(sql); return prepare(sql); });
+  state.data.trips[0].expenses = [receipt];
+  const restored = await store.writeLedger(actor, state.data, state.revision);
+  assert.deepEqual(restored.data.trips[0].expenses[0].memory, receipt.memory);
+  const lookup = queries.find(sql => /memory\.aliases/.test(sql))!;
+  assert.ok(lookup);
+  const metadata = lookup.slice(0, lookup.indexOf('SELECT latest.entity_id'));
+  assert.match(metadata, /MAX\(sequence\)/);
+  assert.doesNotMatch(metadata, /before_data|after_data|json_extract/);
+  assert.match(lookup, /JOIN activity_events e ON e\.sequence = latest\.sequence/);
 });
 
 test('restoring a fully deleted receipt verifies Bob’s speaker from immutable history despite forged client authors', async context => {

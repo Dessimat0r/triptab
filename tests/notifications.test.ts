@@ -116,18 +116,10 @@ test('activity wording suppresses draft-only changes and preserves complete copy
   assert.ok(long.body.length <= 240);
 });
 
-test('derived collection-order events preserve precise financial notifications and silent draft-only edits', () => {
-  const trip = { entityType: 'trip', action: 'update', before: { name: 'Secret holiday', expenseOrder: ['old'], paymentOrder: [], draftOrder: [] }, after: { name: 'Secret holiday', expenseOrder: ['old', 'new'], paymentOrder: [], draftOrder: [] } } as const;
-  assert.equal(notifications.activityNotification('Alice', [trip, { entityType: 'expense', entityId: 'new', action: 'create' }])!.body,
-    'Alice added an expense. Open TripTab to review the activity.');
-  assert.equal(notifications.activityNotification('Alice', [{ ...trip, after: { ...trip.before, draftOrder: ['draft'] } }, { entityType: 'draft', entityId: 'draft', action: 'create' }]), null);
-  assert.match(notifications.activityNotification('Alice', [{ ...trip, before: { expenseOrder: ['a', 'b'] }, after: { expenseOrder: ['b', 'a'] } }])!.body, /updated the holiday details/);
-  assert.match(notifications.activityNotification('Alice', [{ ...trip, before: { expenseOrder: ['a', 'b'] }, after: { expenseOrder: ['b', 'a'] } }, { entityType: 'expense', entityId: 'a', action: 'update' }])!.body, /updated this holiday/);
-  assert.match(notifications.activityNotification('Alice', [{ ...trip, after: { ...trip.after, name: 'Changed holiday' } }, { entityType: 'expense', entityId: 'new', action: 'create' }])!.body, /updated this holiday/);
-  const removal = { ...trip, before: { expenseOrder: ['removed', 'a', 'b'] }, after: { expenseOrder: ['a', 'b'] } };
-  assert.equal(notifications.activityNotification('Alice', [removal, { entityType: 'expense', entityId: 'removed', action: 'delete' }])!.body,
-    'Alice removed an expense. Open TripTab to review the activity.');
-  assert.match(notifications.activityNotification('Alice', [{ ...removal, after: { expenseOrder: ['b', 'a'] } }, { entityType: 'expense', entityId: 'removed', action: 'delete' }])!.body, /updated this holiday/);
+test('deliberate collection reorders remain visible without notification-side order inference', () => {
+  const trip = { entityType: 'trip', action: 'update', before: { expenseOrder: ['a', 'b'] }, after: { expenseOrder: ['b', 'a'] } } as const;
+  assert.match(notifications.activityNotification('Alice', [trip])!.body, /updated the holiday details/);
+  assert.match(notifications.activityNotification('Alice', [trip, { entityType: 'expense', entityId: 'a', action: 'update' }])!.body, /updated this holiday/);
   assert.match(notifications.activityNotification('Alice', [{ ...trip, before: { memberOrder: ['a', 'b'] }, after: { memberOrder: ['a', 'c', 'b'] } }, { entityType: 'member', entityId: 'c', action: 'create' }])!.body, /updated this holiday/);
 });
 
