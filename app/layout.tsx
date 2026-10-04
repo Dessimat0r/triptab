@@ -1,5 +1,4 @@
 import type { Metadata, Viewport } from "next";
-import TripTabApp from "@/components/trip-app";
 import "./globals.css";
 export const metadata: Metadata = {
   title: "TripTab · Holiday expenses",
@@ -21,7 +20,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body><TripTabApp>{children}</TripTabApp></body>
+      <body>{children}</body>
     </html>
   );
 }

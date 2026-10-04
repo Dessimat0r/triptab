@@ -2,11 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import ExpensesPage from "../app/expenses/page";
-import BalancesPage from "../app/balances/page";
-import ReceiptsPage from "../app/receipts/page";
-import TravellersPage from "../app/travellers/page";
-import HistoryPage from "../app/history/page";
+import ExpensesPage from "../app/(ledger)/expenses/page";
+import BalancesPage from "../app/(ledger)/balances/page";
+import ReceiptsPage from "../app/(ledger)/receipts/page";
+import TravellersPage from "../app/(ledger)/travellers/page";
+import HistoryPage from "../app/(ledger)/history/page";
 import { TripTabRouteProvider } from "../components/trip-routing";
 import { TRIP_SECTIONS, tripSectionForPathname, tripSectionHref, type TripSection } from "../lib/trip-routes";
 
