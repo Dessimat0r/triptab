@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Currency } from "@/lib/model";
 import type { ActivityEvent } from "@/lib/store";
 import "./activity-details.css";
@@ -139,21 +139,33 @@ export function auditText(value: unknown): string { return typeof value === "str
 export function auditRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
 }
+let timestampFormatter: Intl.DateTimeFormat | undefined;
 export function auditTimestamp(value: unknown, exact = false): string {
   const text = auditText(value);
   const date = new Date(text);
   if (!text || !Number.isFinite(date.getTime())) return "Date unavailable";
-  return exact ? date.toISOString() + " (UTC)" : new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "long" }).format(date);
+  return exact ? date.toISOString() + " (UTC)" : (timestampFormatter ??= new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "long" })).format(date);
 }
 export function auditSource(value: string): string {
   return value === "chatgpt" ? "via ChatGPT/Codex" : value === "system" ? "by TripTab system" : "in TripTab";
 }
+const currencyFormatters = new Map<string, Intl.NumberFormat>();
+let amountFormatter: Intl.NumberFormat | undefined;
+let quantityFormatter: Intl.NumberFormat | undefined;
 function money(value: unknown, currency?: string): string {
   if (typeof value !== "number" || !Number.isFinite(value)) return "Not recorded";
   try {
-    if (currency) return new Intl.NumberFormat("en-GB", { style: "currency", currency, minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value / 100);
+    if (currency) {
+      let formatter = currencyFormatters.get(currency);
+      if (!formatter) {
+        formatter = new Intl.NumberFormat("en-GB", { style: "currency", currency, minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        if (currencyFormatters.size >= 32) currencyFormatters.clear();
+        currencyFormatters.set(currency, formatter);
+      }
+      return formatter.format(value / 100);
+    }
   } catch {}
-  return `${new Intl.NumberFormat("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value / 100)} (holiday currency)`;
+  return `${(amountFormatter ??= new Intl.NumberFormat("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 })).format(value / 100)} (holiday currency)`;
 }
 function traveller(value: unknown, names: Record<string, string>): string {
   const id = auditText(value);
@@ -170,7 +182,7 @@ function percentages(value: unknown, names: Record<string, string>): string {
   return Object.entries(entries).map(([id, percent]) => `${traveller(id, names)}: ${percent}%`).join("\n") || "No participants";
 }
 function quantity(value: unknown): string {
-  return typeof value === "number" && Number.isFinite(value) ? new Intl.NumberFormat("en-GB", { maximumFractionDigits: 6 }).format(value) : "Not recorded";
+  return typeof value === "number" && Number.isFinite(value) ? (quantityFormatter ??= new Intl.NumberFormat("en-GB", { maximumFractionDigits: 6 })).format(value) : "Not recorded";
 }
 function itemName(snapshot: Record<string, unknown>, id: unknown): string {
   const item = (Array.isArray(snapshot.items) ? snapshot.items : []).map(auditRecord).find(value => value?.id === id);
@@ -320,6 +332,44 @@ function eventLabel(event: ActivityEvent, currency?: Currency): string {
   return auditText(snapshot.title) || auditText(snapshot.name) || labels[entity] || "Entry";
 }
 
+type ActivityDetailProps = Pick<ActivityPanelProps, "currency"> & {
+  event: ActivityEvent;
+  memberNames: Record<string, string>;
+  actorMemberNames: Record<string, string>;
+};
+
+function ActivityDetailBody({ event, currency, memberNames, actorMemberNames }: ActivityDetailProps) {
+  const fields = useMemo(() => changes(event, currency, memberNames, actorMemberNames), [event, currency, memberNames, actorMemberNames]);
+  const actor = event.actorName || "Traveller", tripName = actorMemberNames[event.actorId];
+  const snapshot = event.after || event.before || {};
+  return <>
+    <dl className="activity-identifiers">
+      <div><dt>Recorded at</dt><dd><time dateTime={event.createdAt}>{auditTimestamp(event.createdAt, true)}</time></dd></div>
+      <div><dt>Changed by</dt><dd>{actor}{tripName ? ` · current traveller name: ${tripName}` : ""}<br />{event.source === "system" ? "System reference" : "Account"} {event.actorId}</dd></div>
+      <div><dt>Record</dt><dd>{eventLabel(event, currency)} · {event.entityId}</dd></div>
+      <div><dt>Change reference</dt><dd>{event.id} · holiday revision {event.revision}</dd></div>
+      {event.entityType === "invite" && <div><dt>Invitation for</dt><dd>{auditText(snapshot.memberName) || memberNames[auditText(snapshot.memberId)] || "Earlier traveller"} · traveller {auditText(snapshot.memberId)}</dd></div>}
+      {event.entityType === "receipt" && <>
+        {!!snapshot.uploaderId && <div><dt>Image uploaded by</dt><dd>{accountReference(snapshot.uploaderId, actorMemberNames)}</dd></div>}
+        {!!snapshot.initiatorId && <div><dt>Cleanup initiated by</dt><dd>{auditText(snapshot.initiatorName) || accountReference(snapshot.initiatorId, actorMemberNames)} · account {auditText(snapshot.initiatorId)}</dd></div>}
+        {!!snapshot.sha256 && <div><dt>Image checksum (SHA-256)</dt><dd>{auditText(snapshot.sha256)}</dd></div>}
+      </>}
+    </dl>
+    <p className="footnote">Traveller references use current holiday names with stable IDs. Message authors retain their recorded names.</p>
+    <ActivityChanges fields={fields} before={!!event.before} after={!!event.after} />
+  </>;
+}
+
+function ActivityEventDetails(props: ActivityDetailProps) {
+  const [visited, setVisited] = useState(false);
+  // Closed rows need only their summary. Keep the body mounted after its first
+  // expansion so closing and refreshing preserve the reader's details.
+  return <details onToggle={event => { if (event.currentTarget.open) setVisited(true); }}>
+    <summary>View {props.event.action === "update" ? "changes" : "details"}</summary>
+    {visited && <ActivityDetailBody {...props} />}
+  </details>;
+}
+
 export default function ActivityPanel({ tripId, expenseId, draftId, title, description, emptyText, refreshKey = 0, currency, memberNames = {}, actorMemberNames = {}, onRestore, busy = false }: ActivityPanelProps) {
   const scope = expenseId ? { kind: "expenseId", id: expenseId } : draftId ? { kind: "draftId", id: draftId } : null;
   const query = new URLSearchParams({ tripId });
@@ -339,27 +389,10 @@ export default function ActivityPanel({ tripId, expenseId, draftId, title, descr
     {!history.loading && !history.error && !history.events.length && <p className="footnote">{emptyText ?? (scope ? "No recorded changes for this receipt yet." : "No recorded changes yet. Activity starts when this version of TripTab saves a change.")}</p>}
     <ol className="activity-list">{history.events.map(event => {
       const actor = event.actorName || "Traveller", tripName = actorMemberNames[event.actorId];
-      const snapshot = event.after || event.before || {};
       return <li key={event.id} className="activity-event">
         <p><strong>{actor}{tripName && tripName !== actor ? ` (${tripName})` : ""}</strong> {({ create: "created", update: "updated", delete: "removed" }[event.action]) || "changed"} <strong>{eventLabel(event, currency)}</strong></p>
         <p className="footnote"><time dateTime={event.createdAt}>{auditTimestamp(event.createdAt)}</time> · {auditSource(event.source)}</p>
-        <details>
-          <summary>View {event.action === "update" ? "changes" : "details"}</summary>
-          <dl className="activity-identifiers">
-            <div><dt>Recorded at</dt><dd><time dateTime={event.createdAt}>{auditTimestamp(event.createdAt, true)}</time></dd></div>
-            <div><dt>Changed by</dt><dd>{actor}{tripName ? ` · current traveller name: ${tripName}` : ""}<br />{event.source === "system" ? "System reference" : "Account"} {event.actorId}</dd></div>
-            <div><dt>Record</dt><dd>{eventLabel(event, currency)} · {event.entityId}</dd></div>
-            <div><dt>Change reference</dt><dd>{event.id} · holiday revision {event.revision}</dd></div>
-            {event.entityType === "invite" && <div><dt>Invitation for</dt><dd>{auditText(snapshot.memberName) || memberNames[auditText(snapshot.memberId)] || "Earlier traveller"} · traveller {auditText(snapshot.memberId)}</dd></div>}
-            {event.entityType === "receipt" && <>
-              {!!snapshot.uploaderId && <div><dt>Image uploaded by</dt><dd>{accountReference(snapshot.uploaderId, actorMemberNames)}</dd></div>}
-              {!!snapshot.initiatorId && <div><dt>Cleanup initiated by</dt><dd>{auditText(snapshot.initiatorName) || accountReference(snapshot.initiatorId, actorMemberNames)} · account {auditText(snapshot.initiatorId)}</dd></div>}
-              {!!snapshot.sha256 && <div><dt>Image checksum (SHA-256)</dt><dd>{auditText(snapshot.sha256)}</dd></div>}
-            </>}
-          </dl>
-          <p className="footnote">Traveller references use current holiday names with stable IDs. Message authors retain their recorded names.</p>
-          <ActivityChanges fields={changes(event, currency, memberNames, actorMemberNames)} before={!!event.before} after={!!event.after} />
-        </details>
+        <ActivityEventDetails event={event} currency={currency} memberNames={memberNames} actorMemberNames={actorMemberNames} />
         {onRestore && event.action === "delete" && event.before && ["expense", "payment"].includes(event.entityType) && <button type="button" className="quiet" disabled={busy} onClick={() => onRestore(event)}>Review {event.entityType} to restore</button>}
       </li>;
     })}</ol>

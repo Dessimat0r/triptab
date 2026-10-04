@@ -11,7 +11,7 @@ import type { ActivityEvent } from '../lib/store';
 // Only CSS loading and import locations are adapted for Node; diff logic and
 // descriptions remain the same code used by both history interfaces.
 const source = await readFile(new URL('../components/activity-panel.tsx', import.meta.url), 'utf8');
-const compiled = transpileModule(source + '\nexport { changes };', {
+const compiled = transpileModule(source + '\nexport { changes, ActivityEventDetails, ActivityDetailBody };', {
   compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022, jsx: JsxEmit.ReactJSX },
 }).outputText
   .replace('import "./activity-details.css";', '')
@@ -20,7 +20,10 @@ const compiled = transpileModule(source + '\nexport { changes };', {
 const renderer = await import('data:text/javascript;base64,' + Buffer.from(compiled).toString('base64')) as {
   changes(event: ActivityEvent, currency: 'GBP', names: Record<string, string>, accountNames: Record<string, string>): AuditChange[];
   ActivityChanges: ComponentType<{ fields: AuditChange[]; before: boolean; after: boolean }>;
+  ActivityEventDetails: ComponentType<HistoryDetailProps>;
+  ActivityDetailBody: ComponentType<HistoryDetailProps>;
 };
+type HistoryDetailProps = { event: ActivityEvent; currency: 'GBP'; memberNames: Record<string, string>; actorMemberNames: Record<string, string> };
 const names = { alice: 'Alice', bob: 'Bob' };
 const question = { id: 'question', role: 'user', text: 'Was service included?', createdAt: '2026-10-04T12:00:00Z', itemId: 'dinner', authorMemberId: 'bob', authorName: 'Bob' };
 const assistant = { id: 'answer', role: 'assistant', text: 'Service is already included.', createdAt: '2026-10-04T12:01:00Z', itemId: 'dinner', replyTo: 'question' };
@@ -87,4 +90,28 @@ test('the correction label requires absent human stamps after the change and saf
   const correction = render(event([{ ...assistant, authorName: '<img src=x onerror=alert(1)>' }], [assistant]));
   assert.match(correction.html, /&lt;img src=x onerror=alert\(1\)&gt;/);
   assert.doesNotMatch(correction.html, /<img|Reply by &lt;img/);
+});
+
+test('closed history details do not inspect or render receipt snapshots', () => {
+  const change = event([], []);
+  Object.defineProperty(change, 'before', { get() { throw Error('A closed row must not inspect its receipt snapshot'); } });
+  Object.defineProperty(change, 'after', { get() { throw Error('A closed row must not inspect its receipt snapshot'); } });
+  const html = renderToStaticMarkup(createElement(renderer.ActivityEventDetails, { event: change, currency: 'GBP', memberNames: names, actorMemberNames: {} }));
+  assert.match(html, /<details><summary>View changes<\/summary><\/details>/);
+  assert.doesNotMatch(html, /activity-changes|activity-identifiers/);
+});
+
+test('expanded history details retain every large receipt item and its complete before and after values', () => {
+  const change = event([], []);
+  change.before = { id: 'expense', currency: 'GBP', items: Array.from({ length: 200 }, (_, index) => ({ id: 'item-' + index, name: 'Before item ' + index, amount: 1000, members: ['alice', 'bob'] })) };
+  change.after = { ...change.before, items: (change.before.items as Record<string, unknown>[]).map(item => ({ ...item, name: String(item.name).replace('Before', 'After'), amount: 1200 })) };
+  const original = structuredClone(change);
+  const html = renderToStaticMarkup(createElement(renderer.ActivityDetailBody, { event: change, currency: 'GBP', memberNames: names, actorMemberNames: {} }));
+  assert.equal((html.match(/<dt>Item changed<\/dt>/g) || []).length, 200);
+  assert.match(html, /Before item 199/);
+  assert.match(html, /After item 199/);
+  assert.match(html, /Full line total: £10\.00/);
+  assert.match(html, /Full line total: £12\.00/);
+  assert.match(html, /2026-10-04T13:00:00\.000Z \(UTC\)/);
+  assert.deepEqual(change, original, 'deferred rendering cannot mutate immutable audit snapshots');
 });
