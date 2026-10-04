@@ -128,6 +128,17 @@ function tripChanges(previous: Trip | undefined, next: Trip): ActivityChange[] {
 
 export const MAX_ACTIVITY_BYTES = 4 * 1024 * 1024;
 
+/** Assistant identity comes from its role; historical human stamps were erroneous. */
+function clearAssistantAuthors<Entry extends object>(entry: Entry): Entry {
+  const conversation = (entry as { conversation?: unknown }).conversation;
+  if (Array.isArray(conversation)) for (const message of conversation) {
+    if (message && typeof message === 'object' && message.role === 'assistant') {
+      delete message.authorMemberId; delete message.authorName;
+    }
+  }
+  return entry;
+}
+
 export async function readActivity(user: string, tripId: string, options: { before?: number; limit?: number } = {}): Promise<{ events: ActivityEvent[]; nextCursor: number | null }> {
   if (!tripId || tripId.length > 100) throw new RequestError('Choose a valid trip.');
   const limit = options.limit ?? 20;
@@ -215,6 +226,7 @@ export async function readLedger(id: string): Promise<{ data: Ledger; revision: 
       const link = links.find(value => value.trip_id === trip.id && value.member_id === member.id);
       if (link) { member.userId = link.user_id; member.email = link.email || member.email; }
     }
+    for (const entry of [...trip.expenses, ...trip.drafts]) clearAssistantAuthors(entry);
     return trip;
   });
   const revision = (results[1].results as { revision: number }[])[0]?.revision || 0;
@@ -275,15 +287,16 @@ async function stampReceiptAuthors(trip: Trip, previous: Trip | undefined, actor
     if (saved) {
       const original = saved.find(candidate => canonical(receiptMessageBody(candidate)) === canonical(receiptMessageBody(message)));
       if (!original) throw new RequestError('Saved receipt messages cannot be edited. Add a new message instead.');
-      if (original.authorMemberId === undefined) delete message.authorMemberId;
+      if (message.role === 'assistant' || original.authorMemberId === undefined) delete message.authorMemberId;
       else message.authorMemberId = original.authorMemberId;
-      if (original.authorName === undefined) delete message.authorName;
+      if (message.role === 'assistant' || original.authorName === undefined) delete message.authorName;
       else message.authorName = original.authorName;
     } else {
       added = true;
-      if (actorMemberId === undefined) delete message.authorMemberId;
+      if (message.role === 'assistant' || actorMemberId === undefined) delete message.authorMemberId;
       else message.authorMemberId = actorMemberId;
-      message.authorName = actorName;
+      if (message.role === 'assistant') delete message.authorName;
+      else message.authorName = actorName;
     }
   }
   return added;
@@ -412,7 +425,13 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
     }
   }
 
-  ledger = validateLedger(ledger, { previous: { trips: [...previousTrips.values()] } });
+  // Repair only the old assistant attribution, preserving compatibility for
+  // unchanged historical money. Audit before-images still retain the raw stamps.
+  const validationPrevious = [...previousTrips.values()].map(trip => ({ ...trip,
+    expenses: trip.expenses.map(entry => clearAssistantAuthors({ ...entry, conversation: entry.conversation?.map(message => ({ ...message })) })),
+    drafts: trip.drafts.map(entry => clearAssistantAuthors({ ...entry, conversation: entry.conversation?.map(message => ({ ...message })) })),
+  }));
+  ledger = validateLedger(ledger, { previous: { trips: validationPrevious } });
   checkLedgerSize(ledger);
   // Diff the final validated representation, so accepted normalization of new
   // fields and every explicit legacy repair have accurate history snapshots.
