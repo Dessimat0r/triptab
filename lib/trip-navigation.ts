@@ -7,20 +7,19 @@ export function tripTabLocationSnapshot(): string {
   return window.location.pathname + window.location.search;
 }
 
-function restoreTripSection(event: PopStateEvent) {
+function restoreTripSection() {
   if (!isTripSectionPathname(window.location.pathname)) return;
-  // These routes share one client ledger. Returning to one needs neither a
-  // server component request nor the framework's page-navigation listener.
-  event.stopImmediatePropagation();
+  // The shared client application follows the committed browser URL. Leave the
+  // native event available to framework history/scroll and other subscribers.
   window.dispatchEvent(new Event(navigationEvent));
 }
 
 export function subscribeTripTabLocation(listener: () => void): () => void {
-  if (subscribers++ === 0) window.addEventListener("popstate", restoreTripSection, { capture: true });
+  if (subscribers++ === 0) window.addEventListener("popstate", restoreTripSection);
   window.addEventListener(navigationEvent, listener);
   return () => {
     window.removeEventListener(navigationEvent, listener);
-    if (--subscribers === 0) window.removeEventListener("popstate", restoreTripSection, { capture: true });
+    if (--subscribers === 0) window.removeEventListener("popstate", restoreTripSection);
   };
 }
 

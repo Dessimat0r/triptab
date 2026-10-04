@@ -52,20 +52,23 @@ test("section navigation publishes committed URLs, keeps history metadata, and c
   } finally { unsubscribe(); }
 }));
 
-test("browser history restores owned sections without triggering server navigation and leaves other routes alone", () => browserFixture(browser => {
-  let updates = 0, frameworkNavigations = 0;
-  const unsubscribe = subscribeTripTabLocation(() => updates++);
+test("browser history publishes owned sections without suppressing framework or independent native listeners", () => browserFixture(browser => {
+  let updates = 0, frameworkNavigations = 0, applicationNavigations = 0;
   browser.addEventListener("popstate", () => frameworkNavigations++);
+  const unsubscribe = subscribeTripTabLocation(() => updates++);
+  browser.addEventListener("popstate", () => applicationNavigations++);
   try {
     browser.location = new URL("https://triptab.example/receipts");
     browser.dispatchEvent(new Event("popstate"));
     assert.equal(updates, 1);
-    assert.equal(frameworkNavigations, 0);
-    assert.equal(browser.scrolls.length, 0, "back and forward retain browser scroll restoration");
+    assert.equal(frameworkNavigations, 1);
+    assert.equal(applicationNavigations, 1, "later application listeners also receive owned traversal");
+    assert.equal(browser.scrolls.length, 0, "the app leaves native history scroll handling intact");
     browser.location = new URL("https://triptab.example/unowned");
     browser.dispatchEvent(new Event("popstate"));
     assert.equal(updates, 1);
-    assert.equal(frameworkNavigations, 1);
+    assert.equal(frameworkNavigations, 2);
+    assert.equal(applicationNavigations, 2);
   } finally { unsubscribe(); }
 }));
 
@@ -75,13 +78,13 @@ test("shared route subscriptions retain history handling until the last mounted 
   const unsubscribeSecond = subscribeTripTabLocation(() => secondUpdates++);
   browser.addEventListener("popstate", () => frameworkNavigations++);
   browser.dispatchEvent(new Event("popstate"));
-  assert.deepEqual([firstUpdates, secondUpdates, frameworkNavigations], [1, 1, 0]);
+  assert.deepEqual([firstUpdates, secondUpdates, frameworkNavigations], [1, 1, 1]);
   unsubscribeFirst();
   browser.dispatchEvent(new Event("popstate"));
-  assert.deepEqual([firstUpdates, secondUpdates, frameworkNavigations], [1, 2, 0]);
+  assert.deepEqual([firstUpdates, secondUpdates, frameworkNavigations], [1, 2, 2]);
   unsubscribeSecond();
   browser.dispatchEvent(new Event("popstate"));
-  assert.deepEqual([firstUpdates, secondUpdates, frameworkNavigations], [1, 2, 1]);
+  assert.deepEqual([firstUpdates, secondUpdates, frameworkNavigations], [1, 2, 3], "last unsubscribe removes app publication without touching native subscribers");
 }));
 
 test("section anchors retain normal modifier, new-tab, download and external-link behavior", () => browserFixture(browser => {
