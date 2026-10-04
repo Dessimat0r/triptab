@@ -12,10 +12,10 @@ class SQLiteStatement {
   private values: (string | number | null)[] = [];
   constructor(private readonly database: SQLiteD1, readonly sql: string) {}
   bind(...values: (string | number | null)[]) { this.values = values; return this; }
-  async first<T>() { this.database.read(this.sql); return (this.database.sqlite.prepare(this.sql).get(...this.values) || null) as T | null; }
-  async all<T>() { this.database.read(this.sql); return { results: this.database.sqlite.prepare(this.sql).all(...this.values) as T[] }; }
+  async first<T>() { this.database.read(this.sql, this.values); return (this.database.sqlite.prepare(this.sql).get(...this.values) || null) as T | null; }
+  async all<T>() { this.database.read(this.sql, this.values); return { results: this.database.sqlite.prepare(this.sql).all(...this.values) as T[] }; }
   runSync() {
-    this.database.read(this.sql);
+    this.database.read(this.sql, this.values);
     const statement = this.database.sqlite.prepare(this.sql);
     const results = statement.columns().length ? statement.all(...this.values) : (statement.run(...this.values), []);
     return { results, success: true, meta: { changes: Number(this.database.sqlite.prepare('SELECT changes() AS changes').get()?.changes || 0) } };
@@ -25,8 +25,9 @@ class SQLiteStatement {
 class SQLiteD1 {
   readonly sqlite = new DatabaseSync(':memory:');
   readonly queries: string[] = [];
+  readonly reads: { sql: string; values: (string | number | null)[] }[] = [];
   beforeRead?: (sql: string) => void;
-  read(sql: string) { this.queries.push(sql); this.beforeRead?.(sql); }
+  read(sql: string, values: (string | number | null)[] = []) { this.queries.push(sql); this.reads.push({ sql, values: [...values] }); this.beforeRead?.(sql); }
   prepare(sql: string) { return new SQLiteStatement(this, sql); }
   async batch(statements: SQLiteStatement[]) {
     this.sqlite.exec('BEGIN');
@@ -68,9 +69,9 @@ function event(database: SQLiteD1, id: string, type: ActivityEntity, entityId: s
   database.sqlite.prepare('INSERT INTO activity_events (id,trip_id,actor_id,actor_name,created_at,entity_type,entity_id,action,before_data,after_data,revision,source) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
     .run(id, tripId, source === 'system' ? 'system' : 'owner', source === 'system' ? 'TripTab' : 'Owner', '2026-10-04T12:00:00Z', type, entityId, before ? after ? 'update' : 'delete' : 'create', before ? JSON.stringify(before) : null, after ? JSON.stringify(after) : null, 1, source);
 }
-async function storage() {
+async function storage(includeScopeIndexes = true) {
   const database = new SQLiteD1();
-  for (const file of (await readdir(new URL('../drizzle/', import.meta.url))).filter(value => value.endsWith('.sql')).sort()) database.sqlite.exec(await readFile(new URL('../drizzle/' + file, import.meta.url), 'utf8'));
+  for (const file of (await readdir(new URL('../drizzle/', import.meta.url))).filter(value => value.endsWith('.sql') && (includeScopeIndexes || !value.startsWith('0008_'))).sort()) database.sqlite.exec(await readFile(new URL('../drizzle/' + file, import.meta.url), 'utf8'));
   for (const [actor, token] of Object.entries(tokens)) {
     database.sqlite.prepare('INSERT INTO profiles (id,email,display_name,created_at) VALUES (?,?,?,?)').run(actor, actor + '@example.com', actor, '2026-10-04T00:00:00Z');
     database.sqlite.prepare('INSERT INTO auth_sessions (token_hash,user_id,expires_at,created_at) VALUES (?,?,?,?)').run(await hashToken(token), actor, '2099-01-01T00:00:00Z', '2026-10-04T00:00:00Z');
@@ -247,4 +248,106 @@ test('receipt byte budgets exclude unrelated large snapshots and retain complete
   database.queries.length = 0;
   await assert.rejects(store.readActivity('joined', 'trip', { expenseId: 'dinner' }), error => error instanceof store.RequestError && error.status === 413);
   assert.ok(database.queries.every(sql => !sql.includes('SELECT e.*')), 'an oversized scoped entry is rejected before materializing snapshots');
+});
+
+test('distinct source draft provenance retains every prelink event and old photo through posting and deletion', async () => {
+  const database = await storage();
+  event(database, 'source-draft-upload', 'draft', 'source-draft', null, { ...snapshot('source-draft', 'source-photo-old'), status: 'waiting' });
+  event(database, 'source-draft-ai', 'draft', 'source-draft', { ...snapshot('source-draft', 'source-photo-old'), status: 'waiting' }, { ...snapshot('source-draft', 'source-photo-new'), status: 'review' }, 'chatgpt');
+  event(database, 'source-old-photo', 'receipt', 'source-photo-old', null, { status: 'active' });
+  event(database, 'source-new-photo', 'receipt', 'source-photo-new', null, { status: 'active' });
+  const posted = { ...snapshot('different-posted-id', 'source-photo-new'), sourceDraftId: 'source-draft' };
+  event(database, 'source-posted-expense', 'expense', 'different-posted-id', null, posted);
+  event(database, 'source-draft-consumed', 'draft', 'source-draft', { ...snapshot('source-draft', 'source-photo-new'), status: 'review' }, null);
+  const current = trip(); current.expenses.push(posted);
+  // An unrelated expense can use the draft's raw ID. Explicit provenance
+  // must resolve the differently named expense instead of that collision.
+  current.expenses.push(snapshot('source-draft', 'unrelated-source-collision-photo'));
+  database.sqlite.prepare('UPDATE trips SET data=? WHERE id=?').run(JSON.stringify(current), 'trip');
+  event(database, 'unrelated-source-collision', 'expense', 'source-draft', null, snapshot('source-draft', 'unrelated-source-collision-photo'));
+  event(database, 'unrelated-source-collision-photo', 'receipt', 'unrelated-source-collision-photo', null, { status: 'active' });
+  const expected = new Set(['source-draft-upload', 'source-draft-ai', 'source-old-photo', 'source-new-photo', 'source-posted-expense', 'source-draft-consumed']);
+  assert.deepEqual(ids(await page('tripId=trip&expenseId=different-posted-id&limit=50')), expected);
+  assert.deepEqual(ids(await page('tripId=trip&draftId=source-draft&limit=50')), expected);
+  assert.deepEqual(ids(await page('tripId=trip&expenseId=source-draft&limit=50')), new Set(['unrelated-source-collision', 'unrelated-source-collision-photo']));
+  current.expenses = current.expenses.filter(value => value.id !== 'different-posted-id');
+  database.sqlite.prepare('UPDATE trips SET data=? WHERE id=?').run(JSON.stringify(current), 'trip');
+  event(database, 'source-expense-deleted', 'expense', 'different-posted-id', posted, null);
+  expected.add('source-expense-deleted');
+  assert.deepEqual(ids(await page('tripId=trip&expenseId=different-posted-id&limit=50')), expected);
+  assert.deepEqual(ids(await page('tripId=trip&draftId=source-draft&limit=50')), expected, 'historical sourceDraftId is sufficient after both live records are gone');
+});
+
+test('parent link discovery includes earlier unlinked draft changes without admitting cross-collection collisions', async () => {
+  const database = await storage();
+  event(database, 'prelink-created', 'draft', 'later-linked', null, { ...snapshot('later-linked', 'prelink-photo'), status: 'waiting' });
+  event(database, 'prelink-photo', 'receipt', 'prelink-photo', null, { status: 'active' });
+  event(database, 'prelink-associated', 'draft', 'later-linked', { ...snapshot('later-linked', 'prelink-photo'), status: 'waiting' }, { ...snapshot('later-linked', 'prelink-photo'), expenseId: 'dinner', status: 'review' });
+  const expected = new Set([...dinnerIds, 'prelink-created', 'prelink-photo', 'prelink-associated']);
+  assert.deepEqual(ids(await page('tripId=trip&expenseId=dinner&limit=50')), expected);
+  assert.deepEqual(ids(await page('tripId=trip&draftId=later-linked&limit=50')), expected);
+  // The colliding draft belongs to breakfast even though an older event had
+  // not yet established that link; dinner must not inherit its earlier photo.
+  event(database, 'collision-before-link', 'draft', 'dinner', null, { ...snapshot('dinner', 'foreign-prelink-photo'), status: 'waiting' });
+  event(database, 'collision-linked-other', 'draft', 'dinner', { ...snapshot('dinner', 'foreign-prelink-photo'), status: 'waiting' }, { ...snapshot('dinner', 'foreign-prelink-photo'), expenseId: 'breakfast', status: 'review' });
+  event(database, 'foreign-prelink-photo', 'receipt', 'foreign-prelink-photo', null, { status: 'active' });
+  assert.deepEqual(ids(await page('tripId=trip&expenseId=dinner&limit=50')), expected);
+});
+
+test('index migration bootstraps populated immutable history without rewriting old events', async () => {
+  const database = await storage(false);
+  const before = database.sqlite.prepare('SELECT * FROM activity_events ORDER BY sequence').all();
+  const rawTrip = database.sqlite.prepare('SELECT data FROM trips WHERE id=?').get('trip')!.data;
+  database.sqlite.exec(await readFile(new URL('../drizzle/0008_receipt_activity_scope.sql', import.meta.url), 'utf8'));
+  assert.deepEqual(database.sqlite.prepare('SELECT * FROM activity_events ORDER BY sequence').all(), before);
+  assert.equal(database.sqlite.prepare('SELECT data FROM trips WHERE id=?').get('trip')!.data, rawTrip);
+  assert.deepEqual(ids(await page('tripId=trip&draftId=historic-draft&limit=50')), dinnerIds);
+  assert.throws(() => database.sqlite.prepare('UPDATE activity_events SET after_data=? WHERE id=?').run('{}', 'expense-created'), /append-only/);
+  assert.throws(() => database.sqlite.prepare('DELETE FROM activity_events WHERE id=?').run('expense-created'), /append-only/);
+  assert.throws(() => database.sqlite.prepare('INSERT OR REPLACE INTO activity_events SELECT * FROM activity_events WHERE id=?').run('expense-created'), /append-only/);
+  event(database, 'indexed-new-event', 'draft', 'new-indexed-draft', null, { expenseId: 'dinner', receiptId: 'new-indexed-photo' });
+  event(database, 'indexed-new-photo', 'receipt', 'new-indexed-photo', null, { status: 'active' });
+  assert.deepEqual(ids(await page('tripId=trip&expenseId=dinner&limit=50')), new Set([...dinnerIds, 'indexed-new-event', 'indexed-new-photo']));
+});
+
+test('scoped query plans use entity and expression indexes and never parse unrelated historical payloads', async () => {
+  const database = await storage();
+  const marker = 'UNRELATED_LARGE_HISTORY_PAYLOAD';
+  const payload = marker + 'x'.repeat(4096);
+  database.sqlite.exec('BEGIN');
+  for (let index = 0; index < 1500; index++) {
+    event(database, 'large-unrelated-draft-' + index, 'draft', 'unrelated-draft-' + index, { expenseId: 'unrelated-expense-' + index, title: payload }, { expenseId: 'unrelated-expense-' + index, title: payload });
+    event(database, 'large-unrelated-expense-' + index, 'expense', 'unrelated-expense-' + index, null, { sourceDraftId: 'unrelated-draft-' + index, title: payload, receiptId: 'unrelated-photo-' + index });
+  }
+  database.sqlite.exec('COMMIT; ANALYZE');
+  const native = new DatabaseSync(':memory:');
+  const extract = native.prepare('SELECT json_extract(?,?) AS value');
+  const type = native.prepare('SELECT json_type(?,?) AS value');
+  let unrelatedParses = 0;
+  database.sqlite.function('json_extract', { deterministic: true }, (value, path) => {
+    if (typeof value === 'string' && value.includes(marker)) unrelatedParses++;
+    return extract.get(value, path)!.value as string | number | null;
+  });
+  database.sqlite.function('json_type', { deterministic: true }, (value, path) => {
+    if (typeof value === 'string' && value.includes(marker)) unrelatedParses++;
+    return type.get(value, path)!.value as string | null;
+  });
+  for (const scope of [{ expenseId: 'dinner' }, { draftId: 'pending' }, { draftId: 'historic-draft' }]) {
+    database.reads.length = 0;
+    const result = await store.readActivity('joined', 'trip', { ...scope, limit: 3 });
+    assert.ok(result.events.every(value => dinnerIds.has(value.id)));
+    const candidate = database.reads.find(value => value.sql.includes('SELECT e.id, e.sequence'))!;
+    const plan = database.sqlite.prepare('EXPLAIN QUERY PLAN ' + candidate.sql).all(...candidate.values).map(row => String(row.detail));
+    assert.ok(plan.some(detail => /SEARCH e USING INTEGER PRIMARY KEY/.test(detail)), 'candidate rows must use receipt sequence primary-key probes');
+    assert.ok(plan.some(detail => detail.includes('activity_events_trip_entity_idx')));
+    assert.ok(plan.some(detail => detail.includes('activity_events_draft_before_expense_idx') && detail.includes('<expr>=?')));
+    assert.ok(plan.some(detail => detail.includes('activity_events_draft_after_expense_idx') && detail.includes('<expr>=?')));
+    assert.ok(plan.some(detail => detail.includes('activity_events_expense_before_source_draft_idx') && detail.includes('<expr>=?')));
+    assert.ok(plan.some(detail => detail.includes('activity_events_expense_after_source_draft_idx') && detail.includes('<expr>=?')));
+    assert.ok(!plan.some(detail => /SCAN (?:h|e)\b/.test(detail)), 'history tables must not be scanned to discover receipt links: ' + plan.filter(detail => /SCAN (?:h|e)\b/.test(detail)).join('; '));
+    const older = await store.readActivity('joined', 'trip', { ...scope, limit: 3, before: result.nextCursor! });
+    assert.ok(older.events.every(value => dinnerIds.has(value.id)));
+  }
+  assert.equal(unrelatedParses, 0, 'neither first nor subsequent receipt pages may parse unrelated history');
+  native.close();
 });

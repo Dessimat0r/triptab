@@ -1,4 +1,5 @@
 import { sqliteTable, text, integer, uniqueIndex, index } from 'drizzle-orm/sqlite-core';
+import { sql } from 'drizzle-orm';
 
 // Keep the original table so existing migration history remains intact.
 export const ledgers = sqliteTable('ledgers', {
@@ -98,6 +99,11 @@ export const activityEvents = sqliteTable('activity_events', {
 }, table => [
   uniqueIndex('activity_events_id_idx').on(table.id),
   index('activity_events_trip_sequence_idx').on(table.tripId, table.sequence),
+  index('activity_events_trip_entity_idx').on(table.tripId, table.entityType, table.entityId, table.sequence),
+  index('activity_events_draft_before_expense_idx').on(table.tripId, sql`json_extract(before_data, '$.expenseId')`, table.entityId).where(sql`entity_type = 'draft'`),
+  index('activity_events_draft_after_expense_idx').on(table.tripId, sql`json_extract(after_data, '$.expenseId')`, table.entityId).where(sql`entity_type = 'draft'`),
+  index('activity_events_expense_before_source_draft_idx').on(table.tripId, sql`json_extract(before_data, '$.sourceDraftId')`, table.entityId).where(sql`entity_type = 'expense'`),
+  index('activity_events_expense_after_source_draft_idx').on(table.tripId, sql`json_extract(after_data, '$.sourceDraftId')`, table.entityId).where(sql`entity_type = 'expense'`),
 ]);
 
 // Immutable identity lookup survives deletion of every live receipt container.
