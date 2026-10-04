@@ -24,6 +24,10 @@ export async function GET() {
     const triggers = await db().prepare(`SELECT name FROM sqlite_master WHERE type = 'trigger' AND name IN (${receiptLinkTriggers.map(() => '?').join(',')})`)
       .bind(...receiptLinkTriggers).all<{ name: string }>();
     if (triggers.results.length !== receiptLinkTriggers.length) throw Error('Missing receipt link maintenance');
+    const receiptMessageTriggers = ['receipt_messages_from_activity', 'receipt_messages_no_update', 'receipt_messages_no_delete', 'receipt_messages_no_replace'];
+    const messageTriggers = await db().prepare(`SELECT name FROM sqlite_master WHERE type = 'trigger' AND name IN (${receiptMessageTriggers.map(() => '?').join(',')})`)
+      .bind(...receiptMessageTriggers).all<{ name: string }>();
+    if (messageTriggers.results.length !== receiptMessageTriggers.length) throw Error('Missing receipt message maintenance');
     const storage = bucket();
     if (typeof storage.get !== 'function' || typeof storage.put !== 'function' || typeof storage.delete !== 'function') throw Error('Missing receipt binding');
     return Response.json({ status: 'ready' }, { headers: { 'Cache-Control': 'no-store' } });

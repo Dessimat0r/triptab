@@ -1679,6 +1679,15 @@ test('registry migration backfills latest immutable and unlabelled live legacy m
 test('fresh messages use an indexed registry lookup without scanning old snapshots or trusting dates', async () => {
   const database = await storage();
   let state = await create(database);
+  for (let index = 0; index < 12; index++) {
+    const legacy = { padding: 'x'.repeat(100_000), conversation: Array.from({ length: 100 }, (_, message) => ({
+      id: `unrelated-${index}-${message}`, role: 'user', text: 'Older discussion '.repeat(30), createdAt: '2020-01-01T12:00:00Z',
+    })) };
+    database.sqlite.prepare(`INSERT INTO activity_events
+      (id,trip_id,actor_id,actor_name,created_at,entity_type,entity_id,action,before_data,after_data,revision,source)
+      VALUES (?,?,?,?,?,'expense',?,'update',?,?,?,'web')`).run(`unrelated-${index}`, 'trip-1', actor, 'Owner', '2026-10-04T00:00:00Z',
+        `old-receipt-${index}`, JSON.stringify(legacy), JSON.stringify(legacy), state.revision);
+  }
   const queries: string[] = [], prepare = database.prepare.bind(database);
   database.prepare = sql => { queries.push(sql); return prepare(sql); };
   state.data.trips[0].expenses = [{ ...dinner(), conversation: [{ id: 'fresh', role: 'user', text: 'New question', createdAt: '2099-01-01T12:00:00Z' }] }];
