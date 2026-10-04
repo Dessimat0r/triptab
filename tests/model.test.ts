@@ -851,3 +851,22 @@ test('rejects malformed receipt messages, invalid reply parents and duplicate ID
   }
   assert.equal(expenseSchema.safeParse(expense({ conversation: [question, answer] })).success, true);
 });
+
+test('receipt source-draft provenance survives consumption, stored parsing and restoration without an active draft', () => {
+  const original = expense({ sourceDraftId: 'consumed-processing-draft' });
+  const persisted = validateLedger(ledger([original]));
+  assert.equal(persisted.trips[0].drafts.length, 0);
+  assert.equal(persisted.trips[0].expenses[0].sourceDraftId, 'consumed-processing-draft');
+  assert.equal(parseStoredTrip(JSON.parse(JSON.stringify(persisted.trips[0]))).expenses[0].sourceDraftId, 'consumed-processing-draft');
+  assert.equal(parseLedgerStructure(JSON.parse(JSON.stringify(persisted))).trips[0].expenses[0].sourceDraftId, 'consumed-processing-draft');
+  assert.deepEqual(balances(persisted.trips[0]), balances(trip([expense()])));
+  assert.equal(validateLedger(ledger([original]), { previous: ledger([]) }).trips[0].expenses[0].sourceDraftId, 'consumed-processing-draft');
+});
+
+test('receipt source-draft IDs are bounded references and remain optional for older expenses', () => {
+  assert.equal(expenseSchema.parse(expense()).sourceDraftId, undefined);
+  assert.equal(expenseSchema.parse(expense({ sourceDraftId: 'd'.repeat(100) })).sourceDraftId, 'd'.repeat(100));
+  for (const sourceDraftId of ['', 'd'.repeat(101), 7, null]) {
+    assert.equal(expenseSchema.safeParse({ ...expense(), sourceDraftId }).success, false);
+  }
+});

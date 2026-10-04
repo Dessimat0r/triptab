@@ -211,6 +211,8 @@ export const itemSchema = rawItemSchema.superRefine((item, context) => {
 });
 export const expenseSchema = z.object({
   id, title: z.string().min(1).max(200), date: dateSchema,
+  // Provenance may reference a consumed or deleted draft retained in history.
+  sourceDraftId: id.optional(),
   time: timeSchema.default('12:00'), timezone: timezoneSchema.default('Europe/London'),
   currency: currencySchema.default('EUR'), fx: fxSchema.optional(), bankAmount: bankAmountSchema.optional(),
   payer: id, items: z.array(itemSchema).min(1).max(200),

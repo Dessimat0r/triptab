@@ -382,7 +382,8 @@ export default function Home() {
       setEditing({ ...editing, conversation: messages });
     } else {
       editorBaseline.current = { tripId: trip.id };
-      setEditing({ ...editing, id: uid(), expenseId: undefined, draftId: undefined });
+      resetReceiptReview(); setRestoration(null);
+      setEditing({ ...editing, id: uid(), expenseId: undefined, draftId: undefined, sourceDraftId: undefined });
     }
     setEditorConflict(null); setError("");
   }
@@ -730,6 +731,7 @@ export default function Home() {
     }
     const { draftId, ...expense } = editing;
     delete expense.expenseId;
+    if (draftId) expense.sourceDraftId = draftId;
     const latestDraft = trip.drafts.find(draft => draft.id === draftId);
     expense.conversation = mergeReceiptConversation(mergeReceiptConversation(trip.expenses.find(value => value.id === expense.id)?.conversation, latestDraft?.conversation), expense.conversation);
     expense.memory = latestDraft?.memory ?? trip.expenses.find(value => value.id === expense.id)?.memory ?? expense.memory;

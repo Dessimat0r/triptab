@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { createSourceFile, isFunctionDeclaration, ModuleKind, ScriptKind, ScriptTarget, transpileModule } from 'typescript';
 import { equalFinancialValue } from '../lib/client-ledger';
-import { itemSchema, itemSplitError, ledgerSchema, receiptSplitError, total, type Draft, type Expense, type ReceiptMessage, type Trip } from '../lib/model';
+import { itemSchema, itemSplitError, ledgerSchema, receiptSplitError, total, validateLedger, type Draft, type Expense, type ReceiptMessage, type Trip } from '../lib/model';
 
 // Execute the actual page handlers against a small state/persistence boundary.
 // JSX, network, clipboard and React hooks are excluded; receipt transitions and
@@ -13,7 +13,7 @@ const pageSource = await readFile(new URL('../app/page.tsx', import.meta.url), '
 const syntax = createSourceFile('page.tsx', pageSource, ScriptTarget.Latest, true, ScriptKind.TSX);
 const home = syntax.statements.find(statement => isFunctionDeclaration(statement) && statement.name?.text === 'Home');
 assert(home && isFunctionDeclaration(home) && home.body);
-const names = ['openExpense', 'openDraft', 'newExpense', 'keepExpenseEdits', 'editorIsCurrent', 'resetReceiptReview', 'storeEditorReceipt', 'submitExpense', 'checkEditorReceipt', 'reviewProcessedReceipt'];
+const names = ['openExpense', 'openDraft', 'newExpense', 'keepExpenseEdits', 'editorIsCurrent', 'resetReceiptReview', 'storeEditorReceipt', 'submitExpense', 'checkEditorReceipt', 'reviewProcessedReceipt', 'reviewRestore'];
 const declarations = [...syntax.statements, ...home.body.statements].filter(isFunctionDeclaration);
 const handlers = ['mergeReceiptConversation', 'hasPendingReceiptQuestions', ...names].map(name => {
   const declaration = declarations.find(statement => statement.name?.text === name);
@@ -33,6 +33,8 @@ const controllerSource = `return function createController(initial, boundary) {
   const money = (amount, currency) => currency+' '+amount/100;
   const previewTotal = entry => total(entry);
   const confirm = async () => true;
+  const load = async () => ({data:{trips:[trip]},revision:updates.length});
+  const setPaymentEditor = () => {};
   const setEditing = next => {editing = typeof next === 'function' ? next(editing) : next};
   const setError = next => {error=next};
   const setProcessedReceipt = next => {processedReceipt=typeof next === 'function' ? next(processedReceipt) : next};
@@ -49,7 +51,7 @@ const controllerSource = `return function createController(initial, boundary) {
   const setPaste = next => {paste=next};
   const setFxError = next => {fxError=next};
   async function updateTrip(next) {
-    const parsed = boundary.ledgerSchema.parse({trips:[next]});
+    const parsed = boundary.validateLedger(boundary.ledgerSchema.parse({trips:[next]}),{previous:{trips:[trip]}});
     trip = parsed.trips[0]; latestSnapshot.current = {data:{trips:[trip]},revision:updates.length+1};
     updates.push(structuredClone(trip)); return true;
   }
@@ -67,12 +69,13 @@ type Controller = {
   storeEditorReceipt(entry: Editing, receiptId?: string, keepProposal?: boolean): Promise<Draft | null>;
   submitExpense(event: { preventDefault(): void }): Promise<void>;
   checkEditorReceipt(repliesOnly?:boolean):Promise<void>; reviewProcessedReceipt():void;
+  reviewRestore(event: {tripId:string;entityType:string;entityId:string;actorName:string;createdAt:string;before:Expense}):Promise<void>;
   editing: Editing | null; trip: Trip; error: string; updates: Trip[]; baseline: { tripId: string; expense?: Expense } | null;
   processed: Draft | null; edit(next: Partial<Editing>): void; remote(next: Trip): void; conflict(next: Expense | null): void;
   restoring(): void; restoration: unknown;
 };
 const createController = new Function(compiled)() as (initial: Trip, boundary: object) => Controller;
-const controller = (trip: Trip) => createController(trip, { uid: randomUUID, ledgerSchema, itemSchema, itemSplitError, receiptSplitError, total, equalFinancialValue });
+const controller = (trip: Trip) => createController(trip, { uid: randomUUID, ledgerSchema, itemSchema, itemSplitError, receiptSplitError, total, validateLedger, equalFinancialValue });
 const stamp = '2026-10-04T12:00:00Z';
 const question: ReceiptMessage = { id: 'question', role: 'user', text: 'Check the replacement image', createdAt: stamp };
 const reply: ReceiptMessage = { id: 'reply', role: 'assistant', replyTo: question.id, text: 'Reviewed replacement image', createdAt: stamp };
@@ -154,4 +157,60 @@ test('checking and reviewing a replacement draft retains posted and local receip
   const saved=await editor.storeEditorReceipt({...editor.editing!,title:'Reviewed replacement with retained context'},editor.editing!.receiptId,true);
   assert.equal(saved?.receiptId,'replacement-photo'); assert.equal(saved?.title,'Reviewed replacement with retained context');
   assert.equal(saved?.memory?.notes,'Memory retained on the posted expense');
+});
+
+function blankTrip(): Trip { const initial=fixture(); initial.expenses=[]; initial.drafts=[]; return initial; }
+function fillNew(editor: Controller, conversation?: ReceiptMessage[]) {
+  editor.newExpense(); editor.edit({title:'New manual dinner',items:[{id:'new-line',name:'New dinner',amount:1234,members:['a','b']}],conversation});
+}
+
+test('a new manual expense atomically records its distinct pre-save draft origin when the draft is consumed', async () => {
+  const editor=controller(blankTrip()); fillNew(editor); const futureExpenseId=editor.editing!.id;
+  const draft=await editor.storeEditorReceipt(editor.editing!,'new-manual-photo'); assert(draft); assert.notEqual(draft.id,futureExpenseId);
+  assert.equal(draft.expenseId,undefined,'unsaved expense cannot be a live draft target'); const before=editor.updates.length;
+  await submit(editor); assert.equal(editor.error,''); assert.equal(editor.updates.length,before+1,'expense posting and provenance use one save');
+  const expense=editor.trip.expenses[0]; assert.equal(expense.id,futureExpenseId); assert.equal(expense.sourceDraftId,draft.id);
+  assert.equal(expense.receiptId,'new-manual-photo'); assert.equal(editor.trip.drafts.length,0);
+});
+
+test('new chat expense keeps provenance through pending retention, later AI review and draft consumption', async () => {
+  const editor=controller(blankTrip()); fillNew(editor,[question]); const futureExpenseId=editor.editing!.id;
+  const draft=await editor.storeEditorReceipt(editor.editing!,'new-chat-photo',true); assert(draft); await submit(editor);
+  assert.equal(editor.trip.expenses[0].id,futureExpenseId); assert.equal(editor.trip.expenses[0].sourceDraftId,draft.id);
+  assert.equal(editor.trip.drafts[0].id,draft.id); assert.equal(editor.trip.drafts[0].expenseId,futureExpenseId);
+  const answered=structuredClone(editor.trip); answered.drafts[0]={...answered.drafts[0],title:'AI reviewed dinner',status:'review',conversation:[question,reply],memory:{notes:'AI remembered the new photo',aliases:[]},items:[{...answered.drafts[0].items[0],amount:2345}]};
+  editor.remote(answered); editor.openExpense(answered.expenses[0]); await submit(editor);
+  assert.equal(editor.error,''); assert.equal(editor.trip.expenses[0].id,futureExpenseId); assert.equal(editor.trip.expenses[0].sourceDraftId,draft.id);
+  assert.equal(editor.trip.expenses[0].receiptId,'new-chat-photo'); assert.equal(editor.trip.expenses[0].items[0].amount,2345);
+  assert.deepEqual(editor.trip.expenses[0].conversation,[question,reply]); assert.equal(editor.trip.drafts.length,0);
+});
+
+test('an inbox draft posted with unanswered questions keeps distinct IDs and explicit provenance', async () => {
+  const initial=blankTrip(); initial.drafts=[{...posted,id:'inbox-draft',conversation:[question],status:'waiting'}];
+  const editor=controller(initial); editor.openDraft(initial.drafts[0]); await submit(editor);
+  assert.equal(editor.error,''); assert.notEqual(editor.trip.expenses[0].id,'inbox-draft');
+  assert.equal(editor.trip.expenses[0].sourceDraftId,'inbox-draft'); assert.equal(editor.trip.drafts[0].id,'inbox-draft');
+  assert.equal(editor.trip.drafts[0].expenseId,editor.trip.expenses[0].id);
+});
+
+test('restoring a deleted expense preserves its identity and links a new receipt draft before or after a reply', async () => {
+  for(const answered of [false,true]) {
+    const editor=controller(blankTrip()); const snapshot={...posted,receiptId:undefined,sourceDraftId:'historical-consumed-draft'};
+    await editor.reviewRestore({tripId:'trip',entityType:'expense',entityId:posted.id,actorName:'Earlier traveller',createdAt:stamp,before:snapshot});
+    assert.equal(editor.editing?.id,posted.id); assert.equal(editor.editing?.sourceDraftId,'historical-consumed-draft');
+    editor.edit({conversation:answered?[question,reply]:[question]}); const draft=await editor.storeEditorReceipt(editor.editing!); assert(draft);
+    assert.notEqual(draft.id,posted.id); await submit(editor); assert.equal(editor.error,'');
+    assert.equal(editor.trip.expenses[0].id,posted.id,'restore must stay in the delete/restore expense family');
+    assert.equal(editor.trip.expenses[0].sourceDraftId,draft.id); assert.equal(editor.trip.drafts.length,answered?0:1);
+  }
+});
+
+test('ordinary edits retain consumed-draft provenance while an explicit new copy clears old family context', async () => {
+  const initial=fixture(); initial.drafts=[]; initial.expenses[0].sourceDraftId='historic-origin';
+  const editor=controller(initial); editor.openExpense(initial.expenses[0]); editor.edit({title:'Ordinary correction'}); await submit(editor);
+  assert.equal(editor.trip.expenses[0].sourceDraftId,'historic-origin');
+  editor.openExpense(editor.trip.expenses[0]); editor.restoring(); editor.conflict(null); const removed=structuredClone(editor.trip); removed.expenses=[]; editor.remote(removed); editor.keepExpenseEdits();
+  assert.notEqual(editor.editing?.id,posted.id); assert.equal(editor.editing?.sourceDraftId,undefined); assert.equal(editor.editing?.draftId,undefined);
+  assert.equal(editor.restoration,null); assert.equal(editor.processed,null); await submit(editor);
+  assert.equal(editor.trip.expenses[0].sourceDraftId,undefined,'a new copy cannot claim a consumed draft belonging to its earlier expense');
 });
