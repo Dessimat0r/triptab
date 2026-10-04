@@ -36,6 +36,13 @@
       "when": 1791119044318,
       "tag": "0004_hot_old_lace",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1791134137415,
+      "tag": "0007_receipt_message_registry",
+      "breakpoints": true
     }
   ]
 }

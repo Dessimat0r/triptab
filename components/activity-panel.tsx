@@ -132,7 +132,7 @@ function changes(event: ActivityEvent, currency: Currency | undefined, names: Re
       const latest = record(value[value.length - 1]);
       const question = latest?.replyTo ? value.map(record).find(message => message?.id === latest.replyTo) : null;
       const context = latest?.itemId || question?.itemId;
-      const author = text(latest?.authorName) || names[text(latest?.authorMemberId)] || (latest?.role === "assistant" ? "ChatGPT/Codex" : "Traveller");
+      const author = latest?.role === "assistant" ? "ChatGPT/Codex" : text(latest?.authorName) || names[text(latest?.authorMemberId)] || "Traveller";
       return `${value.length} ${value.length === 1 ? "message" : "messages"}${latest ? ` · ${author}${context ? ` about ${itemName(snapshot, context)}` : " about this receipt"}: ${text(latest.text).slice(0, 300)}` : ""}`;
     };
     result.push({ label: "Receipt conversation", before: description(before.conversation, before), after: description(after.conversation, after) });

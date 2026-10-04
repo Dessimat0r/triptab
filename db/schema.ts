@@ -93,6 +93,11 @@ export const activityEvents = sqliteTable('activity_events', {
   index('activity_events_trip_sequence_idx').on(table.tripId, table.sequence),
 ]);
 
+// Immutable identity lookup survives deletion of every live receipt container.
+export const receiptMessages = sqliteTable('receipt_messages', {
+  tripId: text('trip_id').notNull(), messageId: text('message_id').notNull(), messageData: text('message_data').notNull(),
+}, table => [uniqueIndex('receipt_messages_trip_message_idx').on(table.tripId, table.messageId)]);
+
 export const notifications = sqliteTable('notifications', {
   id: text('id').primaryKey(), userId: text('user_id').notNull(), title: text('title').notNull(), body: text('body').notNull(), url: text('url').notNull().default('/'), createdAt: text('created_at').notNull(),
 }, table => [index('notifications_user_created_idx').on(table.userId, table.createdAt)]);

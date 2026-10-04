@@ -30,7 +30,7 @@ npm run install:ci
 npm run build
 ```
 
-The initial build generates `dist/server/wrangler.json`. Before the first local run, apply the five migrations in order:
+The initial build generates `dist/server/wrangler.json`. Before the first local run, apply the six listed migrations in order:
 
 ```sh
 node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file drizzle/0000_charming_zeigeist.sql
@@ -38,8 +38,11 @@ node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1
 node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file drizzle/0002_windy_cammi.sql
 node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file drizzle/0003_rainy_blazing_skull.sql
 node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file drizzle/0004_hot_old_lace.sql
+node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file drizzle/0007_receipt_message_registry.sql
 npm run dev
 ```
+
+The message registry retains its existing `0007` filename when backported to this branch. The numbering gap is intentional; `0005` and `0006` belong to the later audit work. Apply only files listed for the checked-out release, recording their filenames rather than assuming a contiguous sequence.
 
 Open `http://localhost:5173` and create an email/password account. Do not replay migrations already applied locally. D1 and R2 preview data persist in the ignored `.wrangler/` directory; these commands do not modify production data.
 

@@ -15,7 +15,9 @@ For each release, record the GitHub commit, Sites source commit/version, deploym
 5. Publish through the Sites build/version/deploy workflow, allowing its migration lifecycle to manage the target database. Do not run local Wrangler commands against production as an additional migration path.
 6. After the deployment succeeds, verify the approved release's essential journeys with test accounts: login, existing trip read, expense save, shared-trip access, receipt upload/retrieval and balances. Record the result and keep the previous Sites version available.
 
-Code using activity history and receipt lifecycle requires both `0003_rainy_blazing_skull.sql` and `0004_hot_old_lace.sql` before it serves traffic. A local migration or a generated SQL journal does not establish production readiness. Apply the migrations through Sites' release path and retain its applied-migration evidence.
+Code using activity history and receipt lifecycle requires `0003_rainy_blazing_skull.sql`, `0004_hot_old_lace.sql` and `0007_receipt_message_registry.sql` before it serves traffic. A local migration or a generated SQL journal does not establish production readiness. Apply the migrations through Sites' release path and retain its applied-migration evidence.
+
+The receipt-message registry backport keeps the already published `0007` SQL unchanged and requires only the earlier `0000`–`0004` schema. Later audit releases add `0005` and `0006`; use Sites' recorded migration lifecycle or the explicit local filename list, not a timestamp-only Drizzle migrator that would skip those earlier timestamps after applying `0007`. When merging the audit release, retain its complete journal and snapshots rather than the abbreviated backport metadata. Never replay the already applied registry SQL.
 
 Redeploying a previous Sites version rolls back code, not necessarily D1 data or schema. Confirm that the previous code is compatible with the current schema before using it. A financial-data problem may require a data restore and reconciliation as well as a code rollback.
 

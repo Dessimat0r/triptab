@@ -1127,7 +1127,7 @@ test('another trip’s historical message cannot prove a forged speaker and fres
   assert.equal(alice.data.trips.find(value => value.id === 'trip-1')!.expenses[0].conversation![0].authorMemberId, 'b');
 });
 
-test('unfamiliar message history lookup is bounded to one hundred IDs per trip', async () => {
+test('unfamiliar message registry lookup is bounded to one hundred IDs per trip', async () => {
   const database = await storage();
   const state = await create(database);
   const initialEvents = count(database);
@@ -1144,4 +1144,79 @@ test('unfamiliar message history lookup is bounded to one hundred IDs per trip',
   const saved = await store.writeLedger(actor, state.data, state.revision);
   assert.equal(saved.data.trips[0].drafts[0].conversation?.length, 100);
   for (const message of saved.data.trips[0].drafts[0].conversation!) assert.equal(message.authorMemberId, 'a');
+});
+
+test('registry migration backfills latest immutable and unlabelled live legacy messages once', async () => {
+  const database = new SQLiteD1();
+  for (const file of (await readdir(new URL('../drizzle/', import.meta.url))).filter(file => file.endsWith('.sql') && file < '0007').sort()) {
+    database.sqlite.exec(await readFile(new URL(`../drizzle/${file}`, import.meta.url), 'utf8'));
+  }
+  const question = { id: 'old-question', role: 'user', text: 'Older words', createdAt: '2026-10-04T20:30:00Z', authorMemberId: 'b', authorName: 'Bob' };
+  const latest = { ...question, text: 'Latest trusted words' };
+  const assistant = { id: 'old-answer', role: 'assistant', text: 'A reply', createdAt: '2026-10-04T20:31:00Z', replyTo: question.id, authorMemberId: 'a', authorName: 'Wrong traveller' };
+  const live = trip(); live.expenses = [{ ...dinner(), conversation: [{ id: 'live-legacy', role: 'user', text: 'No old author', createdAt: '2026-10-04T20:32:00Z' }] }];
+  database.sqlite.prepare('INSERT INTO trips (id,owner,data) VALUES (?,?,?)').run(live.id, actor, JSON.stringify(live));
+  const snapshot = database.sqlite.prepare(`INSERT INTO activity_events
+    (id,trip_id,actor_id,actor_name,created_at,entity_type,entity_id,action,before_data,after_data,revision,source)
+    VALUES (?,?,?,?,?,'expense','dinner','update',?,?,1,'web')`);
+  snapshot.run('historic', live.id, actor, 'Alice', '2026-10-04T21:00:00Z', JSON.stringify({ conversation: [question] }), JSON.stringify({ conversation: [latest, assistant] }));
+  // Wrangler tokenizes migrations before D1 executes them. Running the full SQL
+  // text directly would miss a broken trigger split at an expression's END.
+  const { unstable_splitSqlQuery } = await import('wrangler');
+  const statements = unstable_splitSqlQuery(await readFile(new URL('../drizzle/0007_receipt_message_registry.sql', import.meta.url), 'utf8'));
+  assert.equal(statements.length, 8); assert.ok(!statements.some(statement => statement.trim() === 'END'));
+  for (const statement of statements) database.sqlite.exec(statement);
+  const message = (id: string) => JSON.parse(database.sqlite.prepare('SELECT message_data FROM receipt_messages WHERE trip_id=? AND message_id=?').get(live.id, id)?.message_data as string);
+  assert.deepEqual(message(question.id), latest);
+  assert.deepEqual(message('live-legacy'), live.expenses[0].conversation![0]);
+  assert.deepEqual(message(assistant.id), { id: assistant.id, role: assistant.role, text: assistant.text, createdAt: assistant.createdAt, replyTo: question.id });
+  assert.ok((database.sqlite.prepare('SELECT after_data FROM activity_events WHERE id=?').get('historic')?.after_data as string).includes('Wrong traveller'));
+  assert.throws(() => database.sqlite.exec('UPDATE receipt_messages SET message_data=\'{}\''), /immutable/);
+  assert.throws(() => database.sqlite.exec('DELETE FROM receipt_messages'), /immutable/);
+  assert.throws(() => database.sqlite.prepare('INSERT OR REPLACE INTO receipt_messages VALUES (?,?,?)').run(live.id, question.id, '{}'), /immutable/);
+});
+
+test('fresh messages use an indexed registry lookup without scanning old snapshots or trusting dates', async () => {
+  const database = await storage();
+  let state = await create(database);
+  for (let index = 0; index < 12; index++) {
+    const legacy = { padding: 'x'.repeat(100_000), conversation: Array.from({ length: 100 }, (_, message) => ({
+      id: `unrelated-${index}-${message}`, role: 'user', text: 'Older discussion '.repeat(30), createdAt: '2020-01-01T12:00:00Z',
+    })) };
+    database.sqlite.prepare(`INSERT INTO activity_events
+      (id,trip_id,actor_id,actor_name,created_at,entity_type,entity_id,action,before_data,after_data,revision,source)
+      VALUES (?,?,?,?,?,'expense',?,'update',?,?,?,'web')`).run(`unrelated-${index}`, 'trip-1', actor, 'Owner', '2026-10-04T00:00:00Z',
+        `old-receipt-${index}`, JSON.stringify(legacy), JSON.stringify(legacy), state.revision);
+  }
+  const queries: string[] = [], prepare = database.prepare.bind(database);
+  database.prepare = sql => { queries.push(sql); return prepare(sql); };
+  state.data.trips[0].expenses = [{ ...dinner(), conversation: [{ id: 'fresh', role: 'user', text: 'New question', createdAt: '2099-01-01T12:00:00Z' }] }];
+  state = await store.writeLedger(actor, state.data, state.revision);
+  const lookups = queries.filter(sql => /SELECT message_data AS message FROM receipt_messages/.test(sql));
+  assert.equal(lookups.length, 1); assert.ok(!queries.some(sql => /json_each\(snapshots\.data/.test(sql)));
+  const plan = database.sqlite.prepare('EXPLAIN QUERY PLAN SELECT message_data FROM receipt_messages WHERE trip_id=? AND message_id IN (SELECT value FROM json_each(?)) LIMIT 100')
+    .all('trip-1', '["fresh"]');
+  assert.ok(plan.some(row => /SEARCH receipt_messages USING INDEX receipt_messages_trip_message_idx/.test(String(row.detail))));
+  assert.equal(state.data.trips[0].expenses[0].conversation![0].authorName, 'Original Owner');
+  const receipt = structuredClone(state.data.trips[0].expenses[0]);
+  state.data.trips[0].expenses = []; state = await store.writeLedger(actor, state.data, state.revision);
+  receipt.conversation![0].createdAt = '2099-02-01T12:00:00Z';
+  state.data.trips[0].expenses = [receipt];
+  await assert.rejects(store.writeLedger(actor, state.data, state.revision), /Saved receipt messages cannot be edited/);
+});
+
+test('message registry insertion and failed audit projections roll back with the financial CAS', async () => {
+  const database = await storage();
+  const state = await create(database); const initial = count(database);
+  state.data.trips[0].expenses = [{ ...dinner(), conversation: [{ id: 'new', role: 'user', text: 'My dinner?', createdAt: '2026-10-04T20:31:00Z' }] }];
+  database.sqlite.exec("CREATE TRIGGER refuse_message BEFORE INSERT ON receipt_messages BEGIN SELECT RAISE(ABORT,'registry unavailable'); END");
+  await assert.rejects(store.writeLedger(actor, state.data, state.revision), /registry unavailable/);
+  assert.equal(count(database), initial);
+  assert.equal(database.sqlite.prepare('SELECT COUNT(*) AS count FROM receipt_messages').get()?.count, 0);
+  assert.equal(database.sqlite.prepare('SELECT revision FROM sync_state WHERE id=1').get()?.revision, state.revision);
+  assert.equal((await store.readLedger(actor)).data.trips[0].expenses.length, 0);
+  database.sqlite.exec('DROP TRIGGER refuse_message');
+  const saved = await store.writeLedger(actor, state.data, state.revision);
+  assert.equal(database.sqlite.prepare('SELECT COUNT(*) AS count FROM receipt_messages').get()?.count, 1);
+  assert.equal(saved.data.trips[0].expenses[0].conversation![0].authorName, 'Original Owner');
 });

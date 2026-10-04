@@ -266,24 +266,12 @@ async function stampReceiptAuthors(trip: Trip, previous: Trip | undefined, actor
     .map(message => message.id)))];
   if (previous && unfamiliar.length) {
     if (unfamiliar.length > 100) throw new RequestError('Add or restore no more than 100 receipt messages at a time. Save one receipt at a time.');
-    // One same-trip lookup covers new or restored IDs, including unlabelled old
-    // messages. SQLite extracts at most 100 bounded message objects rather than
-    // returning complete receipts or trusting any supplied author metadata.
+    // Indexed same-trip IDs distinguish genuinely new messages from restoration.
+    // Timestamps and caller-supplied author claims never bypass this lookup.
     const history = await db().prepare(`
-      WITH snapshots AS (
-        SELECT sequence, 0 AS snapshot_order, before_data AS data FROM activity_events
-        WHERE trip_id = ? AND entity_type IN ('expense', 'draft')
-        UNION ALL
-        SELECT sequence, 1 AS snapshot_order, after_data AS data FROM activity_events
-        WHERE trip_id = ? AND entity_type IN ('expense', 'draft')
-      ), matched AS (
-        SELECT message.value AS message,
-          ROW_NUMBER() OVER (PARTITION BY json_extract(message.value, '$.id')
-            ORDER BY snapshots.sequence DESC, snapshots.snapshot_order DESC) AS position
-        FROM snapshots, json_each(snapshots.data, '$.conversation') message
-        WHERE json_extract(message.value, '$.id') IN (SELECT value FROM json_each(?))
-      ) SELECT message FROM matched WHERE position = 1 LIMIT 100
-    `).bind(trip.id, trip.id, JSON.stringify(unfamiliar)).all<{ message: string }>();
+      SELECT message_data AS message FROM receipt_messages
+      WHERE trip_id = ? AND message_id IN (SELECT value FROM json_each(?)) LIMIT 100
+    `).bind(trip.id, JSON.stringify(unfamiliar)).all<{ message: string }>();
     for (const row of history.results) {
       const message = JSON.parse(row.message) as ReceiptMessage;
       known.set(message.id, [message]);
@@ -305,6 +293,7 @@ async function stampReceiptAuthors(trip: Trip, previous: Trip | undefined, actor
       else message.authorMemberId = actorMemberId;
       if (message.role === 'assistant') delete message.authorName;
       else message.authorName = actorName;
+      known.set(message.id, [{ ...message }]);
     }
   }
   return added;
