@@ -1,0 +1,12 @@
+.data-export-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-block: 12px 18px;
+}
+
+.data-export-actions > button {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+}

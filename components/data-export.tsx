@@ -3,6 +3,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { Download } from "lucide-react";
 import type { Trip } from "@/lib/model";
+import "./data-export.css";
 
 export type DataExportProps = {
   trips?: Pick<Trip, "id" | "name">[];
@@ -70,12 +71,14 @@ export default function DataExport({ trips = [], tripId, compact = false }: Data
   return <section className={`account-section data-export${compact ? " compact" : ""}`} aria-labelledby={`${id}-title`}>
     <h3 id={`${id}-title`}>Download your data</h3>
     <p className="footnote">Keep a copy of your profile and holidays you can currently access, including shared records. Photos and sign-in credentials are excluded.</p>
-    <button type="button" className="quiet" disabled={busy} onClick={() => download("account", "json")}><Download size={17} aria-hidden="true" />Account JSON</button>
-    {!compact && <div className="data-export-actions">
-      <button type="button" className="quiet" disabled={busy} onClick={() => download("account-activity", "json")}><Download size={17} aria-hidden="true" />Account history JSON</button>
-      <button type="button" className="quiet" disabled={busy} onClick={() => download("account-activity", "csv")}><Download size={17} aria-hidden="true" />Account history CSV</button>
-      {accountHistoryCursor !== null && <button type="button" className="quiet" disabled={busy} onClick={() => download("account-activity", "csv", true)}><Download size={17} aria-hidden="true" />Older account history CSV</button>}
-    </div>}
+    <div className="data-export-actions">
+      <button type="button" className="quiet" disabled={busy} onClick={() => download("account", "json")}><Download size={17} aria-hidden="true" />Account JSON</button>
+      {!compact && <>
+        <button type="button" className="quiet" disabled={busy} onClick={() => download("account-activity", "json")}><Download size={17} aria-hidden="true" />Account history JSON</button>
+        <button type="button" className="quiet" disabled={busy} onClick={() => download("account-activity", "csv")}><Download size={17} aria-hidden="true" />Account history CSV</button>
+        {accountHistoryCursor !== null && <button type="button" className="quiet" disabled={busy} onClick={() => download("account-activity", "csv", true)}><Download size={17} aria-hidden="true" />Older account history CSV</button>}
+      </>}
+    </div>
     {(trips.length > 0 || tripId) && <>
       {trips.length > 1 ? <label htmlFor={`${id}-trip`}>Holiday
         <select id={`${id}-trip`} value={selectedTrip} disabled={busy} onChange={event => { setChoice(event.target.value); setHistory(null); setStatus(""); setError(""); }}>
