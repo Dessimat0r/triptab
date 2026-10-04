@@ -11,6 +11,8 @@ export function receiptActivityScope(tripId: string, scope: ReceiptActivityScope
   if (!expense && !draft) return { prefix: '', condition: '1', bindings: [] };
   // CROSS JOIN keeps the one-row context outside indexed history probes;
   // otherwise SQLite may reverse a join and scan a partial expression index.
+  // D1 limits each compound SELECT to five terms. Split discovery into small
+  // materialized groups while retaining the same indexed lookup branches.
   return {
     bindings: [JSON.stringify([{ tripId, kind: draft ? 'draft' : 'expense', entryId: draft ? scope.draftId : scope.expenseId }])],
     prefix: `
@@ -26,7 +28,7 @@ export function receiptActivityScope(tripId: string, scope: ReceiptActivityScope
         SELECT json_extract(d.value, '$.id') AS id, json_extract(d.value, '$.expenseId') AS expense_id,
           json_extract(d.value, '$.receiptId') AS receipt_id
         FROM trips t JOIN receipt_scope_context c ON t.id = c.trip_id, json_each(t.data, '$.drafts') d
-      ), receipt_scope_links(id) AS MATERIALIZED (
+      ), receipt_scope_draft_links(id) AS MATERIALIZED (
         SELECT d.expense_id FROM receipt_scope_current_drafts d, receipt_scope_context c
         WHERE c.kind = 'draft' AND d.id = c.entry_id AND typeof(d.expense_id) = 'text'
         UNION
@@ -39,7 +41,7 @@ export function receiptActivityScope(tripId: string, scope: ReceiptActivityScope
         FROM receipt_scope_context c CROSS JOIN activity_events h INDEXED BY activity_events_trip_entity_idx
           ON h.trip_id = c.trip_id AND h.entity_type = 'draft' AND h.entity_id = c.entry_id
         WHERE c.kind = 'draft' AND json_type(h.after_data, '$.expenseId') = 'text'
-        UNION
+      ), receipt_scope_posted_links(id) AS MATERIALIZED (
         SELECT x.id FROM receipt_scope_current_expenses x, receipt_scope_context c
         WHERE c.kind = 'draft' AND x.source_draft_id = c.entry_id
         UNION
@@ -52,6 +54,9 @@ export function receiptActivityScope(tripId: string, scope: ReceiptActivityScope
         FROM receipt_scope_context c CROSS JOIN activity_events h INDEXED BY activity_events_expense_after_source_draft_idx
           ON h.trip_id = c.trip_id AND json_extract(h.after_data, '$.sourceDraftId') = c.entry_id
         WHERE c.kind = 'draft' AND h.entity_type = 'expense'
+      ), receipt_scope_links(id) AS MATERIALIZED (
+        SELECT id FROM receipt_scope_draft_links
+        UNION SELECT id FROM receipt_scope_posted_links
       ), receipt_scope_roots(id) AS MATERIALIZED (
         SELECT entry_id FROM receipt_scope_context
         WHERE kind = 'expense' OR NOT EXISTS (SELECT 1 FROM receipt_scope_links)
@@ -88,11 +93,8 @@ export function receiptActivityScope(tripId: string, scope: ReceiptActivityScope
             SELECT 1 FROM activity_events h INDEXED BY activity_events_expense_after_source_draft_idx
             WHERE h.trip_id = c.trip_id AND h.entity_type = 'expense' AND json_extract(h.after_data, '$.sourceDraftId') = r.id
           )
-      ), receipt_scope_drafts(id) AS MATERIALIZED (
-        SELECT entry_id FROM receipt_scope_context WHERE kind = 'draft'
-        UNION SELECT id FROM receipt_scope_source_drafts
-        UNION SELECT id FROM receipt_scope_fallback_drafts
-        UNION SELECT d.id FROM receipt_scope_current_drafts d WHERE d.expense_id IN (SELECT id FROM receipt_scope_roots)
+      ), receipt_scope_related_drafts(id) AS MATERIALIZED (
+        SELECT d.id FROM receipt_scope_current_drafts d WHERE d.expense_id IN (SELECT id FROM receipt_scope_roots)
         UNION
         SELECT h.entity_id
         FROM receipt_scope_context c CROSS JOIN activity_events h INDEXED BY activity_events_draft_before_expense_idx
@@ -103,6 +105,11 @@ export function receiptActivityScope(tripId: string, scope: ReceiptActivityScope
         FROM receipt_scope_context c CROSS JOIN activity_events h INDEXED BY activity_events_draft_after_expense_idx
           ON h.trip_id = c.trip_id AND json_extract(h.after_data, '$.expenseId') IN (SELECT id FROM receipt_scope_roots)
         WHERE h.entity_type = 'draft'
+      ), receipt_scope_drafts(id) AS MATERIALIZED (
+        SELECT entry_id FROM receipt_scope_context WHERE kind = 'draft'
+        UNION SELECT id FROM receipt_scope_source_drafts
+        UNION SELECT id FROM receipt_scope_fallback_drafts
+        UNION SELECT id FROM receipt_scope_related_drafts
       ), receipt_scope_changes AS MATERIALIZED (
         SELECT h.sequence, json_extract(h.before_data, '$.receiptId') AS before_receipt_id,
           json_extract(h.after_data, '$.receiptId') AS after_receipt_id
