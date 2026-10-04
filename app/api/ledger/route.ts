@@ -28,7 +28,7 @@ export async function POST(r: Request) {
   try {
     sameOrigin(r);
     const profile = await ensureProfile(r);
-    const bytes = await readBoundedBody(r, 1_600_000);
+    const bytes = await readBoundedBody(r, 2_000_000);
     const body: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
     if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('Invalid ledger request');
     const fields = body as Record<string, unknown>;

@@ -43,6 +43,13 @@
       "when": 1791127637593,
       "tag": "0005_audit_coverage",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1791130056460,
+      "tag": "0006_receipt_cleanup",
+      "breakpoints": true
     }
   ]
 }

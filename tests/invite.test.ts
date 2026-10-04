@@ -352,6 +352,79 @@ test('a stale financial preview cannot be accepted; refreshed confirmation prese
   assert.equal(activityCount(database), before + 2);
 });
 
+test('invitation account association enforces the stored UTF8 trip limit before any guarded writes', async context => {
+  for (const boundary of ['over limit', 'exact limit'] as const) await context.test(boundary, async () => {
+    const database = await storage(true);
+    const invitation = await create();
+    const accountId = 'p'.repeat(320);
+    const accountEmail = 'long-account@example.com';
+    database.sqlite.prepare('INSERT INTO profiles (id,email,display_name,created_at) VALUES (?,?,?,?)')
+      .run(accountId, accountEmail, 'Long account name', '2026-10-04T00:00:00Z');
+    const trip = JSON.parse(String(database.sqlite.prepare('SELECT data FROM trips WHERE id=?').get('trip-1')?.data)) as Trip;
+    // Existing records can omit fields whose read schema supplies defaults.
+    // Linking an account must preserve their saved financial representation.
+    delete (trip.expenses[0] as Partial<Trip['expenses'][number]>).time;
+    delete (trip.expenses[0] as Partial<Trip['expenses'][number]>).timezone;
+    for (const [expenseIndex, expense] of trip.expenses.entries()) {
+      expense.conversation = Array.from({ length: 100 }, (_, messageIndex) => ({
+        id: `cap-${expenseIndex}-${messageIndex}`, role: 'user', text: 'é', createdAt: '2026-10-04T00:00:00Z',
+      }));
+    }
+    const bytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).byteLength;
+    const joined = { ...trip, members: trip.members.map(member => member.id === 'b'
+      ? { ...member, userId: accountId, email: accountEmail } : member) };
+    const associationGrowth = bytes(joined) - bytes(trip);
+    const target = boundary === 'over limit' ? store.MAX_STORED_TRIP_BYTES - 1 : store.MAX_STORED_TRIP_BYTES - associationGrowth;
+    let remaining = target - bytes(trip);
+    for (const message of trip.expenses.flatMap(expense => expense.conversation!)) {
+      const addition = Math.min(remaining, 7998);
+      message.text += 'é'.repeat(Math.floor(addition / 2)) + (addition % 2 ? 'a' : '');
+      remaining -= addition;
+    }
+    assert.equal(remaining, 0);
+    assert.equal(bytes(trip), target);
+    assert.ok(JSON.stringify(trip).length < store.MAX_STORED_TRIP_BYTES - associationGrowth,
+      'UTF16 character counts would wrongly permit this Unicode account association');
+    // Model-valid historical content, already bearing server policy metadata,
+    // is placed near the hard storage cap without inventing a new client write.
+    database.sqlite.prepare('UPDATE trips SET data=? WHERE id=?').run(JSON.stringify(trip), 'trip-1');
+    const headers = { 'oai-authenticated-user-id': accountId, 'oai-authenticated-user-email': accountEmail };
+    const info = await json<Preview>(await route.GET(new Request('https://triptab.test/api/invite?token=' + token(invitation), { headers })));
+    assert.match(info.historySnapshot, /^[a-f0-9]{64}$/);
+    const before = {
+      trip: database.sqlite.prepare('SELECT data FROM trips WHERE id=?').get('trip-1')?.data,
+      invites: database.sqlite.prepare('SELECT * FROM invites ORDER BY token_hash').all(),
+      memberships: database.sqlite.prepare('SELECT * FROM memberships ORDER BY trip_id,user_id').all(),
+      activity: database.sqlite.prepare('SELECT * FROM activity_events ORDER BY sequence').all(),
+      state: database.sqlite.prepare('SELECT * FROM sync_state').all(),
+    };
+    const response = await post({ mode: 'accept', token: token(invitation), acceptHistory: true, historySnapshot: info.historySnapshot }, 'bob', headers);
+    if (boundary === 'over limit') {
+      assert.equal(response.status, 413);
+      assert.match(String((await json(response)).error), /too much stored receipt or payment content to link another account/);
+      assert.equal(database.sqlite.prepare('SELECT data FROM trips WHERE id=?').get('trip-1')?.data, before.trip);
+      assert.deepEqual(database.sqlite.prepare('SELECT * FROM invites ORDER BY token_hash').all(), before.invites);
+      assert.deepEqual(database.sqlite.prepare('SELECT * FROM memberships ORDER BY trip_id,user_id').all(), before.memberships);
+      assert.deepEqual(database.sqlite.prepare('SELECT * FROM activity_events ORDER BY sequence').all(), before.activity);
+      assert.deepEqual(database.sqlite.prepare('SELECT * FROM sync_state').all(), before.state);
+      assert.equal(notifications.length, 0);
+    } else {
+      assert.equal(response.status, 200);
+      const stored = String(database.sqlite.prepare('SELECT data FROM trips WHERE id=?').get('trip-1')?.data);
+      assert.equal(new TextEncoder().encode(stored).byteLength, store.MAX_STORED_TRIP_BYTES);
+      const after = JSON.parse(stored) as Trip;
+      assert.deepEqual(after.expenses, trip.expenses);
+      assert.deepEqual(after.payments, trip.payments);
+      assert.deepEqual(after.drafts, trip.drafts);
+      assert.deepEqual(after.members.find(member => member.id === 'b'), { ...trip.members[1], userId: accountId, email: accountEmail });
+      assert.equal(activityCount(database), before.activity.length + 2);
+      const events = database.sqlite.prepare('SELECT actor_id,actor_name,source,revision FROM activity_events ORDER BY sequence DESC LIMIT 2').all();
+      for (const event of events) assert.deepEqual({ ...event }, { actor_id: accountId, actor_name: 'Long account name', source: 'web', revision: revision(database) });
+      assert.equal(notifications.length, 1);
+    }
+  });
+});
+
 test('consent for one traveller cannot claim another invitation in the same unchanged holiday', async () => {
   const database = await storage(true);
   const bobInvitation = await create('b');

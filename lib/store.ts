@@ -289,13 +289,55 @@ async function stampReceiptAuthors(trip: Trip, previous: Trip | undefined, actor
   return added;
 }
 
+export const MAX_LEDGER_CONTENT_BYTES = 1_500_000;
+export const MAX_STORED_LEDGER_BYTES = 1_900_000;
+export const MAX_STORED_TRIP_BYTES = 1_900_000;
+const jsonBytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).byteLength;
+
+/** Count editable content; trusted ownership, speakers and rule versions have reserved space. */
+export function ledgerContentBytes(ledger: Ledger): number {
+  const receiptContent = <Entry extends Trip['expenses'][number] | Trip['drafts'][number]>(entry: Entry): Entry => {
+    const content = { ...entry };
+    delete content.adjustmentAllocation;
+    if (content.conversation) content.conversation = content.conversation.map(message => {
+      const contentMessage = { ...message };
+      delete contentMessage.authorMemberId; delete contentMessage.authorName;
+      return contentMessage;
+    });
+    return content;
+  };
+  return jsonBytes({ trips: ledger.trips.map(trip => {
+    const content = { ...trip };
+    delete content.ownerId;
+    content.members = content.members.map(member => {
+      const contentMember = { ...member };
+      delete contentMember.userId; delete contentMember.email;
+      return contentMember;
+    });
+    content.expenses = content.expenses.map(receiptContent);
+    content.drafts = content.drafts.map(receiptContent);
+    return content;
+  }) });
+}
+
+function checkLedgerSize(ledger: Ledger) {
+  if (ledgerContentBytes(ledger) > MAX_LEDGER_CONTENT_BYTES) {
+    throw new RequestError('Your ledger has too much receipt or payment content. Remove some entries before saving.', 413);
+  }
+  // Bound the entire normalized ledger and every stored JSON value below D1's
+  // 2 MB cell/binding limit. Server metadata never bypasses this hard ceiling.
+  if (ledger.trips.some(trip => jsonBytes(trip) > MAX_STORED_TRIP_BYTES) || jsonBytes(ledger) > MAX_STORED_LEDGER_BYTES) {
+    throw new RequestError('Your ledger has exhausted its storage space for receipt metadata. Remove some entries before saving.', 413);
+  }
+}
+
 export async function writeLedger(id: string, data: unknown, revision: unknown, options: { source?: ActivitySource } = {}) {
   // Parse bounded structure first. New financial rules are applied after access
   // checks, with trusted stored snapshots allowing unchanged legacy entries to
   // remain available until their owner explicitly repairs them.
   let ledger = parseLedgerStructure(data);
   if (typeof revision !== 'number' || !Number.isSafeInteger(revision) || revision < 0) throw new Error('Invalid revision');
-  if (new TextEncoder().encode(JSON.stringify(ledger)).byteLength > 1_500_000) throw new RequestError('Your ledger is too large.', 413);
+  checkLedgerSize(ledger);
   const tripIds = ledger.trips.map(trip => trip.id);
   const tripIdsJson = JSON.stringify(tripIds);
   // D1 batches read one transactional snapshot. Reject future as well as stale
@@ -371,7 +413,7 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
   }
 
   ledger = validateLedger(ledger, { previous: { trips: [...previousTrips.values()] } });
-  if (new TextEncoder().encode(JSON.stringify(ledger)).byteLength > 1_500_000) throw new RequestError('Your ledger is too large.', 413);
+  checkLedgerSize(ledger);
   // Diff the final validated representation, so accepted normalization of new
   // fields and every explicit legacy repair have accurate history snapshots.
   for (const trip of ledger.trips) {

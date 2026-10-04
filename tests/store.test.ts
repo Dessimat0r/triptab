@@ -5,7 +5,7 @@ import { createRequire } from 'node:module';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { ModuleKind, ScriptTarget, transpileModule } from 'typescript';
-import type { Trip } from '../lib/model';
+import { parseLedgerStructure, type Trip } from '../lib/model';
 import type { ActivityEvent } from '../lib/store';
 import { receiptMemorySchema } from '../lib/receipt-context';
 
@@ -83,6 +83,26 @@ function trip(id = 'trip-1'): Trip {
 }
 function dinner() {
   return { id: 'dinner', title: 'Dinner', currency: 'GBP' as const, payer: 'a', date: '2026-10-04', time: '20:30', timezone: 'Europe/Lisbon', items: [{ id: 'food', name: 'Dinner', amount: 12345, members: ['a', 'b'] }], tax: 0, tip: 0, discount: 0 };
+}
+const jsonBytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).byteLength;
+function nearContentLimit(bytes: number) {
+  const expenses = Array.from({ length: 1000 }, (_, index) => ({
+    id: `e${index}`, title: 'x', currency: 'GBP' as const, date: '2026-10-04', payer: 'a',
+    items: [{ id: 'i', name: 'x', amount: 1, members: ['a'] }], tax: 0, tip: 0, discount: 0,
+  }));
+  const data = parseLedgerStructure({ trips: Array.from({ length: 7 }, (_, index) => ({ ...trip(`t${index}`),
+    members: [{ id: 'a', name: 'Original Owner' }], expenses: structuredClone(expenses),
+  })) });
+  let remaining = bytes - jsonBytes(data);
+  assert.ok(remaining >= 0);
+  for (const expense of data.trips.flatMap(holiday => holiday.expenses)) {
+    const chocolates = Math.min(98, Math.floor(remaining / 4));
+    expense.title += '🍫'.repeat(chocolates); remaining -= chocolates * 4;
+    if (remaining < 4) { expense.title += 'x'.repeat(remaining); remaining = 0; }
+    if (!remaining) break;
+  }
+  assert.equal(remaining, 0); assert.equal(jsonBytes(data), bytes);
+  return data;
 }
 async function storage() {
   const database = new SQLiteD1();
@@ -463,6 +483,92 @@ test('large receipt edits and many creation events remain atomic with complete s
     assert.equal(update.before?.tip, 0);
     assert.deepEqual(update.after, state.data.trips[0].expenses.find(expense => expense.id === update.entityId));
   }
+});
+
+test('a Unicode ledger near the content limit survives maximum receipt policy growth and round trips', async () => {
+  const database = await storage();
+  const data = nearContentLimit(store.MAX_LEDGER_CONTENT_BYTES - 10);
+  assert.equal(store.ledgerContentBytes(data), store.MAX_LEDGER_CONTENT_BYTES - 10);
+  database.sqlite.exec(`CREATE TRIGGER refuse_last_large_event BEFORE INSERT ON activity_events
+    WHEN NEW.trip_id='t6' AND NEW.entity_id='e999' BEGIN SELECT RAISE(ABORT, 'simulated late audit failure'); END`);
+  await assert.rejects(store.writeLedger(actor, data, 0), /simulated late audit failure/);
+  assert.equal(database.sqlite.prepare('SELECT COUNT(*) AS count FROM trips').get()?.count, 0);
+  assert.equal(database.sqlite.prepare('SELECT revision FROM sync_state WHERE id=1').get(), undefined);
+  assert.equal(count(database), 0, 'a late audit chunk failure rolls back all normalized trip writes');
+  database.sqlite.exec('DROP TRIGGER refuse_last_large_event');
+  let saved = await store.writeLedger(actor, data, 0);
+  assert.equal(saved.data.trips.flatMap(holiday => holiday.expenses).length, 7000);
+  assert.ok(jsonBytes(saved.data) > 1_800_000, '7000 new policy stamps require reserved storage headroom');
+  assert.equal(count(database), 7014);
+  assert.equal(store.ledgerContentBytes(saved.data), store.MAX_LEDGER_CONTENT_BYTES - 10);
+  assert.ok(jsonBytes(saved.data) <= store.MAX_STORED_LEDGER_BYTES);
+  for (const holiday of saved.data.trips) {
+    assert.ok(holiday.expenses.every(expense => expense.adjustmentAllocation === 'selected-participants'));
+    const stored = database.sqlite.prepare('SELECT data FROM trips WHERE id=?').get(holiday.id)?.data as string;
+    assert.ok(new TextEncoder().encode(stored).byteLength <= store.MAX_STORED_TRIP_BYTES);
+    assert.deepEqual(JSON.parse(stored), holiday);
+  }
+  const response = await (await ledgerRoute()).POST(saveRequest(saved.data, saved.revision));
+  assert.equal(response.status, 200, 'the HTTP body limit must allow a normalized ledger to round trip');
+  saved = await response.json() as typeof saved;
+  assert.equal(count(database), 7014, 'resaving server-normalized content must not add history');
+  saved.data.trips[0].expenses[0].tip = 1;
+  saved = await store.writeLedger(actor, saved.data, saved.revision);
+  assert.equal(count(database), 7015);
+  const event = lastEntity(await history(actor, 't0'), 'expense', 'e0');
+  assert.equal(event.before?.tip, 0); assert.equal(event.after?.tip, 1);
+  assert.deepEqual(event.after, saved.data.trips[0].expenses[0]);
+});
+
+test('editable content uses UTF8 bytes and over-budget Unicode leaves live data and audit unchanged', async () => {
+  const database = await storage();
+  const data = nearContentLimit(store.MAX_LEDGER_CONTENT_BYTES + 1);
+  assert.ok(JSON.stringify(data).length < store.MAX_LEDGER_CONTENT_BYTES, 'UTF16 character counts understate this receipt content');
+  await assert.rejects(store.writeLedger(actor, data, 0), (error: unknown) => error instanceof store.RequestError
+    && error.status === 413 && /too much receipt or payment content/.test(error.message));
+  assert.equal(database.sqlite.prepare('SELECT COUNT(*) AS count FROM trips').get()?.count, 0);
+  assert.equal(database.sqlite.prepare('SELECT revision FROM sync_state WHERE id=1').get(), undefined);
+  assert.equal(count(database), 0);
+});
+
+function authorGrowthLedger(withAuthors = false) {
+  const memberId = 'm'.repeat(100), authorName = '🍫'.repeat(40);
+  return parseLedgerStructure({ trips: Array.from({ length: 50 }, (_, index) => ({ ...trip(`authored-${index}`),
+    members: [{ id: memberId, name: authorName.slice(0, 50) }],
+    expenses: [{ ...dinner(), id: 'receipt', payer: memberId,
+      items: [{ id: 'item', name: 'Chocolate', amount: 1, members: [memberId] }],
+      conversation: Array.from({ length: 100 }, (_, message) => ({ id: `message-${message}`, role: 'user',
+        text: '🍫'.repeat(15), createdAt: '2026-10-04T00:00:00Z',
+        ...(withAuthors ? { authorMemberId: memberId, authorName } : {}),
+      })),
+    }],
+  })) });
+}
+
+test('trusted speaker metadata exceeding reserved headroom is rejected before financial or audit writes', async () => {
+  const database = await storage();
+  database.sqlite.prepare('UPDATE profiles SET display_name=? WHERE id=?').run('🍫'.repeat(40), actor);
+  const data = authorGrowthLedger();
+  assert.ok(jsonBytes(data) < store.MAX_LEDGER_CONTENT_BYTES);
+  assert.ok(jsonBytes(authorGrowthLedger(true)) > store.MAX_STORED_LEDGER_BYTES);
+  await assert.rejects(store.writeLedger(actor, data, 0), (error: unknown) => error instanceof store.RequestError
+    && error.status === 413 && /storage space for receipt metadata/.test(error.message));
+  assert.equal(database.sqlite.prepare('SELECT COUNT(*) AS count FROM trips').get()?.count, 0);
+  assert.equal(database.sqlite.prepare('SELECT revision FROM sync_state WHERE id=1').get(), undefined);
+  assert.equal(count(database), 0);
+});
+
+test('client-supplied author metadata cannot bypass the hard UTF8 storage ceiling', async () => {
+  const database = await storage();
+  const data = authorGrowthLedger(true);
+  assert.ok(store.ledgerContentBytes(data) < store.MAX_LEDGER_CONTENT_BYTES);
+  assert.ok(jsonBytes(data) > store.MAX_STORED_LEDGER_BYTES);
+  let baselineReads = 0;
+  database.beforeBatch = () => { baselineReads++; };
+  await assert.rejects(store.writeLedger(actor, data, 0), (error: unknown) => error instanceof store.RequestError
+    && error.status === 413 && /storage space for receipt metadata/.test(error.message));
+  assert.equal(baselineReads, 0, 'oversized metadata is rejected before reading or preparing a mutation');
+  assert.equal(count(database), 0);
 });
 
 test('notifications describe committed actors/events and skip draft-only saves and failed writes', async () => {

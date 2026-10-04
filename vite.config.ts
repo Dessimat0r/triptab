@@ -17,6 +17,9 @@ const managedLinux = readExecutionProfile() === "managed-linux";
 const localBindingConfig = {
   main: "./build/sites-worker.ts",
   compatibility_flags: ["nodejs_compat"],
+  // Cloudflare-compatible output declares UTC maintenance every 15 minutes.
+  // Sites' production deployment must separately confirm trigger activation.
+  triggers: { crons: ["*/15 * * * *"] },
   d1_databases: d1
     ? [
         {

@@ -23,6 +23,19 @@ function csv(rows: unknown[][]): string { return rows.map(row => row.map(csvCell
 function decimal(amount: number | undefined): string | undefined { return amount === undefined ? undefined : (amount / 100).toFixed(2); }
 function utc(value: string): string { return new Date(value).toISOString(); }
 
+// Downloads may be forwarded outside a holiday. Copy structured contact
+// fields only for the account explicitly linked in that particular snapshot;
+// historical names, current membership and matching email text cannot prove
+// ownership. Ordinary strings (including notes and receipt chat) stay intact.
+function exportContacts<T>(value: T, actor: string): T {
+  if (Array.isArray(value)) return value.map(entry => exportContacts(entry, actor)) as T;
+  if (!value || typeof value !== 'object') return value;
+  const record = value as Record<string, unknown>;
+  return Object.fromEntries(Object.entries(record)
+    .filter(([key]) => key !== 'email' || record.userId === actor)
+    .map(([key, entry]) => [key, exportContacts(entry, actor)])) as T;
+}
+
 function financialCsv(trip: Trip): string {
   const name = (id: string) => trip.members.find(member => member.id === id)?.name || id;
   const rows: unknown[][] = [[
@@ -75,7 +88,7 @@ async function snapshots(actor: string, tripId?: string): Promise<Trip[]> {
   const size = sizes.results[0] as { count: number; bytes: number } | undefined;
   if (!size || size.bytes > MAX_SNAPSHOT_BYTES) throw new RequestError('This account export is too large. Download one holiday at a time.', 413);
   if (tripId !== undefined && !size.count) throw new RequestError('You do not have access to this holiday.', 403);
-  return (rows.results as TripRow[]).map(row => ({ ...parseStoredTrip(JSON.parse(row.data)), ownerId: row.owner }));
+  return (rows.results as TripRow[]).map(row => exportContacts({ ...parseStoredTrip(JSON.parse(row.data)), ownerId: row.owner }, actor));
 }
 
 async function activity(actor: string, tripId: string, before = Number.MAX_SAFE_INTEGER) {
@@ -98,7 +111,7 @@ async function activity(actor: string, tripId: string, before = Number.MAX_SAFE_
   const remaining = await db().prepare(`SELECT e.sequence FROM activity_events e JOIN trips t ON t.id = e.trip_id WHERE e.trip_id = ? AND e.sequence < ? AND ${ACCESS} LIMIT 1`).bind(tripId, last, actor, actor).first<{ sequence: number }>();
   if (!rows.length && remaining) throw new RequestError('This history entry is too large to download as a page.', 413);
   return {
-    events: rows.map(row => ({ id: row.id, sequence: row.sequence, tripId: row.trip_id, actorId: row.actor_id, actorName: row.actor_name, createdAt: utc(row.created_at), entityType: row.entity_type, entityId: row.entity_id, action: row.action, before: row.before_data ? JSON.parse(row.before_data) : null, after: row.after_data ? JSON.parse(row.after_data) : null, revision: row.revision, source: row.source })),
+    events: rows.map(row => ({ id: row.id, sequence: row.sequence, tripId: row.trip_id, actorId: row.actor_id, actorName: row.actor_name, createdAt: utc(row.created_at), entityType: row.entity_type, entityId: row.entity_id, action: row.action, before: row.before_data ? exportContacts(JSON.parse(row.before_data), actor) : null, after: row.after_data ? exportContacts(JSON.parse(row.after_data), actor) : null, revision: row.revision, source: row.source })),
     nextCursor: remaining ? last : null,
   };
 }

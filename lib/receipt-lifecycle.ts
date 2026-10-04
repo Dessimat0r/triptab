@@ -6,7 +6,7 @@ export class ReceiptLifecycleError extends Error {
 }
 
 export const RECEIPT_LIMITS = { perUser: 500, perTrip: 200, sweepBatch: 20, orphanAgeMs: 24 * 60 * 60 * 1000 } as const;
-type ReceiptRow = { id: string; owner: string; trip_id: string; created_at: string; state: 'pending' | 'active' | 'deleting'; content_type: string; size_bytes: number; sha256: string };
+type ReceiptRow = { id: string; owner: string; trip_id: string; created_at: string; state: 'pending' | 'active' | 'deleting'; content_type: string; size_bytes: number; sha256: string; legacy_cleanup_after: string };
 type AuditActor = { id: string; displayName: string };
 type ImageMetadata = { contentType: string; sizeBytes: number; sha256: string };
 type ReceiptReason = 'upload-started' | 'upload-complete' | 'receipt-detached' | 'image-deletion' | 'orphan-expired' | 'upload-failed' | 'cleanup-retry' | 'image-deleted';
@@ -17,14 +17,17 @@ const access = `(r.owner = ? OR t.owner = ? OR EXISTS (SELECT 1 FROM memberships
 const identity = `NOT EXISTS (SELECT 1 FROM auth_links WHERE oai_user_id = ? AND user_id <> ?)`;
 const unreferenced = `NOT EXISTS (SELECT 1 FROM json_each(t.data, '$.expenses') e WHERE json_extract(e.value, '$.receiptId') = r.id)
   AND NOT EXISTS (SELECT 1 FROM json_each(t.data, '$.drafts') d WHERE json_extract(d.value, '$.receiptId') = r.id)`;
+const expired = `((r.created_at <> '' AND r.created_at <= ?) OR
+  (r.created_at = '' AND r.legacy_cleanup_after <> '' AND r.legacy_cleanup_after <= ?))`;
 // Exact metadata guards keep the before snapshot truthful across competing calls.
 const baseline = `r.id = ? AND r.owner = ? AND r.trip_id = ? AND r.created_at = ? AND r.state = ?
-  AND r.content_type = ? AND r.size_bytes = ? AND r.sha256 = ?`;
-const baselineValues = (row: ReceiptRow) => [row.id, row.owner, row.trip_id, row.created_at, row.state, row.content_type, row.size_bytes, row.sha256];
+  AND r.content_type = ? AND r.size_bytes = ? AND r.sha256 = ? AND r.legacy_cleanup_after = ?`;
+const baselineValues = (row: ReceiptRow) => [row.id, row.owner, row.trip_id, row.created_at, row.state, row.content_type, row.size_bytes, row.sha256, row.legacy_cleanup_after];
 
 function snapshot(row: ReceiptRow, reason: ReceiptReason, initiator?: AuditActor) {
   return { id: row.id, uploaderId: row.owner, state: row.state, contentType: row.content_type, sizeBytes: row.size_bytes,
     sha256: row.sha256, createdAt: row.created_at, reason,
+    ...(row.legacy_cleanup_after ? { legacyCleanupAfter: row.legacy_cleanup_after } : {}),
     ...(initiator ? { initiatorId: initiator.id, initiatorName: initiator.displayName.slice(0, 80) } : {}) };
 }
 function change(row: ReceiptRow, action: ActivityChange['action'], before: Record<string, unknown> | null, after: Record<string, unknown> | null): ActivityChange {
@@ -64,7 +67,7 @@ async function tripAllowed(database: D1Database, user: string, tripId: string) {
 /** Reserve a quota slot and its audit trail before writing image bytes. */
 export async function reserveReceipt(database: D1Database, user: string, tripId: string, id: string, now = new Date().toISOString(), image: ImageMetadata = { contentType: '', sizeBytes: 0, sha256: '' }) {
   const { actor, revision } = await auditContext(database, user);
-  const row: ReceiptRow = { id, owner: user, trip_id: tripId, created_at: now, state: 'pending', content_type: image.contentType, size_bytes: image.sizeBytes, sha256: image.sha256 };
+  const row: ReceiptRow = { id, owner: user, trip_id: tripId, created_at: now, state: 'pending', content_type: image.contentType, size_bytes: image.sizeBytes, sha256: image.sha256, legacy_cleanup_after: '' };
   const statement = database.prepare(`
     INSERT INTO receipts (id, owner, trip_id, created_at, state, content_type, size_bytes, sha256)
     SELECT ?, ?, t.id, ?, 'pending', ?, ?, ? FROM trips t WHERE t.id = ?
@@ -114,8 +117,8 @@ export async function markRemovedReceipts(database: D1Database, user: string, id
 export async function sweepReceiptOrphans(database: D1Database, user: string, now = Date.now()) {
   const cutoff = new Date(now - RECEIPT_LIMITS.orphanAgeMs).toISOString();
   const rows = await database.prepare(`SELECT r.* FROM receipts r JOIN trips t ON t.id = r.trip_id
-    WHERE r.state = 'active' AND r.created_at <> '' AND r.created_at <= ? AND ${access} AND ${unreferenced} AND ${identity}
-    ORDER BY r.created_at, r.id LIMIT ?`).bind(cutoff, user, user, user, user, user, RECEIPT_LIMITS.sweepBatch).all<ReceiptRow>();
+    WHERE r.state = 'active' AND ${expired} AND ${access} AND ${unreferenced} AND ${identity}
+    ORDER BY r.created_at, r.id LIMIT ?`).bind(cutoff, new Date(now).toISOString(), user, user, user, user, user, RECEIPT_LIMITS.sweepBatch).all<ReceiptRow>();
   if (!rows.results.length) return 0;
   const { revision } = await auditContext(database);
   return commitReceiptChanges(database, rows.results.map(row => ({
@@ -136,15 +139,11 @@ async function deletionIntent(database: D1Database, row: ReceiptRow) {
 }
 
 /** Deletion completes only with an atomic metadata delete and audit record. */
-export async function purgeDeletingReceipts(database: D1Database, bucket: R2Bucket, user: string, limit: number = RECEIPT_LIMITS.sweepBatch) {
-  const boundedLimit = Math.max(1, Math.min(RECEIPT_LIMITS.sweepBatch, Math.floor(limit)));
-  const rows = await database.prepare(`SELECT r.* FROM receipts r JOIN trips t ON t.id = r.trip_id
-    WHERE r.state = 'deleting' AND ${access} AND ${identity}
-    ORDER BY r.created_at, r.id LIMIT ?`).bind(user, user, user, user, user, boundedLimit).all<ReceiptRow>();
+async function purgeReceiptRows(database: D1Database, bucket: R2Bucket, rows: ReceiptRow[]) {
   const { revision } = await auditContext(database);
   let deleted = 0, failed = 0;
-  for (let offset = 0; offset < rows.results.length; offset += 4) {
-    await Promise.all(rows.results.slice(offset, offset + 4).map(async row => {
+  for (let offset = 0; offset < rows.length; offset += 4) {
+    await Promise.all(rows.slice(offset, offset + 4).map(async row => {
       try {
         const intent = await deletionIntent(database, row);
         await bucket.delete(key(row.owner, row.id));
@@ -160,9 +159,43 @@ export async function purgeDeletingReceipts(database: D1Database, bucket: R2Buck
   return { deleted, failed };
 }
 
+export async function purgeDeletingReceipts(database: D1Database, bucket: R2Bucket, user: string, limit: number = RECEIPT_LIMITS.sweepBatch) {
+  const boundedLimit = Math.max(1, Math.min(RECEIPT_LIMITS.sweepBatch, Math.floor(limit)));
+  const rows = await database.prepare(`SELECT r.* FROM receipts r JOIN trips t ON t.id = r.trip_id
+    WHERE r.state = 'deleting' AND ${access} AND ${identity}
+    ORDER BY r.created_at, r.id LIMIT ?`).bind(user, user, user, user, user, boundedLimit).all<ReceiptRow>();
+  return purgeReceiptRows(database, bucket, rows.results);
+}
+
 export async function maintainReceipts(database: D1Database, bucket: R2Bucket, user: string) {
   const marked = await sweepReceiptOrphans(database, user);
   return { marked, ...await purgeDeletingReceipts(database, bucket, user) };
+}
+
+export type SystemReceiptMaintenanceOptions = { now?: number; sweepLimit?: number; purgeLimit?: number };
+function maintenanceLimit(value: number | undefined) {
+  const limit = value ?? RECEIPT_LIMITS.sweepBatch;
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > RECEIPT_LIMITS.sweepBatch) throw new Error('Invalid receipt maintenance limit.');
+  return limit;
+}
+
+/** Server scheduling only: bounded maintenance does not depend on participant visits. */
+export async function maintainSystemReceipts(database: D1Database, bucket: R2Bucket, options: SystemReceiptMaintenanceOptions = {}) {
+  const now = options.now ?? Date.now(), sweepLimit = maintenanceLimit(options.sweepLimit), purgeLimit = maintenanceLimit(options.purgeLimit);
+  if (!Number.isSafeInteger(now) || now < 0 || now > 8_640_000_000_000_000) throw new Error('Invalid receipt maintenance time.');
+  const cutoff = new Date(now - RECEIPT_LIMITS.orphanAgeMs).toISOString(), current = new Date(now).toISOString();
+  const rows = await database.prepare(`SELECT r.* FROM receipts r JOIN trips t ON t.id = r.trip_id
+    WHERE r.state = 'active' AND ${expired} AND ${unreferenced}
+    ORDER BY r.created_at, r.id LIMIT ?`).bind(cutoff, current, sweepLimit).all<ReceiptRow>();
+  const { revision } = await auditContext(database);
+  const marked = await commitReceiptChanges(database, rows.results.map(row => ({
+    statement: database.prepare(`UPDATE receipts AS r SET state = 'deleting' WHERE ${baseline}
+      AND EXISTS (SELECT 1 FROM trips t WHERE t.id = r.trip_id AND ${unreferenced})`).bind(...baselineValues(row)),
+    change: change(row, 'update', snapshot(row, 'upload-complete'), snapshot({ ...row, state: 'deleting' }, 'orphan-expired', systemActor)),
+  })), systemActor, revision, 'system');
+  const deleting = await database.prepare(`SELECT * FROM receipts WHERE state = 'deleting' ORDER BY created_at, id LIMIT ?`)
+    .bind(purgeLimit).all<ReceiptRow>();
+  return { marked, ...await purgeReceiptRows(database, bucket, deleting.results) };
 }
 
 /** Upload failure retains a tombstone if object cleanup or completion auditing fails. */
@@ -170,7 +203,7 @@ async function abandonUpload(database: D1Database, bucket: R2Bucket, user: strin
   const existing = await database.prepare('SELECT * FROM receipts WHERE id = ?').bind(id).first<ReceiptRow>();
   const { actor: initiator, revision } = await auditContext(database, user);
   if (!existing) {
-    const row: ReceiptRow = { id, owner: user, trip_id: tripId, created_at: now, state: 'deleting', content_type: image.contentType, size_bytes: image.sizeBytes, sha256: image.sha256 };
+    const row: ReceiptRow = { id, owner: user, trip_id: tripId, created_at: now, state: 'deleting', content_type: image.contentType, size_bytes: image.sizeBytes, sha256: image.sha256, legacy_cleanup_after: '' };
     await commitReceiptChanges(database, [{
       statement: database.prepare(`INSERT OR IGNORE INTO receipts (id,owner,trip_id,created_at,state,content_type,size_bytes,sha256)
         SELECT ?,?,?,?,'deleting',?,?,? WHERE EXISTS (SELECT 1 FROM trips WHERE id = ?)`)

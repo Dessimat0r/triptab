@@ -30,7 +30,7 @@ npm run install:ci
 npm run build
 ```
 
-The initial build generates `dist/server/wrangler.json`. Before the first local run, apply the six migrations in order:
+The initial build generates `dist/server/wrangler.json`. Before the first local run, apply the seven migrations in order:
 
 ```sh
 node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file drizzle/0000_charming_zeigeist.sql
@@ -39,6 +39,7 @@ node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1
 node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file drizzle/0003_rainy_blazing_skull.sql
 node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file drizzle/0004_hot_old_lace.sql
 node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file drizzle/0005_audit_coverage.sql
+node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file drizzle/0006_receipt_cleanup.sql
 npm run dev
 ```
 
@@ -58,6 +59,10 @@ npm run db:generate  # Generate migrations after changing db/schema.ts
 ```
 
 `npm start` shares the local D1/R2 state but does not simulate ChatGPT sign-in or deploy the app.
+
+Ledger saves allow 1,500,000 UTF-8 bytes of editable content and reserve space for server metadata, with a hard 1,900,000-byte storage ceiling. Structured contact emails belonging to other travellers are omitted from JSON/history downloads; authored names, notes and messages are preserved.
+
+The Worker implements bounded receipt cleanup with a 15-minute UTC Cron declaration. Confirm that Sites installs and runs this timer when deploying; a declaration in the generated Wrangler configuration does not establish an active production schedule. Historical images with unknown upload dates receive a 24-hour grace period from migration `0006`; referenced images and pending uploads remain protected.
 
 `npm test` runs `tests/*.test.ts` with the directly declared `tsx` dependency. It deliberately excludes the historical reproductions under `docs/audit/evidence-*`; those files describe the state reviewed in the original audit. GitHub Actions runs a clean locked install, regression tests, type checks, lint and a production build on pull requests and pushes to `main`, with read-only repository permissions. CI does not contact production or publish the app.
 

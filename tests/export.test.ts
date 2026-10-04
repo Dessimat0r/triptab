@@ -145,6 +145,96 @@ test('account JSON requires a real session and includes only own profile and cur
   assert.equal(shared.profile.id, 'joined');
 });
 
+test('joined and owner JSON downloads omit other traveller contacts while preserving own details and receipt text', async () => {
+  const database = await storage();
+  const trip = holiday('shared', 'outsider');
+  trip.members = [
+    { id: 'a', name: 'host-contact@example.com', userId: 'outsider', email: 'host-contact@example.com' },
+    { id: 'b', name: 'Joined traveller', userId: 'joined', email: 'joined@example.com' },
+    // Matching the caller's email is not evidence that this unlinked traveller
+    // is the caller. Its contact field must still be omitted from a download.
+    { id: 'c', name: 'Guest', email: 'joined@example.com' },
+  ];
+  trip.expenses[0].items[0].name = 'host-contact@example.com';
+  trip.expenses[0].memory = { notes: 'Ask host-contact@example.com about dinner.', aliases: [{ name: 'host-contact@example.com', memberId: 'a' }] };
+  trip.expenses[0].conversation = [{ id: 'question', role: 'user', text: 'Ask host-contact@example.com about this item.', createdAt: '2026-10-04T12:00:00Z', authorMemberId: 'b', authorName: 'Joined traveller' }];
+  trip.payments[0].note = 'Sent to host-contact@example.com';
+  database.sqlite.prepare('UPDATE profiles SET email=? WHERE id=?').run('host-contact@example.com', 'outsider');
+  database.sqlite.prepare('INSERT INTO memberships (trip_id,user_id,member_id) VALUES (?,?,?)').run('shared', 'outsider', 'a');
+  database.sqlite.prepare('UPDATE trips SET data=? WHERE id=?').run(JSON.stringify(trip), 'shared');
+  const edited = structuredClone(trip);
+  edited.expenses[0].title = 'Dinner receipt, ask host-contact@example.com';
+  edited.drafts = [{ ...structuredClone(edited.expenses[0]), id: 'contact-review', expenseId: 'expense', status: 'review' }];
+  const saved = await store.writeLedger('outsider', { trips: [edited] }, 0);
+  const stored = database.sqlite.prepare('SELECT data FROM trips WHERE id=?').get('shared')!.data;
+  const savedTrip = saved.data.trips.find(value => value.id === 'shared')!;
+
+  for (const actor of ['joined', 'outsider'] as const) {
+    for (const query of ['', 'scope=trip&tripId=shared']) {
+      const response = await route.GET(request(query, actor));
+      assert.equal(response.status, 200);
+      const body = await json<Snapshot>(response);
+      assert.equal(body.profile.email, actor === 'joined' ? 'joined@example.com' : 'host-contact@example.com');
+      const exported = body.data.trips.find(value => value.id === 'shared')!;
+      assert.equal(exported.members.find(member => member.userId === actor)!.email, actor === 'joined' ? 'joined@example.com' : 'host-contact@example.com');
+      assert.ok(exported.members.filter(member => member.userId !== actor).every(member => !Object.hasOwn(member, 'email')));
+      assert.deepEqual(exported.members.map(member => member.name), savedTrip.members.map(member => member.name));
+      assert.deepEqual(exported.expenses, savedTrip.expenses, 'expense split IDs, memory and authored receipt text stay unchanged');
+      assert.deepEqual(exported.drafts, savedTrip.drafts, 'draft context has no traveller contact objects to redact');
+      assert.deepEqual(exported.payments, savedTrip.payments);
+    }
+  }
+  const rows = parseCsv(await (await route.GET(request('scope=trip&tripId=shared&format=csv', 'joined'))).text());
+  assert.equal(rows[1][rows[0].indexOf('paid_by')], 'host-contact@example.com', 'a user-entered name remains a name even when it resembles an email');
+  assert.equal(rows[2][rows[0].indexOf('note')], 'Sent to host-contact@example.com');
+  assert.deepEqual(JSON.parse(rows[1][rows[0].indexOf('item_details_json')]), savedTrip.expenses[0].items, 'CSV split members remain IDs without contact fields');
+  assert.equal(database.sqlite.prepare('SELECT data FROM trips WHERE id=?').get('shared')!.data, stored, 'export must not mutate stored contacts or receipt text');
+  const live = (await store.readLedger('joined')).data.trips.find(value => value.id === 'shared')!;
+  assert.deepEqual(live.members, savedTrip.members, 'live shared ledger keeps its intentionally shared contacts');
+});
+
+test('history JSON and CSV redact structured contacts using each historical association without changing saved events', async () => {
+  const database = await storage();
+  const insert = database.sqlite.prepare('INSERT INTO activity_events (id,trip_id,actor_id,actor_name,created_at,entity_type,entity_id,action,before_data,after_data,revision,source) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)');
+  const own = { id: 'b', name: 'Old own name', userId: 'joined', email: 'own-historical@example.com' };
+  const foreign = { id: 'a', name: 'foreign-contact@example.com', userId: 'outsider', email: 'foreign-contact@example.com' };
+  const unlinked = { id: 'c', name: 'Unlinked guest', email: 'joined@example.com' };
+  const reassigned = { ...own, name: 'Later different account', userId: 'outsider', email: 'later-contact@example.com' };
+  const before = { name: 'Trip before', members: [own, foreign, unlinked], expenses: [{ title: 'Legacy expense snapshot', members: [own, foreign], note: 'foreign-contact@example.com' }], drafts: [{ title: 'Legacy draft snapshot', members: [unlinked, foreign], conversation: [{ text: 'foreign-contact@example.com' }], memory: { notes: 'foreign-contact@example.com', aliases: [{ name: 'foreign-contact@example.com', memberId: 'a' }] } }] };
+  const after = { ...structuredClone(before), members: [reassigned, foreign, unlinked] };
+  insert.run('contact-trip-history', 'shared', 'outsider', 'foreign-contact@example.com', '2026-10-04T12:00:00Z', 'trip', 'shared', 'update', JSON.stringify(before), JSON.stringify(after), 2, 'web');
+  insert.run('contact-member-history', 'shared', 'outsider', 'Host', '2026-10-04T12:01:00Z', 'member', 'b', 'update', JSON.stringify(own), JSON.stringify(reassigned), 3, 'web');
+  insert.run('unlinked-member-history', 'shared', 'outsider', 'Host', '2026-10-04T12:02:00Z', 'member', 'c', 'create', null, JSON.stringify(unlinked), 4, 'web');
+  const stored = database.sqlite.prepare('SELECT id,before_data,after_data FROM activity_events WHERE trip_id=? ORDER BY id').all('shared');
+  const expectedOwn = { ...own };
+  const expectedForeign = { id: foreign.id, name: foreign.name, userId: foreign.userId };
+  const expectedUnlinked = { id: unlinked.id, name: unlinked.name };
+  const expectedReassigned = { id: reassigned.id, name: reassigned.name, userId: reassigned.userId };
+
+  for (const format of ['json', 'csv']) {
+    const response = await route.GET(request('scope=activity&tripId=shared&format=' + format, 'joined'));
+    assert.equal(response.status, 200);
+    let events: Pick<ActivityEvent, 'id' | 'before' | 'after' | 'actorName'>[];
+    if (format === 'json') events = (await json<HistoryPage>(response)).events;
+    else {
+      const rows = parseCsv(await response.text()), headers = rows[0];
+      const field = (row: string[], name: string) => row[headers.indexOf(name)];
+      events = rows.slice(1).map(row => ({ id: field(row, 'event_id'), actorName: field(row, 'actor_name'), before: field(row, 'before_json') ? JSON.parse(field(row, 'before_json')) : null, after: field(row, 'after_json') ? JSON.parse(field(row, 'after_json')) : null }));
+    }
+    const tripEvent = events.find(event => event.id === 'contact-trip-history')!;
+    assert.deepEqual(tripEvent.before, { ...before, members: [expectedOwn, expectedForeign, expectedUnlinked], expenses: [{ ...before.expenses[0], members: [expectedOwn, expectedForeign] }], drafts: [{ ...before.drafts[0], members: [expectedUnlinked, expectedForeign] }] });
+    assert.deepEqual(tripEvent.after, { ...after, members: [expectedReassigned, expectedForeign, expectedUnlinked], expenses: [{ ...after.expenses[0], members: [expectedOwn, expectedForeign] }], drafts: [{ ...after.drafts[0], members: [expectedUnlinked, expectedForeign] }] });
+    assert.equal(tripEvent.actorName, 'foreign-contact@example.com', 'authored display names are not arbitrarily scrubbed');
+    const memberEvent = events.find(event => event.id === 'contact-member-history')!;
+    assert.deepEqual(memberEvent.before, expectedOwn, 'historically own member keeps its own contact');
+    assert.deepEqual(memberEvent.after, expectedReassigned, 'later foreign association never inherits current-caller contact permission');
+    assert.deepEqual(events.find(event => event.id === 'unlinked-member-history')!.after, expectedUnlinked, 'email equality does not establish ownership');
+  }
+  assert.deepEqual(database.sqlite.prepare('SELECT id,before_data,after_data FROM activity_events WHERE trip_id=? ORDER BY id').all('shared'), stored, 'export copies must not rewrite append-only source history');
+  const live = await store.readActivity('joined', 'shared', { limit: 50 });
+  assert.deepEqual(live.events.find(event => event.id === 'contact-trip-history')!.before, before, 'live shared history retains its original contact snapshots');
+});
+
 test('scoped trip exports reject foreign trips, SQL-like IDs and cross-origin browser requests', async () => {
   await storage();
   for (const query of ['scope=trip&tripId=secret', 'scope=activity&tripId=secret', 'scope=trip&tripId=mine%27%20OR%201%3D1--']) assert.equal((await route.GET(request(query))).status, 403, query);

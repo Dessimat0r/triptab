@@ -69,10 +69,13 @@ export const receipts = sqliteTable('receipts', {
   contentType: text('content_type').notNull().default(''),
   sizeBytes: integer('size_bytes').notNull().default(0),
   sha256: text('sha256').notNull().default(''),
+  // Migration grants unknown-age historical images a fresh cleanup grace.
+  legacyCleanupAfter: text('legacy_cleanup_after').notNull().default(''),
 }, table => [
   index('receipts_trip_idx').on(table.tripId),
   index('receipts_owner_idx').on(table.owner),
   index('receipts_cleanup_idx').on(table.state, table.createdAt),
+  index('receipts_legacy_cleanup_idx').on(table.state, table.legacyCleanupAfter),
 ]);
 
 export const syncState = sqliteTable('sync_state', {

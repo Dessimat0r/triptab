@@ -1,4 +1,4 @@
-import { activityStatements, db, ensureProfile, failure, readBoundedBody, RequestError, sameOrigin } from '@/lib/store';
+import { activityStatements, db, ensureProfile, failure, MAX_STORED_TRIP_BYTES, readBoundedBody, RequestError, sameOrigin } from '@/lib/store';
 import { notifyMembers } from '@/lib/notifications';
 import { parseStoredTrip, travellerFinancialPreview, type Trip } from '@/lib/model';
 
@@ -273,11 +273,20 @@ async function acceptInvite(profile: Profile, body: Record<string, unknown>) {
     throw new RequestError('Review and confirm this traveller’s current financial history before joining.', 409);
   }
 
+  const accountEmail = profile.email.trim().toLowerCase();
+  // Preserve the stored financial representation; parsing for validation may
+  // supply defaults that must not become an incidental invitation change.
+  const nextTrip = JSON.parse(invite.data) as Trip;
+  nextTrip.members = nextTrip.members.map(value => value.id === invite.member_id
+    ? { ...value, userId: profile.id, email: accountEmail } : value);
+  const nextData = JSON.stringify(nextTrip);
+  if (new TextEncoder().encode(nextData).byteLength > MAX_STORED_TRIP_BYTES) {
+    throw new RequestError('This holiday has too much stored receipt or payment content to link another account. Ask its owner to reduce that content before joining.', 413);
+  }
   const database = db();
   const state = await invitationRevision(database);
   const marker = crypto.randomUUID();
   const now = new Date().toISOString();
-  const accountEmail = profile.email.trim().toLowerCase();
   const before = await invitationSnapshot(invite, member.name, 'pending');
   // A compare-and-swap protects the trip JSON and invalidates any ledger loaded
   // before this join. Every subsequent statement is guarded by this batch marker.
@@ -307,12 +316,10 @@ async function acceptInvite(profile: Profile, body: Record<string, unknown>) {
         AND EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND last_write = ?)
     `).bind(profile.id, hash, profile.id, marker),
     database.prepare(`
-      UPDATE trips SET data = json_set(data,
-        '$.members[' || (SELECT key FROM json_each(trips.data, '$.members') WHERE json_extract(value, '$.id') = ?) || '].userId', ?,
-        '$.members[' || (SELECT key FROM json_each(trips.data, '$.members') WHERE json_extract(value, '$.id') = ?) || '].email', ?)
+      UPDATE trips SET data = ?
       WHERE id = ? AND EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND last_write = ?)
         AND EXISTS (SELECT 1 FROM invites WHERE token_hash = ? AND used_by = ? AND trip_id = trips.id)
-    `).bind(invite.member_id, profile.id, invite.member_id, accountEmail, invite.trip_id, marker, hash, profile.id),
+    `).bind(nextData, invite.trip_id, marker, hash, profile.id),
     ...activityStatements(database, [
       { tripId: invite.trip_id, entityType: 'invite', entityId: before.id, action: 'update', before, after: { ...before, status: 'accepted' } },
       { tripId: invite.trip_id, entityType: 'member', entityId: invite.member_id, action: 'update', before: { ...member }, after: { ...member, userId: profile.id, email: accountEmail } },

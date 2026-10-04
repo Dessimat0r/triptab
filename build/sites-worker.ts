@@ -34,6 +34,25 @@ export function secureResponse(request: Request, response: Response, development
 }
 
 const worker = {
+  scheduled(controller: ScheduledController, env: Cloudflare.Env, ctx: ExecutionContext) {
+    // Scheduled work receives bindings directly, without a visitor identity or
+    // request-scoped connected-app access. Sites must activate the Cron trigger.
+    const cleanup = async () => {
+      try {
+        const bindings = env as unknown as { DB?: D1Database; RECEIPTS?: R2Bucket };
+        if (!bindings.DB || !bindings.RECEIPTS) throw new Error('Receipt maintenance bindings unavailable.');
+        const { maintainSystemReceipts } = await import("../lib/receipt-lifecycle");
+        const result = await maintainSystemReceipts(bindings.DB, bindings.RECEIPTS, { now: controller.scheduledTime });
+        if (result.failed) throw new Error('Receipt cleanup needs a retry.');
+      } catch {
+        // Database/provider exceptions can contain resource IDs or image keys.
+        // Report failure to the scheduler without forwarding those values.
+        console.warn('TripTab scheduled receipt cleanup did not complete.');
+        throw new Error('TripTab scheduled receipt cleanup did not complete.');
+      }
+    };
+    ctx.waitUntil(cleanup());
+  },
   async fetch(request: Request, env: Cloudflare.Env, ctx: ExecutionContext<{ CONNECTORS?: ConnectorBinding }>) {
     let binding = ctx.props?.CONNECTORS;
     // Local preview emulates the same request-scoped capability. This branch and

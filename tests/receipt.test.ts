@@ -7,7 +7,7 @@ import test from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { ModuleKind, ScriptTarget, transpileModule } from 'typescript';
 import {
-  activateReceipt, deleteReceipt, maintainReceipts, markRemovedReceipts,
+  activateReceipt, deleteReceipt, maintainReceipts, maintainSystemReceipts, markRemovedReceipts,
   purgeDeletingReceipts, RECEIPT_LIMITS, ReceiptLifecycleError, reserveReceipt,
   storeReceipt, sweepReceiptOrphans,
 } from '../lib/receipt-lifecycle';
@@ -122,8 +122,8 @@ function addTrip(database: SQLiteD1, id = 'trip-1', owner = actor) {
   database.sqlite.prepare('INSERT INTO trips (id,owner,data) VALUES (?,?,?)').run(id, owner, JSON.stringify(trip(id, owner)));
   database.sqlite.prepare('INSERT INTO memberships (trip_id,user_id,member_id) VALUES (?,?,?)').run(id, owner, 'a');
 }
-function seedReceipt(database: SQLiteD1, id = crypto.randomUUID(), options: { state?: string; createdAt?: string; owner?: string; tripId?: string } = {}) {
-  database.sqlite.prepare('INSERT INTO receipts (id,owner,trip_id,created_at,state) VALUES (?,?,?,?,?)').run(id, options.owner || actor, options.tripId || 'trip-1', options.createdAt ?? new Date().toISOString(), options.state || 'active');
+function seedReceipt(database: SQLiteD1, id = crypto.randomUUID(), options: { state?: string; createdAt?: string; owner?: string; tripId?: string; legacyCleanupAfter?: string } = {}) {
+  database.sqlite.prepare('INSERT INTO receipts (id,owner,trip_id,created_at,state,legacy_cleanup_after) VALUES (?,?,?,?,?,?)').run(id, options.owner || actor, options.tripId || 'trip-1', options.createdAt ?? new Date().toISOString(), options.state || 'active', options.legacyCleanupAfter || '');
   return id;
 }
 function count(database: SQLiteD1, table = 'receipts') { return database.sqlite.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()?.count as number; }
@@ -151,7 +151,7 @@ async function upload(database: SQLiteD1, bucket: MemoryR2, owner = actor, tripI
   return id;
 }
 
-test('receipt migration preserves old metadata, treating age as unknown and images as active', async () => {
+test('receipt migrations preserve unknown upload age and give legacy images a migration-anchored grace period', async () => {
   const database = new SQLiteD1();
   for (const name of ['0000_charming_zeigeist.sql', '0001_regular_maginty.sql', '0002_windy_cammi.sql', '0003_rainy_blazing_skull.sql']) database.sqlite.exec(await readFile(new URL(`../drizzle/${name}`, import.meta.url), 'utf8'));
   addTrip(database);
@@ -162,7 +162,25 @@ test('receipt migration preserves old metadata, treating age as unknown and imag
   assert.equal(database.sqlite.prepare('SELECT data FROM trips').get()?.data, before);
   database.sqlite.exec(await readFile(new URL('../drizzle/0005_audit_coverage.sql', import.meta.url), 'utf8'));
   assert.deepEqual({ ...database.sqlite.prepare('SELECT content_type,size_bytes,sha256 FROM receipts WHERE id=?').get(id) }, { content_type: '', size_bytes: 0, sha256: '' });
-  assert.equal(await sweepReceiptOrphans(database.asD1(), actor, Date.now() + 10 * RECEIPT_LIMITS.orphanAgeMs), 0);
+  const pending = crypto.randomUUID(), known = crypto.randomUUID();
+  database.sqlite.prepare("INSERT INTO receipts (id,owner,trip_id,created_at,state) VALUES (?,?,?,'','pending')").run(pending, actor, 'trip-1');
+  database.sqlite.prepare("INSERT INTO receipts (id,owner,trip_id,created_at,state) VALUES (?,?,?,?,'active')").run(known, actor, 'trip-1', new Date(Date.now() + RECEIPT_LIMITS.orphanAgeMs).toISOString());
+  const migrationStarted = Date.now();
+  database.sqlite.exec(await readFile(new URL('../drizzle/0006_receipt_cleanup.sql', import.meta.url), 'utf8'));
+  const migrationFinished = Date.now();
+  const legacy = database.sqlite.prepare('SELECT created_at,legacy_cleanup_after FROM receipts WHERE id=?').get(id);
+  assert.equal(legacy?.created_at, '', 'the migration does not invent an original upload timestamp');
+  const deadline = Date.parse(String(legacy?.legacy_cleanup_after));
+  assert.ok(deadline >= migrationStarted + RECEIPT_LIMITS.orphanAgeMs - 1 && deadline <= migrationFinished + RECEIPT_LIMITS.orphanAgeMs + 1);
+  for (const untouched of [pending, known]) assert.equal(database.sqlite.prepare('SELECT legacy_cleanup_after FROM receipts WHERE id=?').get(untouched)?.legacy_cleanup_after, '');
+  assert.equal(await sweepReceiptOrphans(database.asD1(), actor, deadline - 1), 0);
+  const bucket = new MemoryR2(); bucket.objects.set(imageKey(id), { bytes: png, contentType: 'image/png' });
+  const result = await maintainSystemReceipts(database.asD1(), bucket.asR2(), { now: deadline, sweepLimit: 1, purgeLimit: 1 });
+  assert.deepEqual(result, { marked: 1, deleted: 1, failed: 0 });
+  assert.equal(bucket.objects.size, 0);
+  const events = receiptEvents(database, id);
+  assert.equal(events.length, 2); assert.equal(events[0].before?.createdAt, ''); assert.equal(events[0].before?.legacyCleanupAfter, legacy?.legacy_cleanup_after);
+  assert.equal(events[0].after?.reason, 'orphan-expired'); assert.equal(events[1].source, 'system');
 });
 
 test('native receipt route uploads valid image, stores active metadata and protects image reads', async () => {
@@ -517,4 +535,109 @@ test('competing activation requests record only the successful state transition'
   const failure = (results.find(result => result.status === 'rejected') as PromiseRejectedResult).reason;
   assert.ok(failure instanceof ReceiptLifecycleError && failure.status === 409);
   assert.equal(receiptEvents(database, id).length, 2);
+});
+
+test('global maintenance cleans quiet trips across accounts with bounded mutation and object batches', async () => {
+  const { database, bucket } = await storage(); addTrip(database, 'quiet-private-trip', outsider);
+  const now = Date.now(), old = new Date(now - 2 * RECEIPT_LIMITS.orphanAgeMs).toISOString();
+  const ids: string[] = [];
+  for (let index = 0; index < RECEIPT_LIMITS.sweepBatch + 3; index++) {
+    const owner = index % 2 ? outsider : actor;
+    const id = seedReceipt(database, crypto.randomUUID(), { owner, tripId: owner === outsider ? 'quiet-private-trip' : 'trip-1', createdAt: old });
+    ids.push(id); bucket.objects.set(imageKey(id, owner), { bytes: png, contentType: 'image/png' });
+  }
+  database.sqlite.prepare('DELETE FROM memberships').run();
+  const revision = (await store.readLedger(actor)).revision;
+  assert.deepEqual(await maintainSystemReceipts(database.asD1(), bucket.asR2(), { now }), { marked: 20, deleted: 20, failed: 0 });
+  assert.equal(bucket.objects.size, 3); assert.equal(count(database), 3); assert.equal(bucket.deleteCalls.length, 20);
+  assert.deepEqual(await maintainSystemReceipts(database.asD1(), bucket.asR2(), { now, sweepLimit: 1, purgeLimit: 1 }), { marked: 1, deleted: 1, failed: 0 });
+  assert.equal(bucket.objects.size, 2); assert.equal(count(database), 2);
+  const events = receiptEvents(database);
+  assert.equal(events.length, 42); assert.equal(events.some(event => event.tripId === 'quiet-private-trip'), true);
+  for (const event of events) { assert.equal(event.actorId, 'system'); assert.equal(event.source, 'system'); }
+  assert.equal((await store.readLedger(actor)).revision, revision);
+  assert.equal(ids.length, 23);
+});
+
+test('global maintenance protects pending uploads, recent images and all live expense/draft references', async () => {
+  const { database, bucket } = await storage(); const now = Date.now(), old = new Date(now - 2 * RECEIPT_LIMITS.orphanAgeMs).toISOString();
+  const expiredGrace = new Date(now - 1).toISOString();
+  const pending = seedReceipt(database, crypto.randomUUID(), { state: 'pending', createdAt: old, legacyCleanupAfter: expiredGrace });
+  const recent = seedReceipt(database), unknown = seedReceipt(database, crypto.randomUUID(), { createdAt: '' });
+  const expenseImage = seedReceipt(database, crypto.randomUUID(), { createdAt: old });
+  const draftImage = seedReceipt(database, crypto.randomUUID(), { createdAt: '', legacyCleanupAfter: expiredGrace });
+  const holiday = trip(); holiday.expenses = [expense(expenseImage)]; holiday.drafts = [{ ...expense(draftImage), id: 'quiet-review', status: 'review' }];
+  database.sqlite.prepare('UPDATE trips SET data=? WHERE id=?').run(JSON.stringify(holiday), 'trip-1');
+  for (const id of [pending, recent, unknown, expenseImage, draftImage]) bucket.objects.set(imageKey(id), { bytes: png, contentType: 'image/png' });
+  assert.deepEqual(await maintainSystemReceipts(database.asD1(), bucket.asR2(), { now }), { marked: 0, deleted: 0, failed: 0 });
+  assert.equal(count(database), 5); assert.equal(bucket.objects.size, 5); assert.equal(receiptEvents(database).length, 0);
+});
+
+test('global cleanup retries a participant tombstone without access links and preserves the original initiator', async () => {
+  const { database, bucket } = await storage(); const id = await upload(database, bucket);
+  bucket.failDelete = true;
+  assert.deepEqual(await deleteReceipt(database.asD1(), bucket.asR2(), member, id), { receiptId: id, deleted: false, pending: true });
+  database.sqlite.prepare('DELETE FROM memberships').run();
+  assert.deepEqual(await maintainSystemReceipts(database.asD1(), bucket.asR2()), { marked: 0, deleted: 0, failed: 1 });
+  assert.equal(receiptEvents(database, id).length, 3);
+  bucket.failDelete = false;
+  assert.deepEqual(await maintainSystemReceipts(database.asD1(), bucket.asR2()), { marked: 0, deleted: 1, failed: 0 });
+  const events = receiptEvents(database, id);
+  assert.equal(events.length, 4); assert.equal(events[3].before?.initiatorId, member); assert.equal(events[3].before?.deletionReason, 'image-deletion');
+  assert.equal(events[3].actorId, 'system'); assert.equal(events[3].source, 'system'); assert.equal(count(database), 0);
+  assert.deepEqual(await maintainSystemReceipts(database.asD1(), bucket.asR2()), { marked: 0, deleted: 0, failed: 0 });
+  assert.equal(receiptEvents(database, id).length, 4);
+});
+
+test('a competing financial attachment prevents global cleanup from auditing or deleting a selected image', async () => {
+  const { database, bucket } = await storage(); const id = await upload(database, bucket);
+  database.sqlite.prepare('UPDATE receipts SET created_at=? WHERE id=?').run(new Date(Date.now() - 2 * RECEIPT_LIMITS.orphanAgeMs).toISOString(), id);
+  database.beforeReceiptBatch = async () => {
+    const state = await store.readLedger(actor); state.data.trips[0].expenses = [expense(id)];
+    await store.writeLedger(actor, state.data, state.revision);
+  };
+  assert.deepEqual(await maintainSystemReceipts(database.asD1(), bucket.asR2()), { marked: 0, deleted: 0, failed: 0 });
+  assert.equal(receiptEvents(database, id).length, 2); assert.ok(bucket.objects.has(imageKey(id)));
+  assert.equal(database.sqlite.prepare('SELECT state FROM receipts WHERE id=?').get(id)?.state, 'active');
+});
+
+test('legacy grace changes after global selection invalidate the exact deletion baseline', async () => {
+  const { database, bucket } = await storage(); const now = Date.now();
+  const id = seedReceipt(database, crypto.randomUUID(), { createdAt: '', legacyCleanupAfter: new Date(now - 1).toISOString() });
+  bucket.objects.set(imageKey(id), { bytes: png, contentType: 'image/png' });
+  const extended = new Date(now + RECEIPT_LIMITS.orphanAgeMs).toISOString();
+  database.beforeReceiptBatch = () => { database.sqlite.prepare('UPDATE receipts SET legacy_cleanup_after=? WHERE id=?').run(extended, id); };
+  assert.deepEqual(await maintainSystemReceipts(database.asD1(), bucket.asR2(), { now }), { marked: 0, deleted: 0, failed: 0 });
+  assert.equal(receiptEvents(database, id).length, 0); assert.ok(bucket.objects.has(imageKey(id)));
+  assert.equal(database.sqlite.prepare('SELECT legacy_cleanup_after FROM receipts WHERE id=?').get(id)?.legacy_cleanup_after, extended);
+});
+
+test('global maintenance validates strict bounds before doing any database or R2 work', async () => {
+  const { database, bucket } = await storage();
+  seedReceipt(database, crypto.randomUUID(), { createdAt: new Date(Date.now() - 2 * RECEIPT_LIMITS.orphanAgeMs).toISOString() });
+  for (const options of [{ sweepLimit: 0 }, { sweepLimit: 21 }, { sweepLimit: 1.5 }, { purgeLimit: NaN }, { purgeLimit: Infinity }, { purgeLimit: -1 }, { now: NaN }, { now: -1 }, { now: 8_640_000_000_000_001 }]) {
+    await assert.rejects(maintainSystemReceipts(database.asD1(), bucket.asR2(), options), /Invalid receipt maintenance/);
+  }
+  assert.equal(receiptEvents(database).length, 0); assert.equal(bucket.deleteCalls.length, 0); assert.equal(count(database), 1);
+});
+
+test('global sweep audit failure rolls back all selected marks before deleting any objects', async () => {
+  const { database, bucket } = await storage(); const old = new Date(Date.now() - 2 * RECEIPT_LIMITS.orphanAgeMs).toISOString();
+  for (let index = 0; index < 2; index++) {
+    const id = seedReceipt(database, crypto.randomUUID(), { createdAt: old }); bucket.objects.set(imageKey(id), { bytes: png, contentType: 'image/png' });
+  }
+  failReceiptAudit(database, "json_extract(NEW.after_data,'$.state')='deleting'");
+  await assert.rejects(maintainSystemReceipts(database.asD1(), bucket.asR2()), /receipt audit unavailable/);
+  assert.equal(database.sqlite.prepare("SELECT COUNT(*) AS n FROM receipts WHERE state='active'").get()?.n, 2);
+  assert.equal(receiptEvents(database).length, 0); assert.equal(bucket.deleteCalls.length, 0); assert.equal(bucket.objects.size, 2);
+});
+
+test('global sweep cannot race a slow pending object put', async () => {
+  const { database, bucket } = await storage();
+  bucket.beforePut = async () => {
+    assert.deepEqual(await maintainSystemReceipts(database.asD1(), bucket.asR2(), { now: Date.now() + 3 * RECEIPT_LIMITS.orphanAgeMs }), { marked: 0, deleted: 0, failed: 0 });
+    assert.equal(database.sqlite.prepare('SELECT state FROM receipts').get()?.state, 'pending');
+  };
+  const id = await upload(database, bucket);
+  assert.equal(receiptEvents(database, id).length, 2); assert.ok(bucket.objects.has(imageKey(id)));
 });
