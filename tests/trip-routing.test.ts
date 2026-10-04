@@ -46,3 +46,24 @@ test("changing sections preserves unfinished invitation and account entry parame
   }
   assert.equal(tripSectionHref("balances"), "/balances");
 });
+
+test("invitation and account entry links survive browsers without URLSearchParams.size", () => {
+  const descriptor = Object.getOwnPropertyDescriptor(URLSearchParams.prototype, "size");
+  if (descriptor) assert.equal(Reflect.deleteProperty(URLSearchParams.prototype, "size"), true);
+  try {
+    assert.equal(new URLSearchParams("invite=existing-member").size, undefined);
+    const entries = [["invite", "abc+123&join"], ["account", "login"], ["connect", "chatgpt"]];
+    const queries = [...entries.map(([key, value]) => new URLSearchParams([[key, value]])), new URLSearchParams(entries)];
+    for (const section of TRIP_SECTIONS) {
+      for (const query of queries) {
+        const destination = new URL(tripSectionHref(section.id, query.toString()), "https://triptab.example");
+        assert.equal(destination.pathname, section.href);
+        assert.equal(destination.search, "?" + query.toString(), "unfinished entry parameters must remain in the navigable URL");
+      }
+      assert.equal(tripSectionHref(section.id), section.href);
+      assert.equal(tripSectionHref(section.id, "?receipt=private-photo"), section.href);
+    }
+  } finally {
+    if (descriptor) Object.defineProperty(URLSearchParams.prototype, "size", descriptor);
+  }
+});

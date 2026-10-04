@@ -28,5 +28,6 @@ export function tripSectionHref(section: TripSection, search = ""): string {
     const value = source.get(key);
     if (value) entry.set(key, value);
   }
-  return entry.size ? `${path}?${entry}` : path;
+  const query = entry.toString();
+  return query ? `${path}?${query}` : path;
 }
