@@ -8,6 +8,11 @@ export const TRIP_SECTIONS = [
 
 export type TripSection = (typeof TRIP_SECTIONS)[number]["id"];
 
+export function isTripSectionPathname(pathname: string): boolean {
+  const path = pathname.replace(/\/+$/, "") || "/";
+  return path === "/" || TRIP_SECTIONS.some(section => section.href === path);
+}
+
 export function tripSectionForPathname(pathname: string | null): TripSection {
   const path = pathname?.replace(/\/+$/, "") || "/";
   return TRIP_SECTIONS.find(section => section.href === path)?.id || "expenses";
