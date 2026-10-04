@@ -19,8 +19,8 @@ WITH snapshots AS (
   WHERE json_type(message.value,'$.id') = 'text'
 )
 INSERT INTO receipt_messages (trip_id,message_id,message_data)
-SELECT trip_id,message_id,CASE WHEN json_extract(message_data,'$.role') = 'assistant'
-  THEN json_remove(message_data,'$.authorMemberId','$.authorName') ELSE message_data END
+SELECT trip_id,message_id,iif(json_extract(message_data,'$.role') = 'assistant',
+  json_remove(message_data,'$.authorMemberId','$.authorName'),message_data)
 FROM messages WHERE position = 1;
 --> statement-breakpoint
 -- Live legacy messages may predate activity history. Keep unknown speakers unknown.
@@ -38,26 +38,27 @@ WITH live AS (
   SELECT *,ROW_NUMBER() OVER (PARTITION BY trip_id,message_id ORDER BY position,message_data) AS choice FROM live
 )
 INSERT INTO receipt_messages (trip_id,message_id,message_data)
-SELECT trip_id,message_id,CASE WHEN json_extract(message_data,'$.role') = 'assistant'
-  THEN json_remove(message_data,'$.authorMemberId','$.authorName') ELSE message_data END
+SELECT trip_id,message_id,iif(json_extract(message_data,'$.role') = 'assistant',
+  json_remove(message_data,'$.authorMemberId','$.authorName'),message_data)
 FROM chosen WHERE choice = 1 AND NOT EXISTS (
   SELECT 1 FROM receipt_messages saved WHERE saved.trip_id = chosen.trip_id AND saved.message_id = chosen.message_id
 );
 --> statement-breakpoint
 -- Projection updates share the history transaction, including legacy deletion before-images.
+-- iif avoids CASE/END ambiguity in Wrangler's migration statement tokenizer.
 CREATE TRIGGER receipt_messages_from_activity AFTER INSERT ON activity_events
 WHEN NEW.entity_type IN ('expense','draft')
 BEGIN
   INSERT INTO receipt_messages (trip_id,message_id,message_data)
-  SELECT NEW.trip_id,json_extract(message.value,'$.id'),CASE WHEN json_extract(message.value,'$.role') = 'assistant'
-    THEN json_remove(message.value,'$.authorMemberId','$.authorName') ELSE message.value END
+  SELECT NEW.trip_id,json_extract(message.value,'$.id'),iif(json_extract(message.value,'$.role') = 'assistant',
+    json_remove(message.value,'$.authorMemberId','$.authorName'),message.value)
   FROM json_each(NEW.after_data,'$.conversation') message
   WHERE json_type(message.value,'$.id') = 'text' AND NOT EXISTS (
     SELECT 1 FROM receipt_messages saved WHERE saved.trip_id = NEW.trip_id AND saved.message_id = json_extract(message.value,'$.id')
   );
   INSERT INTO receipt_messages (trip_id,message_id,message_data)
-  SELECT NEW.trip_id,json_extract(message.value,'$.id'),CASE WHEN json_extract(message.value,'$.role') = 'assistant'
-    THEN json_remove(message.value,'$.authorMemberId','$.authorName') ELSE message.value END
+  SELECT NEW.trip_id,json_extract(message.value,'$.id'),iif(json_extract(message.value,'$.role') = 'assistant',
+    json_remove(message.value,'$.authorMemberId','$.authorName'),message.value)
   FROM json_each(NEW.before_data,'$.conversation') message
   WHERE json_type(message.value,'$.id') = 'text' AND NOT EXISTS (
     SELECT 1 FROM receipt_messages saved WHERE saved.trip_id = NEW.trip_id AND saved.message_id = json_extract(message.value,'$.id')

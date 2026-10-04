@@ -1347,7 +1347,12 @@ test('registry migration backfills latest immutable and unlabelled live legacy m
     (id,trip_id,actor_id,actor_name,created_at,entity_type,entity_id,action,before_data,after_data,revision,source)
     VALUES (?,?,?,?,?,'expense','dinner','update',?,?,1,'web')`);
   snapshot.run('historic', live.id, actor, 'Alice', '2026-10-04T21:00:00Z', JSON.stringify({ conversation: [question] }), JSON.stringify({ conversation: [latest, assistant] }));
-  database.sqlite.exec(await readFile(new URL('../drizzle/0007_receipt_message_registry.sql', import.meta.url), 'utf8'));
+  // Wrangler tokenizes migrations before D1 executes them. Running the full SQL
+  // text directly would miss a broken trigger split at an expression's END.
+  const { unstable_splitSqlQuery } = await import('wrangler');
+  const statements = unstable_splitSqlQuery(await readFile(new URL('../drizzle/0007_receipt_message_registry.sql', import.meta.url), 'utf8'));
+  assert.equal(statements.length, 8); assert.ok(!statements.some(statement => statement.trim() === 'END'));
+  for (const statement of statements) database.sqlite.exec(statement);
   const message = (id: string) => JSON.parse(database.sqlite.prepare('SELECT message_data FROM receipt_messages WHERE trip_id=? AND message_id=?').get(live.id, id)?.message_data as string);
   assert.deepEqual(message(question.id), latest);
   assert.deepEqual(message('live-legacy'), live.expenses[0].conversation![0]);
