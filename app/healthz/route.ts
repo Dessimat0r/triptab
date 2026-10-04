@@ -8,6 +8,10 @@ export async function GET() {
     await db().prepare(`SELECT r.state, r.created_at, r.legacy_cleanup_after, e.sequence, m.message_data
       FROM receipts r CROSS JOIN activity_events e
       CROSS JOIN receipt_messages m INDEXED BY receipt_messages_trip_message_idx LIMIT 0`).all();
+    const receiptMessageTriggers = ['receipt_messages_from_activity', 'receipt_messages_no_update', 'receipt_messages_no_delete', 'receipt_messages_no_replace'];
+    const triggers = await db().prepare(`SELECT name FROM sqlite_master WHERE type = 'trigger' AND name IN (${receiptMessageTriggers.map(() => '?').join(',')})`)
+      .bind(...receiptMessageTriggers).all<{ name: string }>();
+    if (triggers.results.length !== receiptMessageTriggers.length) throw Error('Missing receipt message maintenance');
     const storage = bucket();
     if (typeof storage.get !== 'function' || typeof storage.put !== 'function' || typeof storage.delete !== 'function') throw Error('Missing receipt binding');
     return Response.json({ status: 'ready' }, { headers: { 'Cache-Control': 'no-store' } });

@@ -17,6 +17,8 @@ For each release, record the GitHub commit, Sites source commit/version, deploym
 
 Code using activity history, receipt lifecycle and private account history requires migrations through `0007_receipt_message_registry.sql` in order before it serves traffic. Migration `0005` adds invitation/image audit metadata and browser-subscription generations; `0006` gives active historical images with unknown dates a fixed 24-hour cleanup grace without inventing an upload date. Migration `0007` backfills an immutable receipt-message lookup from historical and live conversations, then updates it atomically as new activity is recorded. Measure this one-time backfill on a production-sized copy before release; ordinary new questions use bounded indexed lookups. A local migration or a generated SQL journal does not establish production readiness. Apply the migrations through Sites' release path and retain its applied-migration evidence.
 
+Installations that applied the standalone `0007` receipt-message registry backport must still apply `0005` and `0006` by their explicit filenames through the recorded migration lifecycle. A timestamp-only migrator can skip these earlier entries; do not replay the already applied `0007` SQL.
+
 Redeploying a previous Sites version rolls back code, not necessarily D1 data or schema. Confirm that the previous code is compatible with the current schema before using it. A financial-data problem may require a data restore and reconciliation as well as a code rollback.
 
 ## Embedded preview release check
