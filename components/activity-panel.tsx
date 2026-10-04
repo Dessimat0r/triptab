@@ -51,14 +51,39 @@ function percentages(value: unknown, names: Record<string, string>): string {
   if (!entries) return "Item shares";
   return Object.entries(entries).map(([id, percent], index) => `${names[id] || `Person ${index + 1}`}: ${percent}%`).join("; ");
 }
+function quantity(value: unknown): string {
+  return typeof value === "number" && Number.isFinite(value)
+    ? new Intl.NumberFormat("en-GB", { maximumFractionDigits: 6 }).format(value)
+    : "Not recorded";
+}
 function itemDescription(value: unknown, currency: string | undefined, names: Record<string, string>): string {
   const item = record(value);
   if (!item) return "Not recorded";
   const members = Array.isArray(item.members) ? item.members.filter((id): id is string => typeof id === "string") : [];
-  const split = item.percentages ? percentages(item.percentages, names) : members.length
+  const units = record(item.units);
+  const allocations = record(units?.allocations);
+  const split = units ? `${quantity(units.total)} ${text(units.label) || "units"} total${allocations ? `; ${Object.entries(allocations).map(([id, amount], index) => `${names[id] || `Person ${index + 1}`}: ${quantity(amount)}`).join("; ")}` : ""}`
+    : item.percentages ? percentages(item.percentages, names) : members.length
     ? members.every(id => names[id]) ? members.map(id => names[id]).join(", ") : `${members.length} ${members.length === 1 ? "person" : "people"}`
     : "No participants";
   return `${text(item.name) || "Item"}: ${money(item.amount, currency)} · ${split}`;
+}
+
+function itemName(snapshot: Record<string, unknown>, id: unknown): string {
+  const item = (Array.isArray(snapshot.items) ? snapshot.items : []).map(record).find(value => value?.id === id);
+  return text(item?.name) || "an earlier item";
+}
+
+function memoryAliases(value: unknown, snapshot: Record<string, unknown>, names: Record<string, string>): string {
+  if (!Array.isArray(value) || !value.length) return "No saved names";
+  return value.map(value => {
+    const alias = record(value);
+    if (!alias) return "Earlier saved name";
+    const meaning = alias.itemId ? itemName(snapshot, alias.itemId)
+      : alias.memberId ? names[text(alias.memberId)] || "an earlier traveller" : "this receipt";
+    const scope = alias.scopeMemberId ? ` (for ${names[text(alias.scopeMemberId)] || "an earlier traveller"})` : "";
+    return `“${text(alias.name) || "Saved name"}” means ${meaning}${scope}`;
+  }).join("; ");
 }
 
 function changes(event: ActivityEvent, currency: Currency | undefined, names: Record<string, string>): Change[] {
@@ -102,12 +127,23 @@ function changes(event: ActivityEvent, currency: Currency | undefined, names: Re
     result.push({ label: "Traveller order", before: order(before.memberOrder), after: order(after.memberOrder) });
   }
   if (!same(before.conversation, after.conversation)) {
-    const description = (value: unknown) => {
+    const description = (value: unknown, snapshot: Record<string, unknown>) => {
       if (!Array.isArray(value) || !value.length) return "No messages";
       const latest = record(value[value.length - 1]);
-      return `${value.length} ${value.length === 1 ? "message" : "messages"}${latest ? ` · ${text(latest.text).slice(0, 300)}` : ""}`;
+      const question = latest?.replyTo ? value.map(record).find(message => message?.id === latest.replyTo) : null;
+      const context = latest?.itemId || question?.itemId;
+      const author = text(latest?.authorName) || names[text(latest?.authorMemberId)] || (latest?.role === "assistant" ? "ChatGPT/Codex" : "Traveller");
+      return `${value.length} ${value.length === 1 ? "message" : "messages"}${latest ? ` · ${author}${context ? ` about ${itemName(snapshot, context)}` : " about this receipt"}: ${text(latest.text).slice(0, 300)}` : ""}`;
     };
-    result.push({ label: "Receipt conversation", before: description(before.conversation), after: description(after.conversation) });
+    result.push({ label: "Receipt conversation", before: description(before.conversation, before), after: description(after.conversation, after) });
+  }
+  const oldMemory = record(before.memory);
+  const newMemory = record(after.memory);
+  if (text(oldMemory?.notes) !== text(newMemory?.notes)) {
+    result.push({ label: "Remembered receipt notes", before: text(oldMemory?.notes) || "No saved notes", after: text(newMemory?.notes) || "No saved notes" });
+  }
+  if (!same(oldMemory?.aliases || [], newMemory?.aliases || [])) {
+    result.push({ label: "Remembered names", before: memoryAliases(oldMemory?.aliases, before, names), after: memoryAliases(newMemory?.aliases, after, names) });
   }
   const oldItems = new Map((Array.isArray(before.items) ? before.items : []).map(value => { const item = record(value); return [text(item?.id), value]; }));
   const newItems = new Map((Array.isArray(after.items) ? after.items : []).map(value => { const item = record(value); return [text(item?.id), value]; }));

@@ -3,11 +3,21 @@
 import { useId, useRef, useState } from "react";
 import { MessageCircle, RefreshCw } from "lucide-react";
 import type { ReceiptMessage } from "@/lib/model";
+import type { ReceiptMemory } from "@/lib/receipt-context";
+import "./receipt-chat-context.css";
 
 export type ReceiptChatProps = {
   messages: ReceiptMessage[];
   busy: boolean;
-  onSend: (text: string) => Promise<boolean> | boolean;
+  itemId?: string;
+  scopeLabel?: string;
+  contextTitle?: string;
+  itemNames?: Record<string, string>;
+  memberNames?: Record<string, string>;
+  currentMemberId?: string;
+  memory?: ReceiptMemory;
+  error?: string;
+  onSend: (text: string, itemId?: string) => Promise<boolean> | boolean;
   onRefresh: () => void;
 };
 
@@ -23,7 +33,7 @@ function messageTime(createdAt: string) {
       });
 }
 
-export default function ReceiptChat({ messages, busy, onSend, onRefresh }: ReceiptChatProps) {
+export default function ReceiptChat({ messages, busy, itemId, scopeLabel, contextTitle, itemNames, memberNames, currentMemberId, memory, error, onSend, onRefresh }: ReceiptChatProps) {
   const titleId = useId();
   const questionId = useId();
   const hintId = useId();
@@ -33,8 +43,25 @@ export default function ReceiptChat({ messages, busy, onSend, onRefresh }: Recei
   const [sendError, setSendError] = useState("");
   const sendingRef = useRef(false);
   const working = busy || sending;
-  const replies = messages.filter(message => message.role === "assistant");
+  // Older replies may predate the explicit item field. Their saved question
+  // still supplies the context; receipt-level discussion retains every thread.
+  const questions = new Map(messages.filter(message => message.role === "user").map(message => [message.id, message]));
+  const messageItem = (message: ReceiptMessage) => message.itemId || (message.replyTo ? questions.get(message.replyTo)?.itemId : undefined);
+  const visibleMessages = itemId ? messages.filter(message => messageItem(message) === itemId) : messages;
+  const replies = visibleMessages.filter(message => message.role === "assistant");
   const answered = new Set(replies.map(message => message.replyTo).filter(Boolean));
+  const itemLabel = scopeLabel || (itemId && itemNames?.[itemId]) || "this item";
+  const heading = contextTitle || (itemId ? `Discuss ${itemLabel}` : "Discuss this receipt");
+  const questionLabel = itemId ? `Question about ${itemLabel}` : "Receipt question";
+  const visibleError = sendError || error;
+  const authorLabel = (message: ReceiptMessage) => {
+    if (message.role === "assistant") return "ChatGPT or Codex";
+    if (message.authorMemberId) {
+      if (message.authorMemberId === currentMemberId) return "You";
+      return message.authorName || memberNames?.[message.authorMemberId] || "Earlier traveller";
+    }
+    return message.authorName || "Earlier traveller";
+  };
 
   async function sendQuestion() {
     const text = question.trim();
@@ -43,7 +70,7 @@ export default function ReceiptChat({ messages, busy, onSend, onRefresh }: Recei
     setSending(true);
     setSendError("");
     try {
-      const saved = await onSend(text);
+      const saved = await onSend(text, itemId);
       if (saved) setQuestion("");
       else setSendError("Your question could not be saved. Your draft is still here.");
     } catch {
@@ -55,21 +82,36 @@ export default function ReceiptChat({ messages, busy, onSend, onRefresh }: Recei
   }
 
   return (
-    <section className="receipt-chat" aria-labelledby={titleId} aria-busy={working}>
-      <h3 id={titleId}>Discuss this receipt</h3>
+    <section className="receipt-chat" aria-labelledby={titleId} aria-busy={working} data-item-id={itemId}>
+      <h3 id={titleId}>{heading}</h3>
       <p id={hintId} className="receipt-chat-hint">
-        Questions are saved here. Use the copied prompt in your connected ChatGPT
-        or Codex, then check for its reply.
+        Questions are saved here. AI is optional: use the copied question prompt in your connected ChatGPT
+        or Codex, then check for its reply. You can adjust the details yourself.
       </p>
-      {messages.length ? (
-        <div className="receipt-chat-scroll" role="region" aria-label="Receipt conversation" tabIndex={0}>
+      {itemId && <p className="receipt-chat-scope">“This” refers to {itemLabel}. You can also ask about other items or the whole receipt.</p>}
+      {memory && <details className="receipt-chat-memory">
+        <summary>Remembered receipt context</summary>
+        <p className="receipt-chat-hint">Saved with this receipt so your connected ChatGPT or Codex can read these notes and names each time it loads the receipt. All item discussions share this context.</p>
+        {memory.notes && <p className="receipt-chat-memory-notes">{memory.notes}</p>}
+        {memory.aliases.length > 0 && <ul className="receipt-chat-aliases">
+          {memory.aliases.map((alias, index) => <li key={`${alias.name}:${index}`}>
+            <strong>{alias.name}</strong>
+            <span>{alias.itemId ? itemNames?.[alias.itemId] || "Earlier item" : alias.memberId ? memberNames?.[alias.memberId] || "Earlier traveller" : "Saved name"}
+              {alias.scopeMemberId ? ` · for ${memberNames?.[alias.scopeMemberId] || "an earlier traveller"}` : ""}</span>
+          </li>)}
+        </ul>}
+        {!memory.notes && memory.aliases.length === 0 && <p className="receipt-chat-empty">No notes or names remembered yet.</p>}
+      </details>}
+      {visibleMessages.length ? (
+        <div className="receipt-chat-scroll" role="region" aria-label={itemId ? `${itemLabel} conversation` : "Receipt conversation"} tabIndex={0}>
           <ol className="receipt-chat-thread">
-            {messages.map(message => (
+            {visibleMessages.map(message => (
               <li key={message.id} className={`receipt-chat-message ${message.role}`}>
                 <div className="receipt-chat-message-heading">
-                  <strong>{message.role === "user" ? "You" : "ChatGPT or Codex"}</strong>
+                  <strong>{authorLabel(message)}</strong>
                   <time dateTime={message.createdAt}>{messageTime(message.createdAt)}</time>
                 </div>
+                {messageItem(message) && <span className="receipt-chat-context">{itemNames?.[messageItem(message)!] || (messageItem(message) === itemId && scopeLabel) || "Earlier item"}</span>}
                 <p className="receipt-chat-text">{message.text}</p>
                 {message.role === "user" && !answered.has(message.id) && (
                   <span className="receipt-chat-pending">Waiting for reply</span>
@@ -80,19 +122,19 @@ export default function ReceiptChat({ messages, busy, onSend, onRefresh }: Recei
         </div>
       ) : (
         <p className="receipt-chat-empty">
-          Ask about unclear items, missing charges or totals that do not match.
+          {itemId ? "Ask about this item’s quantity, price or cost shares, or anything else on the receipt." : "Ask about unclear items, missing charges or totals that do not match."}
         </p>
       )}
       <div className="receipt-chat-announcement" role="status" aria-live="polite" aria-atomic="true">
-        {replies.length > 0 ? `${replies.length} ${replies.length === 1 ? "reply is" : "replies are"} available from ChatGPT or Codex.` : ""}
+        {replies.length > 0 ? `${replies.length} ${replies.length === 1 ? "reply is" : "replies are"} available from ChatGPT or Codex${itemId ? ` about ${itemLabel}` : ""}.` : ""}
       </div>
-      <label htmlFor={questionId}>Receipt question</label>
+      <label htmlFor={questionId}>{questionLabel}</label>
       <textarea
         id={questionId}
         value={question}
         maxLength={4000}
         rows={3}
-        aria-describedby={sendError ? `${hintId} ${errorId}` : hintId}
+        aria-describedby={visibleError ? `${hintId} ${errorId}` : hintId}
         disabled={working}
         onChange={event => {
           setQuestion(event.target.value);
@@ -109,7 +151,7 @@ export default function ReceiptChat({ messages, busy, onSend, onRefresh }: Recei
           Check for replies
         </button>
       </div>
-      {sendError && <p id={errorId} className="receipt-chat-error" role="alert">{sendError}</p>}
+      {visibleError && <p id={errorId} className="receipt-chat-error" role="alert">{visibleError}</p>}
       <p className="receipt-chat-note">Proposed changes need your review before the expense is updated.</p>
     </section>
   );

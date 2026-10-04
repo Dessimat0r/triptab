@@ -52,8 +52,10 @@ const storeCompiled = transpileModule(storeSource, { compilerOptions: { module: 
   .replace("'./model'", JSON.stringify(new URL('../lib/model.ts', import.meta.url).href))
   .replace("'./auth'", JSON.stringify(new URL('../lib/auth.ts', import.meta.url).href))
   .replace("'./receipt-lifecycle'", JSON.stringify(new URL('../lib/receipt-lifecycle.ts', import.meta.url).href))
+  .replace("'./receipt-context'", JSON.stringify(new URL('../lib/receipt-context.ts', import.meta.url).href))
   .replace("'./notifications'", JSON.stringify(notificationUrl));
 const storeUrl = 'data:text/javascript;base64,' + Buffer.from(storeCompiled).toString('base64');
+const store = await import(storeUrl) as typeof import('../lib/store');
 const routeSource = await readFile(new URL('../app/api/export/route.ts', import.meta.url), 'utf8');
 const routeCompiled = transpileModule(routeSource, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
   .replace("'@/lib/store'", JSON.stringify(storeUrl))
@@ -182,6 +184,62 @@ test('financial CSV preserves amounts and RFC4180 notes while neutralizing formu
   assert.equal(rows[1][index('transaction_timezone')], 'Europe/Lisbon');
   const snapshot = await json<Snapshot>(await route.GET(request('scope=trip&tripId=mine')));
   assert.equal(snapshot.data.trips[0].expenses[0].title, trip.expenses[0].title, 'JSON keeps the literal stored value');
+});
+
+test('real saved receipt units, memory and item conversation survive authorized JSON and item-detail CSV exports', async () => {
+  const database = await storage();
+  const trip = holiday('mine', 'owner');
+  const expense = trip.expenses[0];
+  expense.currency = 'GBP';
+  delete expense.bankAmount;
+  expense.items = [{ id: 'chocolate', name: 'Chocolate, "dark"\nThree blocks', amount: 1001, members: ['a', 'b'], units: { total: 3, label: 'blocks', allocations: { a: 2.5, b: 0.5 } } }];
+  expense.memory = { notes: 'Treat "blocks" as chocolate.\nKeep this context for later questions.', aliases: [{ name: 'blocks', itemId: 'chocolate' }, { name: 'me', memberId: 'b', scopeMemberId: 'b' }] };
+  expense.conversation = [{ id: 'item-question', role: 'user', text: 'Which blocks are mine?', createdAt: '2026-10-04T12:00:00Z', itemId: 'chocolate', authorMemberId: 'b', authorName: 'Bob' }];
+  // Preserve a historical authored thread, then change the receipt through the
+  // actual validator/CAS/storage path rather than testing a constructed CSV.
+  database.sqlite.prepare('UPDATE trips SET data=? WHERE id=?').run(JSON.stringify(trip), 'mine');
+  database.sqlite.prepare('INSERT INTO memberships (trip_id,user_id,member_id) VALUES (?,?,?)').run('mine', 'owner', 'a');
+  const edited = structuredClone(trip);
+  edited.expenses[0].memory!.notes += '\nBob calls them pieces.';
+  edited.drafts = [{ ...structuredClone(edited.expenses[0]), id: 'receipt-review', expenseId: expense.id, status: 'review' }];
+  const saved = await store.writeLedger('owner', { trips: [edited] }, 0);
+
+  for (const query of ['', 'scope=trip&tripId=mine']) {
+    const response = await route.GET(request(query));
+    assert.equal(response.status, 200);
+    const exported = (await json<Snapshot>(response)).data.trips[0];
+    assert.deepEqual(exported.expenses[0].items, saved.data.trips[0].expenses[0].items);
+    assert.deepEqual(exported.expenses[0].memory, edited.expenses[0].memory);
+    assert.deepEqual(exported.drafts[0].memory, edited.expenses[0].memory);
+    assert.deepEqual(exported.expenses[0].conversation, expense.conversation);
+    assert.deepEqual(exported.drafts[0].conversation, expense.conversation);
+  }
+
+  const financialRows = parseCsv(await (await route.GET(request('scope=trip&tripId=mine&format=csv'))).text());
+  const header = financialRows[0];
+  assert.equal(header.at(-1), 'item_details_json', 'new details append after all existing columns');
+  assert.equal(header[8], 'receipt_amount');
+  assert.equal(header[27], 'Alice_cost_share_hundredths');
+  assert.ok(financialRows.every(row => row.length === header.length));
+  assert.equal(financialRows[1][header.indexOf('receipt_amount_hundredths')], '1001', 'line amount is the full price, not a per-unit price');
+  assert.equal(financialRows[1][header.indexOf('Alice_cost_share_hundredths')], '834');
+  assert.equal(financialRows[1][header.indexOf('Bob_cost_share_hundredths')], '167');
+  assert.deepEqual(JSON.parse(financialRows[1].at(-1)!), expense.items);
+  assert.equal(financialRows[2].at(-1), '', 'payment rows have no item detail');
+  const history = await json<HistoryPage>(await route.GET(request('scope=activity&tripId=mine')));
+  const changed = history.events.find(event => event.entityType === 'expense' && event.entityId === expense.id && event.action === 'update');
+  assert.deepEqual(changed?.after?.memory, edited.expenses[0].memory);
+  assert.deepEqual(changed?.after?.items, expense.items);
+
+  // A whole-receipt percentage split still controls financial totals while
+  // the saved unit assignments remain available in the exported detail.
+  const overridden = structuredClone(saved.data.trips[0]);
+  overridden.expenses[0].percentages = { a: 25, b: 75 };
+  await store.writeLedger('owner', { trips: [overridden] }, saved.revision);
+  const overriddenRows = parseCsv(await (await route.GET(request('scope=trip&tripId=mine&format=csv'))).text());
+  assert.equal(overriddenRows[1][header.indexOf('Alice_cost_share_hundredths')], '250');
+  assert.equal(overriddenRows[1][header.indexOf('Bob_cost_share_hundredths')], '751');
+  assert.deepEqual(JSON.parse(overriddenRows[1].at(-1)!), expense.items);
 });
 
 test('history pages are bounded, cursor-complete, UTC, scoped and safe as CSV', async () => {

@@ -7,6 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { ModuleKind, ScriptTarget, transpileModule } from 'typescript';
 import type { Trip } from '../lib/model';
 import type { ActivityEvent } from '../lib/store';
+import { receiptMemorySchema } from '../lib/receipt-context';
 
 // Execute the real store SQL in SQLite. Only the Worker binding and background
 // notification delivery are replaced; authorization, CAS, diffs and batches are real.
@@ -526,4 +527,301 @@ test('legacy compatibility cannot authorize changed, copied or newly introduced 
   assert.equal(database.sqlite.prepare('SELECT data FROM trips WHERE id=?').get(legacy.id)?.data, original);
   assert.equal(count(database), 0);
   assert.equal((await store.readLedger(actor)).revision, 0);
+});
+
+test('receipt memory validates bounded notes and exact alias targets while retaining historical references', () => {
+  assert.deepEqual(receiptMemorySchema.parse({}), { notes: '', aliases: [] });
+  const memory = receiptMemorySchema.parse({
+    notes: 'n'.repeat(6000),
+    aliases: Array.from({ length: 50 }, (_, index) => ({ name: `  ${'a'.repeat(60)}  `, itemId: `removed-item-${index}`, scopeMemberId: 'removed-person' })),
+  });
+  assert.equal(memory.notes.length, 6000);
+  assert.equal(memory.aliases.length, 50);
+  assert.equal(memory.aliases[0].name.length, 60);
+  assert.equal(memory.aliases[0].itemId, 'removed-item-0');
+  assert.deepEqual(receiptMemorySchema.parse({ aliases: [{ name: ' Dad ', memberId: 'former-traveller' }] }).aliases, [{ name: 'Dad', memberId: 'former-traveller' }]);
+  for (const invalid of [
+    { notes: 'n'.repeat(6001) },
+    { aliases: Array.from({ length: 51 }, () => ({ name: 'meal', itemId: 'food' })) },
+    { aliases: [{ name: '  ', itemId: 'food' }] },
+    { aliases: [{ name: 'a'.repeat(61), itemId: 'food' }] },
+    { aliases: [{ name: 'ambiguous' }] },
+    { aliases: [{ name: 'ambiguous', itemId: 'food', memberId: 'a' }] },
+    { aliases: [{ name: 'meal', itemId: '' }] },
+    { aliases: [{ name: 'meal', itemId: 'x'.repeat(101) }] },
+    { aliases: [{ name: 'meal', itemId: 'food', scopeMemberId: '' }] },
+    { aliases: [{ name: 'meal', itemId: 'food', unsupported: 'value' }] },
+    { unsupported: 'value' },
+  ]) {
+    const result = receiptMemorySchema.safeParse(invalid);
+    assert.equal(result.success, false);
+    if (!result.success) assert.equal(result.error.name, 'ZodError');
+  }
+});
+
+test('new receipt messages ignore forged speakers and record the authenticated creator on user and assistant roles', async () => {
+  const database = await storage();
+  const holiday = trip();
+  holiday.expenses = [{ ...dinner(), conversation: [
+    { id: 'question', role: 'user', text: 'Was this my meal?', createdAt: '2026-10-04T20:31:00Z', itemId: 'food', authorMemberId: 'b', authorName: 'Forged Bob' },
+    { id: 'answer', role: 'assistant', text: 'Check the item assignment.', createdAt: '2026-10-04T20:32:00Z', replyTo: 'question', itemId: 'food', authorMemberId: 'b', authorName: 'Forged Bob' },
+  ] }];
+  const state = await create(database, holiday);
+  const messages = state.data.trips[0].expenses[0].conversation!;
+  for (const message of messages) {
+    assert.equal(message.authorMemberId, 'a');
+    assert.equal(message.authorName, 'Original Owner');
+  }
+  assert.equal(messages[0].role, 'user');
+  assert.equal(messages[1].role, 'assistant');
+  assert.equal(messages[0].itemId, 'food');
+  assert.deepEqual(lastEntity(await history(), 'expense', 'dinner').after?.conversation, messages);
+});
+
+test('known Bob messages keep their original speakers when Alice copies a receipt into review and submits a new reply', async () => {
+  const database = await storage();
+  const holiday = trip(); holiday.expenses = [dinner()];
+  await create(database, holiday);
+  database.sqlite.prepare('INSERT INTO memberships (trip_id,user_id,member_id) VALUES (?,?,?)').run('trip-1', member, 'b');
+  let bob = await store.readLedger(member);
+  bob.data.trips[0].expenses[0].conversation = [
+    { id: 'bob-question', role: 'user', text: 'I had the dinner.', createdAt: '2026-10-04T20:31:00Z', itemId: 'food', authorMemberId: 'a', authorName: 'Forged Alice' },
+  ];
+  bob = await store.writeLedger(member, bob.data, bob.revision);
+  const savedQuestion = structuredClone(bob.data.trips[0].expenses[0].conversation![0]);
+  assert.equal(savedQuestion.authorMemberId, 'b');
+  assert.equal(savedQuestion.authorName, 'Bob');
+  database.sqlite.prepare('UPDATE profiles SET display_name=? WHERE id=?').run('New Bob', member);
+  let alice = await store.readLedger(actor);
+  const eventsBeforeForgery = count(database);
+  alice.data.trips[0].expenses[0].conversation![0].authorMemberId = 'a';
+  alice.data.trips[0].expenses[0].conversation![0].authorName = 'Forged Alice';
+  alice = await store.writeLedger(actor, alice.data, alice.revision);
+  assert.deepEqual(alice.data.trips[0].expenses[0].conversation![0], savedQuestion);
+  assert.equal(count(database), eventsBeforeForgery, 'ignored author forgery must not create a false edit');
+  const reviewed = structuredClone(alice.data.trips[0].expenses[0]);
+  reviewed.conversation![0].authorMemberId = 'a';
+  reviewed.conversation![0].authorName = 'Forged Alice';
+  alice.data.trips[0].drafts = [{ ...reviewed, id: 'review-draft', status: 'review', expenseId: 'dinner', conversation: [
+    ...reviewed.conversation!,
+    { id: 'alice-answer', role: 'assistant', text: 'Your dinner is assigned to Bob.', createdAt: '2026-10-04T20:33:00Z', replyTo: 'bob-question', itemId: 'food', authorMemberId: 'b', authorName: 'Forged Bob' },
+  ] }];
+  alice = await store.writeLedger(actor, alice.data, alice.revision, { source: 'chatgpt' });
+  assert.deepEqual(alice.data.trips[0].drafts[0].conversation![0], savedQuestion);
+  assert.deepEqual(alice.data.trips[0].expenses[0].conversation![0], savedQuestion);
+  const reply = alice.data.trips[0].drafts[0].conversation![1];
+  assert.equal(reply.authorMemberId, 'a');
+  assert.equal(reply.authorName, 'Original Owner');
+  assert.equal(reply.replyTo, 'bob-question');
+  assert.equal(lastEntity(await history(), 'draft', 'review-draft').source, 'chatgpt');
+  // Posting the review may remove its container without dropping provenance.
+  alice.data.trips[0].expenses[0].conversation = alice.data.trips[0].drafts[0].conversation;
+  alice.data.trips[0].drafts = [];
+  alice = await store.writeLedger(actor, alice.data, alice.revision);
+  assert.deepEqual(alice.data.trips[0].expenses[0].conversation![0], savedQuestion);
+  assert.equal(alice.data.trips[0].expenses[0].conversation![1].authorMemberId, 'a');
+});
+
+test('saved message IDs cannot be reused to rewrite another traveller’s words or item context', async context => {
+  const database = await storage();
+  const holiday = trip(); holiday.expenses = [dinner()];
+  await create(database, holiday);
+  database.sqlite.prepare('INSERT INTO memberships (trip_id,user_id,member_id) VALUES (?,?,?)').run('trip-1', member, 'b');
+  const bob = await store.readLedger(member);
+  bob.data.trips[0].expenses[0].conversation = [{ id: 'bob-question', role: 'user', text: 'My meal was the dinner.', createdAt: '2026-10-04T20:31:00Z', itemId: 'food' }];
+  await store.writeLedger(member, bob.data, bob.revision);
+  const alice = await store.readLedger(actor);
+  const original = database.sqlite.prepare('SELECT data FROM trips WHERE id=?').get('trip-1')?.data;
+  const initialEvents = count(database);
+  for (const [field, value] of [
+    ['role', 'assistant'], ['text', 'Bob owes everything.'], ['createdAt', '2026-10-04T20:35:00Z'], ['replyTo', 'other-question'], ['itemId', 'other-item'],
+  ] as const) await context.test(field, async () => {
+    const changed = structuredClone(alice.data);
+    Object.assign(changed.trips[0].expenses[0].conversation![0], { [field]: value });
+    await assert.rejects(store.writeLedger(actor, changed, alice.revision), (error: unknown) => error instanceof store.RequestError && error.status === 400 && /Saved receipt messages cannot be edited/.test(error.message));
+    assert.equal(database.sqlite.prepare('SELECT data FROM trips WHERE id=?').get('trip-1')?.data, original);
+    assert.equal(database.sqlite.prepare('SELECT revision FROM sync_state WHERE id=1').get()?.revision, alice.revision);
+    assert.equal(count(database), initialEvents);
+  });
+});
+
+test('historical speakers and unlabelled legacy messages survive removed travellers and receipt copies', async () => {
+  const database = await storage();
+  const holiday = trip(); holiday.members.push({ id: 'former', name: 'Former Traveller' }); holiday.expenses = [dinner()];
+  let state = await create(database, holiday);
+  state.data.trips[0].expenses[0].conversation = [
+    { id: 'historical', role: 'user', text: 'I ordered this.', createdAt: '2026-10-03T20:31:00Z', itemId: 'removed-item', authorMemberId: 'former', authorName: 'Former Name' },
+    { id: 'legacy', role: 'user', text: 'An older unlabelled question.', createdAt: '2026-10-02T20:31:00Z' },
+  ];
+  // Fixture represents messages saved before this account/session and old schema.
+  database.sqlite.prepare('UPDATE trips SET data=? WHERE id=?').run(JSON.stringify(state.data.trips[0]), 'trip-1');
+  state = await store.readLedger(actor);
+  const originalMessages = structuredClone(state.data.trips[0].expenses[0].conversation!);
+  state.data.trips[0].members = state.data.trips[0].members.filter(person => person.id !== 'former');
+  const review = structuredClone(state.data.trips[0].expenses[0]);
+  review.conversation!.forEach(message => { message.authorMemberId = 'a'; message.authorName = 'Forged Owner'; });
+  state.data.trips[0].drafts = [{ ...review, id: 'review-history', status: 'review', expenseId: 'dinner' }];
+  state = await store.writeLedger(actor, state.data, state.revision);
+  assert.deepEqual(state.data.trips[0].expenses[0].conversation, originalMessages);
+  assert.deepEqual(state.data.trips[0].drafts[0].conversation, originalMessages);
+  assert.equal(state.data.trips[0].drafts[0].conversation![0].authorName, 'Former Name');
+  assert.equal(state.data.trips[0].drafts[0].conversation![1].authorMemberId, undefined);
+  assert.equal(state.data.trips[0].drafts[0].conversation![1].authorName, undefined);
+});
+
+test('membership reassignment during a chat save cannot commit a message under a stale linked traveller', async () => {
+  const database = await storage();
+  const holiday = trip(); holiday.members.push({ id: 'c', name: 'Carol' }); holiday.expenses = [dinner()];
+  await create(database, holiday);
+  database.sqlite.prepare('INSERT INTO memberships (trip_id,user_id,member_id) VALUES (?,?,?)').run('trip-1', member, 'b');
+  const state = await store.readLedger(member);
+  state.data.trips[0].expenses[0].conversation = [{ id: 'question', role: 'user', text: 'My share?', createdAt: '2026-10-04T20:31:00Z' }];
+  const initialEvents = count(database);
+  database.beforeWriteBatch = () => { database.sqlite.prepare('UPDATE memberships SET member_id=? WHERE trip_id=? AND user_id=?').run('c', 'trip-1', member); };
+  await assert.rejects(store.writeLedger(member, state.data, state.revision), /CONFLICT/);
+  assert.equal((await store.readLedger(actor)).data.trips[0].expenses[0].conversation, undefined);
+  assert.equal(database.sqlite.prepare('SELECT revision FROM sync_state WHERE id=1').get()?.revision, state.revision);
+  assert.equal(count(database), initialEvents);
+});
+
+test('receipt memory persists through financial saves and bounds failures cannot change ledger or history', async context => {
+  const errors = context.mock.method(console, 'error', () => {});
+  const database = await storage();
+  const holiday = trip(); holiday.expenses = [{ ...dinner(), memory: {
+    notes: 'Bill includes tax. Keep the original receipt currency.',
+    aliases: [{ name: 'My dinner', itemId: 'food', scopeMemberId: 'a' }, { name: 'Dad', memberId: 'b' }],
+  } }];
+  const state = await create(database, holiday);
+  const memory = state.data.trips[0].expenses[0].memory;
+  assert.deepEqual(memory, holiday.expenses[0].memory);
+  assert.deepEqual(lastEntity(await history(), 'expense', 'dinner').after?.memory, memory);
+  const original = database.sqlite.prepare('SELECT data FROM trips WHERE id=?').get('trip-1')?.data;
+  const initialEvents = count(database);
+  const route = await ledgerRoute();
+  for (const [invalid, expected] of [
+    [{ notes: 'n'.repeat(6001), aliases: [] }, /memory → notes.*6000/],
+    [{ notes: '', aliases: Array.from({ length: 51 }, () => ({ name: 'meal', itemId: 'food' })) }, /memory → aliases.*50/],
+    [{ notes: '', aliases: [{ name: 'conflict', itemId: 'food', memberId: 'a' }] }, /memory → aliases → 1.*exactly one item or traveller/],
+    [{ notes: '', aliases: [{ name: 'meal', itemId: 'food', PRIVATE_FIELD_NAME: 'private' }] }, /Remove unsupported fields/],
+  ] as const) {
+    const changed = structuredClone(state.data);
+    Object.assign(changed.trips[0].expenses[0], { memory: invalid });
+    const response = await route.POST(saveRequest(changed, state.revision));
+    assert.equal(response.status, 400);
+    const message = (await response.json() as { error: string }).error;
+    assert.match(message, expected);
+    assert.doesNotMatch(message, /PRIVATE_FIELD_NAME/);
+    assert.equal(database.sqlite.prepare('SELECT data FROM trips WHERE id=?').get('trip-1')?.data, original);
+    assert.equal(database.sqlite.prepare('SELECT revision FROM sync_state WHERE id=1').get()?.revision, state.revision);
+    assert.equal(count(database), initialEvents);
+  }
+  assert.equal(errors.mock.callCount(), 0);
+});
+
+test('restoring a fully deleted receipt verifies Bob’s speaker from immutable history despite forged client authors', async context => {
+  const database = await storage();
+  const holiday = trip(); holiday.expenses = [dinner()];
+  await create(database, holiday);
+  database.sqlite.prepare('INSERT INTO memberships (trip_id,user_id,member_id) VALUES (?,?,?)').run('trip-1', member, 'b');
+  const bob = await store.readLedger(member);
+  bob.data.trips[0].expenses[0].conversation = [{ id: 'bob-question', role: 'user', text: 'I had the dinner.', createdAt: '2026-10-04T20:31:00Z', itemId: 'food' }];
+  await store.writeLedger(member, bob.data, bob.revision);
+  let alice = await store.readLedger(actor);
+  alice.data.trips[0].expenses = [];
+  alice = await store.writeLedger(actor, alice.data, alice.revision);
+  const deleted = lastEntity(await history(), 'expense', 'dinner');
+  assert.equal(deleted.action, 'delete');
+  const snapshot = structuredClone(deleted.before!) as unknown as Trip['expenses'][number];
+  assert.equal(snapshot.conversation![0].authorMemberId, 'b');
+  assert.equal(snapshot.conversation![0].authorName, 'Bob');
+  const initialEvents = count(database);
+  for (const [field, value] of [
+    ['role', 'assistant'], ['text', 'Bob owes the entire holiday.'], ['createdAt', '2026-10-04T21:00:00Z'], ['replyTo', 'fake-question'], ['itemId', 'other-item'],
+  ] as const) await context.test(`historical ${field} cannot be changed even without author claims`, async () => {
+    const changed = structuredClone(alice.data);
+    const forged = structuredClone(snapshot);
+    delete forged.conversation![0].authorMemberId;
+    delete forged.conversation![0].authorName;
+    Object.assign(forged.conversation![0], { [field]: value });
+    changed.trips[0].expenses = [forged];
+    await assert.rejects(store.writeLedger(actor, changed, alice.revision), (error: unknown) => error instanceof store.RequestError && /Saved receipt messages cannot be edited/.test(error.message));
+    assert.equal((await store.readLedger(actor)).data.trips[0].expenses.length, 0);
+    assert.equal(database.sqlite.prepare('SELECT revision FROM sync_state WHERE id=1').get()?.revision, alice.revision);
+    assert.equal(count(database), initialEvents);
+  });
+  database.sqlite.prepare('UPDATE profiles SET display_name=? WHERE id=?').run('Renamed Bob', member);
+  const restored = structuredClone(snapshot);
+  restored.conversation![0].authorMemberId = 'a';
+  restored.conversation![0].authorName = 'Forged Alice';
+  alice.data.trips[0].expenses = [restored];
+  alice = await store.writeLedger(actor, alice.data, alice.revision);
+  assert.deepEqual(alice.data.trips[0].expenses[0].conversation, snapshot.conversation);
+  const event = lastEntity(await history(), 'expense', 'dinner');
+  assert.equal(event.action, 'create');
+  assert.equal(event.actorId, actor);
+  assert.equal((event.after?.conversation as typeof snapshot.conversation)![0].authorMemberId, 'b');
+  assert.equal((event.after?.conversation as typeof snapshot.conversation)![0].authorName, 'Bob');
+});
+
+test('restoring a fully deleted unlabelled legacy conversation keeps historical I unknown', async () => {
+  const database = await storage();
+  const holiday = trip(); holiday.expenses = [dinner()];
+  let state = await create(database, holiday);
+  state.data.trips[0].expenses[0].conversation = [{ id: 'legacy-question', role: 'user', text: 'I ordered the dinner.', createdAt: '2026-10-02T20:31:00Z', itemId: 'food' }];
+  database.sqlite.prepare('UPDATE trips SET data=? WHERE id=?').run(JSON.stringify(state.data.trips[0]), 'trip-1');
+  state = await store.readLedger(actor);
+  state.data.trips[0].expenses = [];
+  state = await store.writeLedger(actor, state.data, state.revision);
+  const snapshot = structuredClone(lastEntity(await history(), 'expense', 'dinner').before!) as unknown as Trip['expenses'][number];
+  state.data.trips[0].expenses = [snapshot];
+  state = await store.writeLedger(actor, state.data, state.revision);
+  const message = state.data.trips[0].expenses[0].conversation![0];
+  assert.equal(message.authorMemberId, undefined);
+  assert.equal(message.authorName, undefined);
+  assert.deepEqual(message, snapshot.conversation![0]);
+  assert.deepEqual(lastEntity(await history(), 'expense', 'dinner').after?.conversation, snapshot.conversation);
+});
+
+test('another trip’s historical message cannot prove a forged speaker and fresh IDs use the current authenticated author', async () => {
+  const database = await storage();
+  const holiday = trip(); holiday.expenses = [dinner()];
+  await create(database, holiday);
+  database.sqlite.prepare('INSERT INTO memberships (trip_id,user_id,member_id) VALUES (?,?,?)').run('trip-1', member, 'b');
+  const bob = await store.readLedger(member);
+  bob.data.trips[0].expenses[0].conversation = [{ id: 'bob-question', role: 'user', text: 'My dinner.', createdAt: '2026-10-04T20:31:00Z' }];
+  const saved = await store.writeLedger(member, bob.data, bob.revision);
+  const question = structuredClone(saved.data.trips[0].expenses[0].conversation![0]);
+  let alice = await store.readLedger(actor);
+  alice.data.trips.push(trip('other-trip'));
+  alice = await store.writeLedger(actor, alice.data, alice.revision);
+  alice.data.trips.find(value => value.id === 'other-trip')!.expenses = [{ ...dinner(), conversation: [
+    question,
+    { id: 'fresh-question', role: 'user', text: 'A new question.', createdAt: '2026-10-04T20:32:00Z', authorMemberId: 'b', authorName: 'Forged Bob' },
+  ] }];
+  alice = await store.writeLedger(actor, alice.data, alice.revision);
+  const messages = alice.data.trips.find(value => value.id === 'other-trip')!.expenses[0].conversation!;
+  for (const message of messages) {
+    assert.equal(message.authorMemberId, 'a');
+    assert.equal(message.authorName, 'Original Owner');
+  }
+  assert.equal(alice.data.trips.find(value => value.id === 'trip-1')!.expenses[0].conversation![0].authorMemberId, 'b');
+});
+
+test('unfamiliar message history lookup is bounded to one hundred IDs per trip', async () => {
+  const database = await storage();
+  const state = await create(database);
+  const initialEvents = count(database);
+  const messages = Array.from({ length: 100 }, (_, index) => ({ id: `message-${index}`, role: 'user' as const, text: 'Question', createdAt: '2026-10-04T20:31:00Z' }));
+  state.data.trips[0].drafts = [
+    { ...dinner(), id: 'first-draft', status: 'review', conversation: messages },
+    { ...dinner(), id: 'second-draft', status: 'review', conversation: [{ ...messages[0], id: 'one-too-many' }] },
+  ];
+  await assert.rejects(store.writeLedger(actor, state.data, state.revision), (error: unknown) => error instanceof store.RequestError && error.status === 400 && /no more than 100 receipt messages/.test(error.message));
+  assert.equal(count(database), initialEvents);
+  assert.equal((await store.readLedger(actor)).data.trips[0].drafts.length, 0);
+  assert.equal(database.sqlite.prepare('SELECT revision FROM sync_state WHERE id=1').get()?.revision, state.revision);
+  state.data.trips[0].drafts.pop();
+  const saved = await store.writeLedger(actor, state.data, state.revision);
+  assert.equal(saved.data.trips[0].drafts[0].conversation?.length, 100);
+  for (const message of saved.data.trips[0].drafts[0].conversation!) assert.equal(message.authorMemberId, 'a');
 });

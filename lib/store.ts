@@ -1,6 +1,6 @@
 import { env } from 'cloudflare:workers';
 import { ZodError } from 'zod';
-import { LedgerValidationError, parseLedgerStructure, parseStoredTrip, validateLedger, type Ledger, type Trip } from './model';
+import { LedgerValidationError, parseLedgerStructure, parseStoredTrip, validateLedger, type Ledger, type ReceiptMessage, type Trip } from './model';
 import { activityNotification, notifyMembers } from './notifications';
 import { AuthError, resolveIdentity, readAuthState } from './auth';
 import { markRemovedReceipts, purgeDeletingReceipts, ReceiptLifecycleError } from './receipt-lifecycle';
@@ -231,6 +231,64 @@ export async function receiptAccess(user: string, id: string): Promise<{ owner: 
   return row ? { owner: row.owner, tripId: row.trip_id } : null;
 }
 
+function receiptMessageBody(message: ReceiptMessage) {
+  return { role: message.role, text: message.text, createdAt: message.createdAt, replyTo: message.replyTo, itemId: message.itemId };
+}
+
+/** Saved IDs identify immutable words and authors, including draft/expense copies. */
+async function stampReceiptAuthors(trip: Trip, previous: Trip | undefined, actorMemberId: string | undefined, actorName: string) {
+  const known = new Map<string, ReceiptMessage[]>();
+  for (const entry of [...(previous?.expenses || []), ...(previous?.drafts || [])]) {
+    for (const message of entry.conversation || []) known.set(message.id, [...(known.get(message.id) || []), message]);
+  }
+  const unfamiliar = [...new Set([...trip.expenses, ...trip.drafts].flatMap(entry => (entry.conversation || [])
+    .filter(message => !known.has(message.id))
+    .map(message => message.id)))];
+  if (previous && unfamiliar.length) {
+    if (unfamiliar.length > 100) throw new RequestError('Add or restore no more than 100 receipt messages at a time. Save one receipt at a time.');
+    // One same-trip lookup covers new or restored IDs, including unlabelled old
+    // messages. SQLite extracts at most 100 bounded message objects rather than
+    // returning complete receipts or trusting any supplied author metadata.
+    const history = await db().prepare(`
+      WITH snapshots AS (
+        SELECT sequence, 0 AS snapshot_order, before_data AS data FROM activity_events
+        WHERE trip_id = ? AND entity_type IN ('expense', 'draft')
+        UNION ALL
+        SELECT sequence, 1 AS snapshot_order, after_data AS data FROM activity_events
+        WHERE trip_id = ? AND entity_type IN ('expense', 'draft')
+      ), matched AS (
+        SELECT message.value AS message,
+          ROW_NUMBER() OVER (PARTITION BY json_extract(message.value, '$.id')
+            ORDER BY snapshots.sequence DESC, snapshots.snapshot_order DESC) AS position
+        FROM snapshots, json_each(snapshots.data, '$.conversation') message
+        WHERE json_extract(message.value, '$.id') IN (SELECT value FROM json_each(?))
+      ) SELECT message FROM matched WHERE position = 1 LIMIT 100
+    `).bind(trip.id, trip.id, JSON.stringify(unfamiliar)).all<{ message: string }>();
+    for (const row of history.results) {
+      const message = JSON.parse(row.message) as ReceiptMessage;
+      known.set(message.id, [message]);
+    }
+  }
+  let added = false;
+  for (const entry of [...trip.expenses, ...trip.drafts]) for (const message of entry.conversation || []) {
+    const saved = known.get(message.id);
+    if (saved) {
+      const original = saved.find(candidate => canonical(receiptMessageBody(candidate)) === canonical(receiptMessageBody(message)));
+      if (!original) throw new RequestError('Saved receipt messages cannot be edited. Add a new message instead.');
+      if (original.authorMemberId === undefined) delete message.authorMemberId;
+      else message.authorMemberId = original.authorMemberId;
+      if (original.authorName === undefined) delete message.authorName;
+      else message.authorName = original.authorName;
+    } else {
+      added = true;
+      if (actorMemberId === undefined) delete message.authorMemberId;
+      else message.authorMemberId = actorMemberId;
+      message.authorName = actorName;
+    }
+  }
+  return added;
+}
+
 export async function writeLedger(id: string, data: unknown, revision: unknown, options: { source?: ActivitySource } = {}) {
   // Parse bounded structure first. New financial rules are applied after access
   // checks, with trusted stored snapshots allowing unchanged legacy entries to
@@ -249,6 +307,7 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
   const changedTrips: Trip[] = [];
   const changes: ActivityChange[] = [];
   const previousTrips = new Map<string, Trip>();
+  const conversationAuthors: { tripId: string; memberId?: string }[] = [];
 
   for (const trip of ledger.trips) {
     const stored = existing.get(trip.id);
@@ -294,6 +353,10 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
         throw new RequestError('This receipt was removed or does not belong to the trip. Upload it again before saving.');
       }
     }
+    const actorMemberId = stored ? links.find(link => link.user_id === id)?.member_id : trip.members[0].id;
+    if (await stampReceiptAuthors(trip, previousTrips.get(trip.id), actorMemberId, profile?.display_name.trim().slice(0, 80) || 'Traveller') && stored) {
+      conversationAuthors.push({ tripId: trip.id, memberId: actorMemberId });
+    }
   }
 
   ledger = validateLedger(ledger, { previous: { trips: [...previousTrips.values()] } });
@@ -319,7 +382,10 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
           WHERE t.owner <> ? AND NOT EXISTS (SELECT 1 FROM memberships m WHERE m.trip_id = t.id AND m.user_id = ?))
         AND NOT EXISTS (SELECT 1 FROM json_each(?) ref LEFT JOIN receipts r ON r.id = json_extract(ref.value, '$.id')
           WHERE r.id IS NULL OR r.state <> 'active' OR r.trip_id <> json_extract(ref.value, '$.tripId'))
-    `).bind(marker, revision, id, id, JSON.stringify(tripIds), id, id, JSON.stringify(receiptReferences)),
+        AND NOT EXISTS (SELECT 1 FROM json_each(?) author LEFT JOIN memberships m
+          ON m.trip_id = json_extract(author.value, '$.tripId') AND m.user_id = ?
+          WHERE m.member_id IS NOT json_extract(author.value, '$.memberId'))
+    `).bind(marker, revision, id, id, JSON.stringify(tripIds), id, id, JSON.stringify(receiptReferences), JSON.stringify(conversationAuthors), id),
   ];
   for (const trip of ledger.trips) {
     statements.push(db().prepare('INSERT INTO trips (id, owner, data) SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND last_write = ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data WHERE EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND last_write = ?) AND (trips.owner = ? OR EXISTS (SELECT 1 FROM memberships m WHERE m.trip_id = trips.id AND m.user_id = ?))').bind(trip.id, trip.ownerId!, JSON.stringify(trip), marker, marker, id, id));
@@ -355,10 +421,11 @@ export function failure(e: unknown) {
   if (!(e instanceof RequestError) && !(e instanceof AuthError) && !(e instanceof ReceiptLifecycleError) && !(e instanceof LedgerValidationError) && !(e instanceof ZodError) && !(e instanceof Error && ['UNAUTHORIZED', 'CONFLICT'].includes(e.message))) console.error('TripTab request failed', { kind: e instanceof Error ? e.name : 'UnknownError' });
   const m = e instanceof Error ? e.message : '';
   const issue = e instanceof ZodError ? e.issues[0] : undefined;
-  const knownFields = new Set(['trips', 'id', 'ownerId', 'name', 'currency', 'startDate', 'endDate', 'members', 'userId', 'email', 'expenses', 'drafts', 'payments', 'title', 'date', 'time', 'timezone', 'fx', 'rate', 'asOf', 'source', 'bankAmount', 'payer', 'items', 'amount', 'percentages', 'conversation', 'role', 'text', 'createdAt', 'replyTo', 'tax', 'tip', 'discount', 'receiptId', 'expenseId', 'status', 'from', 'to', 'note', 'method']);
+  const knownFields = new Set(['trips', 'id', 'ownerId', 'name', 'currency', 'startDate', 'endDate', 'members', 'userId', 'email', 'expenses', 'drafts', 'payments', 'title', 'date', 'time', 'timezone', 'fx', 'rate', 'asOf', 'source', 'bankAmount', 'payer', 'items', 'amount', 'percentages', 'units', 'total', 'allocations', 'label', 'conversation', 'role', 'text', 'createdAt', 'replyTo', 'itemId', 'authorMemberId', 'authorName', 'memory', 'notes', 'aliases', 'memberId', 'scopeMemberId', 'tax', 'tip', 'discount', 'receiptId', 'expenseId', 'status', 'from', 'to', 'note', 'method']);
   const issuePath = issue?.path.map(part => typeof part === 'number' ? String(part + 1) : knownFields.has(part) ? part : 'entry').join(' → ');
   // Zod's enum/literal messages can echo the supplied value; use a fixed message.
-  const issueMessage = issue && ['invalid_enum_value', 'invalid_literal'].includes(issue.code) ? 'Choose a supported value.' : issue?.message;
+  const issueMessage = issue?.code === 'unrecognized_keys' ? 'Remove unsupported fields.'
+    : issue && ['invalid_enum_value', 'invalid_literal'].includes(issue.code) ? 'Choose a supported value.' : issue?.message;
   const error = issue ? `${issuePath || 'Entry'}: ${issueMessage?.slice(0, 300) || 'Check this value.'}`
     : e instanceof LedgerValidationError ? e.message
     : e instanceof RequestError || e instanceof AuthError || e instanceof ReceiptLifecycleError ? (m === 'UNAUTHORIZED' ? 'Sign in to TripTab to open your ledger.' : e.message)
