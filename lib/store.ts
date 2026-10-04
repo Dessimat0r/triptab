@@ -4,7 +4,7 @@ import { LedgerValidationError, parseLedgerStructure, parseStoredTrip, validateL
 import { activityNotification, notifyMembers } from './notifications';
 import { AuthError, resolveIdentity, readAuthState } from './auth';
 import { markRemovedReceipts, purgeDeletingReceipts, ReceiptLifecycleError } from './receipt-lifecycle';
-import { activityStatements, accountAuditStatement, type ActivityEntity, type ActivitySource, type ActivityChange, type ActivityEvent } from './audit';
+import { activityStatements, type ActivityEntity, type ActivitySource, type ActivityChange, type ActivityEvent } from './audit';
 import { assertReceiptActivityVersion, receiptActivityScope, resolveReceiptActivityFamily, validateReceiptActivityScope, ReceiptScopeChangedError, ReceiptScopeSizeError, type ReceiptActivityScope } from './activity-scope';
 export { activityStatements, type ActivityEntity, type ActivitySource, type ActivityChange, type ActivityEvent } from './audit';
 import { receiptMemorySchema, type ReceiptMemory } from './receipt-context';
@@ -239,26 +239,17 @@ async function readActivityPage(user: string, tripId: string, options: { before?
 }
 
 export async function ensureProfile(request: Request, options: { allowSession?: boolean } = { allowSession: true }): Promise<Profile> {
+  const state = await readAuthState(request, db(), { ...options, requireIdentityEmail: true });
+  if (!state.authenticated || !state.profile) throw new Error('UNAUTHORIZED');
+  // Retain the final original-request identity check without attempted writes
+  // or repeated profile reads. Linking/revocation cannot switch principals.
   const identity = await resolveIdentity(request, options, db());
-  const id = identity.id;
-  const email = identity.email?.trim().toLowerCase();
-  if (!email || email.length > 320 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('UNAUTHORIZED');
-  const name = identity.displayName || email.split('@')[0];
-  const createdAt = new Date().toISOString();
-  const displayName = name.slice(0, 80);
-  const providerId = identity.kind === 'chatgpt' ? identity.chatgptId || id : null;
-  await db().batch([
-    db().prepare(`INSERT INTO profiles (id, email, display_name, created_at)
-      SELECT ?, ?, ?, ? WHERE ? IS NULL OR NOT EXISTS (SELECT 1 FROM auth_links WHERE oai_user_id = ? AND user_id <> ?)
-      ON CONFLICT(id) DO NOTHING`).bind(id, email, displayName, createdAt, providerId, providerId, id),
-    accountAuditStatement(db(), { userId: id, actorName: displayName, entityType: 'profile', entityId: id,
-      action: 'create', before: null, after: { displayName }, source: 'chatgpt' }, { sql: 'changes() > 0', bindings: [] }),
-  ]);
-  const profile = await db().prepare('SELECT id, email, display_name, created_at FROM profiles WHERE id = ?').bind(id).first<ProfileRow>();
-  if (!profile) throw new Error('UNAUTHORIZED');
-  const state = await readAuthState(request, db(), options);
-  if (!state.authenticated || state.profile?.id !== id) throw new Error('UNAUTHORIZED');
-  return { id: profile.id, email: profile.email, displayName: profile.display_name, createdAt: profile.created_at, authMethod: identity.kind === 'session' ? 'password' : 'chatgpt', hasPassword: state.hasPassword, chatgptConnected: state.chatgptLinked, chatgptAvailable: state.chatgptAvailable, emailVerified: state.emailVerified };
+  if (identity.id !== state.profile.id) throw new Error('UNAUTHORIZED');
+  const profile = state.profile;
+  return { id: profile.id, email: profile.email, displayName: profile.displayName, createdAt: profile.createdAt,
+    authMethod: identity.kind === 'session' ? 'password' : 'chatgpt', hasPassword: state.hasPassword,
+    chatgptConnected: state.chatgptLinked, chatgptAvailable: state.chatgptAvailable,
+    emailVerified: identity.kind === 'chatgpt' && !!identity.emailVerified && identity.email === profile.email && state.emailVerified };
 }
 
 /** Body, revision and freshness metadata from the same D1 transaction. */

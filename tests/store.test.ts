@@ -813,11 +813,13 @@ test('profile reads reject a raced provider link even when the previous provider
   const providerRequest = new Request('https://triptab.test/api/profile', { headers: {
     'oai-authenticated-user-id': 'old-provider', 'oai-authenticated-user-email': 'old@example.com',
   } });
-  database.beforeBatch = statements => {
-    if (!statements.some(statement => /^INSERT INTO profiles/.test(statement.sql.trim()))) return;
-    database.beforeBatch = undefined;
-    database.sqlite.prepare('INSERT INTO auth_links (oai_user_id,user_id,created_at) VALUES (?,?,?)')
-      .run('old-provider', actor, '2026-10-04T00:00:00Z');
+  const prepare = database.prepare.bind(database); let reads = 0;
+  database.prepare = sql => {
+    if (sql.includes('LEFT JOIN auth_links l ON') && ++reads === 2) {
+      database.sqlite.prepare('INSERT INTO auth_links (oai_user_id,user_id,created_at) VALUES (?,?,?)')
+        .run('old-provider', actor, '2026-10-04T00:00:00Z');
+    }
+    return prepare(sql);
   };
   await assert.rejects(store.ensureProfile(providerRequest), /UNAUTHORIZED/);
   assert.equal(database.sqlite.prepare('SELECT display_name FROM profiles WHERE id=?').get('old-provider')?.display_name, 'Old Traveller');
@@ -832,10 +834,12 @@ test('profile reads recheck the original provider when its existing canonical li
   const providerRequest = new Request('https://triptab.test/api/profile', { headers: {
     'oai-authenticated-user-id': 'linked-provider', 'oai-authenticated-user-email': 'provider@example.com',
   } });
-  database.beforeBatch = statements => {
-    if (!statements.some(statement => /^INSERT INTO profiles/.test(statement.sql.trim()))) return;
-    database.beforeBatch = undefined;
-    database.sqlite.prepare('UPDATE auth_links SET user_id=? WHERE oai_user_id=?').run(member, 'linked-provider');
+  const prepare = database.prepare.bind(database); let reads = 0;
+  database.prepare = sql => {
+    if (sql.includes('LEFT JOIN auth_links l ON') && ++reads === 2) {
+      database.sqlite.prepare('UPDATE auth_links SET user_id=? WHERE oai_user_id=?').run(member, 'linked-provider');
+    }
+    return prepare(sql);
   };
   await assert.rejects(store.ensureProfile(providerRequest), /UNAUTHORIZED/);
   assert.equal(database.sqlite.prepare('SELECT COUNT(*) AS count FROM account_activity_events').get()?.count, 0);
