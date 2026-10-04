@@ -46,10 +46,7 @@ export function TripTabLink({ href, onClick, ...props }: AnchorHTMLAttributes<HT
   return <a {...props} href={href} onClick={event => {
     onClick?.(event);
     if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || (props.target && props.target !== "_self") || props.download !== undefined) return;
-    const destination = new URL(href, window.location.href);
-    if (destination.origin !== window.location.origin || !TRIP_SECTIONS.some(section => section.href === destination.pathname) && destination.pathname !== "/") return;
-    event.preventDefault();
-    navigateTripTab(href);
+    if (navigateTripTab(href)) event.preventDefault();
   }} />;
 }
 

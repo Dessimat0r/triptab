@@ -25,6 +25,7 @@ export function subscribeTripTabLocation(listener: () => void): () => void {
 }
 
 export function navigateTripTab(href: string, options: { replace?: boolean; scroll?: boolean } = {}): boolean {
+  if (!isTripSectionPathname(window.location.pathname)) return false;
   const destination = new URL(href, window.location.href);
   if (destination.origin !== window.location.origin || !isTripSectionPathname(destination.pathname)) return false;
   const next = destination.pathname + destination.search + destination.hash;

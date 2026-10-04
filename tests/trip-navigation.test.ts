@@ -86,4 +86,7 @@ test("section anchors retain normal modifier, new-tab, download and external-lin
   assert.equal(browser.changes.length, 0);
   assert.equal(click({ href: "/balances" }), true);
   assert.equal(browser.location.pathname, "/balances");
+  browser.location = new URL("https://triptab.example/unowned");
+  assert.equal(click({ href: "/expenses" }), false, "an unknown page uses a hard navigation to mount the correct route outlet");
+  assert.equal(browser.changes.length, 1);
 }));
