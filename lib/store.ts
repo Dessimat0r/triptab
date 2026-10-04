@@ -5,6 +5,7 @@ import { activityNotification, notifyMembers } from './notifications';
 import { AuthError, resolveIdentity, readAuthState } from './auth';
 import { markRemovedReceipts, purgeDeletingReceipts, ReceiptLifecycleError } from './receipt-lifecycle';
 import { activityStatements, accountAuditStatement, type ActivityEntity, type ActivitySource, type ActivityChange, type ActivityEvent } from './audit';
+import { receiptActivityScope, type ReceiptActivityScope } from './activity-scope';
 export { activityStatements, type ActivityEntity, type ActivitySource, type ActivityChange, type ActivityEvent } from './audit';
 
 export class RequestError extends Error {
@@ -128,15 +129,19 @@ function tripChanges(previous: Trip | undefined, next: Trip): ActivityChange[] {
 
 export const MAX_ACTIVITY_BYTES = 4 * 1024 * 1024;
 
-export async function readActivity(user: string, tripId: string, options: { before?: number; limit?: number } = {}): Promise<{ events: ActivityEvent[]; nextCursor: number | null }> {
+export async function readActivity(user: string, tripId: string, options: { before?: number; limit?: number } & ReceiptActivityScope = {}): Promise<{ events: ActivityEvent[]; nextCursor: number | null }> {
   if (!tripId || tripId.length > 100) throw new RequestError('Choose a valid trip.');
   const limit = options.limit ?? 20;
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 50) throw new RequestError('Choose an activity page size between 1 and 50.');
   if (options.before !== undefined && (!Number.isSafeInteger(options.before) || options.before < 1)) throw new RequestError('Choose a valid activity cursor.');
+  let scope;
+  try { scope = receiptActivityScope(tripId, options); }
+  catch { throw new RequestError('Choose a valid receipt history.'); }
   if (!await tripAccess(user, tripId)) throw new RequestError('You do not have access to this trip.', 403);
   // Select only identifiers and encoded lengths first. Particularly large
   // immutable snapshots must not materialize as an unbounded activity page.
   const candidates = await db().prepare(`
+    ${scope.prefix}
     SELECT e.id, e.sequence,
       length(CAST(json_object('id', e.id, 'sequence', e.sequence, 'tripId', e.trip_id,
         'actorId', e.actor_id, 'actorName', e.actor_name, 'createdAt', e.created_at,
@@ -146,9 +151,10 @@ export async function readActivity(user: string, tripId: string, options: { befo
       + length(CAST(COALESCE(e.after_data, '') AS BLOB)) AS bytes
     FROM activity_events e JOIN trips t ON t.id = e.trip_id
     WHERE e.trip_id = ? AND e.sequence < ?
+      AND ${scope.condition}
       AND (t.owner = ? OR EXISTS (SELECT 1 FROM memberships m WHERE m.trip_id = t.id AND m.user_id = ?))
     ORDER BY e.sequence DESC LIMIT ?
-  `).bind(tripId, options.before ?? Number.MAX_SAFE_INTEGER, user, user, limit + 1).all<{ id: string; sequence: number; bytes: number }>();
+  `).bind(...scope.bindings, tripId, options.before ?? Number.MAX_SAFE_INTEGER, user, user, limit + 1).all<{ id: string; sequence: number; bytes: number }>();
   const selected: { id: string; sequence: number }[] = [];
   let bytes = 128; // Envelope, commas and the bounded sequence cursor.
   for (const candidate of candidates.results.slice(0, limit)) {

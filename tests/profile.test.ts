@@ -48,6 +48,7 @@ const compiledStore = transpileModule(await readFile(new URL('../lib/store.ts', 
   .replace("'cloudflare:workers'", JSON.stringify(envURL))
   .replace("'./model'", JSON.stringify(new URL('../lib/model.ts', import.meta.url).href))
   .replace("'./auth'", JSON.stringify(new URL('../lib/auth.ts', import.meta.url).href))
+  .replace("'./activity-scope'", JSON.stringify(new URL('../lib/activity-scope.ts', import.meta.url).href))
   .replaceAll("'./audit'", JSON.stringify(auditURL))
   .replace("'./receipt-lifecycle'", JSON.stringify(new URL('../lib/receipt-lifecycle.ts', import.meta.url).href))
   .replace("'./notifications'", JSON.stringify(notificationURL));

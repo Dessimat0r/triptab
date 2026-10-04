@@ -36,3 +36,17 @@
   max-width: 100%;
   white-space: normal;
 }
+.receipt-activity {
+  max-width: 100%;
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+.receipt-activity .quiet {
+  min-height: 44px;
+  max-width: 100%;
+  white-space: normal;
+}
+.receipt-activity .activity-changes {
+  padding: 12px;
+}

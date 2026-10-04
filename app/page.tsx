@@ -12,6 +12,7 @@ import ReceiptChat from "@/components/receipt-chat";
 import PaymentEditor from "@/components/payment-editor";
 import ActivityPanel from "@/components/activity-panel";
 import RestorationNotice, { type RestorationInfo } from "@/components/restoration-notice";
+import "@/components/receipt-history-view.css";
 import MemberStatement from "@/components/member-statement";
 import TripDetails from "@/components/trip-details";
 import DataExport from "@/components/data-export";
@@ -148,6 +149,7 @@ export default function Home() {
     [editorConflict, setEditorConflict] = useState<{ latest: Expense | null } | null>(null),
     [paymentEditor, setPaymentEditor] = useState<{ entry: Payment; original?: Payment; tripId: string; key: string; restoredFrom?: RestorationInfo } | null>(null),
     [restoration, setRestoration] = useState<RestorationInfo | null>(null),
+    [receiptHistoryOpen, setReceiptHistoryOpen] = useState(false),
     [statement, setStatement] = useState(""),
     [referenceRate, setReferenceRate] = useState<{ rate: number; currency: Currency; date: string; time: string; timezone: string } | null>(null);
   const editorBaseline = useRef<{ tripId: string; expense?: Expense } | null>(null);
@@ -357,6 +359,7 @@ export default function Home() {
     return true;
   }
   function openExpense(expense: Expense) {
+    setReceiptHistoryOpen(false);
     setRestoration(null);
     if (!trip) return;
     editorBaseline.current = { tripId: trip.id, expense: structuredClone(expense) };
@@ -382,6 +385,7 @@ export default function Home() {
     setEditorConflict(null); setError("");
   }
   function newExpense() {
+    setReceiptHistoryOpen(false);
     setRestoration(null);
     if (!trip) return;
     resetReceiptReview();
@@ -414,6 +418,7 @@ export default function Home() {
     });
   }
   function openDraft(d: Draft) {
+    setReceiptHistoryOpen(false);
     setRestoration(null);
     resetReceiptReview();
     setPaste("");
@@ -675,6 +680,7 @@ export default function Home() {
   }
   async function submitExpense(e: React.FormEvent) {
     e.preventDefault();
+    if (receiptHistoryOpen) return;
     if (!trip || !editing || uploading || receiptChecking || saving) return;
     if (!editorIsCurrent()) return;
     if (editing.fx?.source === "manual" && editing.bankAmount === undefined) {
@@ -849,6 +855,7 @@ export default function Home() {
     }
   }
   async function reviewRestore(event: ActivityEvent) {
+    setReceiptHistoryOpen(false);
     if (!trip || !event.before || event.tripId !== trip.id) return;
     const fresh = await load();
     const current = fresh?.data.trips.find(value => value.id === trip.id);
@@ -1787,11 +1794,12 @@ export default function Home() {
                   <X />
                 </button>
               </div>
-              <div
-                className={
-                  "editor-body " + (editing.receiptId ? "with-receipt" : "")
-                }
-              >
+              <nav className="receipt-view-switch" aria-label="Receipt views">
+                <button type="button" className="quiet" aria-pressed={!receiptHistoryOpen} aria-controls="receipt-details-view" onClick={() => setReceiptHistoryOpen(false)}>Details & split</button>
+                <button type="button" className="quiet" aria-pressed={receiptHistoryOpen} aria-controls="receipt-history-view" onClick={() => setReceiptHistoryOpen(true)}><History size={17} aria-hidden="true" />Receipt history</button>
+              </nav>
+              <div id="receipt-details-view" className="receipt-details-view" hidden={receiptHistoryOpen} inert={receiptHistoryOpen}>
+              <div className={"editor-body " + (editing.receiptId ? "with-receipt" : "")}>
                 <ReceiptCapture
                   receiptId={editing.receiptId}
                   busy={uploading || saving || receiptChecking}
@@ -2366,6 +2374,19 @@ export default function Home() {
                   </button>
                 </div>
               </div>
+              </div>
+              {receiptHistoryOpen && <div id="receipt-history-view" className="receipt-history-view">
+                <ActivityPanel
+                  tripId={trip.id}
+                  expenseId={editing.expenseId || (trip.expenses.some(value => value.id === editing.id) ? editing.id : undefined)}
+                  draftId={editing.expenseId || trip.expenses.some(value => value.id === editing.id) ? undefined : editing.draftId || editing.id}
+                  title="Receipt history"
+                  refreshKey={revision}
+                  currency={trip.currency}
+                  memberNames={Object.fromEntries(trip.members.map(member => [member.id, member.name]))}
+                  actorMemberNames={Object.fromEntries(trip.members.filter(member => member.userId).map(member => [member.userId!, member.name]))}
+                />
+              </div>}
             </form>
           </section>
         </ModalA11y>

@@ -7,6 +7,11 @@ import "./activity-details.css";
 
 export type ActivityPanelProps = {
   tripId: string;
+  expenseId?: string;
+  draftId?: string;
+  title?: string;
+  description?: string;
+  emptyText?: string;
   refreshKey?: number;
   currency?: Currency;
   memberNames?: Record<string, string>;
@@ -296,16 +301,23 @@ function eventLabel(event: ActivityEvent, currency?: Currency): string {
   return auditText(snapshot.title) || auditText(snapshot.name) || labels[entity] || "Entry";
 }
 
-export default function ActivityPanel({ tripId, refreshKey = 0, currency, memberNames = {}, actorMemberNames = {}, onRestore, busy = false }: ActivityPanelProps) {
-  const history = useActivityPages<ActivityEvent>(`/api/activity?tripId=${encodeURIComponent(tripId)}`, tripId, refreshKey);
-  return <section className="activity-panel" aria-label="Holiday activity" aria-busy={history.loading}>
-    <h2 className="subheading">Activity</h2>
-    <p className="footnote">See who changed this holiday and the complete details before and after each change. Earlier records remain in the history.</p>
-    <button type="button" className="quiet" disabled={history.loading} onClick={history.retry}>{history.error ? "Retry activity" : "Refresh activity"}</button>
+export default function ActivityPanel({ tripId, expenseId, draftId, title, description, emptyText, refreshKey = 0, currency, memberNames = {}, actorMemberNames = {}, onRestore, busy = false }: ActivityPanelProps) {
+  const scope = expenseId ? { kind: "expenseId", id: expenseId } : draftId ? { kind: "draftId", id: draftId } : null;
+  const query = new URLSearchParams({ tripId });
+  if (scope) query.set(scope.kind, scope.id);
+  const history = useActivityPages<ActivityEvent>(`/api/activity?${query.toString()}`, JSON.stringify([tripId, scope?.kind, scope?.id]), refreshKey);
+  const heading = title ?? (scope ? "Receipt history" : "Activity");
+  const help = description ?? (scope
+    ? "See who changed this receipt, its reviews and images, with the complete details before and after each change."
+    : "See who changed this holiday and the complete details before and after each change. Earlier records remain in the history.");
+  return <section className={`activity-panel${scope ? " receipt-activity" : ""}`} aria-label={scope ? heading : "Holiday activity"} aria-busy={history.loading}>
+    <h2 className="subheading">{heading}</h2>
+    {help && <p className="footnote">{help}</p>}
+    <button type="button" className="quiet" disabled={history.loading} onClick={history.retry}>{history.error ? scope ? "Retry receipt history" : "Retry activity" : scope ? "Refresh receipt history" : "Refresh activity"}</button>
     {history.loading && !history.events.length && <p role="status">Loading activity…</p>}
     {history.loading && !!history.events.length && <p role="status">Checking for changes…</p>}
     {history.error && <p className="error" role="alert">{history.error}</p>}
-    {!history.loading && !history.error && !history.events.length && <p className="footnote">No recorded changes yet. Activity starts when this version of TripTab saves a change.</p>}
+    {!history.loading && !history.error && !history.events.length && <p className="footnote">{emptyText ?? (scope ? "No recorded changes for this receipt yet." : "No recorded changes yet. Activity starts when this version of TripTab saves a change.")}</p>}
     <ol className="activity-list">{history.events.map(event => {
       const actor = event.actorName || "Traveller", tripName = actorMemberNames[event.actorId];
       const snapshot = event.after || event.before || {};

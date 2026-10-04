@@ -47,6 +47,8 @@ Account snapshots contain bounded state flags and descriptions. Actor/display na
 
 ## Reading, export and operations
 
+Each receipt editor has a **Receipt history** view for that receipt's saved actions. The server selects its expense/draft family and current or earlier attached image events before pagination, so unrelated receipts cannot crowd out older actions. Deleted draft links and restored expense IDs retain their history. Explicit draft-to-expense links take precedence over coincidentally matching IDs. Switching views keeps unsaved form values; unsaved edits do not create events.
+
 History uses descending sequence cursors with pages of at most 50 events. Shared-history access is checked against current holiday access, while private history is always scoped to the current account. JSON/CSV history exports retain before/after snapshots; follow the returned cursor to obtain older pages. Current account/holiday snapshots are separate downloads and do not automatically include every history page. Exports exclude authentication secrets and receipt binaries and are not backups.
 
 SQLite triggers reject modification, deletion and replacement of existing shared/private events. Application code cannot edit history through the ordinary write routes. An operator with database/schema privileges remains able to change the database; this is application-level append-only protection, not an external tamper-proof ledger.
