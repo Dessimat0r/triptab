@@ -15,6 +15,7 @@ const compiled = transpileModule(source + '\nexport { changes, ActivityEventDeta
   compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022, jsx: JsxEmit.ReactJSX },
 }).outputText
   .replace('import "./activity-details.css";', '')
+  .replace('from "@/lib/money-format"', `from ${JSON.stringify(import.meta.resolve('../lib/money-format.ts'))}`)
   .replaceAll('from "react"', `from ${JSON.stringify(import.meta.resolve('react'))}`)
   .replaceAll('from "react/jsx-runtime"', `from ${JSON.stringify(import.meta.resolve('react/jsx-runtime'))}`);
 const renderer = await import('data:text/javascript;base64,' + Buffer.from(compiled).toString('base64')) as {

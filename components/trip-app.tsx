@@ -62,17 +62,9 @@ import {
   type Payment,
   type Item,
 } from "@/lib/model";
+import { formatMoney as money } from "@/lib/money-format";
 const uid = () => crypto.randomUUID();
 const today = () => localDate();
-const currencyFormatters = new Map<string, Intl.NumberFormat>();
-const money = (n: number, c: string) => {
-  let formatter = currencyFormatters.get(c);
-  if (!formatter) {
-    formatter = new Intl.NumberFormat("en-GB", { style: "currency", currency: c, minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    currencyFormatters.set(c, formatter);
-  }
-  return formatter.format(n / 100);
-};
 const expenseDateFormatter = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric" });
 function expenseDate(date: string) {
   const value = new Date(date + "T12:00:00");
@@ -189,7 +181,7 @@ export default function Home({ children }: { children: ReactNode }) {
   }, []);
   const trip = ledger.trips.find((t) => t.id === selected) || ledger.trips[0];
   const { confirm, dialog: confirmationDialog, confirming } = useConfirmation(`${trip?.id || ""}:${profile?.id || ""}`);
-  const load = useCallback(async (options?: { background?: boolean; signal?: AbortSignal }) => {
+  const load = useCallback(async (options?: { background?: boolean }) => {
     const pending = inFlightLoad.current;
     // Background refreshes share the active request. A foreground action starts
     // a fresh read if the pending request began before it in the background.
@@ -202,7 +194,7 @@ export default function Home({ children }: { children: ReactNode }) {
     if (!options?.background) setLoading(true);
     const promise = (async () => {
       try {
-        const r = await fetch("/api/ledger", { cache: "no-store", signal: options?.signal, headers: requestedEtag ? { "If-None-Match": requestedEtag } : {} });
+        const r = await fetch("/api/ledger", { cache: "no-store", headers: requestedEtag ? { "If-None-Match": requestedEtag } : {} });
         if (requestId !== loadRequest.current) return latestSnapshot.current;
         if (r.status === 304 && requestedEtag) {
           if (r.headers.get("etag") !== requestedEtag) throw Error("The ledger refresh returned an inconsistent version. Refresh and try again.");
@@ -241,7 +233,7 @@ export default function Home({ children }: { children: ReactNode }) {
       } catch (e) {
         // Silent refreshes must preserve local validation and editor messages.
         // A foreground refresh still reports a failed user-requested operation.
-        if (requestId === loadRequest.current && !options?.background && !options?.signal?.aborted) setError(e instanceof Error ? e.message : "Unable to load your ledger");
+        if (requestId === loadRequest.current && !options?.background) setError(e instanceof Error ? e.message : "Unable to load your ledger");
       } finally {
         if (requestId === loadRequest.current) setLoading(false);
       }
@@ -256,9 +248,7 @@ export default function Home({ children }: { children: ReactNode }) {
     if (auth || saving || uploading || loading) return;
     const poll = async () => {
       if (document.visibilityState !== "visible" || !navigator.onLine) return;
-      try {
-        await load({ background: true });
-      } catch { /* Keep the current form; the online/focus refresh can retry. */ }
+      await load({ background: true });
     };
     const timer = window.setInterval(() => void poll(), 30_000);
     return () => { window.clearInterval(timer); };

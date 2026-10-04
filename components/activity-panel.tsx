@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Currency } from "@/lib/model";
 import type { ActivityEvent } from "@/lib/store";
+import { formatMoney } from "@/lib/money-format";
 import "./activity-details.css";
 
 export type ActivityPanelProps = {
@@ -149,21 +150,12 @@ export function auditTimestamp(value: unknown, exact = false): string {
 export function auditSource(value: string): string {
   return value === "chatgpt" ? "via ChatGPT/Codex" : value === "system" ? "by TripTab system" : "in TripTab";
 }
-const currencyFormatters = new Map<string, Intl.NumberFormat>();
 let amountFormatter: Intl.NumberFormat | undefined;
 let quantityFormatter: Intl.NumberFormat | undefined;
 function money(value: unknown, currency?: string): string {
   if (typeof value !== "number" || !Number.isFinite(value)) return "Not recorded";
   try {
-    if (currency) {
-      let formatter = currencyFormatters.get(currency);
-      if (!formatter) {
-        formatter = new Intl.NumberFormat("en-GB", { style: "currency", currency, minimumFractionDigits: 2, maximumFractionDigits: 2 });
-        if (currencyFormatters.size >= 32) currencyFormatters.clear();
-        currencyFormatters.set(currency, formatter);
-      }
-      return formatter.format(value / 100);
-    }
+    if (currency) return formatMoney(value, currency);
   } catch {}
   return `${(amountFormatter ??= new Intl.NumberFormat("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 })).format(value / 100)} (holiday currency)`;
 }
