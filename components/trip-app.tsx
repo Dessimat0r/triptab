@@ -1,5 +1,5 @@
 "use client";
-import Link from "next/link";
+import { TripTabLink as Link } from "@/components/trip-routing";
 import { TripTabRouteProvider, TripTabNavigation, useTripTabNavigation, useTripTabEntryQuery } from "@/components/trip-routing";
 import type { TripSection } from "@/lib/trip-routes";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";

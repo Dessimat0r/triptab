@@ -74,7 +74,7 @@ function controller(trip: model.Trip, fetcher?: typeof fetch) {
     if (name === '@/lib/dates') return dates;
     if (name === '@/lib/client-ledger') return clientLedger;
     if (name === '@/components/trip-routing') return {
-      TripTabRouteProvider: component, TripTabNavigation: component,
+      TripTabRouteProvider: component, TripTabNavigation: component, TripTabLink: component,
       useTripTabEntryQuery: () => '',
       useTripTabNavigation: () => ({ view: state.view, navigate: (next: string) => {state.view = next;}, replaceEntryUrl() {} }),
     };
