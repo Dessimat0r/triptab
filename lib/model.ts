@@ -73,6 +73,28 @@ const percentagesSchema = z.record(id, z.number().finite().min(0).max(100)).supe
   if (message) context.addIssue({ code: z.ZodIssueCode.custom, message });
 });
 
+const receiptMessageSchema = z.object({
+  id,
+  role: z.enum(['user', 'assistant']),
+  text: z.string().trim().min(1).max(4000),
+  createdAt: z.string().datetime({ offset: true }),
+  replyTo: id.optional(),
+});
+export type ReceiptMessage = z.infer<typeof receiptMessageSchema>;
+const conversationSchema = z.array(receiptMessageSchema).max(100).superRefine((messages, context) => {
+  const seen = new Set<string>();
+  const questions = new Set(messages.filter(message => message.role === 'user').map(message => message.id));
+  messages.forEach((message, index) => {
+    if (seen.has(message.id)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: [index, 'id'], message: 'Duplicate receipt message IDs' });
+    }
+    seen.add(message.id);
+    if (message.role === 'assistant' && message.replyTo !== undefined && !questions.has(message.replyTo)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: [index, 'replyTo'], message: 'Receipt replies must refer to a question in this conversation' });
+    }
+  });
+});
+
 const rawItemSchema = z.object({
   id, name: z.string().min(1).max(200), amount: cents, members: z.array(id).min(1).max(50),
   percentages: z.record(id, z.number().finite().min(0).max(100)).optional(),
@@ -103,14 +125,16 @@ export const expenseSchema = z.object({
   currency: currencySchema.default('EUR'), fx: fxSchema.optional(), bankAmount: cents.optional(),
   payer: id, items: z.array(itemSchema).min(1).max(200),
   percentages: percentagesSchema.optional(),
+  conversation: conversationSchema.optional(),
   tax: cents, tip: cents, discount: cents, receiptId: id.optional(),
 });
 export const draftSchema = z.object({
-  id, title: z.string().max(200), receiptId: id.optional(),
+  id, title: z.string().max(200), receiptId: id.optional(), expenseId: id.optional(),
   currency: currencySchema.default('EUR'),
   date: dateSchema.optional(), time: timeSchema.optional(), timezone: timezoneSchema.optional(),
   fx: fxSchema.optional(), bankAmount: cents.optional(),
   percentages: percentagesSchema.optional(),
+  conversation: conversationSchema.optional(),
   items: z.array(itemSchema).max(200), tax: cents, tip: cents, discount: cents,
   payer: id, status: z.enum(['waiting', 'review']),
 });
@@ -143,6 +167,12 @@ export function validateLedger(data: unknown): Ledger {
     if (memberIds.size !== trip.members.length
       || !unique([...trip.expenses, ...trip.drafts].map(expense => expense.id))
       || !unique(trip.payments.map(payment => payment.id))) throw new Error('Duplicate IDs');
+    const expenseIds = new Set(trip.expenses.map(expense => expense.id));
+    const draftTargets = trip.drafts.flatMap(draft => draft.expenseId === undefined ? [] : [draft.expenseId]);
+    if (draftTargets.some(expenseId => !expenseIds.has(expenseId))) {
+      throw new Error('Receipt draft targets an expense that is not in this trip');
+    }
+    if (!unique(draftTargets)) throw new Error('An expense can only have one pending receipt draft');
     for (const expense of [...trip.expenses, ...trip.drafts]) {
       if (!memberIds.has(expense.payer)) throw new Error('Choose a trip member as payer');
       if (expense.percentages && Object.keys(expense.percentages).some(member => !memberIds.has(member))) {

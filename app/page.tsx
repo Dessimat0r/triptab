@@ -5,6 +5,8 @@ import ModalA11y from "@/components/modal-accessibility";
 import AccountPanel, { type Profile } from "@/components/account-panel";
 import { TripSharing, JoinTrip } from "@/components/trip-sharing";
 import ShareSplit, { equalPercentages } from "@/components/share-split";
+import ReceiptCapture from "@/components/receipt-capture";
+import ReceiptChat from "@/components/receipt-chat";
 import {
   Plus,
   Plane,
@@ -39,6 +41,7 @@ import {
   type Trip,
   type Expense,
   type Draft,
+  type ReceiptMessage,
 } from "@/lib/model";
 const uid = () => crypto.randomUUID();
 const today = () => new Date().toISOString().slice(0, 10);
@@ -59,6 +62,13 @@ function Amount({
   label: string;
 }) {
   const [v, set] = useState((value / 100).toFixed(2));
+  useEffect(() => {
+    let active = true;
+    Promise.resolve().then(() => {
+      if (active) set(previous => Math.round(Number(previous) * 100) === value ? previous : (value / 100).toFixed(2));
+    });
+    return () => { active = false; };
+  }, [value]);
   return (
     <input
       aria-label={label}
@@ -80,6 +90,15 @@ function Amount({
     />
   );
 }
+function mergeReceiptConversation(stored?: ReceiptMessage[], local?: ReceiptMessage[]) {
+  const messages = [...stored || []];
+  for (const message of local || []) if (!messages.some(value => value.id === message.id)) messages.push(message);
+  return messages.length ? messages : undefined;
+}
+function hasPendingReceiptQuestions(messages?: ReceiptMessage[]) {
+  const answered = new Set(messages?.filter(message => message.role === "assistant").map(message => message.replyTo));
+  return !!messages?.some(message => message.role === "user" && !answered.has(message.id));
+}
 export default function Home() {
   const [ledger, setLedger] = useState<Ledger>({ trips: [] }),
     [revision, setRevision] = useState(0),
@@ -92,11 +111,16 @@ export default function Home() {
     [menu, setMenu] = useState(false),
     [create, setCreate] = useState(false),
     [help, setHelp] = useState(false),
-    [editing, setEditing] = useState<(Expense & { draftId?: string }) | null>(
+    [editing, setEditing] = useState<(Expense & { draftId?: string; expenseId?: string }) | null>(
       null,
     ),
     [paste, setPaste] = useState(""),
     [uploading, setUploading] = useState(false),
+    [receiptPending, setReceiptPending] = useState(false),
+    [receiptCopied, setReceiptCopied] = useState(false),
+    [receiptPrompt, setReceiptPrompt] = useState(""),
+    [receiptChecking, setReceiptChecking] = useState(false),
+    [processedReceipt, setProcessedReceipt] = useState<Draft | null>(null),
     [fxLoading, setFxLoading] = useState(false),
     [fxError, setFxError] = useState(""),
     [profile, setProfile] = useState<Profile | null>(null),
@@ -185,6 +209,7 @@ export default function Home() {
   }
   function newExpense() {
     if (!trip) return;
+    resetReceiptReview();
     setPaste("");
     setFxError("");
     setEditing({
@@ -210,10 +235,12 @@ export default function Home() {
     });
   }
   function openDraft(d: Draft) {
+    resetReceiptReview();
     setPaste("");
     setFxError("");
     setEditing({
       ...d,
+      id: d.expenseId || d.id,
       date: d.date || today(),
       time: d.time || "12:00",
       timezone: d.timezone || "Europe/London",
@@ -230,6 +257,155 @@ export default function Home() {
             },
           ],
     });
+  }
+  function resetReceiptReview() {
+    setReceiptPending(false);
+    setReceiptCopied(false);
+    setReceiptPrompt("");
+    setProcessedReceipt(null);
+  }
+  async function storeEditorReceipt(entry: Expense & { draftId?: string; expenseId?: string }, receiptId?: string, keepProposal = false) {
+    if (!trip) return null;
+    const target = trip.expenses.find(expense => expense.id === entry.id);
+    if (entry.expenseId && !target) {
+      setError("This expense was removed. Your current receipt edits are still here.");
+      return null;
+    }
+    const previous = trip.drafts.find(draft => draft.id === entry.draftId || (target && draft.expenseId === target.id));
+    const source = keepProposal && previous?.status === "review" && processedReceipt?.id === previous.id ? previous : entry;
+    const messages = mergeReceiptConversation(previous?.conversation, entry.conversation);
+    const draft: Draft = {
+      id: previous?.id || entry.draftId || uid(),
+      expenseId: target?.id,
+      title: source.title.trim() || "Receipt",
+      receiptId,
+      currency: source.currency,
+      date: source.date || undefined,
+      time: source.time || undefined,
+      timezone: source.timezone,
+      payer: source.payer,
+      items: source.items.flatMap(item => {
+        const parsed = itemSchema.safeParse(item);
+        return parsed.success ? [parsed.data] : [];
+      }),
+      percentages: receiptSplitError(source) ? undefined : source.percentages,
+      conversation: messages,
+      tax: source.tax,
+      tip: source.tip,
+      discount: source.discount,
+      bankAmount: source.bankAmount,
+      fx: source.fx,
+      status: keepProposal && previous ? previous.status : "waiting",
+    };
+    const saved = await updateTrip({
+      ...trip,
+      drafts: previous ? trip.drafts.map(value => value.id === previous.id ? draft : value) : [...trip.drafts, draft],
+    });
+    if (!saved) return null;
+    setReceiptPending(false);
+    setProcessedReceipt(prev => prev?.id === draft.id ? draft : prev);
+    setEditing(prev => prev?.id === entry.id ? { ...prev, draftId: draft.id, receiptId, expenseId: draft.expenseId, conversation: draft.conversation } : prev);
+    return draft;
+  }
+  async function captureEditorReceipt(file: File) {
+    if (!trip || !editing) return;
+    const entry = editing;
+    setUploading(true);
+    setError("");
+    setReceiptCopied(false);
+    setReceiptPrompt("");
+    setProcessedReceipt(null);
+    try {
+      if (!["image/jpeg", "image/png", "image/webp"].includes(file.type) || file.size > 5 * 1024 * 1024) {
+        throw Error("Choose a JPEG, PNG or WebP image under 5 MB.");
+      }
+      const response = await fetch("/api/receipt?tripId=" + encodeURIComponent(trip.id), {
+        method: "POST", headers: { "Content-Type": file.type }, body: file,
+      });
+      const body = await response.json() as { receiptId: string; error?: string };
+      if (!response.ok) throw Error(body.error || "Unable to store the receipt image.");
+      setReceiptPending(true);
+      setEditing(prev => prev?.id === entry.id ? { ...prev, receiptId: body.receiptId } : prev);
+      await storeEditorReceipt(entry, body.receiptId);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Unable to store this receipt.");
+    } finally {
+      setUploading(false);
+    }
+  }
+  async function prepareEditorReceipt() {
+    if (!trip || !editing?.receiptId) return;
+    const draft = await storeEditorReceipt(editing, editing.receiptId);
+    if (!draft) return;
+    setProcessedReceipt(null);
+    await copyEditorReceiptPrompt(draft);
+  }
+  async function copyEditorReceiptPrompt(draft: Draft, question?: ReceiptMessage) {
+    if (!trip) return;
+    const context = draft.receiptId ? `receipt ${draft.receiptId}. Use get_receipt_image to read its original native image` : "the manually entered receipt details";
+    const request = question ? `Resolve question ${question.id}: ${JSON.stringify(question.text)}. Save a reply in the receipt conversation with reply_to_receipt_chat, using this questionId and a new UUID responseId. Explain discrepancies and uncertainty. If a correction is justified, propose it with update_receipt_draft for my review; preserve conversation history.` : "Read and itemise this receipt with update_receipt_draft for my review.";
+    const prompt = `Use my connected TripTab plugin for only trip ${trip.id}, draft ${draft.id}, ${context}. Read get_trip_ledger for its current revision, conversation and member IDs. ${request} Preserve personal cost shares, percentages, payer and purchase details unless I explicitly ask to change them. Keep any read-only expenseId target and receiptId. Use full line totals in integer cents/pence, identify the printed currency, and do not add tax already included in prices. Flag unreadable text and prices rather than guessing. Never guess exchange rates or bank charges. Do not post or duplicate an expense: I will review and save it in TripTab.`;
+    setReceiptPrompt(prompt);
+    try {
+      await navigator.clipboard.writeText(prompt);
+      setReceiptCopied(true);
+    } catch {
+      setError("Select and copy the receipt prompt below, then paste it into your connected ChatGPT or Codex.");
+    }
+  }
+  async function sendReceiptQuestion(text: string) {
+    if (!trip || !editing || saving || uploading || receiptChecking) return false;
+    const trimmed = text.trim();
+    if (!trimmed || trimmed.length > 4000) {
+      setError("Enter a question under 4,000 characters.");
+      return false;
+    }
+    if ((editing.conversation?.length || 0) >= 100) {
+      setError("This receipt conversation has reached its message limit.");
+      return false;
+    }
+    const question: ReceiptMessage = { id: uid(), role: "user", text: trimmed, createdAt: new Date().toISOString() };
+    const entry = { ...editing, conversation: [...editing.conversation || [], question] };
+    const draft = await storeEditorReceipt(entry, editing.receiptId, true);
+    if (!draft) return false;
+    await copyEditorReceiptPrompt(draft, question);
+    return true;
+  }
+  async function checkEditorReceipt(repliesOnly = false) {
+    if (!trip || !editing) return;
+    if (!editing.draftId) {
+      setError("Ask a receipt question or copy the receipt prompt first, then use your connected ChatGPT or Codex.");
+      return;
+    }
+    const draftId = editing.draftId;
+    const receiptId = editing.receiptId;
+    setReceiptChecking(true);
+    setError("");
+    try {
+      const response = await fetch("/api/ledger", { cache: "no-store" });
+      const body = await response.json() as { data: Ledger; revision: number; error?: string };
+      if (!response.ok) throw Error(body.error || "Unable to check this receipt.");
+      setLedger(body.data);
+      setRevision(body.revision);
+      const draft = body.data.trips.find(value => value.id === trip.id)?.drafts.find(value => value.id === draftId);
+      if (!draft || draft.receiptId !== receiptId) throw Error("This receipt draft has changed or is no longer available. Your current edits are still here.");
+      setEditing(prev => prev?.draftId === draftId ? { ...prev, conversation: draft.conversation } : prev);
+      setProcessedReceipt(draft.status === "review" ? draft : null);
+      if (draft.status !== "review" && !repliesOnly) setError("No processed items yet. Ask your connected ChatGPT or Codex to use the receipt prompt, then check again.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Unable to check this receipt.");
+    } finally {
+      setReceiptChecking(false);
+    }
+  }
+  function reviewProcessedReceipt() {
+    if (!trip || !editing || !processedReceipt) return;
+    const latest = trip.drafts.find(draft => draft.id === processedReceipt.id && draft.receiptId === editing.receiptId && draft.status === "review");
+    if (!latest) {
+      setError("Check for the latest processed receipt before reviewing it.");
+      return;
+    }
+    openDraft({ ...latest, conversation: mergeReceiptConversation(latest.conversation, editing.conversation) });
   }
   async function upload(file: File) {
     if (!trip) return;
@@ -276,9 +452,9 @@ export default function Home() {
   }
   async function copyPrompt() {
     const pending = trip?.drafts
-      .filter((d) => d.status === "waiting")
+      .filter((d) => d.status === "waiting" && d.receiptId)
       .map((d) => ({ draftId: d.id, receiptId: d.receiptId, title: d.title }));
-    const prompt = `Pending receipts: ${JSON.stringify(pending)}. Use the connected TripTab plugin. Call get_trip_ledger, then get_receipt_image for each pending receipt in trip ${trip?.id}. Read the native image and save its items with update_receipt_draft for me to review. Amounts must be integers in hundredths of the original currency, full line totals. Use the currency printed on the receipt. Do not invent unreadable prices or double-count tax included in prices. Assign items to all trip members initially; flag uncertain text. Keep receiptId and draft ID. Never post this as an expense.`;
+    const prompt = `Pending receipts: ${JSON.stringify(pending)}. Use the connected TripTab plugin. Call get_trip_ledger, then get_receipt_image for each pending receipt in trip ${trip?.id}. Read the native image and save its items with update_receipt_draft for me to review. Amounts must be integers in hundredths of the original currency, full line totals. Use the currency printed on the receipt. Do not invent unreadable prices or double-count tax included in prices. Preserve existing assignments, personal cost percentages, purchase details and conversation history. Split only new unassigned items equally among all trip members and flag uncertain text. Keep receiptId, draft ID and any read-only expenseId target. Never post this as an expense.`;
     try {
       await navigator.clipboard.writeText(prompt);
     } catch {
@@ -287,7 +463,7 @@ export default function Home() {
   }
   async function submitExpense(e: React.FormEvent) {
     e.preventDefault();
-    if (!trip || !editing) return;
+    if (!trip || !editing || uploading || receiptChecking || saving) return;
     const splitError = receiptSplitError(editing) || editing.items.map(itemSplitError).find(Boolean);
     if (splitError) {
       setError(splitError);
@@ -318,14 +494,29 @@ export default function Home() {
       return;
     }
     const { draftId, ...expense } = editing;
+    delete expense.expenseId;
+    const latestDraft = trip.drafts.find(draft => draft.id === draftId);
+    expense.conversation = mergeReceiptConversation(latestDraft?.conversation, expense.conversation);
     const exists = trip.expenses.some((x) => x.id === expense.id);
+    if (editing.expenseId && !exists) {
+      setError("This expense was removed. It cannot be updated from this receipt draft.");
+      return;
+    }
+    const awaitingReply = !!latestDraft && hasPendingReceiptQuestions(expense.conversation);
+    if (!exists && expense.id === draftId && awaitingReply) expense.id = uid();
+    const retainedDraft: Draft | null = awaitingReply && latestDraft ? {
+      ...expense,
+      id: latestDraft.id,
+      expenseId: expense.id,
+      status: "waiting",
+    } : null;
     if (
       await updateTrip({
         ...trip,
         expenses: exists
           ? trip.expenses.map((x) => (x.id === expense.id ? expense : x))
           : [expense, ...trip.expenses],
-        drafts: trip.drafts.filter((d) => d.id !== draftId),
+        drafts: trip.drafts.flatMap(draft => draft.id === draftId ? retainedDraft ? [retainedDraft] : [] : [draft]),
       })
     )
       setEditing(null);
@@ -706,7 +897,12 @@ export default function Home() {
                               key={e.id}
                               onClick={() => {
                                 setPaste("");
-                                setEditing(e);
+                                const pending = trip.drafts.find(draft => draft.expenseId === e.id);
+                                if (pending) openDraft(pending);
+                                else {
+                                  resetReceiptReview();
+                                  setEditing(e);
+                                }
                               }}
                             >
                               <span className="expense-icon">
@@ -885,7 +1081,7 @@ export default function Home() {
                                 >
                                   {d.status === "review"
                                     ? "Ready to review"
-                                    : "Awaiting itemisation"}{" "}
+                                    : hasPendingReceiptQuestions(d.conversation) ? "Waiting for reply" : "Awaiting itemisation"}{" "}
                                   · {d.items.length} items · {d.currency}
                                 </small>
                               </div>
@@ -1298,7 +1494,7 @@ export default function Home() {
       {editing && trip && (
         <ModalA11y
           className="overlay editor-overlay"
-          onClose={() => setEditing(null)}
+          onClose={() => { if (!uploading && !saving && !receiptChecking) setEditing(null); }}
         >
           <section
             className="modal editor"
@@ -1312,7 +1508,7 @@ export default function Home() {
                   <span className="eyebrow">MAKE EVERY ITEM FAIR</span>
                   <h2 id="expense-title">
                     {editing.draftId
-                      ? "Review receipt"
+                      ? editing.expenseId ? "Review expense update" : "Review receipt"
                       : trip.expenses.some((e) => e.id === editing.id)
                         ? "Edit expense"
                         : "Add an expense"}
@@ -1322,6 +1518,7 @@ export default function Home() {
                   type="button"
                   className="iconbutton"
                   aria-label="Close editor"
+                  disabled={uploading || saving || receiptChecking}
                   onClick={() => setEditing(null)}
                 >
                   <X />
@@ -1332,21 +1529,18 @@ export default function Home() {
                   "editor-body " + (editing.receiptId ? "with-receipt" : "")
                 }
               >
-                {editing.receiptId && (
-                  <div className="receipt-preview">
-                    <img
-                      src={"/api/receipt?id=" + editing.receiptId}
-                      alt="Original receipt for review"
-                    />
-                    <a
-                      href={"/api/receipt?id=" + editing.receiptId}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      Open original receipt
-                    </a>
-                  </div>
-                )}
+                <ReceiptCapture
+                  receiptId={editing.receiptId}
+                  busy={uploading || saving || receiptChecking}
+                  stored={!receiptPending}
+                  copied={receiptCopied}
+                  prompt={receiptPrompt}
+                  ready={!!processedReceipt}
+                  onCapture={captureEditorReceipt}
+                  onPrepare={prepareEditorReceipt}
+                  onRefresh={() => checkEditorReceipt()}
+                  onUseProcessed={reviewProcessedReceipt}
+                />
                 <div className="edit-fields">
                   <label>
                     Expense name
@@ -1631,6 +1825,13 @@ export default function Home() {
                       Import items
                     </button>
                   </details>
+                  <ReceiptChat
+                    key={editing.draftId || editing.id}
+                    messages={editing.conversation || []}
+                    busy={uploading || saving || receiptChecking}
+                    onSend={sendReceiptQuestion}
+                    onRefresh={() => checkEditorReceipt(true)}
+                  />
                   {editing.currency !== trip.currency && (
                     <div className="fx-panel">
                       <div className="sectionheading">
@@ -1821,6 +2022,7 @@ export default function Home() {
                             expenses: trip.expenses.filter(
                               (x) => x.id !== editing.id,
                             ),
+                            drafts: trip.drafts.filter(draft => draft.expenseId !== editing.id),
                           })
                         )
                           setEditing(null);
@@ -1834,6 +2036,8 @@ export default function Home() {
                     className="primary"
                     disabled={
                       saving ||
+                      uploading ||
+                      receiptChecking ||
                       fxLoading ||
                       editing.bankAmount === 0 ||
                       !!receiptSplitError(editing) ||

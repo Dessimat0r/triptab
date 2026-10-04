@@ -80,7 +80,7 @@ const compiled = transpileModule(source, { compilerOptions: { module: ModuleKind
   .replace("'@/lib/model'", JSON.stringify(new URL('../lib/model.ts', import.meta.url).href))
   .replace("'zod'", JSON.stringify(import.meta.resolve('zod')));
 const route = await import('data:text/javascript;base64,' + Buffer.from(compiled).toString('base64')) as { POST(request: Request): Promise<Response> };
-type Reply = { result: { isError?: boolean; content?: { type: string; text: string }[]; tools?: { name: string; description: string; inputSchema: { properties: Record<string, unknown> }; annotations: { readOnlyHint: boolean } }[] } };
+type Reply = { result: { isError?: boolean; content?: { type: string; text: string }[]; tools?: { name: string; description: string; inputSchema: { properties: Record<string, unknown> }; annotations: { readOnlyHint: boolean; idempotentHint?: boolean } }[] } };
 async function invoke(name: string, args: Record<string, unknown>, emailHeader = false) {
   const request = new Request('https://triptab.test/mcp', {
     method: 'POST', headers: { 'content-type': 'application/json', 'oai-authenticated-user-id': user, ...(emailHeader ? { 'oai-authenticated-user-email': profile.email } : {}) },
@@ -99,6 +99,13 @@ const expenseDraft = {
   tax: 0, tip: 200, discount: 0, date: '2026-08-16', time: '21:15', timezone: 'Europe/Lisbon',
   fx: { rate: 0.86, asOf: '2026-08-14', source: 'manual' }, bankAmount: 4111,
 };
+const receiptQuestion = {
+  id: 'question-1', role: 'user' as const, text: 'Does the total include service?', createdAt: '2026-10-04T10:00:00Z',
+};
+const receiptChatReply = {
+  tripId: 'trip-1', draftId: 'draft-1', questionId: receiptQuestion.id,
+  responseId: 'a744f349-86c7-4a57-aa13-0db6aebc6e22', text: 'The listed total includes service.', revision: 3,
+};
 
 test('lists native holiday and natural-language expense tools with write annotations', async () => {
   const response = await route.POST(new Request('https://triptab.test/mcp', { method: 'POST', body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }) }));
@@ -116,6 +123,12 @@ test('lists native holiday and natural-language expense tools with write annotat
       assert.match(tool.description, /never infer personal assignments or percentages/);
     }
   }
+  const replyTool = reply.result.tools!.find(tool => tool.name === 'reply_to_receipt_chat');
+  assert.ok(replyTool);
+  assert.equal(replyTool.annotations.readOnlyHint, false);
+  assert.equal(replyTool.annotations.idempotentHint, true);
+  assert.match(replyTool.description, /only appends a reply/);
+  assert.match(replyTool.description, /separately with update_receipt_draft/);
 });
 
 test('creates a dated holiday using the authenticated stored profile and is safe to retry', async () => {
@@ -336,4 +349,126 @@ test('rejects whole-receipt percentages with invalid totals or unknown participa
   }
   assert.equal(state.writes, 0);
   assert.equal(state.data.trips[0].expenses.length, 0);
+});
+
+test('receipt corrections preserve an existing expense target without changing the posted expense', async () => {
+  reset();
+  const expense = {
+    ...state.data.trips[0].drafts[0], id: 'posted-expense',
+    date: '2026-08-15', time: '20:30', timezone: 'Europe/Lisbon',
+  };
+  state.data.trips[0].expenses = [expense];
+  state.data.trips[0].drafts[0].expenseId = expense.id;
+  const originalExpense = structuredClone(expense);
+  const reply = await invoke('update_receipt_draft', {
+    trip_id: 'trip-1', revision: 3, draft: { ...expenseDraft, id: 'draft-1' },
+  });
+  assert.equal(reply.result.isError, undefined);
+  const holiday = content(reply).data.trips[0];
+  assert.equal(holiday.drafts[0].expenseId, expense.id);
+  assert.equal(holiday.drafts[0].id, 'draft-1');
+  assert.equal(holiday.drafts[0].status, 'review');
+  assert.equal(holiday.drafts[0].items[0].amount, expenseDraft.items[0].amount);
+  // The persisted expense schema removes draft-only status metadata.
+  const { status, ...expectedExpense } = originalExpense;
+  assert.equal(status, 'review');
+  assert.deepEqual(holiday.expenses, [expectedExpense]);
+});
+
+test('the AI tool cannot create or change a draft’s read-only expense target', async () => {
+  reset();
+  const reply = await invoke('create_expense_draft', {
+    trip_id: 'trip-1', revision: 3, draft: { ...expenseDraft, expenseId: 'posted-expense' },
+  });
+  assert.equal(reply.result.isError, true);
+  assert.equal(state.writes, 0);
+  assert.equal(state.data.trips[0].expenses.length, 0);
+});
+
+test('appends and reads a receipt reply without marking it itemised or changing financial details', async () => {
+  reset();
+  state.data.trips[0].drafts[0].status = 'waiting';
+  state.data.trips[0].drafts[0].conversation = [structuredClone(receiptQuestion)];
+  state.data.trips[0].expenses = [{
+    ...initialTrip.drafts[0], id: 'posted-expense',
+    date: '2026-08-15', time: '20:30', timezone: 'Europe/Lisbon',
+  }];
+  const originalExpenses = validateLedger(state.data).trips[0].expenses;
+  const originalDraft = structuredClone(state.data.trips[0].drafts[0]);
+  const before = Date.now();
+  const reply = await invoke('reply_to_receipt_chat', receiptChatReply);
+  assert.equal(reply.result.isError, undefined);
+  const holiday = content(reply).data.trips[0];
+  const draft = holiday.drafts[0];
+  assert.deepEqual(holiday.expenses, originalExpenses);
+  assert.deepEqual({ ...draft, conversation: undefined }, { ...originalDraft, conversation: undefined });
+  assert.equal(draft.status, 'waiting');
+  assert.deepEqual(draft.conversation![0], receiptQuestion);
+  const answer = draft.conversation![1];
+  assert.equal(answer.id, receiptChatReply.responseId);
+  assert.equal(answer.role, 'assistant');
+  assert.equal(answer.text, receiptChatReply.text);
+  assert.equal(answer.replyTo, receiptQuestion.id);
+  assert.ok(Date.parse(answer.createdAt) >= before && Date.parse(answer.createdAt) <= Date.now());
+  assert.match(answer.createdAt, /Z$/);
+  const reread = await invoke('get_trip_ledger', {});
+  assert.deepEqual(content(reread).data.trips[0].drafts[0].conversation, draft.conversation);
+  assert.equal(state.writes, 1);
+});
+
+test('receipt reply retries are idempotent and response ID collisions are rejected', async () => {
+  reset();
+  state.data.trips[0].drafts[0].conversation = [
+    structuredClone(receiptQuestion), { ...receiptQuestion, id: 'question-2', text: 'Who owes the tip?' },
+  ];
+  const first = await invoke('reply_to_receipt_chat', receiptChatReply);
+  assert.equal(first.result.isError, undefined);
+  const retry = await invoke('reply_to_receipt_chat', receiptChatReply);
+  assert.equal(retry.result.isError, undefined);
+  assert.equal(content(retry).revision, 4);
+  assert.deepEqual(content(retry).data.trips[0].drafts[0].conversation, content(first).data.trips[0].drafts[0].conversation);
+  for (const fields of [{ text: 'A different answer.' }, { questionId: 'question-2' }]) {
+    const collision = await invoke('reply_to_receipt_chat', { ...receiptChatReply, ...fields });
+    assert.equal(collision.result.isError, true);
+    assert.match(collision.result.content![0].text, /response ID.*different receipt message/);
+  }
+  assert.equal(state.writes, 1);
+  assert.equal(state.data.trips[0].drafts[0].conversation!.length, 3);
+});
+
+test('receipt replies reject unknown drafts, invalid questions and stale revisions without writing', async () => {
+  reset();
+  state.data.trips[0].drafts[0].conversation = [
+    structuredClone(receiptQuestion),
+    { id: 'assistant-1', role: 'assistant', text: 'Earlier answer.', createdAt: receiptQuestion.createdAt, replyTo: receiptQuestion.id },
+  ];
+  for (const fields of [
+    { tripId: 'other-trip' }, { draftId: 'other-draft' }, { questionId: 'other-question' },
+    { questionId: 'assistant-1' }, { revision: 2 },
+  ]) {
+    const reply = await invoke('reply_to_receipt_chat', { ...receiptChatReply, ...fields });
+    assert.equal(reply.result.isError, true);
+  }
+  assert.equal(state.writes, 0);
+  assert.equal(state.data.trips[0].drafts[0].conversation!.length, 2);
+});
+
+test('AI item corrections preserve the complete receipt conversation and cannot rewrite it', async () => {
+  reset();
+  state.data.trips[0].drafts[0].conversation = [
+    structuredClone(receiptQuestion),
+    { id: receiptChatReply.responseId, role: 'assistant', text: receiptChatReply.text, createdAt: receiptQuestion.createdAt, replyTo: receiptQuestion.id },
+  ];
+  const originalConversation = structuredClone(state.data.trips[0].drafts[0].conversation);
+  const updated = await invoke('update_receipt_draft', {
+    trip_id: 'trip-1', revision: 3, draft: { ...expenseDraft, id: 'draft-1' },
+  });
+  assert.equal(updated.result.isError, undefined);
+  assert.deepEqual(content(updated).data.trips[0].drafts[0].conversation, originalConversation);
+  const attemptedRewrite = await invoke('update_receipt_draft', {
+    trip_id: 'trip-1', revision: 4, draft: { ...expenseDraft, id: 'draft-1', conversation: [] },
+  });
+  assert.equal(attemptedRewrite.result.isError, true);
+  assert.equal(state.writes, 1);
+  assert.deepEqual(state.data.trips[0].drafts[0].conversation, originalConversation);
 });

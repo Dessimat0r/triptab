@@ -4,7 +4,7 @@ import {
   allocate, balances, convertAmount, CURRENCIES, draftSchema, expenseSchema, expenseShares,
   expenseTotal, itemSchema, itemShares, itemSplitError, receiptSplitError, settlements, shares, total, validateLedger,
 } from '../lib/model';
-import type { Expense, Item, Trip } from '../lib/model';
+import type { Expense, Item, ReceiptMessage, Trip } from '../lib/model';
 
 const members = [{ id: 'a', name: 'Alice' }, { id: 'b', name: 'Bob' }, { id: 'c', name: 'Chloe' }];
 function expense(overrides: Partial<Expense> = {}): Expense {
@@ -293,4 +293,91 @@ test('preserves receipt-wide percentages on saved expenses and review drafts', (
   assert.deepEqual(saved.trips[0].drafts[0].percentages, { a: 60, c: 40 });
   assert.equal(draftSchema.safeParse({ ...holiday.drafts[0], percentages: { a: 50 } }).success, false);
   assert.equal(receiptSplitError(expense()), null);
+});
+
+test('persists a receipt review draft linked to an existing expense without changing posted costs', () => {
+  const original = expense({ percentages: { a: 60, b: 40 } });
+  const holiday = trip([original]);
+  const postedBalances = balances(holiday);
+  holiday.drafts = [draftSchema.parse({
+    ...original, id: 'receipt-review', expenseId: original.id, receiptId: 'receipt-image', status: 'waiting',
+    items: [],
+  })];
+  const waiting = validateLedger(JSON.parse(JSON.stringify({ trips: [holiday] })));
+  assert.equal(waiting.trips[0].drafts[0].expenseId, original.id);
+  assert.equal(waiting.trips[0].drafts[0].status, 'waiting');
+  assert.deepEqual(waiting.trips[0].expenses[0], original);
+  assert.deepEqual(balances(waiting.trips[0]), postedBalances);
+
+  holiday.drafts[0] = {
+    ...holiday.drafts[0], status: 'review',
+    items: [{ ...original.items[0], amount: 20000 }],
+  };
+  const reviewed = validateLedger(JSON.parse(JSON.stringify({ trips: [holiday] })));
+  assert.equal(reviewed.trips[0].drafts[0].expenseId, original.id);
+  assert.equal(reviewed.trips[0].drafts[0].items[0].amount, 20000);
+  assert.deepEqual(reviewed.trips[0].expenses[0], original);
+  assert.deepEqual(balances(reviewed.trips[0]), postedBalances);
+});
+
+test('rejects unknown receipt review targets and targets belonging only to a different trip', () => {
+  const holiday = trip();
+  holiday.drafts = [{ ...expense({ id: 'receipt-review' }), expenseId: 'unknown', status: 'review' }];
+  assert.throws(() => validateLedger({ trips: [holiday] }), /expense that is not in this trip/);
+  const otherHoliday = { ...trip([expense({ id: 'elsewhere' })]), id: 'other-holiday' };
+  holiday.drafts[0].expenseId = 'elsewhere';
+  assert.throws(() => validateLedger({ trips: [holiday, otherHoliday] }), /expense that is not in this trip/);
+});
+
+test('allows only one pending receipt review per posted expense while keeping legacy draft IDs distinct', () => {
+  const holiday = trip();
+  const review = { ...expense({ id: 'receipt-review' }), expenseId: 'dinner', status: 'review' as const };
+  holiday.drafts = [review, { ...review, id: 'second-review', status: 'waiting' }];
+  assert.throws(() => validateLedger({ trips: [holiday] }), /only have one pending receipt draft/);
+  holiday.drafts = [review, { ...expense({ id: 'new-receipt' }), status: 'review' }];
+  const saved = validateLedger({ trips: [holiday] });
+  assert.equal(saved.trips[0].drafts[1].expenseId, undefined);
+  assert.deepEqual(balances(saved.trips[0]), balances(trip()));
+  holiday.drafts[0].id = 'dinner';
+  assert.throws(() => validateLedger({ trips: [holiday] }), /Duplicate IDs/);
+});
+
+test('preserves per-receipt conversations on posted expenses and review drafts', () => {
+  const conversation: ReceiptMessage[] = [
+    { id: 'question', role: 'user', text: 'Is the service charge included?', createdAt: '2026-10-04T12:15:00.000Z' },
+    { id: 'answer', role: 'assistant', text: 'The receipt shows it separately.', createdAt: '2026-10-04T12:16:00+01:00', replyTo: 'question' },
+    { id: 'historic-answer', role: 'assistant', text: 'Please check the unclear wine price.', createdAt: '2026-10-04T12:17:00Z' },
+  ];
+  const original = expense({ conversation });
+  const holiday = trip([original]);
+  holiday.drafts = [{ ...original, id: 'review', expenseId: original.id, status: 'review' }];
+  const saved = validateLedger(JSON.parse(JSON.stringify({ trips: [holiday] })));
+  assert.deepEqual(saved.trips[0].expenses[0].conversation, conversation);
+  assert.deepEqual(saved.trips[0].drafts[0].conversation, conversation);
+  assert.deepEqual(balances(saved.trips[0]), balances(trip()));
+  assert.equal(expenseSchema.parse(expense()).conversation, undefined);
+  const trimmed = expenseSchema.parse(expense({ conversation: [{ ...conversation[0], text: '  Check this price.  ' }] }));
+  assert.equal(trimmed.conversation![0].text, 'Check this price.');
+});
+
+test('rejects malformed receipt messages, invalid reply parents and duplicate IDs', () => {
+  const question: ReceiptMessage = { id: 'question', role: 'user', text: 'Check the tip.', createdAt: '2026-10-04T12:15:00Z' };
+  const answer: ReceiptMessage = { id: 'answer', role: 'assistant', text: 'It is 10%.', createdAt: '2026-10-04T12:16:00Z', replyTo: question.id };
+  const invalid: unknown[] = [
+    [{ ...question, id: '' }], [{ ...question, role: 'system' }],
+    [{ ...question, text: '   ' }], [{ ...question, text: 'x'.repeat(4001) }],
+    [{ ...question, createdAt: 'today' }], [{ ...question, createdAt: '2026-02-30T12:15:00Z' }],
+    [{ ...answer, replyTo: '' }], [{ ...answer, replyTo: 'missing' }],
+    [question, { ...answer, replyTo: 'answer' }],
+    [question, answer, { ...answer, id: 'second-answer', replyTo: answer.id }],
+    [question, { ...question, text: 'Repeated ID.' }],
+    Array.from({ length: 101 }, (_, index) => ({ ...question, id: `question-${index}` })),
+  ];
+  for (const conversation of invalid) {
+    const input = { ...expense(), conversation };
+    assert.equal(expenseSchema.safeParse(input).success, false);
+    assert.equal(draftSchema.safeParse({ ...input, status: 'review' }).success, false);
+    assert.throws(() => validateLedger({ trips: [trip([input as Expense])] }));
+  }
+  assert.equal(expenseSchema.safeParse(expense({ conversation: [question, answer] })).success, true);
 });
