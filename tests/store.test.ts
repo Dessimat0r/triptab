@@ -15,6 +15,7 @@ class SQLiteStatement {
   private values: (string | number | null)[] = [];
   constructor(private readonly sqlite: DatabaseSync, readonly sql: string) {}
   bind(...values: (string | number | null)[]) { this.values = values; return this; }
+  get bindingBytes() { return this.values.map(value => typeof value === 'string' ? Buffer.byteLength(value) : 0); }
   async first<T>() { return (this.sqlite.prepare(this.sql).get(...this.values) || null) as T | null; }
   async all<T>() { return { results: this.sqlite.prepare(this.sql).all(...this.values) as T[] }; }
   runSync() {
@@ -205,13 +206,13 @@ test('expense, payment and draft creation/edit/deletion each have precise before
   state.data.trips[0].payments.push({ id: 'payment-1', from: 'b', to: 'a', amount: 1000, date: '2026-10-04' });
   state.data.trips[0].drafts.push({ ...dinner(), id: 'draft-1', status: 'review' });
   state = await store.writeLedger(actor, state.data, state.revision);
-  assert.equal(count(database), initial + 4);
+  assert.equal(count(database), initial + 3);
   const oldExpense = structuredClone(state.data.trips[0].expenses[0]);
   state.data.trips[0].expenses[0].items[0].amount = 15000;
   state.data.trips[0].payments[0].amount = 600;
   state.data.trips[0].drafts[0].title = 'Check the tip';
   state = await store.writeLedger(actor, state.data, state.revision, { source: 'chatgpt' });
-  assert.equal(count(database), initial + 7);
+  assert.equal(count(database), initial + 6);
   let events = await history();
   assert.deepEqual(lastEntity(events, 'expense', 'dinner').before, oldExpense);
   assert.equal((lastEntity(events, 'expense', 'dinner').after?.items as { amount: number }[])[0].amount, 15000);
@@ -222,7 +223,7 @@ test('expense, payment and draft creation/edit/deletion each have precise before
   state.data.trips[0].payments = [];
   state.data.trips[0].drafts = [];
   await store.writeLedger(actor, state.data, state.revision);
-  assert.equal(count(database), initial + 11);
+  assert.equal(count(database), initial + 9);
   events = await history();
   for (const [type, id] of [['expense', 'dinner'], ['payment', 'payment-1'], ['draft', 'draft-1']]) {
     const event = lastEntity(events, type, id);
@@ -285,12 +286,12 @@ test('stale or competing saves have exactly one winner and no loser events', asy
   assert.equal(results.filter(result => result.status === 'fulfilled').length, 1);
   const rejected = results.find(result => result.status === 'rejected') as PromiseRejectedResult;
   assert.match(rejected.reason.message, /CONFLICT/);
-  assert.equal(count(database), initial + 2);
+  assert.equal(count(database), initial + 1);
   const current = await store.readLedger(actor);
   assert.equal(current.revision, 2);
   assert.equal(current.data.trips[0].expenses.length + current.data.trips[0].payments.length, 1);
   await assert.rejects(store.writeLedger(actor, first, state.revision), /CONFLICT/);
-  assert.equal(count(database), initial + 2);
+  assert.equal(count(database), initial + 1);
 });
 
 test('future ledger revisions are rejected before a competing write can make the token current', async () => {
@@ -327,8 +328,8 @@ test('future ledger revisions are rejected before a competing write can make the
   assert.equal(saved.revision, winner.revision + 1);
 });
 
-test('ledger CAS verifies trusted trip preimages and the expected absence of new IDs', async context => {
-  for (const mutation of ['data', 'owner', 'remove', 'new-id'] as const) await context.test(mutation, async () => {
+test('ledger CAS verifies compact owner and existence guards without duplicating stored JSON', async context => {
+  for (const mutation of ['owner', 'remove', 'new-id'] as const) await context.test(mutation, async () => {
     const database = await storage();
     const holiday = trip(); holiday.expenses = [dinner()];
     const state = await create(database, holiday);
@@ -337,11 +338,7 @@ test('ledger CAS verifies trusted trip preimages and the expected absence of new
     if (mutation === 'new-id') proposed.trips.push(trip('new-trip'));
     const initialEvents = count(database);
     database.beforeWriteBatch = () => {
-      if (mutation === 'data') {
-        const changed = structuredClone(state.data.trips[0]);
-        changed.expenses[0].items[0].amount = 22222;
-        database.sqlite.prepare('UPDATE trips SET data=? WHERE id=?').run(JSON.stringify(changed), 'trip-1');
-      } else if (mutation === 'owner') {
+      if (mutation === 'owner') {
         database.sqlite.prepare('UPDATE trips SET owner=? WHERE id=?').run(member, 'trip-1');
       } else if (mutation === 'remove') {
         database.sqlite.prepare('DELETE FROM trips WHERE id=?').run('trip-1');
@@ -353,11 +350,32 @@ test('ledger CAS verifies trusted trip preimages and the expected absence of new
     await assert.rejects(store.writeLedger(actor, proposed, state.revision), /CONFLICT/);
     assert.equal(database.sqlite.prepare('SELECT revision FROM sync_state WHERE id=1').get()?.revision, state.revision);
     assert.equal(count(database), initialEvents);
-    if (mutation === 'data') assert.equal((await store.readLedger(actor)).data.trips[0].expenses[0].items[0].amount, 22222);
     if (mutation === 'owner') assert.equal(database.sqlite.prepare('SELECT owner FROM trips WHERE id=?').get('trip-1')?.owner, member);
     if (mutation === 'remove') assert.equal(database.sqlite.prepare('SELECT id FROM trips WHERE id=?').get('trip-1'), undefined);
     if (mutation === 'new-id') assert.equal((await store.readLedger(actor)).data.trips.find(value => value.id === 'new-trip')?.name, 'Previously committed holiday');
   });
+});
+
+test('an actual trip writer winning after the baseline makes CAS reject the stale before image', async () => {
+  const database = await storage();
+  const holiday = trip(); holiday.expenses = [dinner()];
+  const baseline = await create(database, holiday);
+  const competing = structuredClone(baseline.data), proposed = structuredClone(baseline.data);
+  competing.trips[0].expenses[0].tip = 2; proposed.trips[0].expenses[0].tip = 1;
+  const originalBatch = database.batch.bind(database); let raced = false;
+  database.batch = async statements => {
+    if (!raced && statements.some(statement => /^UPDATE sync_state/.test(statement.sql.trim()))) {
+      raced = true; await store.writeLedger(actor, competing, baseline.revision);
+    }
+    return originalBatch(statements);
+  };
+  const initial = count(database);
+  await assert.rejects(store.writeLedger(actor, proposed, baseline.revision), /CONFLICT/);
+  assert.equal(count(database), initial + 1);
+  const saved = await store.readLedger(actor);
+  assert.equal(saved.data.trips[0].expenses[0].tip, 2);
+  const event = lastEntity(await history(), 'expense', 'dinner');
+  assert.equal(event.before?.tip, 0); assert.equal(event.after?.tip, 2);
 });
 
 test('fifty-trip saves keep exact before snapshots through the maximum ledger collection', async () => {
@@ -398,6 +416,39 @@ test('participant reorder-only changes preserve every collection order in immuta
   }
   await store.writeLedger(member, state.data, state.revision);
   assert.equal(count(database), initialEvents + 1, 'an unchanged order resave is not another edit');
+});
+
+test('receipt and payment insertion/removal events explain order unless retained entries are reordered', async () => {
+  const database = await storage();
+  const holiday = trip();
+  holiday.expenses = ['e1', 'e2', 'e3'].map(id => ({ ...dinner(), id }));
+  holiday.payments = ['p1', 'p2', 'p3'].map(id => ({ id, from: 'b', to: 'a', amount: 1, date: '2026-10-04' }));
+  holiday.drafts = ['d1', 'd2', 'd3'].map(id => ({ ...dinner(), id, status: 'waiting' }));
+  let state = await create(database, holiday);
+  state.data.trips[0].expenses.shift(); state.data.trips[0].payments.shift(); state.data.trips[0].drafts.shift();
+  state = await store.writeLedger(actor, state.data, state.revision);
+  let events = (await history()).filter(event => event.revision === state.revision);
+  assert.deepEqual(events.map(event => event.entityType).sort(), ['draft', 'expense', 'payment']);
+  assert.ok(events.every(event => event.action === 'delete'));
+  state.data.trips[0].expenses.unshift({ ...dinner(), id: 'new-expense' });
+  state.data.trips[0].payments.push({ id: 'new-payment', from: 'b', to: 'a', amount: 1, date: '2026-10-04' });
+  state.data.trips[0].drafts.splice(1, 0, { ...dinner(), id: 'new-draft', status: 'waiting' });
+  state = await store.writeLedger(actor, state.data, state.revision);
+  events = (await history()).filter(event => event.revision === state.revision);
+  assert.deepEqual(events.map(event => event.entityType).sort(), ['draft', 'expense', 'payment']);
+  assert.ok(events.every(event => event.action === 'create'));
+  state.data.trips[0].expenses.shift(); state.data.trips[0].expenses.reverse();
+  state = await store.writeLedger(actor, state.data, state.revision);
+  events = (await history()).filter(event => event.revision === state.revision);
+  assert.deepEqual(events.map(event => event.entityType).sort(), ['expense', 'trip']);
+  const reorder = events.find(event => event.entityType === 'trip')!;
+  assert.deepEqual(reorder.before?.expenseOrder, ['new-expense', 'e2', 'e3']);
+  assert.deepEqual(reorder.after?.expenseOrder, ['e3', 'e2']);
+  state.data.trips[0].members.splice(1, 0, { id: 'c', name: 'Carol' });
+  state = await store.writeLedger(actor, state.data, state.revision);
+  const placement = lastEntity(await history(), 'trip', 'trip-1');
+  assert.deepEqual(placement.before?.memberOrder, ['a', 'b']);
+  assert.deepEqual(placement.after?.memberOrder, ['a', 'c', 'b']);
 });
 
 test('one participant’s financial metadata, units, receipt override, memory and chat edits retain exact snapshots', async () => {
@@ -512,6 +563,10 @@ test('a Unicode ledger near the content limit survives maximum receipt policy gr
   assert.equal(response.status, 200, 'the HTTP body limit must allow a normalized ledger to round trip');
   saved = await response.json() as typeof saved;
   assert.equal(count(database), 7014, 'resaving server-normalized content must not add history');
+  database.beforeBatch = statements => {
+    const cas = statements.find(statement => /^UPDATE sync_state/.test(statement.sql.trim()));
+    if (cas) assert.ok(cas.bindingBytes.every(bytes => bytes < 50_000), 'CAS must not bind the large stored trip JSON a second time');
+  };
   saved.data.trips[0].expenses[0].tip = 1;
   saved = await store.writeLedger(actor, saved.data, saved.revision);
   assert.equal(count(database), 7015);
@@ -605,7 +660,7 @@ test('history is immutable in SQLite and paginated without duplication as newer 
   const older = await store.readActivity(actor, 'trip-1', { limit: 2, before: first.nextCursor! });
   assert.equal(older.events.length, 1); assert.equal(older.nextCursor, null);
   assert.equal(new Set([...first.events, ...older.events].map(event => event.id)).size, 3);
-  assert.equal((await history()).length, 5);
+  assert.equal((await history()).length, 4);
   await assert.rejects(store.readActivity('outsider', 'trip-1'), (error: unknown) => error instanceof store.RequestError && error.status === 403);
   for (const options of [{ limit: 0 }, { limit: 51 }, { before: -1 }, { before: Number.MAX_SAFE_INTEGER + 1 }]) await assert.rejects(store.readActivity(actor, 'trip-1', options));
   assert.equal(state.revision, 2);
@@ -904,7 +959,7 @@ test('unchanged historical invalid bank charges/names do not block unrelated tri
   state.data.trips.find(holiday => holiday.id === 'clean-trip')!.expenses.push(dinner());
   state = await store.writeLedger(actor, state.data, state.revision);
   assert.deepEqual(state.data.trips.find(holiday => holiday.id === legacy.id), legacy);
-  assert.equal(count(database), 5);
+  assert.equal(count(database), 4);
   assert.equal((await history(actor, legacy.id)).length, 0);
 });
 
@@ -1020,7 +1075,9 @@ test('legacy assistant stamps are removed without changing words, historical evi
   assert.deepEqual(saved.conversation![1], { id: 'legacy-ai', role: 'assistant', text: 'Check the receipt.',
     createdAt: '2026-10-04T20:32:00Z', replyTo: 'legacy-user' });
   const event = lastEntity(await history(actor, legacy.id), 'expense', saved.id);
-  assert.deepEqual(event.before?.conversation, messages, 'the repair audit retains its truthful before image');
+  assert.equal((event.before?.conversation as typeof messages)[1].authorName, undefined, 'assistant views never return human attribution');
+  const evidence = database.sqlite.prepare('SELECT before_data FROM activity_events WHERE id=?').get(event.id)?.before_data as string;
+  assert.deepEqual(JSON.parse(evidence).conversation, messages, 'immutable raw evidence retains its truthful before image');
   assert.deepEqual(event.after?.conversation, saved.conversation);
   const changed = structuredClone(state.data);
   changed.trips[0].expenses[0].conversation![1].text = 'Rewritten reply';
@@ -1256,7 +1313,7 @@ test('another trip’s historical message cannot prove a forged speaker and fres
   assert.equal(alice.data.trips.find(value => value.id === 'trip-1')!.expenses[0].conversation![0].authorMemberId, 'b');
 });
 
-test('unfamiliar message history lookup is bounded to one hundred IDs per trip', async () => {
+test('unfamiliar message registry lookup is bounded to one hundred IDs per trip', async () => {
   const database = await storage();
   const state = await create(database);
   const initialEvents = count(database);
@@ -1273,4 +1330,65 @@ test('unfamiliar message history lookup is bounded to one hundred IDs per trip',
   const saved = await store.writeLedger(actor, state.data, state.revision);
   assert.equal(saved.data.trips[0].drafts[0].conversation?.length, 100);
   for (const message of saved.data.trips[0].drafts[0].conversation!) assert.equal(message.authorMemberId, 'a');
+});
+
+test('registry migration backfills latest immutable and unlabelled live legacy messages once', async () => {
+  const database = new SQLiteD1();
+  for (const file of (await readdir(new URL('../drizzle/', import.meta.url))).filter(file => file.endsWith('.sql') && file < '0007').sort()) {
+    database.sqlite.exec(await readFile(new URL(`../drizzle/${file}`, import.meta.url), 'utf8'));
+  }
+  const question = { id: 'old-question', role: 'user', text: 'Older words', createdAt: '2026-10-04T20:30:00Z', authorMemberId: 'b', authorName: 'Bob' };
+  const latest = { ...question, text: 'Latest trusted words' };
+  const assistant = { id: 'old-answer', role: 'assistant', text: 'A reply', createdAt: '2026-10-04T20:31:00Z', replyTo: question.id, authorMemberId: 'a', authorName: 'Wrong traveller' };
+  const live = trip(); live.expenses = [{ ...dinner(), conversation: [{ id: 'live-legacy', role: 'user', text: 'No old author', createdAt: '2026-10-04T20:32:00Z' }] }];
+  database.sqlite.prepare('INSERT INTO trips (id,owner,data) VALUES (?,?,?)').run(live.id, actor, JSON.stringify(live));
+  const snapshot = database.sqlite.prepare(`INSERT INTO activity_events
+    (id,trip_id,actor_id,actor_name,created_at,entity_type,entity_id,action,before_data,after_data,revision,source)
+    VALUES (?,?,?,?,?,'expense','dinner','update',?,?,1,'web')`);
+  snapshot.run('historic', live.id, actor, 'Alice', '2026-10-04T21:00:00Z', JSON.stringify({ conversation: [question] }), JSON.stringify({ conversation: [latest, assistant] }));
+  database.sqlite.exec(await readFile(new URL('../drizzle/0007_receipt_message_registry.sql', import.meta.url), 'utf8'));
+  const message = (id: string) => JSON.parse(database.sqlite.prepare('SELECT message_data FROM receipt_messages WHERE trip_id=? AND message_id=?').get(live.id, id)?.message_data as string);
+  assert.deepEqual(message(question.id), latest);
+  assert.deepEqual(message('live-legacy'), live.expenses[0].conversation![0]);
+  assert.deepEqual(message(assistant.id), { id: assistant.id, role: assistant.role, text: assistant.text, createdAt: assistant.createdAt, replyTo: question.id });
+  assert.ok((database.sqlite.prepare('SELECT after_data FROM activity_events WHERE id=?').get('historic')?.after_data as string).includes('Wrong traveller'));
+  assert.throws(() => database.sqlite.exec('UPDATE receipt_messages SET message_data=\'{}\''), /immutable/);
+  assert.throws(() => database.sqlite.exec('DELETE FROM receipt_messages'), /immutable/);
+  assert.throws(() => database.sqlite.prepare('INSERT OR REPLACE INTO receipt_messages VALUES (?,?,?)').run(live.id, question.id, '{}'), /immutable/);
+});
+
+test('fresh messages use an indexed registry lookup without scanning old snapshots or trusting dates', async () => {
+  const database = await storage();
+  let state = await create(database);
+  const queries: string[] = [], prepare = database.prepare.bind(database);
+  database.prepare = sql => { queries.push(sql); return prepare(sql); };
+  state.data.trips[0].expenses = [{ ...dinner(), conversation: [{ id: 'fresh', role: 'user', text: 'New question', createdAt: '2099-01-01T12:00:00Z' }] }];
+  state = await store.writeLedger(actor, state.data, state.revision);
+  const lookups = queries.filter(sql => /SELECT message_data AS message FROM receipt_messages/.test(sql));
+  assert.equal(lookups.length, 1); assert.ok(!queries.some(sql => /json_each\(snapshots\.data/.test(sql)));
+  const plan = database.sqlite.prepare('EXPLAIN QUERY PLAN SELECT message_data FROM receipt_messages WHERE trip_id=? AND message_id IN (SELECT value FROM json_each(?)) LIMIT 100')
+    .all('trip-1', '["fresh"]');
+  assert.ok(plan.some(row => /SEARCH receipt_messages USING INDEX receipt_messages_trip_message_idx/.test(String(row.detail))));
+  assert.equal(state.data.trips[0].expenses[0].conversation![0].authorName, 'Original Owner');
+  const receipt = structuredClone(state.data.trips[0].expenses[0]);
+  state.data.trips[0].expenses = []; state = await store.writeLedger(actor, state.data, state.revision);
+  receipt.conversation![0].createdAt = '2099-02-01T12:00:00Z';
+  state.data.trips[0].expenses = [receipt];
+  await assert.rejects(store.writeLedger(actor, state.data, state.revision), /Saved receipt messages cannot be edited/);
+});
+
+test('message registry insertion and failed audit projections roll back with the financial CAS', async () => {
+  const database = await storage();
+  const state = await create(database); const initial = count(database);
+  state.data.trips[0].expenses = [{ ...dinner(), conversation: [{ id: 'new', role: 'user', text: 'My dinner?', createdAt: '2026-10-04T20:31:00Z' }] }];
+  database.sqlite.exec("CREATE TRIGGER refuse_message BEFORE INSERT ON receipt_messages BEGIN SELECT RAISE(ABORT,'registry unavailable'); END");
+  await assert.rejects(store.writeLedger(actor, state.data, state.revision), /registry unavailable/);
+  assert.equal(count(database), initial);
+  assert.equal(database.sqlite.prepare('SELECT COUNT(*) AS count FROM receipt_messages').get()?.count, 0);
+  assert.equal(database.sqlite.prepare('SELECT revision FROM sync_state WHERE id=1').get()?.revision, state.revision);
+  assert.equal((await store.readLedger(actor)).data.trips[0].expenses.length, 0);
+  database.sqlite.exec('DROP TRIGGER refuse_message');
+  const saved = await store.writeLedger(actor, state.data, state.revision);
+  assert.equal(database.sqlite.prepare('SELECT COUNT(*) AS count FROM receipt_messages').get()?.count, 1);
+  assert.equal(saved.data.trips[0].expenses[0].conversation![0].authorName, 'Original Owner');
 });

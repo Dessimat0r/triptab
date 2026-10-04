@@ -199,9 +199,10 @@ function messageDescription(value: unknown, snapshot: Record<string, unknown>, n
   const message = auditRecord(value);
   if (!message) return "Not recorded";
   const question = message.replyTo ? entries(snapshot.conversation).find(entry => entry.id === message.replyTo) : null;
-  const author = auditText(message.authorName) || (message.role === "assistant" ? "ChatGPT/Codex" : names[auditText(message.authorMemberId)] || "Traveller");
+  const assistant = message.role === "assistant";
+  const author = assistant ? "ChatGPT/Codex" : auditText(message.authorName) || names[auditText(message.authorMemberId)] || "Traveller";
   const context = message.itemId || question?.itemId;
-  return `${message.role === "assistant" ? "Reply" : "Question"} by ${author}${message.authorMemberId ? ` · ${traveller(message.authorMemberId, names)}` : ""}\n${auditTimestamp(message.createdAt, true)}\n${context ? itemReference(snapshot, context) : "Whole receipt"}\nMessage ${auditText(message.id)}${message.replyTo ? ` · replying to message ${auditText(message.replyTo)}` : ""}\n\n${auditText(message.text)}`;
+  return `${assistant ? "Reply" : "Question"} by ${author}${!assistant && message.authorMemberId ? ` · ${traveller(message.authorMemberId, names)}` : ""}\n${auditTimestamp(message.createdAt, true)}\n${context ? itemReference(snapshot, context) : "Whole receipt"}\nMessage ${auditText(message.id)}${message.replyTo ? ` · replying to message ${auditText(message.replyTo)}` : ""}\n\n${auditText(message.text)}`;
 }
 function order(value: unknown, describe: (id: string) => string): string {
   if (!Array.isArray(value) || !value.length) return "No entries";
