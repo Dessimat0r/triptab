@@ -1876,3 +1876,47 @@ test('native D1 ledger snapshots and conditional freshness agree without rewriti
     assert.equal(await ledgerEtagForSnapshot(outsider.freshness),await ledgerEtag(database as unknown as D1Database,member));
   } finally { binding.DB=undefined; await worker.dispose(); }
 });
+
+test('native conditional GET follows silent trip normalization without fabricating activity and keeps genuine no-op saves cached', async () => {
+  const worker=new Miniflare({ modules:true, script:'export default {fetch(){return new Response("Ledger version test")}}',
+    compatibilityDate:'2026-05-15',d1Databases:{DB:'ledger-body-version-native'},d1Persist:false,log:new Log(LogLevel.NONE) });
+  try {
+    const database=await worker.getD1Database('DB');
+    for(const file of (await readdir(new URL('../drizzle/',import.meta.url))).filter(file=>file.endsWith('.sql')).sort()) {
+      await database.batch(unstable_splitSqlQuery(await readFile(new URL('../drizzle/'+file,import.meta.url),'utf8')).map(sql=>database.prepare(sql)));
+    }
+    binding.DB=database as unknown as D1Database;
+    const holiday=trip('native-normalization');
+    // Pre-existing schemas accepted whitespace that current parsing trims. This
+    // setup is isolated native D1, never a mutation of a shared/prod fixture.
+    holiday.payments=[{id:'paid',from:'a',to:'b',amount:100,date:'2026-10-04',method:'  Cash  ',note:'  Earlier note  '}];
+    await database.batch([
+      database.prepare('INSERT INTO profiles(id,email,display_name,created_at) VALUES(?,?,?,?)').bind(actor,'owner@example.com','Original Owner','2026-10-04T00:00:00Z'),
+      database.prepare('INSERT INTO trips(id,owner,data) VALUES(?,?,?)').bind(holiday.id,actor,JSON.stringify(holiday)),
+      database.prepare('INSERT INTO memberships(trip_id,user_id,member_id) VALUES(?,?,?)').bind(holiday.id,actor,'a'),
+      database.prepare('INSERT INTO sync_state(id,revision,last_write) VALUES(1,4,?)').bind('legacy-setup'),
+    ]);
+    const route=await ledgerRoute(),initial=await route.GET(ledgerReadRequest());
+    const cached=await initial.json() as Awaited<ReturnType<typeof store.readLedger>>;
+    const oldTag=initial.headers.get('etag')!;
+    assert.equal(cached.data.trips[0].payments[0].method,'  Cash  ');
+    const normalized=await store.writeLedger(actor,cached.data,cached.revision);
+    assert.equal(normalized.data.trips[0].payments[0].method,'Cash');
+    assert.equal(normalized.data.trips[0].payments[0].note,'Earlier note');
+    assert.equal(normalized.data.trips[0].payments[0].amount,100);
+    assert.equal((await database.prepare('SELECT COUNT(*) AS count FROM activity_events').first<{count:number}>())!.count,0);
+    const newTag=await ledgerEtag(database as unknown as D1Database,actor);
+    assert.notEqual(newTag,oldTag,'A visible body normalization without participant activity must invalidate its cached representation');
+    const refreshed=await route.GET(ledgerReadRequest(oldTag));
+    assert.equal(refreshed.status,200,'Never attach the newer CAS revision to stale cached data after an unlogged body write');
+    assert.deepEqual(await refreshed.json(),normalized);assert.equal(refreshed.headers.get('etag'),newTag);
+
+    const unchanged=await store.writeLedger(actor,normalized.data,normalized.revision);
+    assert.equal(unchanged.revision,normalized.revision+1);
+    assert.deepEqual(unchanged.data,normalized.data);
+    assert.equal(await ledgerEtag(database as unknown as D1Database,actor),newTag,'An unchanged body and activity can retain the same tag despite a newer global CAS revision');
+    const noOp=await route.GET(ledgerReadRequest(newTag));
+    assert.equal(noOp.status,304);assert.equal(noOp.headers.get('x-ledger-revision'),String(unchanged.revision));
+    assert.equal((await database.prepare('SELECT COUNT(*) AS count FROM activity_events').first<{count:number}>())!.count,0);
+  } finally { binding.DB=undefined;await worker.dispose(); }
+});

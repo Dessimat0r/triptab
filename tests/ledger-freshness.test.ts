@@ -6,12 +6,12 @@ import { ModuleKind, ScriptTarget, transpileModule } from 'typescript';
 import { ledgerEtag, ledgerTagMatches, readLedgerFreshness } from '../lib/ledger-freshness';
 
 const sqlite = new DatabaseSync(':memory:');
-sqlite.exec(`CREATE TABLE trips(id TEXT PRIMARY KEY, owner TEXT); CREATE INDEX trips_owner_idx ON trips(owner);
+sqlite.exec(`CREATE TABLE trips(id TEXT PRIMARY KEY, owner TEXT, receipt_link_version INTEGER NOT NULL DEFAULT 0); CREATE INDEX trips_owner_idx ON trips(owner);
 CREATE TABLE memberships(trip_id TEXT, user_id TEXT, member_id TEXT); CREATE INDEX memberships_user_idx ON memberships(user_id);
 CREATE UNIQUE INDEX memberships_trip_user_idx ON memberships(trip_id,user_id);
 CREATE TABLE profiles(id TEXT PRIMARY KEY,email TEXT); CREATE TABLE sync_state(id INTEGER PRIMARY KEY,revision INTEGER);
 CREATE TABLE activity_events(sequence INTEGER PRIMARY KEY, trip_id TEXT); CREATE INDEX activity_events_trip_sequence_idx ON activity_events(trip_id,sequence);
-INSERT INTO trips VALUES ('shared','alice'),('other','carol'); INSERT INTO memberships VALUES ('shared','bob','b');
+INSERT INTO trips(id,owner) VALUES ('shared','alice'),('other','carol'); INSERT INTO memberships VALUES ('shared','bob','b');
 INSERT INTO profiles VALUES ('bob','bob@example.test'),('carol','carol@example.test');
 INSERT INTO sync_state VALUES(1,7); INSERT INTO activity_events VALUES (1,'shared');`);
 const queries: string[] = [];
@@ -34,7 +34,7 @@ const boundary = {
   ensureProfile: async () => { if (!authenticated) throw Error('UNAUTHORIZED'); return { id: 'bob' }; },
   readLedgerSnapshot: async () => {
     snapshotCalls++;
-    const versions = sqlite.prepare(`SELECT t.id,COALESCE(MAX(e.sequence),0) AS latest FROM trips t
+    const versions = sqlite.prepare(`SELECT t.id,t.receipt_link_version AS dataVersion,COALESCE(MAX(e.sequence),0) AS latest FROM trips t
       LEFT JOIN activity_events e ON e.trip_id=t.id WHERE t.owner='bob' OR t.id IN (SELECT trip_id FROM memberships WHERE user_id='bob')
       GROUP BY t.id ORDER BY t.id`).all();
     const links = sqlite.prepare(`SELECT m.trip_id,m.user_id,m.member_id,p.email FROM memberships m LEFT JOIN profiles p ON p.id=m.user_id
@@ -69,7 +69,7 @@ test('freshness detects lower-sequence membership loss and a trip without activi
   sqlite.prepare('DELETE FROM memberships WHERE trip_id=? AND user_id=?').run('shared', 'bob');
   const remaining = await ledgerEtag(database, 'bob');
   assert.notEqual(remaining, both);
-  sqlite.prepare('INSERT INTO trips VALUES (?,?)').run('empty', 'bob');
+  sqlite.prepare('INSERT INTO trips(id,owner) VALUES (?,?)').run('empty', 'bob');
   assert.notEqual(await ledgerEtag(database, 'bob'), remaining);
   sqlite.prepare('DELETE FROM trips WHERE id=?').run('empty');
   sqlite.prepare('DELETE FROM memberships WHERE trip_id=? AND user_id=?').run('other', 'bob');
@@ -81,6 +81,14 @@ test('freshness tracks the authoritative member email overlay without leaking an
   assert.equal(await ledgerEtag(database,'bob'), before);
   sqlite.prepare('UPDATE profiles SET email=? WHERE id=?').run('updated@example.test','bob');
   assert.notEqual(await ledgerEtag(database,'bob'), before);
+});
+test('visible body versions invalidate tags without activity while unrelated bodies and global CAS advances do not', async () => {
+  const initial = await ledgerEtag(database,'bob');
+  sqlite.prepare('UPDATE trips SET receipt_link_version=receipt_link_version+1 WHERE id=?').run('other');
+  sqlite.prepare('UPDATE sync_state SET revision=revision+1').run();
+  assert.equal(await ledgerEtag(database,'bob'),initial);
+  sqlite.prepare('UPDATE trips SET receipt_link_version=receipt_link_version+1 WHERE id=?').run('shared');
+  assert.notEqual(await ledgerEtag(database,'bob'),initial);
 });
 test('orphan membership metadata cannot change an otherwise empty accessible ledger tag', async () => {
   const before=await ledgerEtag(database,'nobody');

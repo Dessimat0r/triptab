@@ -258,7 +258,7 @@ export async function readLedgerSnapshot(id: string) {
   // every trip (or every membership) in the database.
   const visibleIds = 'SELECT id FROM trips WHERE owner = ? UNION SELECT trip_id FROM memberships WHERE user_id = ?';
   const results = await db().batch([
-    db().prepare(`SELECT t.id, t.owner, t.data,
+    db().prepare(`SELECT t.id, t.owner, t.data, t.receipt_link_version AS dataVersion,
       COALESCE((SELECT e.sequence FROM activity_events e WHERE e.trip_id = t.id ORDER BY e.sequence DESC LIMIT 1), 0) AS latest
       FROM trips t WHERE t.id IN (${visibleIds}) ORDER BY t.id`).bind(id, id),
     db().prepare('SELECT COALESCE((SELECT revision FROM sync_state WHERE id = 1), 0) AS revision'),
@@ -272,7 +272,7 @@ export async function readLedgerSnapshot(id: string) {
     const members = linksByTrip.get(link.trip_id) || new Map<string, MembershipRow>();
     members.set(link.member_id, link); linksByTrip.set(link.trip_id, members);
   }
-  const rows = results[0].results as (StoredTrip & { latest: number })[];
+  const rows = results[0].results as (StoredTrip & { latest: number; dataVersion: number })[];
   const trips = rows.map(row => {
     const trip = { ...JSON.parse(row.data), ownerId: row.owner } as Trip;
     for (const member of trip.members) {
@@ -283,7 +283,7 @@ export async function readLedgerSnapshot(id: string) {
     return trip;
   });
   const revision = (results[1].results as { revision: number }[])[0]?.revision || 0;
-  return { data: { trips }, revision, freshness: { versions: rows.map(row => ({ id: row.id, latest: row.latest })), links } };
+  return { data: { trips }, revision, freshness: { versions: rows.map(row => ({ id: row.id, latest: row.latest, dataVersion: row.dataVersion })), links } };
 }
 
 export async function readLedger(id: string): Promise<{ data: Ledger; revision: number }> {
