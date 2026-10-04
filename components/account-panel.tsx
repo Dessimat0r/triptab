@@ -2,7 +2,9 @@
 import { useId, useState } from "react";
 import { X, UserRound, LogOut, Sparkles } from "lucide-react";
 import ModalA11y from "./modal-accessibility";
-import PwaControls from "./pwa-controls";
+import PwaControls, { clearBrowserNotifications } from "./pwa-controls";
+import DataExport from "./data-export";
+import type { Trip } from "@/lib/model";
 export type Profile = {
   id: string;
   email: string;
@@ -39,16 +41,19 @@ export default function AccountPanel({
   profile,
   onClose,
   onSaved,
+  trips = [],
 }: {
   profile: Profile | null;
   onClose: () => void;
   onSaved: (p: Profile) => void;
+  trips?: Pick<Trip, "id" | "name">[];
 }) {
   const id = useId();
   const [name, setName] = useState(profile?.displayName || ""),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
     [password, setPassword] = useState(""),
+    [currentPassword, setCurrentPassword] = useState(""),
     [passwordError, setPasswordError] = useState(""),
     [passwordBusy, setPasswordBusy] = useState(false),
     [accountError, setAccountError] = useState(""),
@@ -130,74 +135,104 @@ export default function AccountPanel({
                 {busy ? "Saving…" : "Save profile"}
               </button>
             </form>
-            {!profile.hasPassword && (
-              <section className="account-section">
-                <h3>Sign in with your email</h3>
-                <p className="footnote">
-                  Add a TripTab password to sign in without ChatGPT. Your
-                  holidays and profile stay in this account.
-                </p>
-                <form
-                  onSubmit={async (event) => {
-                    event.preventDefault();
-                    if (passwordBusy) return;
-                    setPasswordBusy(true);
-                    setPasswordError("");
-                    try {
-                      const response = await fetch("/api/auth", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                          action: "set_password",
-                          password,
-                        }),
-                      });
-                      const body = (await response.json()) as AuthResponse;
-                      const updatedProfile = profileFromAuth(body);
-                      if (!response.ok || !updatedProfile)
-                        throw Error(body.error || "Unable to add a password.");
-                      setPassword("");
-                      onSaved(updatedProfile);
-                    } catch (cause) {
-                      setPasswordError(
-                        cause instanceof Error
-                          ? cause.message
-                          : "Unable to add a password.",
-                      );
-                    } finally {
-                      setPasswordBusy(false);
-                    }
-                  }}
-                >
-                  <label htmlFor={`${id}-new-password`}>
-                    New TripTab password
+            <section className="account-section">
+              <h3>
+                {profile.hasPassword
+                  ? "Change your password"
+                  : "Sign in with your email"}
+              </h3>
+              <p className="footnote">
+                {profile.hasPassword
+                  ? "Changing your password signs out your other sessions."
+                  : "Add a TripTab password to sign in without ChatGPT. Your holidays and profile stay in this account."}
+              </p>
+              <p className="footnote">
+                Password-reset emails are not available yet. Keep your password
+                safe.
+              </p>
+              <form
+                onSubmit={async (event) => {
+                  event.preventDefault();
+                  if (passwordBusy) return;
+                  setPasswordBusy(true);
+                  setPasswordError("");
+                  try {
+                    const response = await fetch("/api/auth", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        action: "set_password",
+                        password,
+                        ...(profile.hasPassword ? { currentPassword } : {}),
+                      }),
+                    });
+                    const body = (await response.json()) as AuthResponse;
+                    const updatedProfile = profileFromAuth(body);
+                    if (!response.ok || !updatedProfile)
+                      throw Error(body.error || "Unable to save your password.");
+                    setPassword("");
+                    setCurrentPassword("");
+                    onSaved(updatedProfile);
+                  } catch (cause) {
+                    setPasswordError(
+                      cause instanceof Error
+                        ? cause.message
+                        : "Unable to save your password.",
+                    );
+                  } finally {
+                    setPasswordBusy(false);
+                  }
+                }}
+              >
+                {profile.hasPassword && (
+                  <label htmlFor={`${id}-current-password`}>
+                    Current TripTab password
                     <input
-                      id={`${id}-new-password`}
+                      id={`${id}-current-password`}
                       type="password"
-                      autoComplete="new-password"
-                      minLength={12}
+                      autoComplete="current-password"
                       maxLength={128}
                       required
-                      value={password}
+                      value={currentPassword}
                       disabled={passwordBusy}
-                      onChange={(event) => setPassword(event.target.value)}
-                      aria-describedby={`${id}-password-hint`}
+                      onChange={(event) =>
+                        setCurrentPassword(event.target.value)
+                      }
                     />
                   </label>
-                  <small id={`${id}-password-hint`} className="muted">
-                    Use 12–128 characters.
-                  </small>
-                  {passwordError && (
-                    <p className="error" role="alert">
-                      {passwordError}
-                    </p>
-                  )}
-                  <button className="quiet" disabled={passwordBusy}>
-                    {passwordBusy ? "Adding password…" : "Add password"}
-                  </button>
-                </form>
-              </section>
-            )}
+                )}
+                <label htmlFor={`${id}-new-password`}>
+                  New TripTab password
+                  <input
+                    id={`${id}-new-password`}
+                    type="password"
+                    autoComplete="new-password"
+                    minLength={12}
+                    maxLength={128}
+                    required
+                    value={password}
+                    disabled={passwordBusy}
+                    onChange={(event) => setPassword(event.target.value)}
+                    aria-describedby={`${id}-password-hint`}
+                  />
+                </label>
+                <small id={`${id}-password-hint`} className="muted">
+                  Use 12–128 characters.
+                </small>
+                {passwordError && (
+                  <p className="error" role="alert">
+                    {passwordError}
+                  </p>
+                )}
+                <button className="quiet" disabled={passwordBusy}>
+                  {passwordBusy
+                    ? "Saving password…"
+                    : profile.hasPassword
+                      ? "Change password"
+                      : "Add password"}
+                </button>
+              </form>
+            </section>
             <section className="account-section account-ai">
               <h3>
                 <Sparkles size={17} aria-hidden="true" /> Optional AI features
@@ -274,7 +309,8 @@ export default function AccountPanel({
             holidays. ChatGPT and Codex are optional.
           </p>
         )}
-        <PwaControls />
+        {profile && <DataExport trips={trips} />}
+        <PwaControls accountId={profile?.id} />
         {profile && (
           <div className="account-signout">
             <button
@@ -290,6 +326,7 @@ export default function AccountPanel({
                     body: JSON.stringify({ action: "logout" }),
                   });
                   if (!response.ok) throw Error("Unable to sign out.");
+                  await clearBrowserNotifications().catch(() => {});
                   const destination =
                     profile.chatgptAvailable || profile.authMethod === "chatgpt"
                       ? "/signout-with-chatgpt?return_to=/"

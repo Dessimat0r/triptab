@@ -1,266 +1,192 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link, Copy, Users, Check } from "lucide-react";
-import type { Trip } from "@/lib/model";
+import type { Trip, TravellerFinancialPreview } from "@/lib/model";
 import type { Profile } from "./account-panel";
-export function TripSharing({
-  trip,
-  profile,
-}: {
-  trip: Trip;
-  profile: Profile | null;
-}) {
+import { useConfirmation } from "./confirmation-dialog";
+
+type Invitation = {
+  id: string; memberId: string; memberName: string; email: string | null; expiresAt: string;
+};
+type InvitationList = { invitations: Invitation[]; hasMore: boolean; error?: string };
+
+export function TripSharing({ trip, profile }: { trip: Trip; profile: Profile | null }) {
   const [memberId, setMemberId] = useState(""),
     [email, setEmail] = useState(""),
     [link, setLink] = useState(""),
+    [linkId, setLinkId] = useState(""),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
-    [copied, setCopied] = useState(false);
-  const available = trip.members.filter((m) => !m.userId);
+    [copied, setCopied] = useState(false),
+    [invitations, setInvitations] = useState<InvitationList & { key: string }>({ key: "", invitations: [], hasMore: false });
+  const available = trip.members.filter(member => !member.userId);
+  const owner = trip.ownerId === profile?.id;
+  const invitationKey = `${trip.id}:${profile?.id || ""}`;
+  const { confirm, dialog: confirmationDialog, confirming } = useConfirmation(invitationKey);
+  const listed = invitations.key === invitationKey ? invitations : { invitations: [], hasMore: false, error: undefined };
+  const refreshInvitations = useCallback(async () => {
+    if (!owner) return;
+    try {
+      const response = await fetch(`/api/invite?mode=list&tripId=${encodeURIComponent(trip.id)}`, { cache: "no-store" });
+      const body = await response.json() as InvitationList;
+      if (!response.ok) throw Error(body.error || "Unable to load invitations.");
+      setInvitations({ ...body, key: invitationKey });
+    } catch (cause) {
+      setInvitations({ key: invitationKey, invitations: [], hasMore: false, error: cause instanceof Error ? cause.message : "Unable to load invitations." });
+    }
+  }, [invitationKey, owner, trip.id]);
   useEffect(() => {
     Promise.resolve().then(() => {
-      setMemberId(trip.members.find((m) => !m.userId)?.id || "");
-      setLink("");
-      setError("");
+      setMemberId(previous => trip.members.some(member => member.id === previous && !member.userId) ? previous : trip.members.find(member => !member.userId)?.id || "");
+      setLink(""); setLinkId(""); setError("");
+      void refreshInvitations();
     });
-  }, [trip.id, trip.members]);
-  if (trip.ownerId && trip.ownerId !== profile?.id)
-    return (
-      <p className="footnote">
-        The holiday organiser can invite people to join this trip.
-      </p>
-    );
-  return (
-    <div className="panel sharing-panel">
-      <h3>Invite a traveller</h3>
-      <p className="footnote">
-        Share a one-use link. They create a TripTab account with their email or
-        sign in, then join the same holiday. ChatGPT is optional.
-      </p>
-      {available.length ? (
-        <form
-          onSubmit={async (e) => {
-            e.preventDefault();
-            setBusy(true);
-            setError("");
-            setCopied(false);
-            try {
-              const r = await fetch("/api/invite", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  mode: "create",
-                  tripId: trip.id,
-                  memberId: memberId || available[0].id,
-                  email: email.trim() || undefined,
-                }),
-              });
-              const b = (await r.json()) as { url: string; error: string };
-              if (!r.ok) throw Error(b.error || "Unable to create invite");
-              setLink(b.url);
-            } catch (e) {
-              setError(
-                e instanceof Error ? e.message : "Unable to create invite",
-              );
-            } finally {
-              setBusy(false);
-            }
-          }}
-        >
-          <label>
-            Invite as
-            <select
-              value={memberId || available[0].id}
-              onChange={(e) => {
-                setMemberId(e.target.value);
-                setLink("");
-              }}
-            >
-              {available.map((m) => (
-                <option value={m.id} key={m.id}>
-                  {m.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Invitee email <span className="muted">optional</span>
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="traveller@example.com"
-              autoComplete="off"
-            />
-            <small>
-              If supplied, use a TripTab account with this email. Only share the
-              link with the intended traveller.
-            </small>
-          </label>
-          <button className="quiet" disabled={busy}>
-            <Link size={16} />
-            {busy ? "Creating…" : "Create invite link"}
-          </button>
-        </form>
-      ) : (
-        <p className="footnote">
-          All travellers are linked to an account. Add another traveller to
-          invite someone new.
-        </p>
-      )}
-      {link && (
-        <div className="invite-link">
-          <input
-            readOnly
-            value={link}
-            aria-label="Invitation link"
-            onFocus={(e) => e.currentTarget.select()}
-          />
-          <button
-            className="quiet"
-            onClick={async () => {
+  }, [trip.id, trip.members, refreshInvitations]);
+
+  async function createLink(target: string, inviteeEmail: string) {
+    if (busy) return;
+    setBusy(true); setError(""); setCopied(false);
+    try {
+      const response = await fetch("/api/invite", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: "create", tripId: trip.id, memberId: target, email: inviteeEmail.trim() || undefined }),
+      });
+      const body = await response.json() as { url: string; invitationId: string; error?: string };
+      if (!response.ok) throw Error(body.error || "Unable to create an invitation.");
+      setMemberId(target); setEmail(inviteeEmail); setLink(body.url); setLinkId(body.invitationId);
+      await refreshInvitations();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Unable to create an invitation.");
+    } finally { setBusy(false); }
+  }
+
+  if (!owner) return <p className="footnote">The holiday organiser can invite people to join this trip.</p>;
+  return <div className="panel sharing-panel">
+    <h3>Invite a traveller</h3>
+    <p className="footnote">Share a one-use link. They create a TripTab account with their email or sign in, then review the traveller’s saved expenses and payments before joining. ChatGPT is optional.</p>
+    <p className="footnote">Creating a new link replaces earlier unused links for the same traveller.</p>
+    {available.length ? <form onSubmit={event => { event.preventDefault(); void createLink(memberId || available[0].id, email); }}>
+      <label>Invite as
+        <select value={memberId || available[0].id} disabled={busy} onChange={event => { setMemberId(event.target.value); setLink(""); setLinkId(""); }}>
+          {available.map(member => <option value={member.id} key={member.id}>{member.name}</option>)}
+        </select>
+      </label>
+      <label>Invitee email <span className="muted">optional</span>
+        <input type="email" value={email} disabled={busy} onChange={event => setEmail(event.target.value)} placeholder="traveller@example.com" autoComplete="off" />
+        <small>If supplied, the account email must match. Email addresses are not verified by TripTab, so share the link only with the intended traveller.</small>
+      </label>
+      <button className="quiet" disabled={busy}><Link size={16} aria-hidden="true" />{busy ? "Creating…" : "Create invite link"}</button>
+    </form> : <p className="footnote">All travellers are linked to an account. Add another traveller to invite someone new.</p>}
+    {link && <div className="invite-link">
+      <input readOnly value={link} aria-label="Invitation link" onFocus={event => event.currentTarget.select()} />
+      <button className="quiet" onClick={async () => {
+        try { await navigator.clipboard.writeText(link); setCopied(true); }
+        catch { setError("Select and copy the invitation link above."); }
+      }}>{copied ? <Check size={16} aria-hidden="true" /> : <Copy size={16} aria-hidden="true" />}{copied ? "Copied" : "Copy"}</button>
+      <small>Expires in 7 days · One use · Only this newly created link can be copied here</small>
+    </div>}
+    <section className="invite-management" aria-labelledby={`invite-list-${trip.id}`}>
+      <h3 id={`invite-list-${trip.id}`}>Active invitations</h3>
+      {listed.error ? <p className="error" role="alert">{listed.error}</p> : listed.invitations.length ? <ul className="invite-management-list">
+        {listed.invitations.map(invitation => <li className="invite-management-entry" key={invitation.id}>
+          <div className="invite-management-details">
+            <strong>{invitation.memberName}</strong>
+            {invitation.email && <small>{invitation.email}</small>}
+            <small>Expires <time dateTime={invitation.expiresAt}>{new Date(invitation.expiresAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}</time></small>
+          </div>
+          <div className="invite-management-actions">
+            <button type="button" className="quiet" disabled={busy || confirming} onClick={() => void createLink(invitation.memberId, invitation.email || "")}>Replace link</button>
+            <button type="button" className="danger quiet" disabled={busy || confirming} onClick={async () => {
+              if (busy || !await confirm({ title: "Revoke invitation?", message: `Revoke the invitation for ${invitation.memberName}? Its link will stop working.`, confirmLabel: "Revoke invitation", destructive: true })) return;
+              setBusy(true); setError("");
               try {
-                await navigator.clipboard.writeText(link);
-                setCopied(true);
-              } catch {
-                setError("Select and copy the invitation link above.");
-              }
-            }}
-          >
-            {copied ? <Check size={16} /> : <Copy size={16} />}{" "}
-            {copied ? "Copied" : "Copy"}
-          </button>
-          <small>Expires in 7 days · One use</small>
-        </div>
-      )}
-      {error && (
-        <p className="error" role="alert">
-          {error}
-        </p>
-      )}
-    </div>
-  );
+                const response = await fetch("/api/invite", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode: "revoke", tripId: trip.id, invitationId: invitation.id }) });
+                const body = await response.json() as { error?: string };
+                if (!response.ok) throw Error(body.error || "Unable to revoke this invitation.");
+                if (linkId === invitation.id) { setLink(""); setLinkId(""); }
+              } catch (cause) { setError(cause instanceof Error ? cause.message : "Unable to revoke this invitation."); }
+              finally { await refreshInvitations(); setBusy(false); }
+            }}>Revoke</button>
+          </div>
+        </li>)}
+      </ul> : <p className="footnote">No active invitations.</p>}
+      {listed.hasMore && <p className="footnote">More older invitations exist. Replace a traveller’s link to invalidate all their earlier unused links.</p>}
+      <button type="button" className="textbutton" disabled={busy} onClick={() => void refreshInvitations()}>Refresh invitations</button>
+    </section>
+    {error && <p className="error" role="alert">{error}</p>}
+    {confirmationDialog}
+  </div>;
 }
-export function JoinTrip({
-  token,
-  onJoined,
-  onAuthenticate,
-}: {
-  token: string;
-  onJoined: (id: string) => void;
-  onAuthenticate?: () => void;
+
+type JoinInfo = {
+  tripId: string; tripName: string; memberName: string; alreadyMember?: boolean;
+  history: TravellerFinancialPreview; historySnapshot: string; error?: string;
+};
+export function JoinTrip({ token, onJoined, onAuthenticate }: {
+  token: string; onJoined: (id: string) => void; onAuthenticate?: () => void;
 }) {
-  const [info, setInfo] = useState<{
-      tripId: string;
-      tripName: string;
-      memberName: string;
-      alreadyMember?: boolean;
-    } | null>(null),
+  const [info, setInfo] = useState<JoinInfo | null>(null),
     [error, setError] = useState(""),
     [auth, setAuth] = useState(false),
     [busy, setBusy] = useState(false),
-    [displayName, setDisplayName] = useState("");
-  useEffect(() => {
-    fetch("/api/invite?token=" + encodeURIComponent(token))
-      .then(async (r) => {
-        const b = (await r.json()) as {
-          tripId: string;
-          tripName: string;
-          memberName: string;
-          alreadyMember?: boolean;
-          error: string;
-        };
-        if (!r.ok) {
-          setAuth(r.status === 401);
-          throw Error(b.error || "Invitation unavailable");
-        }
-        setInfo(b);
-        setDisplayName(b.memberName);
-      })
-      .catch((e) => setError(e.message));
+    [acceptedHistory, setAcceptedHistory] = useState(false);
+  const refreshInfo = useCallback(async (signal?: AbortSignal) => {
+    const response = await fetch("/api/invite?token=" + encodeURIComponent(token), { cache: "no-store", signal });
+    const body = await response.json() as JoinInfo;
+    if (signal?.aborted) return;
+    setAcceptedHistory(false);
+    if (!response.ok) { setAuth(response.status === 401); setInfo(null); throw Error(body.error || "Invitation unavailable."); }
+    setAuth(false); setInfo(body);
   }, [token]);
-  return (
-    <div className="panel join-panel">
-      <div className="large-icon">
-        <Users size={30} />
-      </div>
-      <h2>{info ? `Join ${info.tripName}` : "Your holiday invitation"}</h2>
-      <p>
-        {info
-          ? `You’ve been invited as ${info.memberName}. Your account will be linked to this traveller.`
-          : "Sign in to view your invitation and join the holiday."}
-      </p>
-      {error && (
-        <p className="error" role="alert">
-          {error}
-        </p>
-      )}
-      {auth ? (
-        onAuthenticate ? (
-          <button
-            className="primary"
-            type="button"
-            onClick={onAuthenticate}
-          >
-            Create an account or sign in
-          </button>
-        ) : (
-          <a
-            className="primary"
-            href={"/?account=login&invite=" + encodeURIComponent(token)}
-          >
-            Create an account or sign in
-          </a>
-        )
-      ) : info?.alreadyMember ? (
-        <button className="primary" onClick={() => onJoined(info.tripId)}>
-          Open holiday
-        </button>
-      ) : (
-        info && (
-          <form
-            onSubmit={async (e) => {
-              e.preventDefault();
-              setBusy(true);
-              setError("");
-              try {
-                const pr = await fetch("/api/profile", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ displayName: displayName.trim() }),
-                });
-                if (!pr.ok) throw Error("Unable to save your profile.");
-                const r = await fetch("/api/invite", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ mode: "accept", token }),
-                });
-                const b = (await r.json()) as { tripId: string; error: string };
-                if (!r.ok) throw Error(b.error || "Unable to join");
-                onJoined(b.tripId || info.tripId);
-              } catch (e) {
-                setError(e instanceof Error ? e.message : "Unable to join");
-              } finally {
-                setBusy(false);
-              }
-            }}
-          >
-            <label>
-              Your display name
-              <input
-                value={displayName}
-                onChange={(e) => setDisplayName(e.target.value)}
-                maxLength={50}
-                required
-                autoComplete="nickname"
-              />
-            </label>
-            <button className="primary" disabled={busy}>
-              {busy ? "Joining…" : "Set up profile & join holiday"}
-            </button>
-          </form>
-        )
-      )}
-    </div>
-  );
+  useEffect(() => {
+    const controller = new AbortController();
+    void Promise.resolve().then(() => refreshInfo(controller.signal)).catch(cause => { if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : "Invitation unavailable."); });
+    return () => controller.abort();
+  }, [refreshInfo]);
+  const history = info?.history;
+  const money = (value: number) => new Intl.NumberFormat("en-GB", { style: "currency", currency: history!.currency, minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value / 100);
+  return <div className="panel join-panel">
+    <div className="large-icon"><Users size={30} aria-hidden="true" /></div>
+    <h2>{info ? `Join ${info.tripName}` : "Your holiday invitation"}</h2>
+    <p>{info ? `You’ve been invited as ${info.memberName}. Your account will take over this traveller’s recorded history and share access to this holiday.` : "Sign in to view your invitation and join the holiday."}</p>
+    {error && <p className="error" role="alert">{error}</p>}
+    {auth ? onAuthenticate ? <button className="primary" type="button" onClick={onAuthenticate}>Create an account or sign in</button>
+      : <a className="primary" href={"/?account=login&invite=" + encodeURIComponent(token)}>Create an account or sign in</a>
+      : info?.alreadyMember ? <button className="primary" onClick={() => onJoined(info.tripId)}>Open holiday</button>
+      : info && history && <form onSubmit={async event => {
+        event.preventDefault(); if (busy || !acceptedHistory) return;
+        setBusy(true); setError("");
+        try {
+          const response = await fetch("/api/invite", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode: "accept", token, acceptHistory: true, historySnapshot: info.historySnapshot }) });
+          const body = await response.json() as { tripId?: string; error?: string };
+          if (!response.ok) {
+            if (response.status === 409) await refreshInfo();
+            throw Error(body.error || "Unable to join.");
+          }
+          onJoined(body.tripId || info.tripId);
+        } catch (cause) { setError(cause instanceof Error ? cause.message : "Unable to join."); }
+        finally { setBusy(false); }
+      }}>
+        <section className="join-history" aria-labelledby="join-history-title">
+          <h3 id="join-history-title">{info.memberName}’s saved financial history</h3>
+          <p className="join-history-counts">{history.expenseCount} {history.expenseCount === 1 ? "expense" : "expenses"} involving this traveller · {history.paymentCount} recorded {history.paymentCount === 1 ? "payment" : "payments"} · {history.currency}</p>
+          {history.available ? <>
+            <dl className="join-history-totals">
+              <div><dt>Cost share</dt><dd>{money(history.costShare)}</dd></div>
+              <div><dt>Paid upfront</dt><dd>{money(history.paidUpfront)}</dd></div>
+              <div><dt>Payments sent</dt><dd>{money(history.paymentsSent)}</dd></div>
+              <div><dt>Payments received</dt><dd>{money(history.paymentsReceived)}</dd></div>
+              <div><dt>{history.netBalance < 0 ? "Still owes" : history.netBalance > 0 ? "Should receive" : "Settled up"}</dt><dd>{money(Math.abs(history.netBalance))}</dd></div>
+            </dl>
+            <p className="footnote">Paid upfront − cost share + payments sent − payments received = balance. These amounts use the saved item splits and currency conversions.</p>
+          </> : <p className="error" role="alert">{history.message} Ask the organiser to review these expenses before relying on the totals.</p>}
+          <p className="footnote">Joining links these existing records to your account. It does not record a payment or transfer any money.</p>
+        </section>
+        <label className="join-history-confirm">
+          <input type="checkbox" required checked={acceptedHistory} disabled={busy} onChange={event => setAcceptedHistory(event.target.checked)} />
+          <span>I have reviewed this history and agree to join as {info.memberName}.</span>
+        </label>
+        <button className="primary" disabled={busy || !acceptedHistory}>{busy ? "Joining…" : "Confirm history & join holiday"}</button>
+      </form>}
+  </div>;
 }

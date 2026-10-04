@@ -6,12 +6,15 @@ A mobile-friendly holiday expense splitter with itemised receipts, shared trips 
 
 ## Features
 
-- Email/password accounts, editable profiles and invitation links for shared trips. ChatGPT/Codex is an optional connection for AI assistance.
-- Expenses, individual payments, balances and suggested settlements, with exact rounding of each participant's share.
-- Camera/gallery receipt uploads with the original image stored alongside an editable itemised receipt. Split each item equally, assign it to one person or specify percentages; a whole-receipt percentage split can override item shares.
+- Email/password accounts, editable profiles, holiday dates and traveller names. Owners can list, revoke or replace pending invitation links; joining previews the shared history before confirmation. ChatGPT/Codex is an optional connection for AI assistance.
+- Expenses, partial and editable payments with review before confirmation, balances, traveller statements and suggested settlements, with exact rounding of each participant's share.
+- Immutable activity history records who changed a financial entry and its previous details. Deleted expenses and payments can be reviewed and confirmed as new entries. Shared-trip members can edit shared entries; history makes these changes visible, but there are no approval roles or soft-delete tombstones.
+- Camera/gallery receipt uploads are capped at 4 million pixels and 8,192 pixels per dimension, preserving detail in long receipts. Photos are orientation-normalised and re-encoded as JPEG within the 5 MiB upload limit, without camera EXIF metadata. The prepared image is stored alongside an editable itemised receipt. Split each item equally, assign it to one person or specify percentages; a whole-receipt percentage split can override item shares.
+- Receipt storage is limited to 500 images per account and 200 per holiday. Removing an image's last saved reference schedules deletion; referenced images cannot be directly deleted. Restoring an expense does not recover a purged image.
 - 25 currencies, including GBP, EUR and European currencies. Record transaction date, time and timezone; compare supported daily reference exchange rates with the actual converted bank charge, or enter a manual rate. Reference rates are daily, rather than intraday card-network rates.
 - Receipt-specific conversations and AI-generated drafts for human review. Use the copied receipt prompt in the user's connected ChatGPT/Codex; the app's MCP tools save proposals and replies without automatically posting an expense.
-- Responsive layouts, automatic dark mode, installable PWA support, an offline screen and optional browser notifications. Private ledger and receipt data are not cached for offline editing.
+- Responsive layouts, automatic dark mode, installable PWA support, an update-available prompt, an offline screen and optional browser notifications. Updates wait until the current form is finished or closed. Private ledger and receipt data are not cached for offline editing.
+- Account/holiday JSON downloads and financial/history CSV exports include the shared data the signed-in user can currently access. Image bytes and authentication secrets are excluded; downloads are not database backups.
 
 ## Stack
 
@@ -19,19 +22,21 @@ React 19 and TypeScript, using [Vinext](https://github.com/cloudflare/vinext) wi
 
 ## Local development
 
-Use Node.js **22.13.0 or newer** and npm. From the repository checkout:
+Use Node.js **24 LTS** (the version used by CI) and npm. Node.js 22.13.0 or newer is supported. From the repository checkout:
 
 ```sh
 npm run install:ci
 npm run build
 ```
 
-The initial build generates `dist/server/wrangler.json`. Before the first local run, apply the three migrations in order:
+The initial build generates `dist/server/wrangler.json`. Before the first local run, apply the five migrations in order:
 
 ```sh
 node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file drizzle/0000_charming_zeigeist.sql
 node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file drizzle/0001_regular_maginty.sql
 node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file drizzle/0002_windy_cammi.sql
+node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file drizzle/0003_rainy_blazing_skull.sql
+node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file drizzle/0004_hot_old_lace.sql
 npm run dev
 ```
 
@@ -46,16 +51,21 @@ npm run build        # Build the Worker and browser assets
 npm start            # Preview the built Worker locally; use its printed URL
 npm run lint         # ESLint
 npx tsc --noEmit     # TypeScript check
+npm test             # Regression tests, including SQLite-backed storage checks
 npm run db:generate  # Generate migrations after changing db/schema.ts
 ```
 
 `npm start` shares the local D1/R2 state but does not simulate ChatGPT sign-in or deploy the app.
+
+`npm test` runs `tests/*.test.ts` with the directly declared `tsx` dependency. It deliberately excludes the historical reproductions under `docs/audit/evidence-*`; those files describe the state reviewed in the original audit. GitHub Actions runs a clean locked install, regression tests, type checks, lint and a production build on pull requests and pushes to `main`, with read-only repository permissions. CI does not contact production or publish the app.
 
 ## Accounts and optional services
 
 Core features work without ChatGPT or an AI API key. Existing ChatGPT users can add a password in **Profile & app settings** while preserving their trips. Connecting ChatGPT requires an explicit account-linking action; matching email addresses do not merge accounts. Email verification delivery and password-reset email flows are not currently implemented.
 
 Push notifications require Worker environment values `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` (a P-256 private JWK encoded as JSON) and optionally `VAPID_SUBJECT`. Keep private keys and other secrets in the deployment environment, never in Git. Notifications also depend on browser support and user permission.
+
+Notification subscriptions are bound to their current account. Signing out clears that browser's subscription without removing the account's other devices. Activity notifications use a generic lock-screen title; finer recipient controls remain future work.
 
 ## Repository layout
 
@@ -64,7 +74,7 @@ Push notifications require Worker environment values `VAPID_PUBLIC_KEY`, `VAPID_
 - `lib/`: financial model, authorization, storage and notifications.
 - `db/` and `drizzle/`: SQLite schema and ordered migrations.
 - `build/` and `scripts/`: Sites Worker integration and development/build helpers.
-- `tests/`: financial-model, authentication and MCP tests.
+- `tests/`: financial-model, authentication, storage, route and MCP regression tests.
 - `public/`: PWA manifest, service worker, icons and offline page.
 
 ## Publishing
@@ -72,3 +82,7 @@ Push notifications require Worker environment values `VAPID_PUBLIC_KEY`, `VAPID_
 GitHub hosts this source mirror. Pushing here does **not** automatically deploy or update the live app. The existing production app is published through ChatGPT Sites, whose managed source repository and deployment lifecycle are separate.
 
 For Sites changes, use the Sites build/publish workflow, including its production migrations and environment configuration. `.openai/hosting.json` identifies the existing Site and declares the `DB`, `RECEIPTS` and MCP capabilities. It contains no account credentials. Running `npm run build` or `npm start` alone does not publish anything.
+
+See [the operations runbook](docs/operations.md) for release records, migration precautions, D1/R2 backup and recovery steps, and the checks still needed before broader production use. A documented procedure is not an exercised restore or an automated backup service.
+
+The audit reports under `docs/audit/` remain historical evidence. [Implementation status](docs/audit/IMPLEMENTATION.md) maps their findings to these changes and the work still outstanding.

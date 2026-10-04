@@ -11,6 +11,7 @@ type NotificationRow = { id: string; title: string; body: string; url: string; c
 
 const subscriptionsPerUser = 5;
 const sendTimeoutMs = 5000;
+const PUSH_COOKIE = 'tt_push';
 let importedKey: { secret: string; key: Promise<CryptoKey> } | undefined;
 
 function settings() { return env as unknown as PushEnvironment; }
@@ -44,6 +45,34 @@ export async function subscriptionCount(user: string) {
   return row?.count ?? 0;
 }
 
+async function endpointHash(endpoint: string) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(endpoint));
+  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
+export async function browserPushCookie(request: Request, endpoint?: string) {
+  const value = endpoint ? await endpointHash(validatePushEndpoint(endpoint)) : '';
+  return `${PUSH_COOKIE}=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${endpoint ? 30 * 24 * 60 * 60 : 0}${new URL(request.url).protocol === 'https:' ? '; Secure' : ''}`;
+}
+
+/** Return ownership only, never another account's identity or notification text. */
+export async function ownsSubscription(user: string, rawEndpoint: unknown) {
+  const endpoint = validatePushEndpoint(rawEndpoint);
+  return Boolean(await db().prepare('SELECT 1 AS owned FROM push_subscriptions WHERE endpoint = ? AND user_id = ?').bind(endpoint, user).first());
+}
+
+/** Revoke this browser's binding before logout clears its authenticated actor. */
+export async function revokeBrowserPush(request: Request, user: string) {
+  const matches = (request.headers.get('cookie') || '').split(';').map(value => value.trim()).filter(value => value.startsWith(`${PUSH_COOKIE}=`));
+  if (matches.length !== 1) return;
+  const hash = matches[0].slice(PUSH_COOKIE.length + 1);
+  if (!/^[a-f0-9]{64}$/.test(hash)) return;
+  const rows = await db().prepare('SELECT endpoint FROM push_subscriptions WHERE user_id = ? LIMIT 5').bind(user).all<{ endpoint: string }>();
+  const hashes = await Promise.all(rows.results.map(row => endpointHash(row.endpoint)));
+  const index = hashes.indexOf(hash);
+  if (index >= 0) await unsubscribe(user, rows.results[index].endpoint);
+}
+
 export async function subscribe(user: string, rawEndpoint: unknown) {
   const endpoint = validatePushEndpoint(rawEndpoint);
   if (!pushConfiguration().enabled) throw new RequestError('Push notifications are not configured yet.', 503);
@@ -62,6 +91,33 @@ export async function unsubscribe(user: string, rawEndpoint: unknown) {
 export async function latestNotifications(user: string) {
   const result = await db().prepare('SELECT id, title, body, url, created_at FROM notifications WHERE user_id = ? ORDER BY created_at DESC, id DESC LIMIT 20').bind(user).all<NotificationRow>();
   return (result.results ?? []).map(row => ({ id: row.id, title: row.title, body: row.body, url: row.url, createdAt: row.created_at }));
+}
+
+type NotificationChange = {
+  entityType: 'trip' | 'member' | 'expense' | 'payment' | 'draft';
+  action: 'create' | 'update' | 'delete';
+};
+
+/** Lock-screen summaries describe the action without exposing holiday contents. */
+export function activityNotification(actorName: string, changes: readonly NotificationChange[]) {
+  const events = changes.filter(change => change.entityType !== 'draft');
+  if (!events.length) return null;
+  const actor = actorName.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80) || 'A traveller';
+  const types = new Set(events.map(event => event.entityType));
+  let summary = 'updated this holiday';
+  if (types.size === 1) {
+    const entity = events[0].entityType;
+    const actions = new Set(events.map(event => event.action));
+    const action = actions.size === 1 ? events[0].action : undefined;
+    const verb = action === 'create' ? 'added' : action === 'delete' ? 'removed' : action === 'update' ? 'updated' : 'changed';
+    if (entity === 'trip') {
+      summary = action === 'create' ? 'created this holiday' : action === 'delete' ? 'removed this holiday' : 'updated the holiday details';
+    } else {
+      const noun = entity === 'member' ? 'traveller' : entity;
+      summary = events.length === 1 ? `${verb} ${entity === 'expense' ? 'an' : 'a'} ${noun}` : `${verb} ${events.length} ${noun}s`;
+    }
+  }
+  return { title: 'TripTab activity', body: `${actor} ${summary}. Open TripTab to review the activity.` };
 }
 
 function base64url(value: Uint8Array) {

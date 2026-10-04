@@ -1,4 +1,4 @@
-const CACHE_NAME = 'triptab-public-v1';
+const CACHE_NAME = 'triptab-public-v2';
 const OFFLINE_URL = '/offline.html';
 const PUBLIC_ASSETS = [
   OFFLINE_URL,
@@ -9,6 +9,8 @@ const PUBLIC_ASSETS = [
 ];
 
 self.addEventListener('install', (event) => {
+  // Updates stay waiting until a traveller explicitly requests activation.
+  // Never reload an open expense editor automatically.
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => cache.addAll(PUBLIC_ASSETS)),
   );
@@ -73,18 +75,37 @@ self.addEventListener('push', (event) => {
     let body = 'Your holiday has an update. Open TripTab to review it.';
     let url = '/';
     let tag = 'triptab-update';
+    let owned = false;
 
     // Push is only a wake-up signal. Fetch account-specific content with the
     // browser session instead of carrying personal details in the payload.
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5000);
     try {
+      const subscription = await self.registration.pushManager?.getSubscription();
+      if (!subscription) return;
+      const ownership = await fetch('/api/push', {
+        method: 'POST', credentials: 'same-origin', cache: 'no-store',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'status', endpoint: subscription.endpoint }),
+        signal: controller.signal,
+      });
+      if (!ownership.ok || !(await ownership.json()).ownsSubscription) {
+        // A previous account's wake-up cannot opt the current account in. Native
+        // unsubscribe also invalidates the old browser endpoint at its provider.
+        const notifications = await self.registration.getNotifications?.();
+        for (const notification of notifications || []) notification.close();
+        await subscription.unsubscribe();
+        return;
+      }
+      owned = true;
       const response = await fetch('/api/notifications', {
         credentials: 'same-origin',
         cache: 'no-store',
         headers: { Accept: 'application/json' },
         signal: controller.signal,
       });
+      if (response.status === 401 || response.status === 403) return;
       if (response.ok) {
         const data = await response.json();
         const latest = Array.isArray(data.notifications) ? data.notifications[0] : null;
@@ -96,6 +117,7 @@ self.addEventListener('push', (event) => {
         }
       }
     } catch {
+      if (!owned) return;
       // A visible generic notification is still required when fetching fails.
     } finally {
       clearTimeout(timeout);

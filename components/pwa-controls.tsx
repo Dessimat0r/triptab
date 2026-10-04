@@ -1,6 +1,6 @@
 "use client";
-import { useEffect, useState } from "react";
-import { Bell, Download, Check } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Bell, Download, Check, RefreshCw } from "lucide-react";
 type InstallEvent = Event & {
   prompt: () => Promise<void>;
   userChoice: Promise<{ outcome: string }>;
@@ -12,7 +12,105 @@ function keyBytes(v: string) {
   );
   return Uint8Array.from(raw, (c) => c.charCodeAt(0));
 }
-export default function PwaControls() {
+
+export async function clearBrowserNotifications(registration?: ServiceWorkerRegistration, capturedSubscription?: PushSubscription) {
+  if (!("serviceWorker" in navigator)) return;
+  const reg = registration || await navigator.serviceWorker.getRegistration("/");
+  if (!reg) return;
+  const notifications = await reg.getNotifications?.();
+  for (const notification of notifications || []) notification.close();
+  const subscription = capturedSubscription || await reg.pushManager?.getSubscription();
+  if (subscription) await subscription.unsubscribe();
+}
+
+/** A browser subscription alone never means this account opted into updates. */
+export async function reconcileBrowserNotifications() {
+  if (!("serviceWorker" in navigator)) return { owned: false, publicKey: "", reset: false };
+  const reg = await navigator.serviceWorker.getRegistration("/")
+    || await navigator.serviceWorker.register("/sw.js", { scope: "/", updateViaCache: "none" });
+  const subscription = await reg.pushManager?.getSubscription();
+  const response = await fetch("/api/push", subscription ? {
+    method: "POST", headers: { "Content-Type": "application/json" }, cache: "no-store",
+    body: JSON.stringify({ mode: "status", endpoint: subscription.endpoint }),
+  } : { cache: "no-store" });
+  if (!response.ok && response.status !== 401) throw Error("Unable to check notification settings. Try again.");
+  const data = response.ok ? await response.json() as { ownsSubscription?: boolean; publicKey?: string } : {};
+  const owned = Boolean(subscription && data.ownsSubscription);
+  if (subscription && !owned) await clearBrowserNotifications(reg, subscription);
+  return { owned, publicKey: data.publicKey || "", reset: Boolean(subscription && !owned) };
+}
+
+export function PwaUpdatePrompt({ canUpdate = true }: { canUpdate?: boolean }) {
+  const [waiting, setWaiting] = useState<ServiceWorker | null>(null);
+  const [dismissed, setDismissed] = useState<ServiceWorker | null>(null);
+  const [updating, setUpdating] = useState(false);
+  const requested = useRef(false);
+  useEffect(() => {
+    if (!("serviceWorker" in navigator)) return;
+    let live = true;
+    let registration: ServiceWorkerRegistration | undefined;
+    let installing: ServiceWorker | null = null;
+    const detect = () => {
+      if (live && registration?.waiting && navigator.serviceWorker.controller) {
+        setWaiting(registration.waiting);
+      }
+    };
+    const stateChanged = () => {
+      if (live && installing?.state === "installed" && navigator.serviceWorker.controller) {
+        setWaiting(registration?.waiting || installing);
+      }
+    };
+    const updateFound = () => {
+      installing?.removeEventListener("statechange", stateChanged);
+      installing = registration?.installing || null;
+      installing?.addEventListener("statechange", stateChanged);
+    };
+    const check = () => {
+      if (navigator.onLine) registration?.update().catch(() => {});
+      detect();
+    };
+    const changed = () => {
+      // Initial activation and updates requested by another tab never reload
+      // this tab: its expense editor may contain unsaved work.
+      if (requested.current) window.location.reload();
+      else if (live) setWaiting(null);
+    };
+    navigator.serviceWorker.addEventListener("controllerchange", changed);
+    window.addEventListener("focus", check);
+    window.addEventListener("online", check);
+    navigator.serviceWorker.register("/sw.js", { scope: "/", updateViaCache: "none" })
+      .then(reg => {
+        if (!live) return;
+        registration = reg;
+        reg.addEventListener("updatefound", updateFound);
+        updateFound();
+        detect();
+      }).catch(() => {});
+    return () => {
+      live = false;
+      registration?.removeEventListener("updatefound", updateFound);
+      installing?.removeEventListener("statechange", stateChanged);
+      navigator.serviceWorker.removeEventListener("controllerchange", changed);
+      window.removeEventListener("focus", check);
+      window.removeEventListener("online", check);
+    };
+  }, []);
+  if (!waiting || waiting === dismissed) return null;
+  return <div className="pwa-update-banner" role="status">
+    <p><strong>A TripTab update is available.</strong> {canUpdate ? "Update when you’re ready." : "Finish or close your current form before updating."}</p>
+    <div>
+      <button type="button" className="quiet" disabled={!canUpdate || updating} onClick={() => {
+        if (!canUpdate || updating || waiting.state !== "installed") return;
+        requested.current = true;
+        setUpdating(true);
+        waiting.postMessage({ type: "SKIP_WAITING" });
+      }}><RefreshCw size={17} aria-hidden="true" />{updating ? "Updating…" : "Update and reload"}</button>
+      <button type="button" className="textbutton" disabled={updating} onClick={() => setDismissed(waiting)}>Later</button>
+    </div>
+  </div>;
+}
+
+export default function PwaControls({ accountId }: { accountId?: string | null } = {}) {
   const [install, setInstall] = useState<InstallEvent | null>(null),
     [installed, setInstalled] = useState(false),
     [supported, setSupported] = useState(false),
@@ -36,31 +134,31 @@ export default function PwaControls() {
       e.preventDefault();
       setInstall(e as InstallEvent);
     };
+    const appInstalled = () => {
+      setInstalled(true);
+      setInstall(null);
+    };
     window.addEventListener("beforeinstallprompt", listener);
+    window.addEventListener("appinstalled", appInstalled);
     if ("serviceWorker" in navigator) {
-      navigator.serviceWorker
-        .register("/sw.js", { scope: "/", updateViaCache: "none" })
-        .then(async (reg) => {
-          const sub = await reg.pushManager?.getSubscription();
-          if (live) setEnabled(!!sub);
+      reconcileBrowserNotifications()
+        .then(result => {
+          if (!live) return;
+          setEnabled(result.owned);
+          setPublicKey(result.publicKey);
+          if (result.reset) setStatus("Notifications are off for this account. Enable them here if you want trip updates.");
         })
         .catch(() => {
           if (live)
-            setStatus("App installation is unavailable in this browser.");
+            setStatus("Notification settings are unavailable. Try again after refreshing.");
         });
-      fetch("/api/push")
-        .then((r) => r.json())
-        .then((b: unknown) => {
-          const data = b as { publicKey?: string };
-          if (live) setPublicKey(data.publicKey || "");
-        })
-        .catch(() => {});
     }
     return () => {
       live = false;
       window.removeEventListener("beforeinstallprompt", listener);
+      window.removeEventListener("appinstalled", appInstalled);
     };
-  }, []);
+  }, [accountId]);
   async function toggle() {
     setBusy(true);
     setStatus("");
@@ -78,7 +176,7 @@ export default function PwaControls() {
             }),
           });
           if (!r.ok) throw Error("Unable to change notifications. Try again.");
-          await sub.unsubscribe();
+          await clearBrowserNotifications(reg, sub);
         }
         setEnabled(false);
         setStatus("Notifications turned off on this device.");
@@ -146,7 +244,7 @@ export default function PwaControls() {
       )}
       <button
         className="quiet wide"
-        disabled={busy || !supported}
+        disabled={busy || !supported || !accountId}
         onClick={toggle}
       >
         <Bell size={17} />

@@ -33,6 +33,11 @@ export default function AuthPanel({
         Use your email to save holidays, share expenses, and join invitations.
         ChatGPT and Codex are optional, for receipt AI and natural-language help.
       </p>
+      <p className="footnote">
+        {registering
+          ? "Save your password in a password manager. TripTab cannot send password-reset emails yet."
+          : "Password-reset emails are not available yet. If you previously linked ChatGPT, you can also sign in with that account."}
+      </p>
       <form
         onSubmit={async (event) => {
           event.preventDefault();

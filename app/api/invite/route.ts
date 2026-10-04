@@ -1,13 +1,13 @@
-import { db, ensureProfile, failure, readBoundedBody, RequestError, sameOrigin } from '@/lib/store';
+import { activityStatements, db, ensureProfile, failure, readBoundedBody, RequestError, sameOrigin } from '@/lib/store';
 import { notifyMembers } from '@/lib/notifications';
+import { parseStoredTrip, travellerFinancialPreview, type Trip } from '@/lib/model';
 
 export const dynamic = 'force-dynamic';
 const PRIVATE_HEADERS = { 'Cache-Control': 'private, no-store' };
 const INVITE_LIFETIME = 7 * 24 * 60 * 60 * 1000;
 
 type Profile = Awaited<ReturnType<typeof ensureProfile>>;
-type Member = { id: string; name: string; userId?: string; email?: string };
-type TripData = { name: string; members: Member[] };
+type Member = Trip['members'][number];
 type Invite = {
   token_hash: string; trip_id: string; member_id: string; email: string | null;
   expires_at: string; used_by: string | null; created_by: string;
@@ -37,7 +37,7 @@ function targetEmail(value: unknown): string | null {
   if (value === undefined || value === null || value === '') return null;
   if (typeof value !== 'string') throw new RequestError('Enter a valid invitee email address.');
   const email = value.trim().toLowerCase();
-  if (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+  if (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || /[\u0000-\u001f\u007f]/.test(email)) {
     throw new RequestError('Enter a valid invitee email address.');
   }
   return email;
@@ -71,17 +71,64 @@ async function membership(tripId: string, userId: string) {
     .bind(tripId, userId).first<{ member_id: string }>();
 }
 
-function inviteMember(invite: Invite): { trip: TripData; member: Member } {
-  const trip = JSON.parse(invite.data) as TripData;
+function inviteMember(invite: Invite): { trip: Trip; member: Member } {
+  const trip = parseStoredTrip(JSON.parse(invite.data));
   const member = trip.members.find(value => value.id === invite.member_id);
   if (!member) throw new RequestError('This traveller is no longer on the trip. Ask for a new invitation.', 409);
   return { trip, member };
+}
+
+async function managementId(hash: string) {
+  // The management reference is a separate digest. It cannot redeem the link
+  // and never exposes the raw invitation token or its stored authentication hash.
+  return `invite_${await tokenHash(`triptab-invite-management:${hash}`)}`;
+}
+
+async function historySnapshot(invite: Invite) {
+  return tokenHash(`triptab-invite-history:${JSON.stringify([invite.token_hash, invite.trip_id, invite.member_id, invite.data])}`);
+}
+
+async function ownerTrip(tripId: string, profile: Profile) {
+  const row = await db().prepare('SELECT owner, data FROM trips WHERE id = ?')
+    .bind(tripId).first<{ owner: string; data: string }>();
+  if (!row || row.owner !== profile.id) throw new RequestError('Only the trip owner can manage invitations.', 403);
+  return { ...row, trip: parseStoredTrip(JSON.parse(row.data)) };
+}
+
+type InvitationRow = { token_hash: string; member_id: string; email: string | null; expires_at: string; member_name: string };
+async function activeInvitations(tripId: string, profile: Profile) {
+  const now = new Date().toISOString();
+  return (await db().prepare(`
+    SELECT i.token_hash, i.member_id, i.email, i.expires_at, json_extract(j.value, '$.name') AS member_name
+    FROM invites i JOIN trips t ON t.id = i.trip_id JOIN json_each(t.data, '$.members') j
+    WHERE i.trip_id = ? AND t.owner = ? AND i.created_by = t.owner
+      AND i.used_by IS NULL AND i.expires_at > ?
+      AND json_extract(j.value, '$.id') = i.member_id AND json_extract(j.value, '$.userId') IS NULL
+      AND NOT EXISTS (SELECT 1 FROM memberships m WHERE m.trip_id = t.id AND m.member_id = i.member_id)
+    ORDER BY i.expires_at DESC, i.token_hash LIMIT 201
+  `).bind(tripId, profile.id, now).all<InvitationRow>()).results;
+}
+
+async function listInvitations(tripId: string, profile: Profile) {
+  await ownerTrip(tripId, profile);
+  const rows = await activeInvitations(tripId, profile);
+  const invitations = await Promise.all(rows.slice(0, 200).map(async row => ({
+    id: await managementId(row.token_hash), memberId: row.member_id, memberName: row.member_name,
+    email: row.email, expiresAt: row.expires_at,
+  })));
+  return Response.json({ invitations, hasMore: rows.length > 200 }, { headers: PRIVATE_HEADERS });
 }
 
 export async function GET(request: Request) {
   try {
     const profile = await ensureProfile(request);
     const params = new URL(request.url).searchParams;
+    if (params.has('mode')) {
+      if (params.getAll('mode').length !== 1 || params.get('mode') !== 'list' || params.getAll('tripId').length !== 1 || params.has('token')) {
+        throw new RequestError('Choose a valid invitation list.');
+      }
+      return await listInvitations(identifier(params.get('tripId'), 'trip'), profile);
+    }
     if (params.getAll('token').length !== 1) throw new RequestError('This invitation link is invalid.', 404);
     const invite = await getInvite(await tokenHash(tokenValue(params.get('token'))));
     checkInvite(invite, profile);
@@ -93,6 +140,7 @@ export async function GET(request: Request) {
     return Response.json({
       tripId: invite.trip_id, tripName: trip.name, memberName: member.name,
       alreadyMember: invite.owner === profile.id || Boolean(linked), expiresAt: invite.expires_at,
+      history: travellerFinancialPreview(trip, member.id), historySnapshot: await historySnapshot(invite),
     }, { headers: PRIVATE_HEADERS });
   } catch (error) {
     return failure(error);
@@ -103,10 +151,7 @@ async function createInvite(request: Request, profile: Profile, body: Record<str
   const tripId = identifier(body.tripId, 'trip');
   const memberId = identifier(body.memberId, 'traveller');
   const email = targetEmail(body.email);
-  const row = await db().prepare('SELECT owner, data FROM trips WHERE id = ?')
-    .bind(tripId).first<{ owner: string; data: string }>();
-  if (!row || row.owner !== profile.id) throw new RequestError('Only the trip owner can invite travellers.', 403);
-  const trip = JSON.parse(row.data) as TripData;
+  const { trip } = await ownerTrip(tripId, profile);
   const member = trip.members.find(value => value.id === memberId);
   if (!member) throw new RequestError('Choose a traveller who is already on this trip.');
   if (member.userId) throw new RequestError('This traveller is already linked to an account.', 409);
@@ -114,25 +159,47 @@ async function createInvite(request: Request, profile: Profile, body: Record<str
     .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
   const hash = await tokenHash(token);
   const expiresAt = new Date(Date.now() + INVITE_LIFETIME).toISOString();
-  const result = await db().prepare(`
+  const database = db();
+  const results = await database.batch([database.prepare(`
     INSERT INTO invites (token_hash, trip_id, member_id, email, expires_at, used_by, created_by)
     SELECT ?, t.id, ?, ?, ?, NULL, ? FROM trips t
     WHERE t.id = ? AND t.owner = ?
       AND NOT EXISTS (SELECT 1 FROM memberships m WHERE m.trip_id = t.id AND m.member_id = ?)
       AND EXISTS (SELECT 1 FROM json_each(t.data, '$.members') j
         WHERE json_extract(j.value, '$.id') = ? AND json_extract(j.value, '$.userId') IS NULL)
-  `).bind(hash, memberId, email, expiresAt, profile.id, tripId, profile.id, memberId, memberId).run();
-  if (!result.meta.changes) throw new RequestError('This traveller changed or has already joined. Refresh the trip.', 409);
+  `).bind(hash, memberId, email, expiresAt, profile.id, tripId, profile.id, memberId, memberId),
+    database.prepare(`
+      DELETE FROM invites WHERE trip_id = ? AND member_id = ? AND used_by IS NULL AND token_hash <> ?
+        AND EXISTS (SELECT 1 FROM invites fresh WHERE fresh.token_hash = ? AND fresh.trip_id = ? AND fresh.member_id = ? AND fresh.created_by = ?)
+    `).bind(tripId, memberId, hash, hash, tripId, memberId, profile.id),
+  ]);
+  if (!results[0].meta.changes) throw new RequestError('This traveller changed or has already joined. Refresh the trip.', 409);
   const url = new URL('/', request.url);
   url.searchParams.set('invite', token);
-  return Response.json({ url: url.toString(), expiresAt }, { headers: PRIVATE_HEADERS });
+  return Response.json({ url: url.toString(), expiresAt, invitationId: await managementId(hash) }, { headers: PRIVATE_HEADERS });
+}
+
+async function revokeInvitation(profile: Profile, body: Record<string, unknown>) {
+  const tripId = identifier(body.tripId, 'trip');
+  await ownerTrip(tripId, profile);
+  if (typeof body.invitationId !== 'string' || !/^invite_[a-f0-9]{64}$/.test(body.invitationId)) throw new RequestError('Choose a valid invitation.');
+  const rows = await activeInvitations(tripId, profile);
+  const references = await Promise.all(rows.map(async row => ({ row, id: await managementId(row.token_hash) })));
+  const selected = references.find(value => value.id === body.invitationId)?.row;
+  if (!selected) throw new RequestError('This invitation is no longer active. Refresh the invitations.', 409);
+  const result = await db().prepare(`
+    DELETE FROM invites WHERE token_hash = ? AND trip_id = ? AND created_by = ? AND used_by IS NULL AND expires_at > ?
+      AND EXISTS (SELECT 1 FROM trips WHERE id = invites.trip_id AND owner = ?)
+  `).bind(selected.token_hash, tripId, profile.id, new Date().toISOString(), profile.id).run();
+  if (!result.meta.changes) throw new RequestError('This invitation changed or was already used. Refresh the invitations.', 409);
+  return Response.json({ revoked: true }, { headers: PRIVATE_HEADERS });
 }
 
 async function acceptInvite(profile: Profile, body: Record<string, unknown>) {
   const hash = await tokenHash(tokenValue(body.token));
   const invite = await getInvite(hash);
   checkInvite(invite, profile);
-  const { trip, member } = inviteMember(invite);
+  const { member } = inviteMember(invite);
   const linked = await membership(invite.trip_id, profile.id);
   if (invite.used_by === profile.id) {
     if (!linked || linked.member_id !== invite.member_id || member.userId !== profile.id) {
@@ -144,6 +211,9 @@ async function acceptInvite(profile: Profile, body: Record<string, unknown>) {
     throw new RequestError('Your account is already linked to a traveller on this trip.', 409);
   }
   if (member.userId) throw new RequestError('This traveller has already joined. Ask for a new invitation.', 409);
+  if (body.acceptHistory !== true || typeof body.historySnapshot !== 'string' || body.historySnapshot !== await historySnapshot(invite)) {
+    throw new RequestError('Review and confirm this traveller’s current financial history before joining.', 409);
+  }
 
   const database = db();
   await database.prepare("INSERT OR IGNORE INTO sync_state (id, revision, last_write) VALUES (1, 0, '')").run();
@@ -151,7 +221,7 @@ async function acceptInvite(profile: Profile, body: Record<string, unknown>) {
   if (!state) throw new RequestError('Trip storage is temporarily unavailable.', 503);
   const marker = crypto.randomUUID();
   const now = new Date().toISOString();
-  const verifiedEmail = profile.email.trim().toLowerCase();
+  const accountEmail = profile.email.trim().toLowerCase();
   // A compare-and-swap protects the trip JSON and invalidates any ledger loaded
   // before this join. Every subsequent statement is guarded by this batch marker.
   const results = await database.batch([
@@ -162,11 +232,12 @@ async function acceptInvite(profile: Profile, body: Record<string, unknown>) {
         WHERE i.token_hash = ? AND i.used_by IS NULL AND i.expires_at > ?
           AND (i.email IS NULL OR lower(i.email) = ?)
           AND t.owner = i.created_by AND t.owner <> ?
+          AND t.data = ?
           AND NOT EXISTS (SELECT 1 FROM memberships m WHERE m.trip_id = t.id AND (m.user_id = ? OR m.member_id = i.member_id))
           AND EXISTS (SELECT 1 FROM json_each(t.data, '$.members') j
             WHERE json_extract(j.value, '$.id') = i.member_id AND json_extract(j.value, '$.userId') IS NULL)
       )
-    `).bind(marker, state.revision, profile.id, profile.id, hash, now, verifiedEmail, profile.id, profile.id),
+    `).bind(marker, state.revision, profile.id, profile.id, hash, now, accountEmail, profile.id, invite.data, profile.id),
     database.prepare(`
       UPDATE invites SET used_by = ? WHERE token_hash = ? AND used_by IS NULL
         AND EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND last_write = ?)
@@ -182,7 +253,8 @@ async function acceptInvite(profile: Profile, body: Record<string, unknown>) {
         '$.members[' || (SELECT key FROM json_each(trips.data, '$.members') WHERE json_extract(value, '$.id') = ?) || '].email', ?)
       WHERE id = ? AND EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND last_write = ?)
         AND EXISTS (SELECT 1 FROM invites WHERE token_hash = ? AND used_by = ? AND trip_id = trips.id)
-    `).bind(invite.member_id, profile.id, invite.member_id, verifiedEmail, invite.trip_id, marker, hash, profile.id),
+    `).bind(invite.member_id, profile.id, invite.member_id, accountEmail, invite.trip_id, marker, hash, profile.id),
+    ...activityStatements(database, [{ tripId: invite.trip_id, entityType: 'member', entityId: invite.member_id, action: 'update', before: { ...member }, after: { ...member, userId: profile.id, email: accountEmail } }], { id: profile.id, displayName: profile.displayName }, marker, state.revision + 1),
   ]);
   if (!results[0].meta.changes) {
     // Simultaneous clicks from the same account can safely return the first claim.
@@ -193,7 +265,7 @@ async function acceptInvite(profile: Profile, body: Record<string, unknown>) {
     }
     throw new RequestError('The trip or invitation changed. Refresh before joining again.', 409);
   }
-  await notifyMembers(invite.trip_id, profile.id, 'Traveller joined', `${profile.displayName} joined ${trip.name}`).catch(() => {
+  await notifyMembers(invite.trip_id, profile.id, 'TripTab activity', `${profile.displayName} joined this holiday. Open TripTab to review the activity.`).catch(() => {
     console.warn('The traveller joined but its notification could not be queued.');
   });
   return Response.json({
@@ -203,8 +275,10 @@ async function acceptInvite(profile: Profile, body: Record<string, unknown>) {
 
 export async function POST(request: Request) {
   try {
-    sameOrigin(request);
+    try { sameOrigin(request); }
+    catch { throw new RequestError('Invitation requests must come from TripTab.', 403); }
     const profile = await ensureProfile(request);
+    if (request.headers.get('content-type')?.split(';', 1)[0].trim().toLowerCase() !== 'application/json') throw new RequestError('Send valid invitation details.', 415);
     let body: unknown;
     try {
       body = JSON.parse(new TextDecoder().decode(await readBoundedBody(request, 4096)));
@@ -216,7 +290,8 @@ export async function POST(request: Request) {
     const details = body as Record<string, unknown>;
     if (details.mode === 'create') return await createInvite(request, profile, details);
     if (details.mode === 'accept') return await acceptInvite(profile, details);
-    throw new RequestError('Choose whether to create or accept an invitation.');
+    if (details.mode === 'revoke') return await revokeInvitation(profile, details);
+    throw new RequestError('Choose a valid invitation action.');
   } catch (error) {
     return failure(error);
   }

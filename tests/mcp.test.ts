@@ -1,12 +1,15 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+import { DatabaseSync } from 'node:sqlite';
 import { transpileModule, ModuleKind, ScriptTarget } from 'typescript';
-import { shares, validateLedger } from '../lib/model';
+import { expenseTotal, shares, validateLedger } from '../lib/model';
 import type { Ledger, Trip } from '../lib/model';
 
 const user = 'owner-1';
 const profile = { id: user, email: 'owner@example.com', displayName: 'Owner', createdAt: '2026-10-04T00:00:00Z' };
+const rateDatabase = new DatabaseSync(':memory:');
+rateDatabase.exec('CREATE TABLE auth_rate_limits (key_hash TEXT PRIMARY KEY, window_start INTEGER NOT NULL, attempts INTEGER NOT NULL)');
 const initialTrip: Trip = {
   id: 'trip-1', ownerId: user, name: 'Lisbon', currency: 'GBP',
   members: [{ id: 'a', name: 'Owner', userId: user, email: profile.email }, { id: 'b', name: 'Alex' }],
@@ -27,10 +30,12 @@ const state = {
   profileHeadersRead: 0,
   ledgerReaders: [] as string[],
   ledgerWriters: [] as string[],
+  writeSources: [] as string[],
   providerLinks: new Map<string, string>(),
   identitySessionFlags: [] as boolean[],
 };
 function reset() {
+  rateDatabase.exec('DELETE FROM auth_rate_limits');
   state.data = { trips: [structuredClone(initialTrip)] };
   state.revision = 3;
   state.writes = 0;
@@ -38,6 +43,7 @@ function reset() {
   state.profileHeadersRead = 0;
   state.ledgerReaders = [];
   state.ledgerWriters = [];
+  state.writeSources = [];
   state.providerLinks = new Map();
   state.identitySessionFlags = [];
 }
@@ -46,9 +52,9 @@ const mockStore = {
     state.ledgerReaders.push(actor);
     return { data: actor === user ? structuredClone(state.data) : { trips: [] }, revision: state.revision };
   },
-  async writeLedger(actor: string, data: unknown, revision: number) {
+  async writeLedger(actor: string, data: unknown, revision: number, options: { source: string }) {
     if (revision !== state.revision) throw new Error('CONFLICT');
-    const ledger = validateLedger(data);
+    const ledger = validateLedger(data, { previous: state.data });
     for (const trip of ledger.trips) {
       if (!state.data.trips.some(existing => existing.id === trip.id)) {
         trip.ownerId = actor;
@@ -57,6 +63,7 @@ const mockStore = {
     }
     state.data = structuredClone(ledger);
     state.ledgerWriters.push(actor);
+    state.writeSources.push(options.source);
     state.revision++;
     state.writes++;
     return { data: structuredClone(ledger), revision: state.revision };
@@ -68,7 +75,10 @@ const mockStore = {
     return profile;
   },
   db() {
-    return { prepare: () => ({ bind: () => ({ first: async () => state.profileAvailable ? { email: profile.email, display_name: profile.displayName } : null }) }) };
+    return { prepare: (sql: string) => ({ bind: (...values: (string | number)[]) => ({
+      first: async () => sql.includes('auth_rate_limits') ? rateDatabase.prepare(sql).get(...values) ?? null : state.profileAvailable ? { email: profile.email, display_name: profile.displayName } : null,
+      run: async () => { assert.ok(sql.includes('auth_rate_limits')); const result = rateDatabase.prepare(sql).run(...values); return { meta: { changes: Number(result.changes) } }; },
+    }) }) };
   },
   bucket() { throw new Error('Receipt storage was not expected in this test'); },
   receiptKey: (actor: string, id: string) => `${actor}/${id}`,
@@ -80,7 +90,7 @@ const mockAuth = {
     if (options.allowSession) throw new Error('MCP must not authorize browser sessions');
     const providerId = request.headers.get('oai-authenticated-user-id');
     if (!providerId) throw new Error('UNAUTHORIZED');
-    return { id: state.providerLinks.get(providerId) ?? providerId };
+    return { id: state.providerLinks.get(providerId) ?? providerId, chatgptId: providerId };
   },
 };
 Object.defineProperty(globalThis, Symbol.for('triptab.mcp-test-store'), { value: mockStore, configurable: true });
@@ -133,7 +143,7 @@ test('browser-session cookies alone cannot authorize private AI tools', async ()
   reset();
   for (const name of ['get_trip_ledger', 'create_holiday', 'get_receipt_image', 'reply_to_receipt_chat', 'update_receipt_draft', 'create_expense_draft']) {
     const response = await route.POST(new Request('https://triptab.test/mcp', {
-      method: 'POST', headers: { cookie: 'triptab_session=valid-local-session' },
+      method: 'POST', headers: { 'content-type': 'application/json', cookie: 'tt_session=valid-local-session' },
       body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: {} } }),
     }));
     const reply = await response.json() as { error: { code: number; message: string } };
@@ -153,20 +163,21 @@ test('a linked ChatGPT identity reads and writes the existing TripTab ledger wit
   const call = async (name: string, args: Record<string, unknown>) => {
     const response = await route.POST(new Request('https://triptab.test/mcp', {
       method: 'POST',
-      headers: { 'oai-authenticated-user-id': providerId, cookie: 'triptab_session=another-account' },
+      headers: { 'content-type': 'application/json', 'oai-authenticated-user-id': providerId, cookie: 'tt_session=another-account' },
       body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }),
     }));
     assert.equal(response.status, 200);
     return await response.json() as Reply;
   };
-  const read = await call('get_trip_ledger', {});
+  const read = await call('get_trip_ledger', { trip_id: initialTrip.id });
   assert.equal(content(read).data.trips[0].id, initialTrip.id);
   const created = await call('create_holiday', create);
   assert.equal(created.result.isError, undefined);
   const newTrip = content(created).data.trips.find(trip => trip.id === content(created).trip_id)!;
   assert.equal(newTrip.ownerId, user);
   assert.equal(newTrip.members[0].userId, user);
-  assert.equal(newTrip.members[0].email, profile.email);
+  assert.equal(newTrip.members[0].email, undefined);
+  assert.equal(state.data.trips.find(trip => trip.id === newTrip.id)!.members[0].email, profile.email);
   // The old gateway identity and its explicit connection use the same scoped
   // retry key, so reconnecting cannot create a duplicate holiday.
   const retry = await invoke('create_holiday', create);
@@ -183,9 +194,10 @@ test('a linked provider’s profile lookup excludes an unrelated browser session
   state.providerLinks.set('chatgpt-linked-identity', user);
   const response = await route.POST(new Request('https://triptab.test/mcp', {
     method: 'POST', headers: {
+      'content-type': 'application/json',
       'oai-authenticated-user-id': 'chatgpt-linked-identity',
       'oai-authenticated-user-email': 'different-ai-email@example.com',
-      cookie: 'triptab_session=another-account',
+      cookie: 'tt_session=another-account',
     },
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'create_holiday', arguments: create } }),
   }));
@@ -193,13 +205,14 @@ test('a linked provider’s profile lookup excludes an unrelated browser session
   assert.equal(reply.result.isError, undefined);
   const holiday = content(reply).data.trips.find(trip => trip.id === content(reply).trip_id)!;
   assert.equal(holiday.ownerId, user);
-  assert.equal(holiday.members[0].email, profile.email);
+  assert.equal(holiday.members[0].email, undefined);
+  assert.equal(state.data.trips.find(trip => trip.id === holiday.id)!.members[0].email, profile.email);
   assert.equal(state.profileHeadersRead, 1);
   assert.deepEqual(state.ledgerWriters, [user]);
 });
 
 test('lists native holiday and natural-language expense tools with write annotations', async () => {
-  const response = await route.POST(new Request('https://triptab.test/mcp', { method: 'POST', body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }) }));
+  const response = await route.POST(new Request('https://triptab.test/mcp', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }) }));
   const reply = await response.json() as Reply;
   for (const name of ['create_holiday', 'create_expense_draft', 'update_receipt_draft']) {
     const tool = reply.result.tools!.find(tool => tool.name === name);
@@ -232,7 +245,8 @@ test('creates a dated holiday using the authenticated stored profile and is safe
   assert.equal(holiday.startDate, create.startDate);
   assert.equal(holiday.endDate, create.endDate);
   assert.equal(holiday.members[0].userId, user);
-  assert.equal(holiday.members[0].email, profile.email);
+  assert.equal(holiday.members[0].email, undefined);
+  assert.equal(state.data.trips.find(trip => trip.id === holiday.id)!.members[0].email, profile.email);
   assert.equal(holiday.members[0].name, profile.displayName);
   assert.equal(holiday.members[1].name, 'Alex');
   assert.match(holiday.members[1].id, /^[a-f0-9-]{36}$/);
@@ -323,7 +337,7 @@ test('roundtrips natural-language item cost percentages without posting an expen
   assert.equal(draft.payer, 'a');
   assert.equal(draft.status, 'review');
   assert.equal(holiday.expenses.length, 0);
-  const reread = await invoke('get_trip_ledger', {});
+  const reread = await invoke('get_trip_ledger', { trip_id: 'trip-1' });
   assert.deepEqual(content(reread).data.trips[0].drafts.find(value => value.id === draftInput.id)!.items[0].percentages, { a: 70, b: 30 });
   assert.equal(state.writes, 1);
 });
@@ -413,7 +427,7 @@ test('roundtrips whole-receipt percentages with priority over item shares and ta
   assert.deepEqual(draft.items[0].percentages, { a: 70, b: 30 });
   assert.deepEqual(shares(draft, holiday.members), [2820, 1880]);
   assert.equal(holiday.expenses.length, 0);
-  const reread = await invoke('get_trip_ledger', {});
+  const reread = await invoke('get_trip_ledger', { trip_id: 'trip-1' });
   assert.deepEqual(content(reread).data.trips[0].drafts.find(value => value.id === draftInput.id)!.percentages, { a: 60, b: 40 });
 });
 
@@ -484,7 +498,7 @@ test('appends and reads a receipt reply without marking it itemised or changing 
     ...initialTrip.drafts[0], id: 'posted-expense',
     date: '2026-08-15', time: '20:30', timezone: 'Europe/Lisbon',
   }];
-  const originalExpenses = validateLedger(state.data).trips[0].expenses;
+  const originalExpenses = validateLedger(state.data, { previous: state.data }).trips[0].expenses;
   const originalDraft = structuredClone(state.data.trips[0].drafts[0]);
   const before = Date.now();
   const reply = await invoke('reply_to_receipt_chat', receiptChatReply);
@@ -492,7 +506,7 @@ test('appends and reads a receipt reply without marking it itemised or changing 
   const holiday = content(reply).data.trips[0];
   const draft = holiday.drafts[0];
   assert.deepEqual(holiday.expenses, originalExpenses);
-  assert.deepEqual({ ...draft, conversation: undefined }, { ...originalDraft, conversation: undefined });
+  assert.deepEqual({ ...draft, conversation: undefined }, { ...originalDraft, conversation: undefined, adjustmentAllocation: 'selected-participants' });
   assert.equal(draft.status, 'waiting');
   assert.deepEqual(draft.conversation![0], receiptQuestion);
   const answer = draft.conversation![1];
@@ -502,7 +516,7 @@ test('appends and reads a receipt reply without marking it itemised or changing 
   assert.equal(answer.replyTo, receiptQuestion.id);
   assert.ok(Date.parse(answer.createdAt) >= before && Date.parse(answer.createdAt) <= Date.now());
   assert.match(answer.createdAt, /Z$/);
-  const reread = await invoke('get_trip_ledger', {});
+  const reread = await invoke('get_trip_ledger', { trip_id: 'trip-1' });
   assert.deepEqual(content(reread).data.trips[0].drafts[0].conversation, draft.conversation);
   assert.equal(state.writes, 1);
 });
@@ -562,4 +576,177 @@ test('AI item corrections preserve the complete receipt conversation and cannot 
   assert.equal(attemptedRewrite.result.isError, true);
   assert.equal(state.writes, 1);
   assert.deepEqual(state.data.trips[0].drafts[0].conversation, originalConversation);
+});
+
+test('AI currency corrections clear a hidden bank charge and rate before review', async () => {
+  reset();
+  const { status, bankAmount, fx, ...input } = state.data.trips[0].drafts[0];
+  assert.equal(status, 'review');
+  assert.equal(bankAmount, 8700);
+  assert.ok(fx);
+  const reply = await invoke('update_receipt_draft', {
+    trip_id: 'trip-1', revision: 3, draft: { ...input, currency: 'GBP' },
+  });
+  assert.equal(reply.result.isError, undefined);
+  const draft = content(reply).data.trips[0].drafts[0];
+  assert.equal(draft.bankAmount, undefined);
+  assert.equal(draft.fx, undefined);
+  assert.equal(expenseTotal({ ...draft, date: '2026-08-15', time: '20:30', timezone: 'Europe/Lisbon' }, 'GBP'), 10000);
+  assert.equal(draft.source, 'ai');
+  assert.deepEqual(state.writeSources, ['chatgpt']);
+  assert.equal(state.data.trips[0].expenses.length, 0);
+});
+
+test('AI currency corrections drop stale foreign-currency charges but accept explicit replacements', async () => {
+  reset();
+  const { status, bankAmount, fx, ...input } = state.data.trips[0].drafts[0];
+  assert.equal(status, 'review');
+  assert.ok(bankAmount && fx);
+  const cleared = await invoke('update_receipt_draft', {
+    trip_id: 'trip-1', revision: 3, draft: { ...input, currency: 'USD' },
+  });
+  assert.equal(cleared.result.isError, undefined);
+  assert.equal(content(cleared).data.trips[0].drafts[0].bankAmount, undefined);
+  assert.equal(content(cleared).data.trips[0].drafts[0].fx, undefined);
+  const replaced = await invoke('update_receipt_draft', {
+    trip_id: 'trip-1', revision: 4,
+    draft: { ...input, currency: 'CAD', bankAmount: 6100, fx: { ...fx, rate: 0.61 } },
+  });
+  assert.equal(replaced.result.isError, undefined);
+  assert.equal(content(replaced).data.trips[0].drafts[0].bankAmount, 6100);
+  assert.equal(content(replaced).data.trips[0].drafts[0].fx!.rate, 0.61);
+});
+
+test('unchanged receipt currencies preserve omitted bank data and reject invalid replacements', async () => {
+  reset();
+  const { status, bankAmount, fx, ...input } = state.data.trips[0].drafts[0];
+  assert.equal(status, 'review');
+  const preserved = await invoke('update_receipt_draft', { trip_id: 'trip-1', revision: 3, draft: input });
+  assert.equal(preserved.result.isError, undefined);
+  assert.equal(content(preserved).data.trips[0].drafts[0].bankAmount, bankAmount);
+  assert.deepEqual(content(preserved).data.trips[0].drafts[0].fx, fx);
+  for (const fields of [{ bankAmount: 0 }, { currency: 'GBP', bankAmount: 8700 }]) {
+    const invalid = await invoke('update_receipt_draft', { trip_id: 'trip-1', revision: 4, draft: { ...input, ...fields } });
+    assert.equal(invalid.result.isError, true);
+  }
+  assert.equal(state.writes, 1);
+});
+
+test('ledger discovery returns summaries and scoped reads exclude unrelated receipt contents and emails', async () => {
+  reset();
+  state.data.trips.push({
+    ...structuredClone(initialTrip), id: 'trip-2', name: 'Other holiday',
+    drafts: [{ ...structuredClone(initialTrip.drafts[0]), id: 'private-draft', title: 'Unrelated private receipt', conversation: [{ ...receiptQuestion, text: 'Unrelated secret question' }] }],
+  });
+  const discovery = await invoke('get_trip_ledger', {});
+  const discovered = content(discovery).data.trips;
+  assert.deepEqual(discovered.map(trip => trip.id), ['trip-1', 'trip-2']);
+  assert.equal(discovered[0].drafts, undefined);
+  assert.equal(discovered[0].expenses, undefined);
+  assert.equal(discovered[0].payments, undefined);
+  assert.doesNotMatch(JSON.stringify(discovery), /Unrelated private receipt|Unrelated secret question|owner@example\.com/);
+  const scoped = await invoke('get_trip_ledger', { trip_id: 'trip-1' });
+  assert.deepEqual(content(scoped).data.trips.map(trip => trip.id), ['trip-1']);
+  assert.equal(content(scoped).data.trips[0].drafts[0].title, 'Dinner');
+  assert.equal(content(scoped).data.trips[0].members[0].email, undefined);
+  assert.doesNotMatch(JSON.stringify(scoped), /Unrelated private receipt|Unrelated secret question|owner@example\.com/);
+  const denied = await invoke('get_trip_ledger', { trip_id: 'foreign-trip' });
+  assert.equal(denied.result.isError, true);
+  assert.match(denied.result.content![0].text, /Trip not found/);
+  assert.equal(state.data.trips[0].members[0].email, profile.email, 'redaction must not mutate stored membership metadata');
+});
+
+test('write responses contain only their affected trip and do not expose email metadata', async () => {
+  reset();
+  state.data.trips.push({ ...structuredClone(initialTrip), id: 'trip-2', name: 'Unrelated trip' });
+  const updated = await invoke('update_receipt_draft', { trip_id: 'trip-1', revision: 3, draft: expenseDraft });
+  assert.equal(updated.result.isError, undefined);
+  assert.deepEqual(content(updated).data.trips.map(trip => trip.id), ['trip-1']);
+  assert.doesNotMatch(JSON.stringify(updated), /Unrelated trip|owner@example\.com/);
+  assert.equal(state.data.trips.length, 2, 'unrelated trips remain stored');
+  assert.equal(state.data.trips[0].members[0].email, profile.email);
+});
+
+test('MCP rejects non-JSON and foreign browser requests before reading an identity or ledger', async () => {
+  reset();
+  const rejectedHeaders: Record<string, string>[] = [
+    { 'content-type': 'text/plain' },
+    { 'content-type': 'application/x-www-form-urlencoded' },
+    { origin: 'https://evil.example' },
+    { origin: 'null' },
+    { 'sec-fetch-site': 'cross-site' },
+    { origin: 'https://triptab.test', 'sec-fetch-site': 'cross-site' },
+  ];
+  for (const additions of rejectedHeaders) {
+    const response = await route.POST(new Request('https://triptab.test/mcp', {
+      method: 'POST', headers: { 'content-type': 'application/json', 'oai-authenticated-user-id': user, ...additions },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'get_trip_ledger', arguments: {} } }),
+    }));
+    assert.equal(response.status, Object.hasOwn(additions, 'content-type') ? 415 : 403);
+    const reply = await response.json() as { error: { code: number } };
+    assert.equal(reply.error.code, -32600);
+  }
+  assert.deepEqual(state.identitySessionFlags, []);
+  assert.deepEqual(state.ledgerReaders, []);
+  assert.equal(state.writes, 0);
+});
+
+test('same-origin JSON and non-browser Codex requests work while initialization remains public metadata', async () => {
+  reset();
+  const response = await route.POST(new Request('https://triptab.test/mcp', {
+    method: 'POST', headers: { 'content-type': 'Application/JSON; charset=utf-8', origin: 'https://triptab.test', 'sec-fetch-site': 'same-origin', 'oai-authenticated-user-id': user },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'get_trip_ledger', arguments: { trip_id: 'trip-1' } } }),
+  }));
+  assert.equal(response.status, 200);
+  assert.equal((await response.json() as Reply).result.isError, undefined);
+  assert.equal((await invoke('get_trip_ledger', { trip_id: 'trip-1' })).result.isError, undefined);
+  const initialized = await route.POST(new Request('https://triptab.test/mcp', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-11-25' } }),
+  }));
+  assert.equal(initialized.status, 200);
+  const result = await initialized.json() as { result: { protocolVersion: string; serverInfo: { name: string } } };
+  assert.equal(result.result.protocolVersion, '2025-11-25');
+  assert.equal(result.result.serverInfo.name, 'TripTab');
+  assert.deepEqual(state.identitySessionFlags, [false, false], 'metadata must not read or create an account');
+  assert.deepEqual(state.ledgerReaders, [user, user]);
+});
+
+test('private AI tool traffic has an atomic 120-call provider budget and public metadata stays available', async () => {
+  reset();
+  const response = () => route.POST(new Request('https://triptab.test/mcp', {
+    method: 'POST', headers: { 'content-type': 'application/json', 'oai-authenticated-user-id': user },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'get_trip_ledger', arguments: { trip_id: 'trip-1' } } }),
+  }));
+  const responses = await Promise.all(Array.from({ length: 121 }, response));
+  assert.equal(responses.filter(reply => reply.status === 200).length, 120);
+  const limited = responses.find(reply => reply.status === 429)!;
+  assert.ok(Number(limited.headers.get('Retry-After')) >= 1 && Number(limited.headers.get('Retry-After')) <= 60);
+  assert.equal((await limited.json() as { error: { code: number } }).error.code, -32029);
+  assert.equal(state.ledgerReaders.length, 120, 'denied requests must not read or mutate the ledger');
+  assert.equal(rateDatabase.prepare('SELECT attempts FROM auth_rate_limits').get()!.attempts, 120);
+  const initialized = await route.POST(new Request('https://triptab.test/mcp', {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize' }),
+  }));
+  assert.equal(initialized.status, 200);
+  rateDatabase.exec('UPDATE auth_rate_limits SET window_start = window_start - 60001');
+  assert.equal((await response()).status, 200);
+  assert.equal(rateDatabase.prepare('SELECT attempts FROM auth_rate_limits').get()!.attempts, 1);
+});
+
+test('AI provider buckets are independent of other providers and live login budgets; cleanup is bounded', async () => {
+  reset();
+  const now = Date.now();
+  rateDatabase.prepare('INSERT INTO auth_rate_limits VALUES (?,?,?)').run('live-login-bucket', now, 40);
+  for (let index = 0; index < 30; index++) rateDatabase.prepare('INSERT INTO auth_rate_limits VALUES (?,?,?)').run(`expired-${index}`, now - 86_400_001, 1);
+  assert.equal((await invoke('get_trip_ledger', { trip_id: 'trip-1' })).result.isError, undefined);
+  assert.equal(rateDatabase.prepare("SELECT COUNT(*) AS count FROM auth_rate_limits WHERE key_hash LIKE 'expired-%'").get()!.count, 10);
+  assert.equal(rateDatabase.prepare("SELECT attempts FROM auth_rate_limits WHERE key_hash='live-login-bucket'").get()!.attempts, 40);
+  state.providerLinks.set('second-provider', user);
+  const reply = await route.POST(new Request('https://triptab.test/mcp', {
+    method: 'POST', headers: { 'content-type': 'application/json', 'oai-authenticated-user-id': 'second-provider' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'get_trip_ledger', arguments: { trip_id: 'trip-1' } } }),
+  }));
+  assert.equal(reply.status, 200);
+  assert.equal(rateDatabase.prepare("SELECT COUNT(*) AS count FROM auth_rate_limits WHERE key_hash <> 'live-login-bucket'").get()!.count, 2);
 });
