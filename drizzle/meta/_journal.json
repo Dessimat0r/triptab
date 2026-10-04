@@ -64,6 +64,13 @@
       "when": 1791134415312,
       "tag": "0008_receipt_activity_scope",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1791140634479,
+      "tag": "0009_receipt_link_projections",
+      "breakpoints": true
     }
   ]
 }

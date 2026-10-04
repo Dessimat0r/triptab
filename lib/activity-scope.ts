@@ -1,146 +1,167 @@
 export type ReceiptActivityScope = { expenseId?: string; draftId?: string };
 export type ActivityScopeSql = { prefix: string; condition: string; bindings: string[] };
+export type ReceiptActivityFamily = { expenseIds: string[]; draftIds: string[]; receiptIds: string[]; version: number };
+type Link = { entity_id: string; expense_id: string | null; source_draft_id: string | null; receipt_id: string | null; has_expense_link: number };
+const MAX_SCOPE_LINKS = 10_000;
+const MAX_SCOPE_BYTES = 4 * 1024 * 1024;
+// D1 cells/bindings cap at2MB; leave room below that UTF-8 ceiling.
+const MAX_SCOPE_BIND_BYTES = 1_900_000;
+const sources = ['current_receipt_links', 'receipt_history_links'];
+export class ReceiptScopeChangedError extends Error { constructor() { super('RECEIPT_SCOPE_CHANGED'); } }
+export class ReceiptScopeSizeError extends Error { constructor() { super('RECEIPT_SCOPE_TOO_LARGE'); } }
 
-/** Resolve typed receipt links with indexed lookups, preserving old snapshots. */
-export function receiptActivityScope(tripId: string, scope: ReceiptActivityScope = {}): ActivityScopeSql {
+export function validateReceiptActivityScope(tripId: string, scope: ReceiptActivityScope) {
   const validId = (value: unknown): value is string => typeof value === 'string' && value.length > 0 && value.length <= 100;
   const expense = scope.expenseId !== undefined, draft = scope.draftId !== undefined;
-  if (!validId(tripId) || (expense && draft) || (expense && !validId(scope.expenseId)) || (draft && !validId(scope.draftId))) {
-    throw new Error('INVALID_RECEIPT_ACTIVITY_SCOPE');
+  if (!validId(tripId) || (expense && draft) || (expense && !validId(scope.expenseId)) || (draft && !validId(scope.draftId))) throw new Error('INVALID_RECEIPT_ACTIVITY_SCOPE');
+  return expense || draft;
+}
+
+/** Indexed facts, not financial or message snapshots, determine the family. */
+export async function resolveReceiptActivityFamily(database: D1Database, tripId: string, scope: ReceiptActivityScope): Promise<ReceiptActivityFamily | undefined> {
+  if (!validateReceiptActivityScope(tripId, scope)) return;
+  const baseline = await database.prepare('SELECT receipt_link_version AS version FROM trips WHERE id = ?').bind(tripId).first<{ version: number }>();
+  if (!baseline) throw new ReceiptScopeChangedError();
+  const facts = new Set<string>(); let bytes = 0;
+  const bounded = <T>(rows: T[]) => {
+    if (rows.length > MAX_SCOPE_LINKS) throw new ReceiptScopeSizeError();
+    for (const row of rows) {
+      const value = JSON.stringify(row);
+      if (!facts.has(value)) { facts.add(value); bytes += new TextEncoder().encode(value).byteLength; }
+    }
+    if (facts.size > MAX_SCOPE_LINKS || bytes > MAX_SCOPE_BYTES) throw new ReceiptScopeSizeError();
+    return rows;
+  };
+  const query = async (kind: 'expense' | 'draft', field: 'entity_id' | 'expense_id' | 'source_draft_id' | 'receipt_id', ids: Iterable<string>) => {
+    const values = [...new Set(ids)];
+    if (!values.length) return [] as Link[];
+    const encoded = JSON.stringify(values);
+    if (values.length > MAX_SCOPE_LINKS || new TextEncoder().encode(encoded).byteLength > MAX_SCOPE_BIND_BYTES) throw new ReceiptScopeSizeError();
+    const index = { entity_id: 'entity', expense_id: 'expense', source_draft_id: 'source', receipt_id: 'receipt' }[field];
+    const sql = sources.map(table => `SELECT entity_id,expense_id,source_draft_id,receipt_id,has_expense_link
+      FROM ${table} INDEXED BY ${table}_${index}_idx
+      WHERE trip_id = ? AND entity_type = '${kind}' AND ${field} IN (SELECT value FROM json_each(?))`).join('\nUNION\n');
+    const result = await database.prepare(`${sql} LIMIT ${MAX_SCOPE_LINKS + 1}`).bind(tripId, encoded, tripId, encoded).all<Link>();
+    return bounded(result.results);
+  };
+  const ids = (rows: Link[], field: 'entity_id' | 'expense_id' | 'source_draft_id' | 'receipt_id') => [...new Set(rows.flatMap(row => typeof row[field] === 'string' ? [row[field] as string] : []))];
+  const entryId = scope.draftId ?? scope.expenseId!;
+  const explicitRoots = new Set<string>(scope.expenseId === undefined ? [] : [scope.expenseId]);
+  if (scope.draftId !== undefined) {
+    for (const id of ids(await query('draft', 'entity_id', [entryId]), 'expense_id')) explicitRoots.add(id);
+    for (const id of ids(await query('expense', 'source_draft_id', [entryId]), 'entity_id')) explicitRoots.add(id);
   }
-  if (!expense && !draft) return { prefix: '', condition: '1', bindings: [] };
-  // CROSS JOIN keeps the one-row context outside indexed history probes;
-  // otherwise SQLite may reverse a join and scan a partial expression index.
-  // D1 limits each compound SELECT to five terms. Split discovery into small
-  // materialized groups while retaining the same indexed lookup branches.
+  const analyzeLegacy = async (expenseRoots: Set<string>, selectedDraft?: string) => {
+    const rootFacts = await query('expense', 'entity_id', expenseRoots);
+    const candidates = new Set(expenseRoots); // Also disambiguate original same-ID posting.
+    if (selectedDraft) candidates.add(selectedDraft);
+    for (const id of ids(await query('draft', 'receipt_id', ids(rootFacts, 'receipt_id')), 'entity_id')) candidates.add(id);
+    const candidateFacts = await query('draft', 'entity_id', candidates);
+    const candidatePhotos = ids(candidateFacts, 'receipt_id');
+    const photoOwners = await query('expense', 'receipt_id', candidatePhotos);
+    const photoDrafts = await query('draft', 'receipt_id', candidatePhotos);
+    const allDraftIds = new Set([...candidates, ...ids(photoDrafts, 'entity_id')]);
+    const allDraftFacts = await query('draft', 'entity_id', allDraftIds);
+    const explicitSources = new Set(ids(await query('expense', 'source_draft_id', allDraftIds), 'source_draft_id'));
+    const collisions = new Set(ids(await query('expense', 'entity_id', candidates), 'entity_id'));
+    // Never infer from a latest missing target when any earlier target existed.
+    // Non-null malformed targets remain blocked by the projection's separate flag.
+    const linkedDrafts = new Set(allDraftFacts.filter(row => row.has_expense_link !== 0).map(row => row.entity_id));
+    const unlinked = (id: string) => !explicitSources.has(id) && !linkedDrafts.has(id);
+    const photosByDraft = new Map<string, Set<string>>();
+    const ownersByPhoto = new Map<string, Set<string>>();
+    const draftsByPhoto = new Map<string, Set<string>>();
+    const add = (map: Map<string, Set<string>>, key: string, id: string) => {
+      const set = map.get(key) ?? new Set<string>(); set.add(id); map.set(key, set);
+    };
+    for (const row of candidateFacts) if (row.receipt_id !== null) add(photosByDraft, row.entity_id, row.receipt_id);
+    for (const row of photoOwners) if (row.receipt_id !== null) add(ownersByPhoto, row.receipt_id, row.entity_id);
+    for (const row of photoDrafts) if (row.receipt_id !== null) add(draftsByPhoto, row.receipt_id, row.entity_id);
+    const owners = new Map<string, Set<string>>();
+    const legacyParents = new Map<string, string>();
+    for (const id of candidates) {
+      const expenseOwners = new Set<string>(); let competing = false;
+      for (const photo of photosByDraft.get(id) ?? []) {
+        for (const owner of ownersByPhoto.get(photo) ?? []) expenseOwners.add(owner);
+        for (const other of draftsByPhoto.get(photo) ?? []) if (other !== id && unlinked(other)) competing = true;
+      }
+      owners.set(id, expenseOwners);
+      if (!unlinked(id) || expenseOwners.size !== 1 || competing || (collisions.has(id) && !expenseRoots.has(id))) continue;
+      // Deleted copies still create ambiguity. Known explicitly linked drafts do
+      // not compete with an otherwise unambiguous legacy draft.
+      legacyParents.set(id, [...expenseOwners][0]);
+    }
+    return { legacyParents, owners, unlinked };
+  };
+  let legacy = await analyzeLegacy(explicitRoots, scope.draftId !== undefined && !explicitRoots.size ? entryId : undefined);
+  const roots = new Set(explicitRoots);
+  if (scope.draftId !== undefined && !roots.size) {
+    const parent = legacy.legacyParents.get(entryId);
+    if (parent) {
+      roots.add(parent);
+      // The inferred expense may have other photos and same-ID drafts. Inspect
+      // those facts before including sibling history, just as expense scope does.
+      legacy = await analyzeLegacy(roots, entryId);
+    } else if (legacy.unlinked(entryId) && ![...(legacy.owners.get(entryId) ?? [])].some(id => id !== entryId)) roots.add(entryId);
+  }
+  const expenseFacts = await query('expense', 'entity_id', roots);
+  const drafts = new Set<string>(scope.draftId === undefined ? [] : [entryId]);
+  for (const id of ids(expenseFacts, 'source_draft_id')) drafts.add(id);
+  for (const id of ids(await query('draft', 'expense_id', roots), 'entity_id')) drafts.add(id);
+  for (const root of roots) if (legacy.unlinked(root) && ![...(legacy.owners.get(root) ?? [])].some(id => !roots.has(id))) drafts.add(root);
+  for (const [id, parent] of legacy.legacyParents) if (roots.has(parent)) drafts.add(id);
+  const family = { expenseIds: [...roots], draftIds: [...drafts], receiptIds: [] as string[], version: baseline.version };
+  const context = JSON.stringify([{ ...family, tripId, draftId: scope.draftId ?? null }]);
+  if (new TextEncoder().encode(context).byteLength > MAX_SCOPE_BIND_BYTES) throw new ReceiptScopeSizeError();
+  const imageSql = sources.flatMap(table => [
+    `SELECT l.receipt_id AS id FROM context c CROSS JOIN ${table} l INDEXED BY ${table}_entity_idx
+      ON l.trip_id = c.trip_id AND l.entity_type = 'expense' AND l.entity_id IN (SELECT value FROM json_each(c.expense_ids)) WHERE l.receipt_id IS NOT NULL`,
+    `SELECT l.receipt_id AS id FROM context c CROSS JOIN ${table} l INDEXED BY ${table}_entity_idx
+      ON l.trip_id = c.trip_id AND l.entity_type = 'draft' AND l.entity_id IN (SELECT value FROM json_each(c.draft_ids))
+      WHERE l.receipt_id IS NOT NULL AND (l.entity_id = c.draft_id OR ${table === 'current_receipt_links' ? `(l.has_expense_link = 0 OR l.expense_id IN (SELECT value FROM json_each(c.expense_ids)))` : `EXISTS (SELECT 1 FROM receipt_history_links pair INDEXED BY receipt_history_links_snapshot_idx WHERE pair.sequence = l.sequence AND pair.expense_id IN (SELECT value FROM json_each(c.expense_ids))) OR NOT EXISTS (SELECT 1 FROM receipt_history_links pair INDEXED BY receipt_history_links_snapshot_idx WHERE pair.sequence = l.sequence AND pair.has_expense_link <> 0)`})`,
+  ]).join('\nUNION\n');
+  const imageRows = await database.prepare(`WITH context AS MATERIALIZED (
+    SELECT json_extract(value,'$[0].tripId') AS trip_id, json_extract(value,'$[0].draftId') AS draft_id,
+      json_extract(value,'$[0].expenseIds') AS expense_ids, json_extract(value,'$[0].draftIds') AS draft_ids FROM (SELECT ? AS value)
+  ) ${imageSql} LIMIT ${MAX_SCOPE_LINKS + 1}`).bind(context).all<{ id: string }>();
+  family.receiptIds = bounded(imageRows.results).map(row => row.id);
+  if (new TextEncoder().encode(JSON.stringify(family)).byteLength > MAX_SCOPE_BYTES) throw new ReceiptScopeSizeError();
+  await assertReceiptActivityVersion(database, tripId, family.version);
+  return family;
+}
+
+export async function assertReceiptActivityVersion(database: D1Database, tripId: string, version: number) {
+  const current = await database.prepare('SELECT receipt_link_version AS version FROM trips WHERE id = ?').bind(tripId).first<{ version: number }>();
+  if (!current || current.version !== version) throw new ReceiptScopeChangedError();
+}
+
+/** The final candidate query uses only bounded, server-resolved typed IDs. */
+export function receiptActivityScope(tripId: string, scope: ReceiptActivityScope = {}, family?: ReceiptActivityFamily): ActivityScopeSql {
+  if (!validateReceiptActivityScope(tripId, scope)) return { prefix: '', condition: '1', bindings: [] };
+  if (!family) throw new Error('INVALID_RECEIPT_ACTIVITY_FAMILY');
+  const resolved = family;
+  const context = JSON.stringify([{ tripId, kind: scope.draftId === undefined ? 'expense' : 'draft', entryId: scope.draftId ?? scope.expenseId, ...resolved }]);
+  if (new TextEncoder().encode(context).byteLength > MAX_SCOPE_BIND_BYTES) throw new ReceiptScopeSizeError();
   return {
-    bindings: [JSON.stringify([{ tripId, kind: draft ? 'draft' : 'expense', entryId: draft ? scope.draftId : scope.expenseId }])],
-    prefix: `
-      WITH receipt_scope_context AS MATERIALIZED (
-        SELECT json_extract(value, '$.tripId') AS trip_id,
-          json_extract(value, '$.kind') AS kind, json_extract(value, '$.entryId') AS entry_id
-        FROM json_each(?)
-      ), receipt_scope_current_expenses AS MATERIALIZED (
-        SELECT json_extract(x.value, '$.id') AS id, json_extract(x.value, '$.sourceDraftId') AS source_draft_id,
-          json_extract(x.value, '$.receiptId') AS receipt_id
-        FROM trips t JOIN receipt_scope_context c ON t.id = c.trip_id, json_each(t.data, '$.expenses') x
-      ), receipt_scope_current_drafts AS MATERIALIZED (
-        SELECT json_extract(d.value, '$.id') AS id, json_extract(d.value, '$.expenseId') AS expense_id,
-          json_extract(d.value, '$.receiptId') AS receipt_id
-        FROM trips t JOIN receipt_scope_context c ON t.id = c.trip_id, json_each(t.data, '$.drafts') d
-      ), receipt_scope_draft_links(id) AS MATERIALIZED (
-        SELECT d.expense_id FROM receipt_scope_current_drafts d, receipt_scope_context c
-        WHERE c.kind = 'draft' AND d.id = c.entry_id AND typeof(d.expense_id) = 'text'
-        UNION
-        SELECT json_extract(h.before_data, '$.expenseId')
-        FROM receipt_scope_context c CROSS JOIN activity_events h INDEXED BY activity_events_trip_entity_idx
-          ON h.trip_id = c.trip_id AND h.entity_type = 'draft' AND h.entity_id = c.entry_id
-        WHERE c.kind = 'draft' AND json_type(h.before_data, '$.expenseId') = 'text'
-        UNION
-        SELECT json_extract(h.after_data, '$.expenseId')
-        FROM receipt_scope_context c CROSS JOIN activity_events h INDEXED BY activity_events_trip_entity_idx
-          ON h.trip_id = c.trip_id AND h.entity_type = 'draft' AND h.entity_id = c.entry_id
-        WHERE c.kind = 'draft' AND json_type(h.after_data, '$.expenseId') = 'text'
-      ), receipt_scope_posted_links(id) AS MATERIALIZED (
-        SELECT x.id FROM receipt_scope_current_expenses x, receipt_scope_context c
-        WHERE c.kind = 'draft' AND x.source_draft_id = c.entry_id
-        UNION
-        SELECT h.entity_id
-        FROM receipt_scope_context c CROSS JOIN activity_events h INDEXED BY activity_events_expense_before_source_draft_idx
-          ON h.trip_id = c.trip_id AND json_extract(h.before_data, '$.sourceDraftId') = c.entry_id
-        WHERE c.kind = 'draft' AND h.entity_type = 'expense'
-        UNION
-        SELECT h.entity_id
-        FROM receipt_scope_context c CROSS JOIN activity_events h INDEXED BY activity_events_expense_after_source_draft_idx
-          ON h.trip_id = c.trip_id AND json_extract(h.after_data, '$.sourceDraftId') = c.entry_id
-        WHERE c.kind = 'draft' AND h.entity_type = 'expense'
-      ), receipt_scope_links(id) AS MATERIALIZED (
-        SELECT id FROM receipt_scope_draft_links
-        UNION SELECT id FROM receipt_scope_posted_links
-      ), receipt_scope_roots(id) AS MATERIALIZED (
-        SELECT entry_id FROM receipt_scope_context
-        WHERE kind = 'expense' OR NOT EXISTS (SELECT 1 FROM receipt_scope_links)
-        UNION SELECT id FROM receipt_scope_links
-      ), receipt_scope_source_drafts(id) AS MATERIALIZED (
-        SELECT x.source_draft_id FROM receipt_scope_current_expenses x
-        WHERE x.id IN (SELECT id FROM receipt_scope_roots) AND typeof(x.source_draft_id) = 'text'
-        UNION
-        SELECT json_extract(h.before_data, '$.sourceDraftId')
-        FROM receipt_scope_context c CROSS JOIN activity_events h INDEXED BY activity_events_trip_entity_idx
-          ON h.trip_id = c.trip_id AND h.entity_type = 'expense' AND h.entity_id IN (SELECT id FROM receipt_scope_roots)
-        WHERE json_type(h.before_data, '$.sourceDraftId') = 'text'
-        UNION
-        SELECT json_extract(h.after_data, '$.sourceDraftId')
-        FROM receipt_scope_context c CROSS JOIN activity_events h INDEXED BY activity_events_trip_entity_idx
-          ON h.trip_id = c.trip_id AND h.entity_type = 'expense' AND h.entity_id IN (SELECT id FROM receipt_scope_roots)
-        WHERE json_type(h.after_data, '$.sourceDraftId') = 'text'
-      ), receipt_scope_fallback_drafts(id) AS MATERIALIZED (
-        -- Same-ID posting is a legacy fallback, never an override for an
-        -- explicitly linked draft or a distinct-ID source draft elsewhere.
-        SELECT r.id FROM receipt_scope_roots r, receipt_scope_context c
-        WHERE NOT EXISTS (SELECT 1 FROM receipt_scope_current_drafts d WHERE d.id = r.id AND d.expense_id IS NOT NULL)
-          AND NOT EXISTS (
-            SELECT 1 FROM activity_events h INDEXED BY activity_events_trip_entity_idx
-            WHERE h.trip_id = c.trip_id AND h.entity_type = 'draft' AND h.entity_id = r.id
-              AND (json_extract(h.before_data, '$.expenseId') IS NOT NULL OR json_extract(h.after_data, '$.expenseId') IS NOT NULL)
-          )
-          AND NOT EXISTS (SELECT 1 FROM receipt_scope_current_expenses x WHERE x.source_draft_id = r.id)
-          AND NOT EXISTS (
-            SELECT 1 FROM activity_events h INDEXED BY activity_events_expense_before_source_draft_idx
-            WHERE h.trip_id = c.trip_id AND h.entity_type = 'expense' AND json_extract(h.before_data, '$.sourceDraftId') = r.id
-          )
-          AND NOT EXISTS (
-            SELECT 1 FROM activity_events h INDEXED BY activity_events_expense_after_source_draft_idx
-            WHERE h.trip_id = c.trip_id AND h.entity_type = 'expense' AND json_extract(h.after_data, '$.sourceDraftId') = r.id
-          )
-      ), receipt_scope_related_drafts(id) AS MATERIALIZED (
-        SELECT d.id FROM receipt_scope_current_drafts d WHERE d.expense_id IN (SELECT id FROM receipt_scope_roots)
-        UNION
-        SELECT h.entity_id
-        FROM receipt_scope_context c CROSS JOIN activity_events h INDEXED BY activity_events_draft_before_expense_idx
-          ON h.trip_id = c.trip_id AND json_extract(h.before_data, '$.expenseId') IN (SELECT id FROM receipt_scope_roots)
-        WHERE h.entity_type = 'draft'
-        UNION
-        SELECT h.entity_id
-        FROM receipt_scope_context c CROSS JOIN activity_events h INDEXED BY activity_events_draft_after_expense_idx
-          ON h.trip_id = c.trip_id AND json_extract(h.after_data, '$.expenseId') IN (SELECT id FROM receipt_scope_roots)
-        WHERE h.entity_type = 'draft'
-      ), receipt_scope_drafts(id) AS MATERIALIZED (
-        SELECT entry_id FROM receipt_scope_context WHERE kind = 'draft'
-        UNION SELECT id FROM receipt_scope_source_drafts
-        UNION SELECT id FROM receipt_scope_fallback_drafts
-        UNION SELECT id FROM receipt_scope_related_drafts
-      ), receipt_scope_changes AS MATERIALIZED (
-        SELECT h.sequence, json_extract(h.before_data, '$.receiptId') AS before_receipt_id,
-          json_extract(h.after_data, '$.receiptId') AS after_receipt_id
-        FROM receipt_scope_context c CROSS JOIN activity_events h INDEXED BY activity_events_trip_entity_idx
-          ON h.trip_id = c.trip_id AND h.entity_type = 'expense' AND h.entity_id IN (SELECT id FROM receipt_scope_roots)
-        UNION ALL
-        SELECT h.sequence, json_extract(h.before_data, '$.receiptId'), json_extract(h.after_data, '$.receiptId')
-        FROM receipt_scope_context c CROSS JOIN activity_events h INDEXED BY activity_events_trip_entity_idx
-          ON h.trip_id = c.trip_id AND h.entity_type = 'draft' AND h.entity_id IN (SELECT id FROM receipt_scope_drafts)
-        WHERE (c.kind = 'draft' AND h.entity_id = c.entry_id)
-          OR json_extract(h.before_data, '$.expenseId') IN (SELECT id FROM receipt_scope_roots)
-          OR json_extract(h.after_data, '$.expenseId') IN (SELECT id FROM receipt_scope_roots)
-          OR (json_extract(h.before_data, '$.expenseId') IS NULL AND json_extract(h.after_data, '$.expenseId') IS NULL)
-      ), receipt_scope_images(id) AS MATERIALIZED (
-        SELECT before_receipt_id FROM receipt_scope_changes WHERE typeof(before_receipt_id) = 'text'
-        UNION SELECT after_receipt_id FROM receipt_scope_changes WHERE typeof(after_receipt_id) = 'text'
-        UNION SELECT x.receipt_id FROM receipt_scope_current_expenses x
-          WHERE x.id IN (SELECT id FROM receipt_scope_roots) AND typeof(x.receipt_id) = 'text'
-        UNION SELECT d.receipt_id FROM receipt_scope_current_drafts d, receipt_scope_context c
-          WHERE d.id IN (SELECT id FROM receipt_scope_drafts) AND typeof(d.receipt_id) = 'text'
-            AND ((c.kind = 'draft' AND d.id = c.entry_id) OR d.expense_id IS NULL OR d.expense_id IN (SELECT id FROM receipt_scope_roots))
-      ), receipt_scope_events(sequence) AS MATERIALIZED (
-        SELECT sequence FROM receipt_scope_changes
-        UNION
-        SELECT h.sequence
-        FROM receipt_scope_context c CROSS JOIN activity_events h INDEXED BY activity_events_trip_entity_idx
-          ON h.trip_id = c.trip_id AND h.entity_type = 'receipt' AND h.entity_id IN (SELECT id FROM receipt_scope_images)
-      )
-    `,
-    // Integer primary-key probes avoid scanning a trip's sequence index before
-    // applying the family filter. Final snapshots still use immutable IDs.
-    condition: 'e.sequence IN (SELECT sequence FROM receipt_scope_events)',
+    bindings: [context],
+    prefix: `WITH receipt_scope_context AS MATERIALIZED (
+      SELECT json_extract(value,'$[0].tripId') AS trip_id, json_extract(value,'$[0].kind') AS kind,
+        json_extract(value,'$[0].entryId') AS entry_id, json_extract(value,'$[0].version') AS version,
+        json_extract(value,'$[0].expenseIds') AS expense_ids, json_extract(value,'$[0].draftIds') AS draft_ids,
+        json_extract(value,'$[0].receiptIds') AS receipt_ids FROM (SELECT ? AS value)
+    ), receipt_scope_events(sequence) AS MATERIALIZED (
+      SELECT h.sequence FROM receipt_scope_context c CROSS JOIN activity_events h INDEXED BY activity_events_trip_entity_idx
+        ON h.trip_id = c.trip_id AND h.entity_type = 'expense' AND h.entity_id IN (SELECT value FROM json_each(c.expense_ids))
+      UNION SELECT h.sequence FROM receipt_scope_context c CROSS JOIN activity_events h INDEXED BY activity_events_trip_entity_idx
+        ON h.trip_id = c.trip_id AND h.entity_type = 'draft' AND h.entity_id IN (SELECT value FROM json_each(c.draft_ids))
+      WHERE (c.kind = 'draft' AND h.entity_id = c.entry_id)
+        OR EXISTS (SELECT 1 FROM receipt_history_links l INDEXED BY receipt_history_links_snapshot_idx
+          WHERE l.sequence = h.sequence AND l.expense_id IN (SELECT value FROM json_each(c.expense_ids)))
+        OR NOT EXISTS (SELECT 1 FROM receipt_history_links l INDEXED BY receipt_history_links_snapshot_idx
+          WHERE l.sequence = h.sequence AND l.has_expense_link <> 0)
+      UNION SELECT h.sequence FROM receipt_scope_context c CROSS JOIN activity_events h INDEXED BY activity_events_trip_entity_idx
+        ON h.trip_id = c.trip_id AND h.entity_type = 'receipt' AND h.entity_id IN (SELECT value FROM json_each(c.receipt_ids))
+    )`,
+    condition: 't.receipt_link_version = (SELECT version FROM receipt_scope_context) AND e.sequence IN (SELECT sequence FROM receipt_scope_events)',
   };
 }

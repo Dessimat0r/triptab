@@ -43,6 +43,7 @@ export const authRateLimits = sqliteTable('auth_rate_limits', {
 
 export const trips = sqliteTable('trips', {
   id: text('id').primaryKey(), owner: text('owner').notNull(), data: text('data').notNull(),
+  receiptLinkVersion: integer('receipt_link_version').notNull().default(0),
 }, table => [index('trips_owner_idx').on(table.owner)]);
 
 export const memberships = sqliteTable('memberships', {
@@ -104,6 +105,36 @@ export const activityEvents = sqliteTable('activity_events', {
   index('activity_events_draft_after_expense_idx').on(table.tripId, sql`json_extract(after_data, '$.expenseId')`, table.entityId).where(sql`entity_type = 'draft'`),
   index('activity_events_expense_before_source_draft_idx').on(table.tripId, sql`json_extract(before_data, '$.sourceDraftId')`, table.entityId).where(sql`entity_type = 'expense'`),
   index('activity_events_expense_after_source_draft_idx').on(table.tripId, sql`json_extract(after_data, '$.sourceDraftId')`, table.entityId).where(sql`entity_type = 'expense'`),
+]);
+
+// Rebuilt transactionally from each accepted trip snapshot. Scoped history
+// reads metadata indexes rather than parsing the live ledger on every page.
+export const currentReceiptLinks = sqliteTable('current_receipt_links', {
+  tripId: text('trip_id').notNull().references(() => trips.id, { onDelete: 'cascade' }),
+  entityType: text('entity_type', { enum: ['expense', 'draft'] }).notNull(),
+  entityId: text('entity_id').notNull(), expenseId: text('expense_id'),
+  sourceDraftId: text('source_draft_id'), receiptId: text('receipt_id'),
+  hasExpenseLink: integer('has_expense_link').notNull().default(0),
+}, table => [
+  uniqueIndex('current_receipt_links_entity_idx').on(table.tripId, table.entityType, table.entityId),
+  index('current_receipt_links_expense_idx').on(table.tripId, table.entityType, table.expenseId, table.entityId),
+  index('current_receipt_links_source_idx').on(table.tripId, table.entityType, table.sourceDraftId, table.entityId),
+  index('current_receipt_links_receipt_idx').on(table.tripId, table.entityType, table.receiptId, table.entityId),
+]);
+
+// Indexed historical link facts are append-only alongside their source event.
+export const receiptHistoryLinks = sqliteTable('receipt_history_links', {
+  tripId: text('trip_id').notNull(), entityType: text('entity_type', { enum: ['expense', 'draft'] }).notNull(),
+  entityId: text('entity_id').notNull(), sequence: integer('sequence').notNull(),
+  snapshotOrder: integer('snapshot_order').notNull(), expenseId: text('expense_id'),
+  sourceDraftId: text('source_draft_id'), receiptId: text('receipt_id'),
+  hasExpenseLink: integer('has_expense_link').notNull().default(0),
+}, table => [
+  uniqueIndex('receipt_history_links_snapshot_idx').on(table.sequence, table.snapshotOrder),
+  index('receipt_history_links_entity_idx').on(table.tripId, table.entityType, table.entityId, table.sequence),
+  index('receipt_history_links_expense_idx').on(table.tripId, table.entityType, table.expenseId, table.entityId),
+  index('receipt_history_links_source_idx').on(table.tripId, table.entityType, table.sourceDraftId, table.entityId),
+  index('receipt_history_links_receipt_idx').on(table.tripId, table.entityType, table.receiptId, table.entityId),
 ]);
 
 // Immutable identity lookup survives deletion of every live receipt container.

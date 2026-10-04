@@ -71,7 +71,7 @@ function event(database: SQLiteD1, id: string, type: ActivityEntity, entityId: s
 }
 async function storage(includeScopeIndexes = true) {
   const database = new SQLiteD1();
-  for (const file of (await readdir(new URL('../drizzle/', import.meta.url))).filter(value => value.endsWith('.sql') && (includeScopeIndexes || !value.startsWith('0008_'))).sort()) database.sqlite.exec(await readFile(new URL('../drizzle/' + file, import.meta.url), 'utf8'));
+  for (const file of (await readdir(new URL('../drizzle/', import.meta.url))).filter(value => value.endsWith('.sql') && (includeScopeIndexes || Number(value.slice(0, 4)) < 8)).sort()) database.sqlite.exec(await readFile(new URL('../drizzle/' + file, import.meta.url), 'utf8'));
   for (const [actor, token] of Object.entries(tokens)) {
     database.sqlite.prepare('INSERT INTO profiles (id,email,display_name,created_at) VALUES (?,?,?,?)').run(actor, actor + '@example.com', actor, '2026-10-04T00:00:00Z');
     database.sqlite.prepare('INSERT INTO auth_sessions (token_hash,user_id,expires_at,created_at) VALUES (?,?,?,?)').run(await hashToken(token), actor, '2099-01-01T00:00:00Z', '2026-10-04T00:00:00Z');
@@ -111,11 +111,12 @@ async function page(query: string, actor: keyof typeof tokens | null = 'joined')
 
 test('receipt SQL binds one JSON context and validates internal scopes without interpolating IDs', () => {
   const id = "receipt' OR 1=1--";
-  const scoped = receiptActivityScope('trip', { expenseId: id });
+  const family = { expenseIds: [id], draftIds: [], receiptIds: [], version: 1 };
+  const scoped = receiptActivityScope('trip', { expenseId: id }, family);
   assert.equal(scoped.bindings.length, 1);
   assert.equal((scoped.prefix.match(/\?/g) || []).length, 1);
   assert.ok(!scoped.prefix.includes(id) && !scoped.condition.includes(id));
-  assert.deepEqual(JSON.parse(scoped.bindings[0]), [{ tripId: 'trip', kind: 'expense', entryId: id }]);
+  assert.deepEqual(JSON.parse(scoped.bindings[0]), [{ tripId: 'trip', kind: 'expense', entryId: id, ...family }]);
   assert.deepEqual(receiptActivityScope('trip'), { prefix: '', condition: '1', bindings: [] });
   for (const scope of [{ expenseId: '', draftId: undefined }, { draftId: 'x'.repeat(101) }, { expenseId: 'dinner', draftId: 'pending' }]) assert.throws(() => receiptActivityScope('trip', scope), /INVALID_RECEIPT_ACTIVITY_SCOPE/);
 });
@@ -227,7 +228,7 @@ test('scoped history rechecks membership during immutable snapshot fetch and can
     }
   };
   const scoped = await store.readActivity('joined', 'trip', { expenseId: 'dinner', limit: 50 });
-  assert.deepEqual(ids(scoped), dinnerIds, 'chosen immutable audit IDs do not change when live receipt context changes');
+  assert.deepEqual(ids(scoped), dinnerIds, 'a retry returns a consistent family without widening to unrelated activity');
   assert.doesNotMatch(JSON.stringify(scoped), /NEVER_WIDEN_THIS_PAGE/);
 });
 
@@ -299,6 +300,7 @@ test('index migration bootstraps populated immutable history without rewriting o
   const before = database.sqlite.prepare('SELECT * FROM activity_events ORDER BY sequence').all();
   const rawTrip = database.sqlite.prepare('SELECT data FROM trips WHERE id=?').get('trip')!.data;
   database.sqlite.exec(await readFile(new URL('../drizzle/0008_receipt_activity_scope.sql', import.meta.url), 'utf8'));
+  database.sqlite.exec(await readFile(new URL('../drizzle/0009_receipt_link_projections.sql', import.meta.url), 'utf8'));
   assert.deepEqual(database.sqlite.prepare('SELECT * FROM activity_events ORDER BY sequence').all(), before);
   assert.equal(database.sqlite.prepare('SELECT data FROM trips WHERE id=?').get('trip')!.data, rawTrip);
   assert.deepEqual(ids(await page('tripId=trip&draftId=historic-draft&limit=50')), dinnerIds);
@@ -310,7 +312,7 @@ test('index migration bootstraps populated immutable history without rewriting o
   assert.deepEqual(ids(await page('tripId=trip&expenseId=dinner&limit=50')), new Set([...dinnerIds, 'indexed-new-event', 'indexed-new-photo']));
 });
 
-test('scoped query plans use entity and expression indexes and never parse unrelated historical payloads', async () => {
+test('scoped query plans use metadata indexes and never parse unrelated current or historical payloads', async () => {
   const database = await storage();
   const marker = 'UNRELATED_LARGE_HISTORY_PAYLOAD';
   const payload = marker + 'x'.repeat(4096);
@@ -320,16 +322,22 @@ test('scoped query plans use entity and expression indexes and never parse unrel
     event(database, 'large-unrelated-expense-' + index, 'expense', 'unrelated-expense-' + index, null, { sourceDraftId: 'unrelated-draft-' + index, title: payload, receiptId: 'unrelated-photo-' + index });
   }
   database.sqlite.exec('COMMIT; ANALYZE');
+  const currentMarker = 'UNRELATED_LARGE_CURRENT_TRIP_PAYLOAD';
+  const current = trip();
+  for (let index = 0; index < 1000; index++) current.expenses.push({ ...snapshot('current-noise-' + index, 'current-noise-photo-' + index), title: currentMarker + 'x'.repeat(1000) });
+  for (let index = 0; index < 100; index++) current.drafts.push({ ...snapshot('draft-noise-' + index, 'draft-noise-photo-' + index), expenseId: 'current-noise-' + index, status: 'review', title: currentMarker + 'x'.repeat(1000) });
+  database.sqlite.prepare('UPDATE trips SET data=? WHERE id=?').run(JSON.stringify(current), 'trip');
+
   const native = new DatabaseSync(':memory:');
   const extract = native.prepare('SELECT json_extract(?,?) AS value');
   const type = native.prepare('SELECT json_type(?,?) AS value');
   let unrelatedParses = 0;
   database.sqlite.function('json_extract', { deterministic: true }, (value, path) => {
-    if (typeof value === 'string' && value.includes(marker)) unrelatedParses++;
+    if (typeof value === 'string' && (value.includes(marker) || value.includes(currentMarker))) unrelatedParses++;
     return extract.get(value, path)!.value as string | number | null;
   });
   database.sqlite.function('json_type', { deterministic: true }, (value, path) => {
-    if (typeof value === 'string' && value.includes(marker)) unrelatedParses++;
+    if (typeof value === 'string' && (value.includes(marker) || value.includes(currentMarker))) unrelatedParses++;
     return type.get(value, path)!.value as string | null;
   });
   for (const scope of [{ expenseId: 'dinner' }, { draftId: 'pending' }, { draftId: 'historic-draft' }]) {
@@ -340,14 +348,183 @@ test('scoped query plans use entity and expression indexes and never parse unrel
     const plan = database.sqlite.prepare('EXPLAIN QUERY PLAN ' + candidate.sql).all(...candidate.values).map(row => String(row.detail));
     assert.ok(plan.some(detail => /SEARCH e USING INTEGER PRIMARY KEY/.test(detail)), 'candidate rows must use receipt sequence primary-key probes');
     assert.ok(plan.some(detail => detail.includes('activity_events_trip_entity_idx')));
-    assert.ok(plan.some(detail => detail.includes('activity_events_draft_before_expense_idx') && detail.includes('<expr>=?')));
-    assert.ok(plan.some(detail => detail.includes('activity_events_draft_after_expense_idx') && detail.includes('<expr>=?')));
-    assert.ok(plan.some(detail => detail.includes('activity_events_expense_before_source_draft_idx') && detail.includes('<expr>=?')));
-    assert.ok(plan.some(detail => detail.includes('activity_events_expense_after_source_draft_idx') && detail.includes('<expr>=?')));
+    assert.ok(plan.some(detail => detail.includes('receipt_history_links_snapshot_idx') && detail.includes('sequence=?')));
+    for (const probe of database.reads.filter(read => /FROM (current_receipt_links|receipt_history_links) INDEXED BY/.test(read.sql))) {
+      const lookup = database.sqlite.prepare('EXPLAIN QUERY PLAN ' + probe.sql).all(...probe.values).map(row => String(row.detail));
+      assert.ok(lookup.every(detail => !/SCAN (?:current_receipt_links|receipt_history_links)\b/.test(detail)), lookup.join('; '));
+      assert.ok(lookup.some(detail => /(?:current_receipt_links|receipt_history_links)_.*_idx/.test(detail) && /SEARCH/.test(detail)));
+    }
     assert.ok(!plan.some(detail => /SCAN (?:h|e)\b/.test(detail)), 'history tables must not be scanned to discover receipt links: ' + plan.filter(detail => /SCAN (?:h|e)\b/.test(detail)).join('; '));
     const older = await store.readActivity('joined', 'trip', { ...scope, limit: 3, before: result.nextCursor! });
     assert.ok(older.events.every(value => dinnerIds.has(value.id)));
   }
-  assert.equal(unrelatedParses, 0, 'neither first nor subsequent receipt pages may parse unrelated history');
+  assert.equal(unrelatedParses, 0, 'neither first nor subsequent receipt pages may parse unrelated live entries or historical JSON');
+  assert.ok(database.reads.every(read => !/json_each\(t\.data|SELECT (?:t\.)?data FROM trips/.test(read.sql)), 'activity never fetches/parses live trip data');
   native.close();
+});
+
+async function legacyReceipt(database: SQLiteD1, draftId = "legacy 'draft", expenseId = 'legacy-expense') {
+  const before = { ...snapshot(draftId, 'legacy-photo-old'), status: 'waiting', conversation: [{ id: 'legacy-question', role: 'user', text: 'Who shared this older receipt?', createdAt: '2026-10-04T12:00:00Z' }] };
+  const after = { ...before, receiptId: 'legacy-photo-posted', status: 'review' };
+  const expense = snapshot(expenseId, 'legacy-photo-posted');
+  event(database, 'legacy-old-upload', 'receipt', 'legacy-photo-old', null, { status: 'pending' });
+  event(database, 'legacy-before-save-question', 'draft', draftId, null, before);
+  event(database, 'legacy-processed', 'draft', draftId, before, after, 'chatgpt');
+  event(database, 'legacy-final-upload', 'receipt', 'legacy-photo-posted', null, { status: 'active' });
+  event(database, 'legacy-posted', 'expense', expenseId, null, expense);
+  event(database, 'legacy-draft-consumed', 'draft', draftId, after, null);
+  event(database, 'legacy-old-photo-purged', 'receipt', 'legacy-photo-old', { status: 'deleting' }, null, 'system');
+  const current = trip(); current.expenses.push(expense);
+  database.sqlite.prepare('UPDATE trips SET data=? WHERE id=?').run(JSON.stringify(current), 'trip');
+  return { draftId, expenseId, expense, before, after, current,
+    expected: new Set(['legacy-old-upload', 'legacy-before-save-question', 'legacy-processed', 'legacy-final-upload', 'legacy-posted', 'legacy-draft-consumed', 'legacy-old-photo-purged']) };
+}
+
+test('legacy distinct manual drafts recover questions, processing and replaced photos across deletion and pagination', async () => {
+  const database = await storage();
+  const fixture = await legacyReceipt(database);
+  const original = database.sqlite.prepare('SELECT * FROM activity_events ORDER BY sequence').all();
+  for (const scope of [{ expenseId: fixture.expenseId }, { draftId: fixture.draftId }]) {
+    const first = await store.readActivity('joined', 'trip', { ...scope, limit: 3 });
+    const second = await store.readActivity('joined', 'trip', { ...scope, limit: 50, before: first.nextCursor! });
+    assert.deepEqual(new Set([...first.events, ...second.events].map(row => row.id)), fixture.expected);
+    assert.equal(second.nextCursor, null);
+  }
+  assert.deepEqual(database.sqlite.prepare('SELECT * FROM activity_events ORDER BY sequence').all(), original, 'legacy recovery never rewrites an event or adds fabricated provenance');
+  fixture.current.expenses = fixture.current.expenses.filter(row => row.id !== fixture.expenseId);
+  database.sqlite.prepare('UPDATE trips SET data=? WHERE id=?').run(JSON.stringify(fixture.current), 'trip');
+  event(database, 'legacy-expense-deleted', 'expense', fixture.expenseId, fixture.expense, null);
+  fixture.expected.add('legacy-expense-deleted');
+  assert.deepEqual(ids(await store.readActivity('joined', 'trip', { draftId: fixture.draftId, limit: 50 })), fixture.expected);
+  event(database, 'legacy-expense-restored', 'expense', fixture.expenseId, null, fixture.expense);
+  fixture.current.expenses.push(fixture.expense);
+  database.sqlite.prepare('UPDATE trips SET data=? WHERE id=?').run(JSON.stringify(fixture.current), 'trip');
+  fixture.expected.add('legacy-expense-restored');
+  assert.deepEqual(ids(await store.readActivity('joined', 'trip', { expenseId: fixture.expenseId, limit: 50 })), fixture.expected);
+});
+
+test('inferred legacy roots inspect other photos and typed same-ID drafts before including sibling history', async () => {
+  const database = await storage(); const fixture = await legacyReceipt(database);
+  // E's old different photo safely resolves another unlinked manual draft X.
+  event(database, 'legacy-expense-older-photo', 'expense', fixture.expenseId, snapshot(fixture.expenseId, 'legacy-sibling-photo'), fixture.expense);
+  event(database, 'legacy-sibling', 'draft', 'legacy-sibling-draft', null, { ...snapshot('legacy-sibling-draft', 'legacy-sibling-photo'), status: 'review' });
+  event(database, 'legacy-sibling-photo', 'receipt', 'legacy-sibling-photo', null, { status: 'active' });
+  // Raw draft ID E belongs to breakfast. Its earlier unlinked history must not
+  // be mistaken for original same-ID posting after D infers the parent E.
+  event(database, 'unrelated-inferred-before-link', 'draft', fixture.expenseId, null, { receiptId: 'unrelated-inferred-photo', text: 'NEVER_INFER_THIS_FAMILY' });
+  event(database, 'unrelated-inferred-linked', 'draft', fixture.expenseId, { receiptId: 'unrelated-inferred-photo' }, { receiptId: 'unrelated-inferred-photo', expenseId: 'breakfast' });
+  event(database, 'unrelated-inferred-photo', 'receipt', 'unrelated-inferred-photo', null, { status: 'active' });
+  const expected = new Set([...fixture.expected, 'legacy-expense-older-photo', 'legacy-sibling', 'legacy-sibling-photo']);
+  for (const scope of [{ expenseId: fixture.expenseId }, { draftId: fixture.draftId }]) {
+    const result = await store.readActivity('joined', 'trip', { ...scope, limit: 50 });
+    assert.deepEqual(ids(result), expected);
+    assert.doesNotMatch(JSON.stringify(result), /NEVER_INFER_THIS_FAMILY/);
+  }
+});
+
+test('receipt matching never overrides any current or historical explicit target or source provenance', async () => {
+  const database = await storage(); const fixture = await legacyReceipt(database);
+  for (const [id, target] of [['once-linked', 'breakfast'], ['numeric-linked', 123], ['empty-linked', '']] as const) {
+    event(database, id + '-created', 'draft', id, null, { receiptId: 'legacy-photo-posted', expenseId: target, text: 'EXPLICIT_FOREIGN_DRAFT' });
+    event(database, id + '-cleared', 'draft', id, { receiptId: 'legacy-photo-posted', expenseId: target }, { receiptId: 'legacy-photo-posted', text: 'EXPLICIT_FOREIGN_DRAFT' });
+  }
+  fixture.current.drafts.push({ ...snapshot('current-malformed', 'legacy-photo-posted'), expenseId: 321 as unknown as string, status: 'review' });
+  database.sqlite.prepare('UPDATE trips SET data=? WHERE id=?').run(JSON.stringify(fixture.current), 'trip');
+  event(database, 'source-provenance-draft', 'draft', 'has-source-provenance', null, { receiptId: 'legacy-photo-posted', text: 'EXPLICIT_FOREIGN_DRAFT' });
+  event(database, 'deleted-source-provenance', 'expense', 'foreign-source-expense', { sourceDraftId: 'has-source-provenance', receiptId: 'another-source-photo' }, null);
+  assert.deepEqual(ids(await store.readActivity('joined', 'trip', { expenseId: fixture.expenseId, limit: 50 })), fixture.expected);
+  assert.deepEqual(ids(await store.readActivity('joined', 'trip', { draftId: fixture.draftId, limit: 50 })), fixture.expected);
+});
+
+test('ambiguous deleted expenses or copied unlinked draft photos cannot infer receipt families', async context => {
+  for (const variant of ['posted-photo-other-expense', 'old-photo-other-expense', 'posted-photo-copy', 'old-photo-copy']) await context.test(variant, async () => {
+    const database = await storage(); const fixture = await legacyReceipt(database);
+    const receiptId = variant.startsWith('old-photo') ? 'legacy-photo-old' : 'legacy-photo-posted';
+    if (variant.endsWith('expense')) event(database, 'ambiguous-deleted-expense', 'expense', 'another-deleted-expense', { receiptId, text: 'AMBIGUOUS_COPY' }, null);
+    else event(database, 'ambiguous-deleted-draft', 'draft', 'another-deleted-draft', { receiptId, text: 'AMBIGUOUS_COPY' }, null);
+    const expensePage = await store.readActivity('joined', 'trip', { expenseId: fixture.expenseId, limit: 50 });
+    assert.deepEqual(ids(expensePage), new Set(['legacy-final-upload', 'legacy-posted']));
+    const draftPage = await store.readActivity('joined', 'trip', { draftId: fixture.draftId, limit: 50 });
+    assert.ok(!ids(draftPage).has('legacy-posted') && !ids(draftPage).has('ambiguous-deleted-draft') && !ids(draftPage).has('ambiguous-deleted-expense'));
+    assert.doesNotMatch(JSON.stringify(expensePage), /AMBIGUOUS_COPY/);
+  });
+});
+
+test('typed metadata and literal IDs keep numeric photo IDs, snapshot IDs and foreign trips isolated', async () => {
+  const database = await storage(); const fixture = await legacyReceipt(database, "draft' OR 1=1 --", "expense' OR 1=1 --");
+  event(database, 'foreign-unlinked-copy', 'draft', fixture.draftId, null, { receiptId: 'legacy-photo-posted', text: 'NEVER_OTHER_TRIP' }, 'web', 'secret');
+  event(database, 'foreign-photo-owner', 'expense', 'foreign-owner', null, { receiptId: 'legacy-photo-posted' }, 'web', 'secret');
+  // $.id is advisory snapshot data; immutable entity_id is authoritative.
+  event(database, 'mismatched-snapshot-id', 'draft', 'different-draft', null, { id: fixture.draftId, receiptId: 123, text: 'NEVER_NUMERIC_PHOTO' });
+  event(database, 'typed-photo-expense', 'expense', 'typed-photo-expense', null, { receiptId: '123' });
+  fixture.current.drafts.push({ ...snapshot('numeric-current', '123'), receiptId: 123 as unknown as string, status: 'review' });
+  database.sqlite.prepare('UPDATE trips SET data=? WHERE id=?').run(JSON.stringify(fixture.current), 'trip');
+  for (const scope of [{ expenseId: fixture.expenseId }, { draftId: fixture.draftId }]) assert.deepEqual(ids(await store.readActivity('joined', 'trip', { ...scope, limit: 50 })), fixture.expected);
+  assert.deepEqual(ids(await store.readActivity('joined', 'trip', { expenseId: 'typed-photo-expense', limit: 50 })), new Set(['typed-photo-expense']));
+  const currentRow = database.sqlite.prepare('SELECT receipt_id FROM current_receipt_links WHERE trip_id=? AND entity_type=? AND entity_id=?').get('trip', 'draft', 'numeric-current');
+  assert.equal(currentRow!.receipt_id, null, 'numeric JSON IDs must not become text through column affinity');
+});
+
+test('a raw same-ID expense cannot replace a contradictory legacy photo association', async () => {
+  const database = await storage(); const fixture = await legacyReceipt(database);
+  event(database, 'same-id-unrelated-expense', 'expense', fixture.draftId, null, snapshot(fixture.draftId, 'same-id-other-photo'));
+  event(database, 'same-id-other-photo', 'receipt', 'same-id-other-photo', null, { status: 'active' });
+  assert.deepEqual(ids(await store.readActivity('joined', 'trip', { expenseId: fixture.expenseId, limit: 50 })), new Set(['legacy-final-upload', 'legacy-posted']));
+  const directDraft = await store.readActivity('joined', 'trip', { draftId: fixture.draftId, limit: 50 });
+  assert.ok(!ids(directDraft).has('same-id-unrelated-expense') && !ids(directDraft).has('same-id-other-photo') && !ids(directDraft).has('legacy-posted'));
+});
+
+test('staged receipt reads restart after link, image or candidate changes without returning false empty pages', async context => {
+  for (const stage of ['metadata-link', 'image-discovery', 'candidate', 'snapshot']) await context.test(stage, async () => {
+    const database = await storage(); let changed = false;
+    database.beforeRead = sql => {
+      const target = stage === 'metadata-link' ? sql.includes("AND entity_type = 'draft' AND receipt_id IN")
+        : stage === 'image-discovery' ? sql.includes('WITH context AS MATERIALIZED')
+        : stage === 'candidate' ? sql.includes('SELECT e.id, e.sequence') : sql.includes('SELECT e.*');
+      if (!target || changed) return;
+      changed = true; database.beforeRead = undefined;
+      if (stage === 'metadata-link') {
+        event(database, 'race-added-draft', 'draft', 'race-added-draft', null, { expenseId: 'dinner', receiptId: 'race-added-photo' });
+        event(database, 'race-added-photo', 'receipt', 'race-added-photo', null, { status: 'active' });
+      } else event(database, 'race-photo-lifecycle', 'receipt', 'photo-old', { status: 'detached' }, { status: 'purged' }, 'system');
+    };
+    const result = await store.readActivity('joined', 'trip', { expenseId: 'dinner', limit: 50 });
+    assert.ok(changed && result.events.length > 0);
+    assert.deepEqual(ids(result), new Set([...dinnerIds, ...(stage === 'metadata-link' ? ['race-added-draft', 'race-added-photo'] : ['race-photo-lifecycle'])]));
+    assert.ok(database.reads.filter(read => read.sql.startsWith('SELECT receipt_link_version AS version')).length >= 4, 'changed metadata causes a fresh captured generation');
+  });
+});
+
+test('three changing receipt snapshots return a retryable conflict, while unrelated trip changes do not restart', async () => {
+  let database = await storage(); let counter = 0;
+  database.beforeRead = sql => {
+    if (sql.includes('SELECT e.id, e.sequence')) event(database, 'continuous-receipt-change-' + ++counter, 'receipt', 'photo-old', null, { status: 'active' }, 'system');
+  };
+  await assert.rejects(store.readActivity('joined', 'trip', { expenseId: 'dinner' }), error => error instanceof store.RequestError && error.status === 409);
+  assert.equal(counter, 3, 'version churn has a finite retry budget');
+  database = await storage(); let changed = false;
+  database.beforeRead = sql => {
+    if (sql.includes('SELECT e.id, e.sequence') && !changed) { changed = true; event(database, 'foreign-race', 'expense', 'dinner', null, snapshot('dinner', 'foreign-photo'), 'web', 'secret'); }
+  };
+  assert.deepEqual(ids(await store.readActivity('joined', 'trip', { expenseId: 'dinner', limit: 50 })), dinnerIds);
+  assert.equal(database.reads.filter(read => read.sql.includes('SELECT e.id, e.sequence')).length, 1);
+});
+
+test('receipt scope rejects excessive Unicode ID bindings before issuing a D1 query', () => {
+  const id = 'x';
+  const longIds = Array.from({ length: 5000 }, (_, index) => String(index).padStart(5, '0') + '🧾'.repeat(47));
+  const family = { expenseIds: longIds, draftIds: longIds, receiptIds: longIds, version: 1 };
+  assert.throws(() => receiptActivityScope('trip', { expenseId: id }, family), /RECEIPT_SCOPE_TOO_LARGE/);
+});
+
+test('membership loss during indexed discovery returns forbidden instead of an empty receipt page', async () => {
+  const database = await storage();
+  database.beforeRead = sql => {
+    if (sql.includes("AND entity_type = 'draft' AND receipt_id IN")) {
+      database.beforeRead = undefined;
+      database.sqlite.prepare('DELETE FROM memberships WHERE trip_id=? AND user_id=?').run('trip', 'joined');
+    }
+  };
+  await assert.rejects(store.readActivity('joined', 'trip', { expenseId: 'dinner' }), error => error instanceof store.RequestError && error.status === 403);
+  assert.ok(database.queries.every(sql => !sql.includes('SELECT e.*')), 'no snapshots materialize after access is lost');
 });

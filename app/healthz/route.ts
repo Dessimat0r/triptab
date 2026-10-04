@@ -5,15 +5,25 @@ export const dynamic = 'force-dynamic';
 export async function GET() {
   try {
     // Compilation of this read-only query also detects missing migrations.
-    await db().prepare(`SELECT r.state, r.created_at, r.legacy_cleanup_after, e.sequence, m.message_data
-      FROM receipts r CROSS JOIN activity_events e
-      CROSS JOIN receipt_messages m INDEXED BY receipt_messages_trip_message_idx LIMIT 0`).all();
+    await db().prepare(`SELECT r.state, r.created_at, r.legacy_cleanup_after, e.sequence, m.message_data, t.receipt_link_version
+      FROM receipts r CROSS JOIN activity_events e CROSS JOIN trips t
+      CROSS JOIN receipt_messages m INDEXED BY receipt_messages_trip_message_idx
+      CROSS JOIN current_receipt_links l INDEXED BY current_receipt_links_entity_idx
+      CROSS JOIN receipt_history_links h INDEXED BY receipt_history_links_snapshot_idx LIMIT 0`).all();
     const receiptHistoryIndexes = ['activity_events_trip_entity_idx', 'activity_events_draft_before_expense_idx',
       'activity_events_draft_after_expense_idx', 'activity_events_expense_before_source_draft_idx',
-      'activity_events_expense_after_source_draft_idx'];
-    const indexes = await db().prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name IN (?, ?, ?, ?, ?)")
+      'activity_events_expense_after_source_draft_idx', 'current_receipt_links_expense_idx',
+      'current_receipt_links_source_idx', 'current_receipt_links_receipt_idx',
+      'receipt_history_links_entity_idx', 'receipt_history_links_expense_idx',
+      'receipt_history_links_source_idx', 'receipt_history_links_receipt_idx'];
+    const indexes = await db().prepare(`SELECT name FROM sqlite_master WHERE type = 'index' AND name IN (${receiptHistoryIndexes.map(() => '?').join(',')})`)
       .bind(...receiptHistoryIndexes).all<{ name: string }>();
     if (indexes.results.length !== receiptHistoryIndexes.length) throw Error('Missing receipt history migration');
+    const receiptLinkTriggers = ['current_receipt_links_insert', 'current_receipt_links_update', 'current_receipt_links_delete',
+      'receipt_history_links_insert', 'receipt_history_links_no_update', 'receipt_history_links_no_delete', 'receipt_history_links_no_replace'];
+    const triggers = await db().prepare(`SELECT name FROM sqlite_master WHERE type = 'trigger' AND name IN (${receiptLinkTriggers.map(() => '?').join(',')})`)
+      .bind(...receiptLinkTriggers).all<{ name: string }>();
+    if (triggers.results.length !== receiptLinkTriggers.length) throw Error('Missing receipt link maintenance');
     const storage = bucket();
     if (typeof storage.get !== 'function' || typeof storage.put !== 'function' || typeof storage.delete !== 'function') throw Error('Missing receipt binding');
     return Response.json({ status: 'ready' }, { headers: { 'Cache-Control': 'no-store' } });

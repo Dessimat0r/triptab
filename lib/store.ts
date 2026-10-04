@@ -5,7 +5,7 @@ import { activityNotification, notifyMembers } from './notifications';
 import { AuthError, resolveIdentity, readAuthState } from './auth';
 import { markRemovedReceipts, purgeDeletingReceipts, ReceiptLifecycleError } from './receipt-lifecycle';
 import { activityStatements, accountAuditStatement, type ActivityEntity, type ActivitySource, type ActivityChange, type ActivityEvent } from './audit';
-import { receiptActivityScope, type ReceiptActivityScope } from './activity-scope';
+import { assertReceiptActivityVersion, receiptActivityScope, resolveReceiptActivityFamily, validateReceiptActivityScope, ReceiptScopeChangedError, ReceiptScopeSizeError, type ReceiptActivityScope } from './activity-scope';
 export { activityStatements, type ActivityEntity, type ActivitySource, type ActivityChange, type ActivityEvent } from './audit';
 import { receiptMemorySchema, type ReceiptMemory } from './receipt-context';
 import { receiptAliasIdentity, ReceiptMemoryOwnershipError, validateReceiptMemoryOwnership } from './receipt-memory-ownership';
@@ -159,14 +159,30 @@ function clearAssistantAuthors<Entry extends object>(entry: Entry): Entry {
 }
 
 export async function readActivity(user: string, tripId: string, options: { before?: number; limit?: number } & ReceiptActivityScope = {}): Promise<{ events: ActivityEvent[]; nextCursor: number | null }> {
+  // Link changes during bounded discovery restart from the new transaction,
+  // rather than returning a mixed family or a misleading empty page.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try { return await readActivityPage(user, tripId, options); }
+    catch (error) {
+      if (error instanceof ReceiptScopeSizeError) throw new RequestError('This receipt has too many history links to load safely.', 413);
+      if (!(error instanceof ReceiptScopeChangedError)) throw error;
+      if (!await tripAccess(user, tripId)) throw new RequestError('Your access to this trip changed. Refresh before viewing its history.', 403);
+      if (attempt === 2) throw new RequestError('This receipt history changed while loading. Refresh to try again.', 409);
+    }
+  }
+  throw new RequestError('This receipt history changed while loading. Refresh to try again.', 409);
+}
+
+async function readActivityPage(user: string, tripId: string, options: { before?: number; limit?: number } & ReceiptActivityScope): Promise<{ events: ActivityEvent[]; nextCursor: number | null }> {
   if (!tripId || tripId.length > 100) throw new RequestError('Choose a valid trip.');
   const limit = options.limit ?? 20;
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 50) throw new RequestError('Choose an activity page size between 1 and 50.');
   if (options.before !== undefined && (!Number.isSafeInteger(options.before) || options.before < 1)) throw new RequestError('Choose a valid activity cursor.');
-  let scope;
-  try { scope = receiptActivityScope(tripId, options); }
+  try { validateReceiptActivityScope(tripId, options); }
   catch { throw new RequestError('Choose a valid receipt history.'); }
   if (!await tripAccess(user, tripId)) throw new RequestError('You do not have access to this trip.', 403);
+  const family = await resolveReceiptActivityFamily(db(), tripId, options);
+  const scope = receiptActivityScope(tripId, options, family);
   // Select only identifiers and encoded lengths first. Particularly large
   // immutable snapshots must not materialize as an unbounded activity page.
   const candidates = await db().prepare(`
@@ -184,6 +200,10 @@ export async function readActivity(user: string, tripId: string, options: { befo
       AND (t.owner = ? OR EXISTS (SELECT 1 FROM memberships m WHERE m.trip_id = t.id AND m.user_id = ?))
     ORDER BY e.sequence DESC LIMIT ?
   `).bind(...scope.bindings, tripId, options.before ?? Number.MAX_SAFE_INTEGER, user, user, limit + 1).all<{ id: string; sequence: number; bytes: number }>();
+  if (family) {
+    if (!await tripAccess(user, tripId)) throw new RequestError('Your access to this trip changed. Refresh before viewing its history.', 403);
+    await assertReceiptActivityVersion(db(), tripId, family.version);
+  }
   const selected: { id: string; sequence: number }[] = [];
   let bytes = 128; // Envelope, commas and the bounded sequence cursor.
   for (const candidate of candidates.results.slice(0, limit)) {
@@ -200,9 +220,11 @@ export async function readActivity(user: string, tripId: string, options: { befo
   const rows = await db().prepare(`
     SELECT e.* FROM activity_events e JOIN trips t ON t.id = e.trip_id
     WHERE e.trip_id = ? AND e.id IN (SELECT value FROM json_each(?))
+      ${family ? 'AND t.receipt_link_version = ?' : ''}
       AND (t.owner = ? OR EXISTS (SELECT 1 FROM memberships m WHERE m.trip_id = t.id AND m.user_id = ?))
     ORDER BY e.sequence DESC
-  `).bind(tripId, JSON.stringify(selected.map(event => event.id)), user, user).all<ActivityRow>();
+  `).bind(tripId, JSON.stringify(selected.map(event => event.id)), ...(family ? [family.version] : []), user, user).all<ActivityRow>();
+  if (family) await assertReceiptActivityVersion(db(), tripId, family.version);
   if (rows.results.length !== selected.length) throw new RequestError('Your access to this trip changed. Refresh before viewing its history.', 403);
   const result = {
     // Audit evidence is immutable. Role-first UI labels handle legacy mistaken

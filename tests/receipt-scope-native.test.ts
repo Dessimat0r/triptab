@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { Log, LogLevel, Miniflare } from 'miniflare';
-import { receiptActivityScope, type ReceiptActivityScope } from '../lib/activity-scope';
+import { unstable_splitSqlQuery } from 'wrangler';
+import { receiptActivityScope, resolveReceiptActivityFamily, type ReceiptActivityScope } from '../lib/activity-scope';
 
 type NativeDatabase = Awaited<ReturnType<Miniflare['getD1Database']>>;
 type Snapshot = Record<string, unknown>;
@@ -36,6 +37,11 @@ async function nativeDatabase(run: (database: NativeDatabase) => Promise<void>) 
     for (const statement of indexes.split('--> statement-breakpoint').map(value => value.trim()).filter(Boolean)) {
       await database.prepare(statement).run();
     }
+    const projection = await readFile(new URL('../drizzle/0009_receipt_link_projections.sql', import.meta.url), 'utf8');
+    const statements = unstable_splitSqlQuery(projection);
+    assert.equal(statements.length, 21);
+    assert.ok(!statements.some(statement => statement.trim() === 'END'));
+    for (const statement of statements) await database.prepare(statement).run();
     await run(database);
   } finally {
     await worker.dispose();
@@ -50,11 +56,12 @@ async function activity(database: NativeDatabase, id: string, type: string, enti
 }
 
 async function scoped(database: NativeDatabase, scope: ReceiptActivityScope, before?: number, limit = 50) {
-  const query = receiptActivityScope(tripId, scope);
+  const family = await resolveReceiptActivityFamily(database as unknown as D1Database, tripId, scope);
+  const query = receiptActivityScope(tripId, scope, family);
   const cursor = before === undefined ? '' : ' AND e.sequence < ?';
   const bindings = [...query.bindings, tripId, ...(before === undefined ? [] : [before]), limit];
   const result = await database.prepare(`${query.prefix}
-    SELECT e.id,e.sequence FROM activity_events e
+    SELECT e.id,e.sequence FROM activity_events e JOIN trips t ON t.id = e.trip_id
     WHERE e.trip_id = ? AND (${query.condition})${cursor}
     ORDER BY e.sequence DESC LIMIT ?`).bind(...bindings).all<ScopeRow>();
   return result.results;
@@ -127,5 +134,55 @@ test('native D1 retains deleted/restored typed receipt links and binds quoted ID
     data.expected.add('expense-restored');
     assert.deepEqual(new Set((await scoped(database, { draftId: data.draftId })).map(row => row.id)), data.expected);
     assert.deepEqual(await scoped(database, { draftId: 'unknown-draft' }), []);
+  });
+});
+
+test('native D1 recovers legacy manual draft history without provenance through photo replacement and deletion', async () => {
+  await nativeDatabase(async database => {
+    const draftId = "legacy' draft", expenseId = "posted' expense";
+    const original = { id: draftId, receiptId: 'legacy-old-photo', status: 'waiting', conversation: [{ id: 'old-question', text: 'Before save' }] };
+    const processed = { ...original, receiptId: 'legacy-final-photo', status: 'review' };
+    const posted = { id: expenseId, receiptId: 'legacy-final-photo' };
+    await database.prepare('INSERT INTO trips(id,data) VALUES (?,?)').bind(tripId, JSON.stringify({ expenses: [posted], drafts: [] })).run();
+    await activity(database, 'legacy-photo-upload', 'receipt', 'legacy-old-photo', null, { status: 'pending' });
+    await activity(database, 'legacy-question', 'draft', draftId, null, original);
+    await activity(database, 'legacy-ai-itemisation', 'draft', draftId, original, processed);
+    await activity(database, 'legacy-final-photo', 'receipt', 'legacy-final-photo', null, { status: 'active' });
+    await activity(database, 'legacy-posting', 'expense', expenseId, null, posted);
+    await activity(database, 'legacy-consumed', 'draft', draftId, processed, null);
+    await activity(database, 'legacy-old-purged', 'receipt', 'legacy-old-photo', { status: 'deleting' }, null);
+    // A matching photo in another holiday or once-explicit draft is not a copy
+    // competitor and cannot insert its financial/message history here.
+    await activity(database, 'foreign-photo-owner', 'expense', 'foreign-expense', null, posted, 'another-holiday');
+    await activity(database, 'once-explicit', 'draft', 'other-draft', { receiptId: 'legacy-final-photo', expenseId: 'different-expense' }, { receiptId: 'legacy-final-photo' });
+    const expected = new Set(['legacy-photo-upload', 'legacy-question', 'legacy-ai-itemisation', 'legacy-final-photo', 'legacy-posting', 'legacy-consumed', 'legacy-old-purged']);
+    for (const scope of [{ expenseId }, { draftId }]) {
+      const all = await scoped(database, scope);
+      assert.deepEqual(new Set(all.map(row => row.id)), expected);
+      const first = await scoped(database, scope, undefined, 3);
+      assert.deepEqual([...first, ...await scoped(database, scope, first.at(-1)!.sequence)], all);
+    }
+    await activity(database, 'legacy-deletion', 'expense', expenseId, posted, null);
+    await database.prepare('UPDATE trips SET data=? WHERE id=?').bind('{"expenses":[],"drafts":[]}', tripId).run();
+    expected.add('legacy-deletion');
+    assert.deepEqual(new Set((await scoped(database, { draftId })).map(row => row.id)), expected);
+  });
+});
+
+test('native D1 excludes ambiguous legacy receipt reuse and typed cross-collection collisions', async () => {
+  await nativeDatabase(async database => {
+    const posted = { id: 'legacy-target', receiptId: 'legacy-photo' };
+    await database.prepare('INSERT INTO trips(id,data) VALUES (?,?)').bind(tripId, JSON.stringify({ expenses: [posted], drafts: [] })).run();
+    await activity(database, 'target-photo', 'receipt', 'legacy-photo', null, { status: 'active' });
+    await activity(database, 'target-posted', 'expense', posted.id, null, posted);
+    await activity(database, 'candidate-draft', 'draft', 'legacy-source', null, { receiptId: 'legacy-photo' });
+    assert.deepEqual(new Set((await scoped(database, { expenseId: posted.id })).map(row => row.id)), new Set(['target-photo', 'target-posted', 'candidate-draft']));
+    await activity(database, 'deleted-unlinked-copy', 'draft', 'deleted-copy', { receiptId: 'legacy-photo' }, null);
+    assert.deepEqual(new Set((await scoped(database, { expenseId: posted.id })).map(row => row.id)), new Set(['target-photo', 'target-posted']));
+    assert.ok(!(await scoped(database, { draftId: 'legacy-source' })).some(row => row.id === 'target-posted'));
+    // Typed IDs alone cannot turn numeric receipt identifiers into string links.
+    await activity(database, 'numeric-photo-draft', 'draft', 'numeric-photo-draft', null, { receiptId: 123 });
+    await activity(database, 'string-photo-expense', 'expense', 'string-photo-expense', null, { receiptId: '123' });
+    assert.deepEqual(new Set((await scoped(database, { expenseId: 'string-photo-expense' })).map(row => row.id)), new Set(['string-photo-expense']));
   });
 });

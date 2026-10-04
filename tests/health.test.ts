@@ -53,3 +53,27 @@ test('missing receipt binding also fails readiness without disclosing internal d
   for (const name of (await readdir(new URL('../drizzle/', import.meta.url))).filter(name => name.endsWith('.sql')).sort()) sqlite.exec(await readFile(new URL('../drizzle/' + name, import.meta.url), 'utf8'));
   const response = await GET(); assert.equal(response.status, 503); assert.deepEqual(await response.json(), { status: 'unavailable' });
 });
+
+
+test('receipt history cannot report ready without its current and historical link projections', async () => {
+  sqlite = new DatabaseSync(':memory:'); receiptBinding = true;
+  for (const name of (await readdir(new URL('../drizzle/', import.meta.url))).filter(name => name.endsWith('.sql') && Number(name.slice(0, 4)) <= 8).sort()) sqlite.exec(await readFile(new URL('../drizzle/' + name, import.meta.url), 'utf8'));
+  const response = await GET(); assert.equal(response.status, 503); assert.deepEqual(await response.json(), { status: 'unavailable' });
+});
+test('each missing metadata lookup index makes partial receipt projection migration unavailable', async context => {
+  for (const index of ['current_receipt_links_entity_idx', 'current_receipt_links_expense_idx', 'current_receipt_links_source_idx', 'current_receipt_links_receipt_idx', 'receipt_history_links_snapshot_idx', 'receipt_history_links_entity_idx', 'receipt_history_links_expense_idx', 'receipt_history_links_source_idx', 'receipt_history_links_receipt_idx']) await context.test(index, async () => {
+    sqlite = new DatabaseSync(':memory:'); receiptBinding = true;
+    for (const name of (await readdir(new URL('../drizzle/', import.meta.url))).filter(name => name.endsWith('.sql')).sort()) sqlite.exec(await readFile(new URL('../drizzle/' + name, import.meta.url), 'utf8'));
+    sqlite.exec(`DROP INDEX ${index}`);
+    const response = await GET(); assert.equal(response.status, 503); assert.deepEqual(await response.json(), { status: 'unavailable' });
+  });
+});
+
+test('receipt history cannot report ready without transactional projection and version maintenance', async context => {
+  for (const trigger of ['current_receipt_links_insert', 'current_receipt_links_update', 'current_receipt_links_delete', 'receipt_history_links_insert', 'receipt_history_links_no_update', 'receipt_history_links_no_delete', 'receipt_history_links_no_replace']) await context.test(trigger, async () => {
+    sqlite = new DatabaseSync(':memory:'); receiptBinding = true;
+    for (const name of (await readdir(new URL('../drizzle/', import.meta.url))).filter(name => name.endsWith('.sql')).sort()) sqlite.exec(await readFile(new URL('../drizzle/' + name, import.meta.url), 'utf8'));
+    sqlite.exec(`DROP TRIGGER ${trigger}`);
+    const response = await GET(); assert.equal(response.status, 503); assert.deepEqual(await response.json(), { status: 'unavailable' });
+  });
+});
