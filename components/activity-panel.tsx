@@ -7,7 +7,7 @@ import "./activity-details.css";
 
 export type ActivityPanelProps = {
   tripId: string;
-  refreshKey?: number;
+  refreshKey?: string | number;
   currency?: Currency;
   memberNames?: Record<string, string>;
   actorMemberNames?: Record<string, string>;
@@ -40,7 +40,7 @@ async function activityPage<T extends SequencedEvent>(endpoint: string, signal: 
 }
 
 /** Keep the reader's loaded range and open details while new immutable events arrive. */
-export function useActivityPages<T extends SequencedEvent>(endpoint: string, key: string, refreshKey = 0, ownerField?: keyof T) {
+export function useActivityPages<T extends SequencedEvent>(endpoint: string, key: string, refreshKey: string | number = 0, ownerField?: keyof T) {
   const [attempt, setAttempt] = useState(0);
   const [state, setState] = useState<State<T>>({ key: "", events: [], nextCursor: null, loading: true, error: "" });
   const saved = useRef(state);

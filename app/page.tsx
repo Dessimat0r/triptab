@@ -116,6 +116,7 @@ function hasPendingReceiptQuestions(messages?: ReceiptMessage[]) {
 export default function Home() {
   const [ledger, setLedger] = useState<Ledger>({ trips: [] }),
     [revision, setRevision] = useState(0),
+    [activityRefreshKey, setActivityRefreshKey] = useState<string | number>(0),
     [selected, setSelected] = useState(""),
     [view, setView] = useState("expenses"),
     [loading, setLoading] = useState(true),
@@ -158,6 +159,7 @@ export default function Home() {
     if (snapshot.revision < latestSnapshot.current.revision) return false;
     latestSnapshot.current = snapshot;
     savedEtag.current = etag;
+    setActivityRefreshKey(etag || snapshot.revision);
     setLedger(snapshot.data); setRevision(snapshot.revision); setLastRefreshed(new Date());
     if (invalidateRefresh) { loadRequest.current++; setLoading(false); }
     return true;
@@ -182,6 +184,7 @@ export default function Home() {
           savedEtag.current = "";
           setLedger({ trips: [] });
           setRevision(0);
+          setActivityRefreshKey(0);
           setProfile(null);
           return;
         }
@@ -260,6 +263,7 @@ export default function Home() {
     latestSnapshot.current = { data: { trips: [] }, revision: 0 };
     savedEtag.current = "";
     setLedger({ trips: [] }); setRevision(0);
+    setActivityRefreshKey(0);
     setProfile(p);
     setAuth(false);
     setError("");
@@ -1349,7 +1353,7 @@ export default function Home() {
                       )}
                     </>
                   )}
-                  {view === "history" && <ActivityPanel tripId={trip.id} refreshKey={revision} currency={trip.currency} memberNames={Object.fromEntries(trip.members.map(member => [member.id, member.name]))} actorMemberNames={Object.fromEntries(trip.members.filter(member => member.userId).map(member => [member.userId!, member.name]))} busy={saving || loading} onRestore={event => void reviewRestore(event)} />}
+                  {view === "history" && <ActivityPanel tripId={trip.id} refreshKey={activityRefreshKey} currency={trip.currency} memberNames={Object.fromEntries(trip.members.map(member => [member.id, member.name]))} actorMemberNames={Object.fromEntries(trip.members.filter(member => member.userId).map(member => [member.userId!, member.name]))} busy={saving || loading} onRestore={event => void reviewRestore(event)} />}
                   {view === "receipts" && (
                     <>
                       <div className="sectionheading">
