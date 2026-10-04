@@ -115,6 +115,7 @@ const compiled = transpileModule(source, { compilerOptions: { module: ModuleKind
   .replace("'@/lib/auth'", JSON.stringify(authUrl))
   .replace("'@/lib/model'", JSON.stringify(new URL('../lib/model.ts', import.meta.url).href))
   .replace("'@/lib/receipt-context'", JSON.stringify(new URL('../lib/receipt-context.ts', import.meta.url).href))
+  .replace("'@/lib/receipt-memory-ownership'", JSON.stringify(new URL('../lib/receipt-memory-ownership.ts', import.meta.url).href))
   .replace("'zod'", JSON.stringify(import.meta.resolve('zod')));
 const route = await import('data:text/javascript;base64,' + Buffer.from(compiled).toString('base64')) as { POST(request: Request): Promise<Response> };
 type Reply = { result: { isError?: boolean; content?: { type: string; text: string }[]; tools?: { name: string; description: string; inputSchema: { properties: Record<string, unknown> }; annotations: { readOnlyHint: boolean; idempotentHint?: boolean } }[] } };
@@ -1231,6 +1232,59 @@ test('Bob can edit his scoped aliases and collaborative notes/shared aliases whi
   assert.deepEqual(state.ledgerWriters, [bob, bob]);
   assert.deepEqual(state.writeSources, ['chatgpt', 'chatgpt']);
   assert.equal(state.revision, 5);
+});
+
+test('removed-speaker alias cleanup frees the full fifty-alias cap while retaining historical context and financial details', async () => {
+  reset();
+  const draft = state.data.trips[0].drafts[0];
+  draft.adjustmentAllocation = 'selected-participants';
+  draft.memory = { notes: 'Earlier receipt context', aliases: Array.from({ length: 50 }, (_, index) => ({
+    name: `former-${index}`, itemId: `removed-item-${index}`, scopeMemberId: 'removed-traveller',
+  })) };
+  const before = structuredClone(draft);
+  const incoming = { notes: 'Obsolete scope removed so the current traveller can add context',
+    aliases: [...draft.memory.aliases.slice(1), { name: 'my dinner', itemId: 'item-1', scopeMemberId: 'a' }] };
+  const args = { tripId: 'trip-1', draftId: draft.id, revision: 3, memory: incoming };
+  const saved = await invoke('remember_receipt_context', args);
+  assert.equal(saved.result.isError, undefined);
+  const context = contextContent(saved);
+  const aliases = context.receipt.memory.aliases as (ReceiptMemory['aliases'][number] & { scopeMemberActive: boolean | null; active: boolean })[];
+  assert.equal(aliases.length, 50);
+  assert.equal(aliases.filter(alias => alias.scopeMemberActive === false).length, 49);
+  assert.equal(aliases.find(alias => alias.name === 'my dinner')!.active, true);
+  assert.deepEqual(state.data.trips[0].drafts[0].memory, incoming);
+  assert.deepEqual({ ...state.data.trips[0].drafts[0], memory: undefined }, { ...before, memory: undefined });
+  assert.deepEqual(state.data.trips[0].expenses, []);
+  assert.deepEqual(state.writeSources, ['chatgpt']);
+  const retry = await invoke('remember_receipt_context', args);
+  assert.equal(retry.result.isError, undefined);
+  assert.equal(contextContent(retry).revision, 4);
+  assert.equal(state.writes, 1);
+});
+
+test('a removed speaker’s existing aliases may survive unchanged but cannot be rewritten or newly claimed', async () => {
+  reset();
+  const alias = { name: 'old me', itemId: 'removed-item', scopeMemberId: 'removed-traveller' };
+  state.data.trips[0].drafts[0].memory = { notes: 'Historical context', aliases: [alias] };
+  const before = structuredClone(state.data);
+  for (const aliases of [
+    [{ ...alias, name: 'renamed removed speaker' }],
+    [{ ...alias, itemId: 'item-1' }],
+    [alias, alias],
+    [alias, { name: 'new former claim', itemId: 'item-1', scopeMemberId: 'removed-traveller' }],
+  ]) {
+    const rejected = await invoke('remember_receipt_context', { tripId: 'trip-1', draftId: 'draft-1', revision: 3,
+      memory: { notes: 'Must not partially save these notes', aliases } });
+    assert.equal(rejected.result.isError, true);
+    assert.match(rejected.result.content![0].text, /own active traveller profile/);
+    assert.deepEqual(state.data, before);
+    assert.equal(state.writes, 0);
+  }
+  const retained = await invoke('remember_receipt_context', { tripId: 'trip-1', draftId: 'draft-1', revision: 3,
+    memory: { notes: 'Updated shared notes with unchanged historical identity', aliases: [alias] } });
+  assert.equal(retained.result.isError, undefined);
+  assert.equal(contextContent(retained).receipt.memory.aliases[0].scopeMemberActive, false);
+  assert.equal(state.writes, 1);
 });
 
 test('memory updates retain unchanged other-speaker and inactive aliases but reject stale writes and forged fields', async () => {

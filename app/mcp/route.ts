@@ -3,6 +3,7 @@ import { readLedger, writeLedger, bucket, receiptKey, receiptAccess, ensureProfi
 import { resolveIdentity } from '@/lib/auth';
 import { draftSchema, tripSchema, unitsSchema, CURRENCIES, type Currency, type Trip, type Ledger, type Draft, type Expense } from '@/lib/model';
 import { receiptMemorySchema, type ReceiptMemory } from '@/lib/receipt-context';
+import { validateReceiptMemoryOwnership } from '@/lib/receipt-memory-ownership';
 
 export const dynamic = 'force-dynamic';
 
@@ -43,7 +44,7 @@ const tools = [
   },
   {
     name: 'remember_receipt_context',
-    description: 'Save shared receipt memory only when the user explicitly asks to remember or correct context. First read get_receipt_context for the existing draft and current revision. Supply the complete notes and aliases to retain, up to 6000 characters of notes and 50 named aliases; this replaces the draft’s saved memory. Shared notes and unscoped aliases can be edited collaboratively. Each new alias refers to exactly one active receipt item or active trip member. scopeMemberId optionally limits an alias to its speaker and must identify the current caller for new aliases. Only the scoped speaker may rewrite or remove their aliases; retain every alias owned by other speakers unchanged, including inactive historical aliases. Do not guess an ambiguous nickname, consumption, member identity or reference. Existing unchanged aliases may be retained as history even if a target was removed, but do not use inactive references. Memory is shared across this receipt’s item chats. This tool changes memory only, preserves financial details and conversation, and never posts or changes an approved expense. Use an existing receipt draft for memory changes. ' + contextGuidance,
+    description: 'Save shared receipt memory only when the user explicitly asks to remember or correct context. First read get_receipt_context for the existing draft and current revision. Supply the complete notes and aliases to retain, up to 6000 characters of notes and 50 named aliases; this replaces the draft’s saved memory. Shared notes and unscoped aliases can be edited collaboratively. Each new alias refers to exactly one active receipt item or active trip member. scopeMemberId optionally limits an alias to its speaker and must identify the current caller for new aliases. Only an active scoped speaker may rewrite or remove their aliases; retain other active speakers’ aliases unchanged even when an item target was removed. Aliases scoped to travellers no longer in the holiday may be removed to free capacity, or retained unchanged as historical context. Never create or rewrite an alias claiming another speaker’s scope. Do not guess an ambiguous nickname, consumption, member identity or reference. Existing unchanged aliases may be retained as history even if a target was removed, but do not use inactive references. Memory is shared across this receipt’s item chats. This tool changes memory only, preserves financial details and conversation, and never posts or changes an approved expense. Use an existing receipt draft for memory changes. ' + contextGuidance,
     inputSchema: {
       type: 'object', properties: { tripId: identifier, draftId: identifier, revision: { type: 'integer', minimum: 0 }, memory: memoryJsonSchema },
       required: ['tripId', 'draftId', 'revision', 'memory'], additionalProperties: false,
@@ -319,9 +320,6 @@ function toolLedger(ledger: { data: Ledger; revision: number }, tripId?: string)
 
 function aliasName(name: string) { return name.normalize('NFKC').trim().toLowerCase().replace(/\s+/g, ' '); }
 function aliasTarget(alias: ReceiptMemory['aliases'][number]) { return alias.itemId ? `item:${alias.itemId}` : `member:${alias.memberId}`; }
-function sameAlias(a: ReceiptMemory['aliases'][number], b: ReceiptMemory['aliases'][number]) {
-  return a.name === b.name && a.itemId === b.itemId && a.memberId === b.memberId && a.scopeMemberId === b.scopeMemberId;
-}
 function aliasActive(alias: ReceiptMemory['aliases'][number], trip: Trip, receipt: Draft | Expense) {
   return (!alias.itemId || receipt.items.some(item => item.id === alias.itemId))
     && (!alias.memberId || trip.members.some(member => member.id === alias.memberId))
@@ -374,20 +372,10 @@ function receiptContext(ledger: { revision: number }, trip: Trip, receipt: Draft
 
 function validateNewMemory(memory: ReceiptMemory, previous: ReceiptMemory | undefined, trip: Trip, draft: Draft, user: string) {
   const callerMemberId = trip.members.find(member => member.userId === user)?.id;
-  // Match individual saved entries so a complete replacement cannot silently
-  // remove, rewrite or duplicate an alias scoped to another speaker.
-  const added = [...memory.aliases];
-  for (const alias of previous?.aliases ?? []) {
-    const retainedIndex = added.findIndex(candidate => sameAlias(candidate, alias));
-    if (retainedIndex !== -1) added.splice(retainedIndex, 1);
-    else if (alias.scopeMemberId !== undefined && alias.scopeMemberId !== callerMemberId) {
-      throw new Error('Keep other travellers’ speaker-scoped aliases unchanged. Only their scoped speaker may rewrite or remove them.');
-    }
-  }
+  const added = validateReceiptMemoryOwnership(previous, memory, callerMemberId, new Set(trip.members.map(member => member.id)));
   for (const alias of added) {
     if (alias.itemId && !draft.items.some(item => item.id === alias.itemId)) throw new Error('New aliases must refer to an active item in this receipt.');
     if (alias.memberId && !trip.members.some(member => member.id === alias.memberId)) throw new Error('New aliases must refer to an active traveller in this holiday.');
-    if (alias.scopeMemberId && alias.scopeMemberId !== callerMemberId) throw new Error('A new speaker-scoped alias must belong to your own traveller profile.');
     if (memory.aliases.some(other => aliasActive(other, trip, draft) && aliasName(other.name) === aliasName(alias.name) && aliasTarget(other) !== aliasTarget(alias)
       && (other.scopeMemberId === undefined || alias.scopeMemberId === undefined || other.scopeMemberId === alias.scopeMemberId))) {
       throw new Error('This alias could refer to more than one item or traveller. Ask the user to clarify its name or speaker scope.');
