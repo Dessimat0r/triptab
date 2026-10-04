@@ -2409,7 +2409,7 @@ export default function Home() {
                   expenseId={editing.expenseId || (trip.expenses.some(value => value.id === editing.id) ? editing.id : undefined)}
                   draftId={editing.expenseId || trip.expenses.some(value => value.id === editing.id) ? undefined : editing.draftId || editing.id}
                   title="Receipt history"
-                  refreshKey={revision}
+                  refreshKey={activityRefreshKey}
                   currency={trip.currency}
                   memberNames={Object.fromEntries(trip.members.map(member => [member.id, member.name]))}
                   actorMemberNames={Object.fromEntries(trip.members.filter(member => member.userId).map(member => [member.userId!, member.name]))}

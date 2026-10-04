@@ -17,17 +17,17 @@ const callbacks = ['applySnapshot', 'load'].map(name => {
   assert(declaration.initializer && isCallExpression(declaration.initializer));
   return `const ${name} = ${declaration.initializer.arguments[0].getText(syntax)};`;
 }).join('\n');
-let panelKey = '';
+const panelKeys: string[] = [];
 function findPanel(node: import('typescript').Node) {
   if (isJsxSelfClosingElement(node) && node.tagName.getText(syntax) === 'ActivityPanel') {
     const property = node.attributes.properties.find(property => isJsxAttribute(property) && property.name.getText(syntax) === 'refreshKey');
     assert(property && isJsxAttribute(property));
-    panelKey = property.initializer!.getText(syntax).slice(1, -1);
+    panelKeys.push(property.initializer!.getText(syntax).slice(1, -1));
   }
   node.forEachChild(findPanel);
 }
 findPanel(syntax);
-assert(panelKey);
+assert(panelKeys.length);
 const controllerSource = `return function controller(fetch) {
   let ledger = {trips: []}, revision = 0, activityRefreshKey = 0, loading = false, error = '';
   const latestSnapshot = {current: {data: ledger, revision}}, savedEtag = {current: ''}, loadRequest = {current: 0}, editorBaseline = {current: null};
@@ -35,11 +35,11 @@ const controllerSource = `return function controller(fetch) {
   const setLoading = next => {loading = next}, setError = next => {error = next};
   const setLastRefreshed = () => {}, setAuth = () => {}, setProfile = () => {}, setEditorConflict = () => {};
   ${callbacks}
-  return {load,applySnapshot,get revision(){return revision},get ledger(){return ledger},get refreshKey(){return ${panelKey}},get loading(){return loading},get error(){return error}};
+  return {load,applySnapshot,get revision(){return revision},get ledger(){return ledger},get refreshKey(){return ${panelKeys[0]}},get panelKeys(){return [${panelKeys.join(',')}]},get loading(){return loading},get error(){return error}};
 }`;
 const compiled = transpileModule(controllerSource, { compilerOptions: { module: ModuleKind.CommonJS, target: ScriptTarget.ES2022 } }).outputText;
 type Snapshot = {data: Ledger; revision: number};
-type Controller = {load(): Promise<unknown>; applySnapshot(snapshot: Snapshot, etag?: string, invalidateRefresh?: boolean): boolean; revision: number; ledger: Ledger; refreshKey: string | number; loading: boolean; error: string};
+type Controller = {load(): Promise<unknown>; applySnapshot(snapshot: Snapshot, etag?: string, invalidateRefresh?: boolean): boolean; revision: number; ledger: Ledger; refreshKey: string | number; panelKeys: (string | number)[]; loading: boolean; error: string};
 const controller = new Function(compiled)() as (fetch: () => Promise<Response>) => Controller;
 
 test('an invitation event refreshes the History panel with no ledger revision change', async () => {
@@ -56,6 +56,7 @@ test('an invitation event refreshes the History panel with no ledger revision ch
     assert.equal(editor.revision, 5);
     assert.notEqual(editor.refreshKey, before, 'the actual panel prop must follow the new invitation audit event');
     assert.equal(editor.refreshKey, await ledgerEtag(database, 'bob'));
+    assert(editor.panelKeys.every(key => key === editor.refreshKey), 'holiday and receipt history must share the accepted freshness token');
     assert.deepEqual(editor.ledger, snapshot.data);
     assert.equal(editor.error, '');
   } finally {sqlite.close();}
