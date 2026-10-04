@@ -13,8 +13,12 @@ export type ActivityEvent = ActivityChange & {
 };
 
 /** Append within the mutation's D1 batch; a failed gate produces no events. */
-export function activityStatements(database: D1Database, changes: ActivityChange[], actor: { id: string; displayName: string }, marker: string, revision: number, source: ActivitySource = 'web', gate?: AuditGate): D1PreparedStatement[] {
+export function activityStatements(database: D1Database, changes: ActivityChange[], actor: { id: string; displayName: string }, marker: string, revision: number | 'current', source: ActivitySource = 'web', gate?: AuditGate): D1PreparedStatement[] {
   const condition = gate ?? { sql: 'EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND last_write = ?)', bindings: [marker] };
+  // Invitation-only mutations have their own snapshot gates. Record the ledger
+  // version inside their transaction without changing or comparing that version.
+  const revisionSql = revision === 'current' ? 'COALESCE((SELECT revision FROM sync_state WHERE id = 1), 0)' : '?';
+  const revisionBindings = revision === 'current' ? [] : [revision];
   const now = new Date().toISOString();
   const statements: D1PreparedStatement[] = [];
   let chunk: (ActivityChange & { id: string })[] = [];
@@ -25,9 +29,9 @@ export function activityStatements(database: D1Database, changes: ActivityChange
       INSERT INTO activity_events (id, trip_id, actor_id, actor_name, created_at, entity_type, entity_id, action, before_data, after_data, revision, source)
       SELECT json_extract(j.value, '$.id'), json_extract(j.value, '$.tripId'), ?, ?, ?,
         json_extract(j.value, '$.entityType'), json_extract(j.value, '$.entityId'), json_extract(j.value, '$.action'),
-        json_extract(j.value, '$.before'), json_extract(j.value, '$.after'), ?, ?
+        json_extract(j.value, '$.before'), json_extract(j.value, '$.after'), ${revisionSql}, ?
       FROM json_each(?) j WHERE ${condition.sql}
-    `).bind(actor.id, actor.displayName.slice(0, 80), now, revision, source, JSON.stringify(chunk), ...condition.bindings));
+    `).bind(actor.id, actor.displayName.slice(0, 80), now, ...revisionBindings, source, JSON.stringify(chunk), ...condition.bindings));
     chunk = []; size = 0;
   };
   for (const change of changes) {
@@ -37,9 +41,9 @@ export function activityStatements(database: D1Database, changes: ActivityChange
       flush();
       statements.push(database.prepare(`
         INSERT INTO activity_events (id, trip_id, actor_id, actor_name, created_at, entity_type, entity_id, action, before_data, after_data, revision, source)
-        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ${condition.sql}
+        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${revisionSql}, ? WHERE ${condition.sql}
       `).bind(event.id, event.tripId, actor.id, actor.displayName.slice(0, 80), now, event.entityType, event.entityId, event.action,
-        event.before ? JSON.stringify(event.before) : null, event.after ? JSON.stringify(event.after) : null, revision, source, ...condition.bindings));
+        event.before ? JSON.stringify(event.before) : null, event.after ? JSON.stringify(event.after) : null, ...revisionBindings, source, ...condition.bindings));
     } else {
       if (size + bytes > 1_000_000) flush();
       chunk.push(event); size += bytes + 1;

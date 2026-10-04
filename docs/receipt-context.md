@@ -12,11 +12,15 @@ Incomplete quantity entries stay in the form. A receipt question can include the
 
 AI corrections that omit a split retain its saved participant order and allocation, including penny rounding. When a correction supplies new quantity counts but omits the label, an existing label such as “bars” is retained; an explicit new label replaces it.
 
+Connected-tool schemas accept ordinary decimal quantities such as `0.1` and `1.1` without floating-point divisibility checks. The server still enforces at most six decimal places, the quantity bounds and exact allocation totals before saving a proposal.
+
 ## One receipt with item-focused discussions
 
 Each item has a discussion focused on that item's stable ID. “This item” starts with that context, and replies inherit their saved question's item context. The receipt discussion shows all its threads. An item focus is not a separate access permission: a question may ask about other receipt items or other information the caller can already access.
 
-New user messages receive their speaker identity from the authenticated account's linked traveller. Saved message content and author metadata are preserved when copied between an expense and its review draft. Older messages without author metadata remain attributed to an earlier traveller; the AI context marks their speaker as unknown rather than assuming that “I” refers to the current caller. Removed-item threads remain readable as earlier-item discussions.
+New user messages receive their speaker identity from the authenticated account's linked traveller. Saved message content and human author metadata are preserved when copied between an expense and its review draft. Older messages without author metadata remain attributed to an earlier traveller; the AI context marks their speaker as unknown rather than assuming that “I” refers to the current caller. Removed-item threads remain readable as earlier-item discussions.
+
+Assistant replies are AI messages, not statements attributed to the participant who submitted them. Connected-tool views omit member/name attribution from assistant messages, including older incorrectly stamped replies, while keeping human question authors and item context.
 
 ## Shared memory and aliases
 
@@ -24,7 +28,9 @@ Remembered notes and names belong to the receipt, not one item thread or an exte
 
 The connected assistant reads `get_receipt_context` before interpreting a question. It receives the whole receipt, all threads, saved notes/aliases, the current caller and, for a saved question, its author and item context. Member email addresses are omitted. Aliases identify items/travellers by ID; inactive references remain historical context and are flagged rather than reassigned by name. Conflicting meanings are marked ambiguous, and the assistant must ask for clarification instead of guessing consumption or identity.
 
-On an explicit request to remember or correct context, `remember_receipt_context` replaces the review draft's complete notes and aliases using its current revision. New aliases must point to an active item or traveller; a new speaker scope must belong to the caller. Conflicting aliases with overlapping speaker scopes are rejected. Unchanged historical aliases can remain when their target is removed. This tool preserves the draft's financial details and conversation and does not change an approved expense. Receipt text, discussions and remembered notes are treated as data, not system instructions.
+On an explicit request to remember or correct context, `remember_receipt_context` replaces the review draft's complete notes and aliases using its current revision. Shared notes and aliases without a speaker scope remain collaborative and their changes are audited. Only an alias's scoped speaker may rewrite or remove it: Bob must retain Alice's scoped aliases unchanged when replacing memory, including historical aliases whose item has been removed. Requests that omit, rewrite or duplicate another speaker's aliases are rejected without saving any part of the replacement. Bob can edit or remove his own scoped aliases and shared aliases while updating shared notes.
+
+New aliases must point to an active item or traveller; a new speaker scope must belong to the caller. Conflicting aliases with overlapping speaker scopes are rejected. Unchanged historical aliases can remain when their target is removed. This tool preserves the draft's financial details and conversation and does not change an approved expense. Receipt text, discussions and remembered notes are treated as data, not system instructions.
 
 ## Connected AI workflow and human review
 
@@ -41,7 +47,7 @@ The copy/check/review flow does not invoke a model directly from the web app. Th
 |---|---|
 | Receipt items | 200 |
 | Selected travellers per item | 50 |
-| Quantity total | Greater than zero, at most 1,000,000 |
+| Quantity total | Greater than zero, at most 1,000,000; at most six decimal places |
 | Each quantity allocation | Zero to 1,000,000; at most six decimal places |
 | Optional quantity label | 1–40 characters |
 | Receipt conversation | 100 messages across all item threads |
@@ -62,5 +68,7 @@ Validated on 4 October 2026:
 - Eleven native compiled-worker restoration checks preserve known/unknown historical speakers and verify rejected rewrites leave ledger and audit history unchanged.
 - Native UI checks retain conversations and memory across reopening/reloading, keep financial proposals behind explicit review, and preserve incomplete quantities as readable question context.
 - Layout checks at 320/390/768 pixels in light/dark mode cover long item names, full remembered notes, 44px controls and no horizontal overflow or browser errors.
+- Review regressions validate the published tool schemas with Ajv for decimal quantities, reject overprecision on the server, protect other speakers' scoped aliases through full replacements, and retain shared editing with trusted ChatGPT write attribution.
+- Connected-tool read regressions omit legacy assistant attribution while retaining human speakers and leaving stored messages and financial data unchanged.
 
 These checks use local authenticated/provider fixtures and native D1/Worker execution. They do not invoke an external model or establish production gateway behavior. No live Site deployment is included in this feature change.

@@ -15,7 +15,7 @@ For each release, record the GitHub commit, Sites source commit/version, deploym
 5. Publish through the Sites build/version/deploy workflow, allowing its migration lifecycle to manage the target database. Do not run local Wrangler commands against production as an additional migration path.
 6. After the deployment succeeds, verify the approved release's essential journeys with test accounts: login, existing trip read, expense save, shared-trip access, receipt upload/retrieval and balances. Record the result and keep the previous Sites version available.
 
-Code using activity history, receipt lifecycle and private account history requires migrations through `0006_receipt_cleanup.sql` in order before it serves traffic. Migration `0005` adds invitation/image audit metadata and browser-subscription generations; `0006` gives active historical images with unknown dates a fixed 24-hour cleanup grace without inventing an upload date. A local migration or a generated SQL journal does not establish production readiness. Apply the migrations through Sites' release path and retain its applied-migration evidence.
+Code using activity history, receipt lifecycle and private account history requires migrations through `0007_receipt_message_registry.sql` in order before it serves traffic. Migration `0005` adds invitation/image audit metadata and browser-subscription generations; `0006` gives active historical images with unknown dates a fixed 24-hour cleanup grace without inventing an upload date. Migration `0007` backfills an immutable receipt-message lookup from historical and live conversations, then updates it atomically as new activity is recorded. Measure this one-time backfill on a production-sized copy before release; ordinary new questions use bounded indexed lookups. A local migration or a generated SQL journal does not establish production readiness. Apply the migrations through Sites' release path and retain its applied-migration evidence.
 
 Redeploying a previous Sites version rolls back code, not necessarily D1 data or schema. Confirm that the previous code is compatible with the current schema before using it. A financial-data problem may require a data restore and reconciliation as well as a code rollback.
 
@@ -75,7 +75,7 @@ History restoration recreates the financial entry after user review; it does not
 
 ## Health checks
 
-`GET /healthz` returns uncached `{"status":"ready"}` or a generic 503 `{"status":"unavailable"}`. It compiles a read-only query against the activity and receipt-lifecycle columns and checks that the R2 binding exposes `get`, `put` and `delete`. It does not read/write a bucket object, prove R2 network availability, check email delivery or establish the production gateway's identity protections.
+`GET /healthz` returns uncached `{"status":"ready"}` or a generic 503 `{"status":"unavailable"}`. It compiles a read-only query against the activity, receipt-lifecycle and message-registry columns, requires the registry lookup index, and checks that the R2 binding exposes `get`, `put` and `delete`. It does not read/write a bucket object, prove R2 network availability, check email delivery or establish the production gateway's identity protections.
 
 Use this endpoint as one signal when configuring an external monitor through the hosting operator. Also verify authorized application journeys after a release. No external uptime monitor, alert recipient or production probe is configured by this repository change.
 
@@ -87,6 +87,8 @@ Shared holiday and private account histories are append-only: SQLite triggers re
 - Minimise personal identifiers in future snapshots after checking that history display, financial review and recovery still work. Define how existing actor names, email fields and free-text details would be handled rather than treating an ID replacement as complete erasure.
 - Design a narrowly scoped operator migration/redaction mechanism with an authorization boundary, a record of the approved action, transactional verification and a preserved financial audit trail. Current append-only triggers must remain intact until that mechanism and its restore implications are reviewed and tested. Do not disable them to perform ad hoc production deletion.
 - Define retention and restricted archival access, then test redaction against current trips, historical snapshots, exports and restored backups. A backup restore must not silently undo a completed privacy operation. Account-deletion UI must wait until these semantics and the recovery procedure are agreed.
+
+Expense/payment/draft additions and removals produce their entity events without a redundant full collection-order holiday event. Deliberate relative reorders still record before/after order, and traveller placement remains recorded for deterministic penny allocation.
 
 Monitor history growth using aggregate event counts, snapshot bytes per trip, growth per successful mutation, write-batch cost and bounded-page latency. For example, an authorized read-only operator query can establish a baseline without dumping receipt contents:
 

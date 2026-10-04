@@ -358,16 +358,18 @@ export default function Home() {
     }
     return true;
   }
-  function openExpense(expense: Expense) {
+  function openExpense(expense: Expense, resumeDraft = true) {
     setReceiptHistoryOpen(false);
     setRestoration(null);
     if (!trip) return;
+    const pending = resumeDraft ? trip.drafts.find(draft => draft.expenseId === expense.id) : undefined;
+    if (pending) {
+      openDraft(pending);
+      return;
+    }
     editorBaseline.current = { tripId: trip.id, expense: structuredClone(expense) };
     setEditorConflict(null); setReferenceRate(null); resetReceiptReview();
-    const pending = trip.drafts.find(draft => draft.expenseId === expense.id);
-    setProcessedReceipt(pending?.status === "review" ? pending : null);
-    setEditing({ ...structuredClone(expense), adjustmentAllocation: "selected-participants", expenseId: expense.id,
-      draftId: pending?.id, conversation: mergeReceiptConversation(expense.conversation, pending?.conversation), memory: pending?.memory ?? expense.memory });
+    setEditing({ ...structuredClone(expense), adjustmentAllocation: "selected-participants", expenseId: expense.id });
   }
   function keepExpenseEdits() {
     if (!editing || !editorConflict || !trip) return;
@@ -418,30 +420,35 @@ export default function Home() {
     });
   }
   function openDraft(d: Draft) {
+    if (!trip) return;
     setReceiptHistoryOpen(false);
     setRestoration(null);
     resetReceiptReview();
     setPaste("");
     setFxError("");
-    editorBaseline.current = { tripId: trip!.id, expense: structuredClone(trip!.expenses.find(value => value.id === d.expenseId)) };
+    const existing = trip.expenses.find(value => value.id === d.expenseId);
+    const draft = structuredClone(d);
+    editorBaseline.current = { tripId: trip.id, expense: structuredClone(existing) };
     setEditorConflict(null); setReferenceRate(null);
     setEditing({
-      ...d,
+      ...draft,
       adjustmentAllocation: "selected-participants",
-      id: d.expenseId || d.id,
-      date: d.date || today(),
-      time: d.time || "12:00",
-      timezone: d.timezone || "Europe/London",
-      currency: d.currency || trip!.currency,
-      draftId: d.id,
-      items: d.items.length
-        ? d.items
+      id: draft.expenseId || draft.id,
+      date: draft.date || existing?.date || today(),
+      time: draft.time || existing?.time || "12:00",
+      timezone: draft.timezone || existing?.timezone || "Europe/London",
+      currency: draft.currency || trip.currency,
+      draftId: draft.id,
+      conversation: mergeReceiptConversation(existing?.conversation, draft.conversation),
+      memory: draft.memory ?? existing?.memory,
+      items: draft.items.length
+        ? draft.items
         : [
             {
               id: uid(),
               name: "",
               amount: 0,
-              members: trip!.members.map((m) => m.id),
+              members: trip.members.map((m) => m.id),
             },
           ],
     });
@@ -603,7 +610,11 @@ export default function Home() {
       editorIsCurrent(currentData.trips.find(value => value.id === trip.id));
       const draft = currentData.trips.find(value => value.id === trip.id)?.drafts.find(value => value.id === draftId);
       if (!draft || draft.receiptId !== receiptId) throw Error("This receipt draft has changed or is no longer available. Your current edits are still here.");
-      setEditing(prev => prev?.draftId === draftId ? { ...prev, conversation: draft.conversation, memory: draft.memory } : prev);
+      const target = currentData.trips.find(value => value.id === trip.id)?.expenses.find(value => value.id === editing.id);
+      setEditing(prev => prev?.draftId === draftId ? { ...prev,
+        conversation: mergeReceiptConversation(mergeReceiptConversation(target?.conversation, draft.conversation), prev.conversation),
+        memory: draft.memory ?? target?.memory ?? prev.memory,
+      } : prev);
       setProcessedReceipt(draft.status === "review" ? draft : null);
       if (draft.status !== "review" && !repliesOnly) setError("No processed items yet. Ask your connected ChatGPT or Codex to use the receipt prompt, then check again.");
     } catch (cause) {
@@ -2309,7 +2320,7 @@ export default function Home() {
                   })}
                 </div>
                 <div className="conflict-actions">
-                  <button type="button" className="quiet" onClick={() => { if (editorConflict.latest) openExpense(editorConflict.latest); else setEditing(null); setError(""); }}>{editorConflict.latest ? "Use latest saved" : "Discard my edits"}</button>
+                  <button type="button" className="quiet" onClick={() => { if (editorConflict.latest) openExpense(editorConflict.latest, false); else setEditing(null); setError(""); }}>{editorConflict.latest ? "Use latest saved" : "Discard my edits"}</button>
                   <button type="button" className="primary" onClick={keepExpenseEdits}>{editorConflict.latest ? "Continue with my edits" : "Save as a new expense"}</button>
                 </div>
                 <p className="footnote">Review your split and press Save expense to commit your choice.</p>

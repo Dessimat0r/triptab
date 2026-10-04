@@ -124,6 +124,11 @@ test('derived collection-order events preserve precise financial notifications a
   assert.match(notifications.activityNotification('Alice', [{ ...trip, before: { expenseOrder: ['a', 'b'] }, after: { expenseOrder: ['b', 'a'] } }])!.body, /updated the holiday details/);
   assert.match(notifications.activityNotification('Alice', [{ ...trip, before: { expenseOrder: ['a', 'b'] }, after: { expenseOrder: ['b', 'a'] } }, { entityType: 'expense', entityId: 'a', action: 'update' }])!.body, /updated this holiday/);
   assert.match(notifications.activityNotification('Alice', [{ ...trip, after: { ...trip.after, name: 'Changed holiday' } }, { entityType: 'expense', entityId: 'new', action: 'create' }])!.body, /updated this holiday/);
+  const removal = { ...trip, before: { expenseOrder: ['removed', 'a', 'b'] }, after: { expenseOrder: ['a', 'b'] } };
+  assert.equal(notifications.activityNotification('Alice', [removal, { entityType: 'expense', entityId: 'removed', action: 'delete' }])!.body,
+    'Alice removed an expense. Open TripTab to review the activity.');
+  assert.match(notifications.activityNotification('Alice', [{ ...removal, after: { expenseOrder: ['b', 'a'] } }, { entityType: 'expense', entityId: 'removed', action: 'delete' }])!.body, /updated this holiday/);
+  assert.match(notifications.activityNotification('Alice', [{ ...trip, before: { memberOrder: ['a', 'b'] }, after: { memberOrder: ['a', 'c', 'b'] } }, { entityType: 'member', entityId: 'c', action: 'create' }])!.body, /updated this holiday/);
 });
 
 test('device preference audit is private, secret-free and unchanged by repeated or foreign requests', async () => {

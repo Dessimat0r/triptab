@@ -200,6 +200,24 @@ test('shared helper gates stale writes and retains every full multilingual snaps
   assert.equal(new Set(events.map(event => event.id)).size, changes.length);
 });
 
+test('current shared revisions are captured inside the batch in both compact and oversized audit paths', async () => {
+  const database = await storage();
+  database.sqlite.prepare('INSERT INTO sync_state (id,revision,last_write) VALUES (1,?,?)').run(7, 'old-financial-write');
+  const changes = [shared('compact'), { ...shared('large'), after: { id: 'large', text: 'é'.repeat(510_000) } }];
+  const statements = activityStatements(database.asD1(), changes, { id: 'alice', displayName: 'Alice' }, '', 'current', 'web', always);
+  assert.equal(statements.length, 2, 'Both the compact JSON and oversized single-record SQL paths are covered');
+  database.sqlite.prepare('UPDATE sync_state SET revision=?,last_write=? WHERE id=1').run(12, 'concurrent-financial-write');
+  await database.batch(statements);
+  const events = database.sqlite.prepare('SELECT entity_id,revision,source,after_data FROM activity_events ORDER BY sequence').all();
+  assert.deepEqual(events.map(event => event.revision), [12, 12]);
+  assert.deepEqual(events.map(event => event.entity_id), ['compact', 'large']);
+  assert.deepEqual(events.map(event => JSON.parse(String(event.after_data))), changes.map(change => change.after));
+  assert.ok(events.every(event => event.source === 'web'));
+  assert.deepEqual({ ...database.sqlite.prepare('SELECT revision,last_write FROM sync_state WHERE id=1').get()! }, { revision: 12, last_write: 'concurrent-financial-write' });
+  await database.batch(activityStatements(database.asD1(), [shared('blocked')], { id: 'alice', displayName: 'Alice' }, '', 'current', 'web', { sql: '0', bindings: [] }));
+  assert.equal(count(database, 'activity_events'), 2, 'Current revision metadata does not weaken the mutation gate');
+});
+
 for (const table of ['activity_events', 'account_activity_events'] as const) {
   test(`${table} rejects UPDATE, DELETE and replacement by either identifier with recursive triggers disabled`, async () => {
     const database = await storage();

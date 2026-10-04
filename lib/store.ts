@@ -107,7 +107,17 @@ function tripChanges(previous: Trip | undefined, next: Trip): ActivityChange[] {
   const changes: ActivityChange[] = [];
   const before = previous ? tripMetadata(previous) : null;
   const after = tripMetadata(next);
-  if (canonical(before) !== canonical(after)) changes.push({ tripId: next.id, entityType: 'trip', entityId: next.id, action: before ? 'update' : 'create', before, after });
+  const comparedBefore = before && { ...before }, comparedAfter = { ...after };
+  if (comparedBefore) for (const key of ['expenseOrder', 'paymentOrder', 'draftOrder']) {
+    const oldOrder = comparedBefore[key] as string[], newOrder = comparedAfter[key] as string[];
+    const oldIds = new Set(oldOrder), newIds = new Set(newOrder);
+    if (canonical(oldOrder.filter(id => newIds.has(id))) === canonical(newOrder.filter(id => oldIds.has(id)))) {
+      // Entry create/delete events explain insertion/removal. Keep true relative
+      // reorders, and all member placement changes that can affect remainder pennies.
+      delete comparedBefore[key]; delete comparedAfter[key];
+    }
+  }
+  if (canonical(comparedBefore) !== canonical(comparedAfter)) changes.push({ tripId: next.id, entityType: 'trip', entityId: next.id, action: before ? 'update' : 'create', before, after });
   for (const [entityType, oldEntries, entries] of [
     ['member', previous?.members || [], next.members],
     ['expense', previous?.expenses || [], next.expenses],
@@ -128,6 +138,17 @@ function tripChanges(previous: Trip | undefined, next: Trip): ActivityChange[] {
 }
 
 export const MAX_ACTIVITY_BYTES = 4 * 1024 * 1024;
+
+/** Assistant identity comes from its role; historical human stamps were erroneous. */
+function clearAssistantAuthors<Entry extends object>(entry: Entry): Entry {
+  const conversation = (entry as { conversation?: unknown }).conversation;
+  if (Array.isArray(conversation)) for (const message of conversation) {
+    if (message && typeof message === 'object' && message.role === 'assistant') {
+      delete message.authorMemberId; delete message.authorName;
+    }
+  }
+  return entry;
+}
 
 export async function readActivity(user: string, tripId: string, options: { before?: number; limit?: number } & ReceiptActivityScope = {}): Promise<{ events: ActivityEvent[]; nextCursor: number | null }> {
   if (!tripId || tripId.length > 100) throw new RequestError('Choose a valid trip.');
@@ -176,7 +197,7 @@ export async function readActivity(user: string, tripId: string, options: { befo
   `).bind(tripId, JSON.stringify(selected.map(event => event.id)), user, user).all<ActivityRow>();
   if (rows.results.length !== selected.length) throw new RequestError('Your access to this trip changed. Refresh before viewing its history.', 403);
   const result = {
-    events: rows.results.map(row => ({ id: row.id, sequence: row.sequence, tripId: row.trip_id, actorId: row.actor_id, actorName: row.actor_name, createdAt: row.created_at, entityType: row.entity_type, entityId: row.entity_id, action: row.action, before: row.before_data ? JSON.parse(row.before_data) : null, after: row.after_data ? JSON.parse(row.after_data) : null, revision: row.revision, source: row.source })),
+    events: rows.results.map(row => ({ id: row.id, sequence: row.sequence, tripId: row.trip_id, actorId: row.actor_id, actorName: row.actor_name, createdAt: row.created_at, entityType: row.entity_type, entityId: row.entity_id, action: row.action, before: row.before_data ? clearAssistantAuthors(JSON.parse(row.before_data)) : null, after: row.after_data ? clearAssistantAuthors(JSON.parse(row.after_data)) : null, revision: row.revision, source: row.source })),
     nextCursor: candidates.results.length > selected.length ? selected[selected.length - 1].sequence : null,
   };
   if (new TextEncoder().encode(JSON.stringify(result)).byteLength > MAX_ACTIVITY_BYTES) {
@@ -221,6 +242,7 @@ export async function readLedger(id: string): Promise<{ data: Ledger; revision: 
       const link = links.find(value => value.trip_id === trip.id && value.member_id === member.id);
       if (link) { member.userId = link.user_id; member.email = link.email || member.email; }
     }
+    for (const entry of [...trip.expenses, ...trip.drafts]) clearAssistantAuthors(entry);
     return trip;
   });
   const revision = (results[1].results as { revision: number }[])[0]?.revision || 0;
@@ -252,24 +274,12 @@ async function stampReceiptAuthors(trip: Trip, previous: Trip | undefined, actor
     .map(message => message.id)))];
   if (previous && unfamiliar.length) {
     if (unfamiliar.length > 100) throw new RequestError('Add or restore no more than 100 receipt messages at a time. Save one receipt at a time.');
-    // One same-trip lookup covers new or restored IDs, including unlabelled old
-    // messages. SQLite extracts at most 100 bounded message objects rather than
-    // returning complete receipts or trusting any supplied author metadata.
+    // Indexed same-trip IDs distinguish genuinely new messages from restoration.
+    // Timestamps and caller-supplied author claims never bypass this lookup.
     const history = await db().prepare(`
-      WITH snapshots AS (
-        SELECT sequence, 0 AS snapshot_order, before_data AS data FROM activity_events
-        WHERE trip_id = ? AND entity_type IN ('expense', 'draft')
-        UNION ALL
-        SELECT sequence, 1 AS snapshot_order, after_data AS data FROM activity_events
-        WHERE trip_id = ? AND entity_type IN ('expense', 'draft')
-      ), matched AS (
-        SELECT message.value AS message,
-          ROW_NUMBER() OVER (PARTITION BY json_extract(message.value, '$.id')
-            ORDER BY snapshots.sequence DESC, snapshots.snapshot_order DESC) AS position
-        FROM snapshots, json_each(snapshots.data, '$.conversation') message
-        WHERE json_extract(message.value, '$.id') IN (SELECT value FROM json_each(?))
-      ) SELECT message FROM matched WHERE position = 1 LIMIT 100
-    `).bind(trip.id, trip.id, JSON.stringify(unfamiliar)).all<{ message: string }>();
+      SELECT message_data AS message FROM receipt_messages
+      WHERE trip_id = ? AND message_id IN (SELECT value FROM json_each(?)) LIMIT 100
+    `).bind(trip.id, JSON.stringify(unfamiliar)).all<{ message: string }>();
     for (const row of history.results) {
       const message = JSON.parse(row.message) as ReceiptMessage;
       known.set(message.id, [message]);
@@ -281,15 +291,17 @@ async function stampReceiptAuthors(trip: Trip, previous: Trip | undefined, actor
     if (saved) {
       const original = saved.find(candidate => canonical(receiptMessageBody(candidate)) === canonical(receiptMessageBody(message)));
       if (!original) throw new RequestError('Saved receipt messages cannot be edited. Add a new message instead.');
-      if (original.authorMemberId === undefined) delete message.authorMemberId;
+      if (message.role === 'assistant' || original.authorMemberId === undefined) delete message.authorMemberId;
       else message.authorMemberId = original.authorMemberId;
-      if (original.authorName === undefined) delete message.authorName;
+      if (message.role === 'assistant' || original.authorName === undefined) delete message.authorName;
       else message.authorName = original.authorName;
     } else {
       added = true;
-      if (actorMemberId === undefined) delete message.authorMemberId;
+      if (message.role === 'assistant' || actorMemberId === undefined) delete message.authorMemberId;
       else message.authorMemberId = actorMemberId;
-      message.authorName = actorName;
+      if (message.role === 'assistant') delete message.authorName;
+      else message.authorName = actorName;
+      known.set(message.id, [{ ...message }]);
     }
   }
   return added;
@@ -418,7 +430,13 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
     }
   }
 
-  ledger = validateLedger(ledger, { previous: { trips: [...previousTrips.values()] } });
+  // Repair only the old assistant attribution, preserving compatibility for
+  // unchanged historical money. Audit before-images still retain the raw stamps.
+  const validationPrevious = [...previousTrips.values()].map(trip => ({ ...trip,
+    expenses: trip.expenses.map(entry => clearAssistantAuthors({ ...entry, conversation: entry.conversation?.map(message => ({ ...message })) })),
+    drafts: trip.drafts.map(entry => clearAssistantAuthors({ ...entry, conversation: entry.conversation?.map(message => ({ ...message })) })),
+  }));
+  ledger = validateLedger(ledger, { previous: { trips: validationPrevious } });
   checkLedgerSize(ledger);
   // Diff the final validated representation, so accepted normalization of new
   // fields and every explicit legacy repair have accurate history snapshots.
@@ -431,12 +449,10 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
   const receiptReferences = ledger.trips.flatMap(trip => [...trip.expenses, ...trip.drafts].flatMap(entry => entry.receiptId ? [{ id: entry.receiptId, tripId: trip.id }] : []));
   const retainedReceiptIds = new Set(receiptReferences.map(reference => reference.id));
   const removedReceiptIds = [...new Set([...previousTrips.values()].flatMap(trip => [...trip.expenses, ...trip.drafts].flatMap(entry => entry.receiptId && !retainedReceiptIds.has(entry.receiptId) ? [entry.receiptId] : [])))];
-  const preimageIndexes = new Map(existingRows.results.map((row, index) => [row.id, index]));
-  const preimages = tripIds.map(tripId => ({ id: tripId, owner: existing.get(tripId)?.owner ?? null, index: preimageIndexes.get(tripId) ?? null }));
-  // Keep full preimages in separate parameters instead of JSON-escaping an
-  // entire ledger again. Fifty trips still fit D1's parameter-count limit.
-  const preimageData = existingRows.results.length
-    ? `CASE json_extract(prior.value, '$.index') ${existingRows.results.map((_, index) => `WHEN ${index} THEN ?`).join(' ')} ELSE NULL END` : 'NULL';
+  const preimages = tripIds.map(tripId => ({ id: tripId, owner: existing.get(tripId)?.owner ?? null }));
+  // Every production trip writer (ledger save and invitation acceptance) advances
+  // the same transactional revision. CAS pins their data without rebinding JSON;
+  // compact owner/existence, access, receipt and actor checks cover other state.
   const marker = crypto.randomUUID();
   const statements: D1PreparedStatement[] = [
     db().prepare("INSERT OR IGNORE INTO sync_state (id, revision, last_write) VALUES (1, 0, '')"),
@@ -451,11 +467,11 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
           ON m.trip_id = json_extract(author.value, '$.tripId') AND m.user_id = ?
           WHERE m.member_id IS NOT json_extract(author.value, '$.memberId'))
         AND NOT EXISTS (SELECT 1 FROM json_each(?) prior LEFT JOIN trips t ON t.id = json_extract(prior.value, '$.id')
-          WHERE (json_extract(prior.value, '$.index') IS NULL AND t.id IS NOT NULL)
-            OR (json_extract(prior.value, '$.index') IS NOT NULL
-              AND (t.id IS NULL OR t.owner IS NOT json_extract(prior.value, '$.owner') OR t.data IS NOT ${preimageData})))
+          WHERE (json_extract(prior.value, '$.owner') IS NULL AND t.id IS NOT NULL)
+            OR (json_extract(prior.value, '$.owner') IS NOT NULL
+              AND (t.id IS NULL OR t.owner IS NOT json_extract(prior.value, '$.owner'))))
     `).bind(marker, revision, id, id, tripIdsJson, id, id, JSON.stringify(receiptReferences), JSON.stringify(conversationAuthors), id,
-      JSON.stringify(preimages), ...existingRows.results.map(row => row.data)),
+      JSON.stringify(preimages)),
   ];
   for (const trip of ledger.trips) {
     statements.push(db().prepare('INSERT INTO trips (id, owner, data) SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND last_write = ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data WHERE EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND last_write = ?) AND (trips.owner = ? OR EXISTS (SELECT 1 FROM memberships m WHERE m.trip_id = trips.id AND m.user_id = ?))').bind(trip.id, trip.ownerId!, JSON.stringify(trip), marker, marker, id, id));
