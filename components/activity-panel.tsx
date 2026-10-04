@@ -204,6 +204,15 @@ function messageDescription(value: unknown, snapshot: Record<string, unknown>, n
   const context = message.itemId || question?.itemId;
   return `${assistant ? "Reply" : "Question"} by ${author}${!assistant && message.authorMemberId ? ` · ${traveller(message.authorMemberId, names)}` : ""}\n${auditTimestamp(message.createdAt, true)}\n${context ? itemReference(snapshot, context) : "Whole receipt"}\nMessage ${auditText(message.id)}${message.replyTo ? ` · replying to message ${auditText(message.replyTo)}` : ""}\n\n${auditText(message.text)}`;
 }
+function assistantAttributionCorrected(before: Record<string, unknown> | undefined, after: Record<string, unknown> | undefined): boolean {
+  if (!before || !after || before.role !== "assistant" || after.role !== "assistant"
+    || after.authorMemberId !== undefined || after.authorName !== undefined
+    || (before.authorMemberId === undefined && before.authorName === undefined)) return false;
+  const earlier = { ...before }, current = { ...after };
+  delete earlier.authorMemberId; delete earlier.authorName;
+  delete current.authorMemberId; delete current.authorName;
+  return same(earlier, current);
+}
 function order(value: unknown, describe: (id: string) => string): string {
   if (!Array.isArray(value) || !value.length) return "No entries";
   return value.map((id, index) => `${index + 1}. ${describe(auditText(id))}`).join("\n");
@@ -256,10 +265,19 @@ function changes(event: ActivityEvent, currency: Currency | undefined, names: Re
   if (!same(oldItemOrder, newItemOrder)) result.push({ label: "Item order", before: order(oldItemOrder, id => itemReference(before, id)), after: order(newItemOrder, id => itemReference(after, id)) });
   handled.add("conversation");
   const oldMessages = new Map(entries(before.conversation).map(message => [auditText(message.id), message])), newMessages = new Map(entries(after.conversation).map(message => [auditText(message.id), message]));
-  for (const id of new Set([...oldMessages.keys(), ...newMessages.keys()])) if (!same(oldMessages.get(id), newMessages.get(id))) result.push({
-    label: oldMessages.has(id) ? newMessages.has(id) ? "Message changed" : "Message removed" : "Message added",
-    before: messageDescription(oldMessages.get(id), before, names), after: messageDescription(newMessages.get(id), after, names),
-  });
+  for (const id of new Set([...oldMessages.keys(), ...newMessages.keys()])) if (!same(oldMessages.get(id), newMessages.get(id))) {
+    const earlier = oldMessages.get(id), current = newMessages.get(id);
+    if (assistantAttributionCorrected(earlier, current)) {
+      const recorded = [auditText(earlier?.authorName) && `Name: ${auditText(earlier?.authorName)}`,
+        auditText(earlier?.authorMemberId) && `Traveller: ${traveller(earlier?.authorMemberId, names)}`].filter(Boolean).join("\n");
+      result.push({ label: "Assistant attribution corrected",
+        before: `Incorrectly stored human attribution${recorded ? `\n${recorded}` : ""}\n\n${messageDescription(earlier, before, names)}`,
+        after: `ChatGPT/Codex assistant; no human attribution\n\n${messageDescription(current, after, names)}` });
+    } else result.push({
+      label: oldMessages.has(id) ? newMessages.has(id) ? "Message changed" : "Message removed" : "Message added",
+      before: messageDescription(earlier, before, names), after: messageDescription(current, after, names),
+    });
+  }
   const oldMessageOrder = [...oldMessages.keys()], newMessageOrder = [...newMessages.keys()];
   if (!same(oldMessageOrder, newMessageOrder)) {
     const describe = (snapshot: Record<string, unknown>, map: Map<string, Record<string, unknown>>) => (id: string) => {
