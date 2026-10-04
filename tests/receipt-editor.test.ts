@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { createSourceFile, isFunctionDeclaration, ModuleKind, ScriptKind, ScriptTarget, transpileModule } from 'typescript';
 import { equalFinancialValue } from '../lib/client-ledger';
-import { itemSchema, itemSplitError, ledgerSchema, receiptSplitError, total, type Draft, type Expense, type ReceiptMessage, type Trip } from '../lib/model';
+import { itemSchema, itemSplitError, ledgerSchema, receiptSplitError, total, validateLedger, type Draft, type Expense, type ReceiptMessage, type Trip } from '../lib/model';
 
 // Execute the actual page handlers against a small state/persistence boundary.
 // JSX, network, clipboard and React hooks are excluded; receipt transitions and
@@ -49,7 +49,8 @@ const controllerSource = `return function createController(initial, boundary) {
   const setPaste = next => {paste=next};
   const setFxError = next => {fxError=next};
   async function updateTrip(next) {
-    const parsed = boundary.ledgerSchema.parse({trips:[next]});
+    error = '';
+    const parsed = boundary.validateLedger(boundary.ledgerSchema.parse({trips:[next]}),{previous:{trips:[trip]}});
     trip = parsed.trips[0]; latestSnapshot.current = {data:{trips:[trip]},revision:updates.length+1};
     updates.push(structuredClone(trip)); return true;
   }
@@ -72,7 +73,7 @@ type Controller = {
   restoring(): void; restoration: unknown;
 };
 const createController = new Function(compiled)() as (initial: Trip, boundary: object) => Controller;
-const controller = (trip: Trip) => createController(trip, { uid: randomUUID, ledgerSchema, itemSchema, itemSplitError, receiptSplitError, total, equalFinancialValue });
+const controller = (trip: Trip) => createController(trip, { uid: randomUUID, ledgerSchema, itemSchema, itemSplitError, receiptSplitError, total, validateLedger, equalFinancialValue });
 const stamp = '2026-10-04T12:00:00Z';
 const question: ReceiptMessage = { id: 'question', role: 'user', text: 'Check the replacement image', createdAt: stamp };
 const reply: ReceiptMessage = { id: 'reply', role: 'assistant', replyTo: question.id, text: 'Reviewed replacement image', createdAt: stamp };
@@ -129,14 +130,70 @@ test('unrelated drafts are not attached and a concurrent posted financial change
 });
 
 
-test('choosing the latest saved expense after a conflict does not reopen its older pending proposal', async () => {
+const financialFields = ['title','date','time','timezone','payer','receiptId','currency','fx','bankAmount','items','percentages','tax','tip','discount','source'] as const;
+function latestCorrection(expense: Expense): Expense {
+  return {...expense,title:'Latest traveller correction',date:'2026-09-05',time:'20:15',timezone:'Europe/Rome',payer:'b',receiptId:'latest-saved-photo',
+    currency:'GBP',fx:undefined,bankAmount:undefined,source:'manual',items:[{id:'latest-item',name:'Bob corrected dinner',amount:3456,members:['a']}],
+    percentages:{a:25,b:75},tax:80,tip:100,discount:10,adjustmentAllocation:'selected-participants'};
+}
+function assertChosenFinancials(actual: Partial<Expense> | null, latest: Expense) {
+  for(const key of financialFields) assert.deepEqual(actual?.[key],latest[key],key);
+}
+
+test('choosing latest saved consumes a resolved pending proposal and reopening keeps the latest financial details and context', async () => {
+  const initial=fixture(pending('review')); const editor=controller(initial); editor.openExpense(initial.expenses[0]);
+  const changed=structuredClone(initial); const latest=latestCorrection(changed.expenses[0]); changed.expenses[0]=latest;
+  const newerQuestion={...question,id:'newer-question',text:'A newer question saved while the conflict was open'};
+  const newerReply={...reply,id:'newer-reply',replyTo:newerQuestion.id,text:'Newer answer on the pending proposal'};
+  changed.drafts[0].conversation=[question,reply,newerQuestion,newerReply]; changed.drafts[0].memory={notes:'Newer pending receipt memory',aliases:[]};
+  editor.remote(changed); assert.equal(editor.editorIsCurrent(),false); editor.openExpense(changed.expenses[0],false);
+  assertChosenFinancials(editor.editing,latest); assert.equal(editor.editing?.draftId,'replacement-draft');
+  assert.deepEqual(editor.baseline?.expense,latest); assert.deepEqual(editor.editing?.conversation,changed.drafts[0].conversation);
+  assert.equal(editor.editing?.memory?.notes,'Newer pending receipt memory'); assert.equal(editor.updates.length,0);
+  await submit(editor); assert.equal(editor.error,''); assertChosenFinancials(editor.trip.expenses[0],latest);
+  assert.equal(editor.trip.drafts.some(draft=>draft.id==='replacement-draft'),false); assert(editor.trip.drafts.some(draft=>draft.id==='unrelated'));
+  editor.openExpense(editor.trip.expenses[0]); assertChosenFinancials(editor.editing,latest); assert.equal(editor.editing?.draftId,undefined);
+  assert.deepEqual(editor.editing?.conversation,changed.drafts[0].conversation); assert.equal(editor.editing?.memory?.notes,'Newer pending receipt memory');
+});
+
+test('an unanswered pending draft is rebuilt from latest saved values so reopening cannot restore its stale proposal', async () => {
   const initial=fixture(); const editor=controller(initial); editor.openExpense(initial.expenses[0]);
-  const changed=structuredClone(initial); changed.expenses[0]={...changed.expenses[0],title:'Latest traveller correction',payer:'b',receiptId:'latest-saved-photo'}; editor.remote(changed);
-  assert.equal(editor.editorIsCurrent(),false); editor.openExpense(changed.expenses[0],false);
-  assert.equal(editor.editing?.title,'Latest traveller correction'); assert.equal(editor.editing?.receiptId,'latest-saved-photo'); assert.equal(editor.editing?.draftId,undefined);
-  assert.deepEqual(editor.editing?.items,changed.expenses[0].items); assert.deepEqual(editor.baseline?.expense,changed.expenses[0]);
-  await submit(editor); assert.equal(editor.trip.expenses[0].title,'Latest traveller correction'); assert.equal(editor.trip.expenses[0].receiptId,'latest-saved-photo');
-  assert.equal(editor.trip.drafts[0].receiptId,'replacement-photo','pending proposal remains available separately');
+  const changed=structuredClone(initial); const latest=latestCorrection(changed.expenses[0]); changed.expenses[0]=latest;
+  changed.drafts[0].memory={notes:'Keep this unresolved question context',aliases:[]}; editor.remote(changed); assert.equal(editor.editorIsCurrent(),false);
+  editor.openExpense(latest,false); await submit(editor); assert.equal(editor.error,''); assertChosenFinancials(editor.trip.expenses[0],latest);
+  const retained=editor.trip.drafts.find(draft=>draft.id==='replacement-draft'); assert(retained);
+  assert.equal(retained.expenseId,latest.id); assert.equal(retained.status,'waiting'); assertChosenFinancials(retained,latest);
+  assert.deepEqual(retained.conversation,[question]); assert.equal(retained.memory?.notes,'Keep this unresolved question context');
+  assert.equal(editor.trip.drafts.filter(draft=>draft.expenseId===latest.id).length,1);
+  editor.openExpense(editor.trip.expenses[0]); assertChosenFinancials(editor.editing,latest); assert.equal(editor.editing?.draftId,retained.id);
+  assert.deepEqual(editor.editing?.conversation,[question]); await submit(editor); assertChosenFinancials(editor.trip.expenses[0],latest);
+});
+
+test('reply refresh after choosing saved values preserves financials across different draft and saved photos', async () => {
+  const initial=fixture(pending('review')); const editor=controller(initial); editor.openExpense(initial.expenses[0]);
+  const changed=structuredClone(initial); const latest=latestCorrection(changed.expenses[0]); changed.expenses[0]=latest; editor.remote(changed);
+  assert.equal(editor.editorIsCurrent(),false); editor.openExpense(latest,false);
+  const newer=structuredClone(changed); newer.drafts[0].conversation!.push({...question,id:'fresh-question',text:'Keep this new follow-up'});
+  newer.drafts[0].memory={notes:'Memory refreshed without replacing chosen financials',aliases:[]}; editor.remote(newer);
+  await editor.checkEditorReceipt(true); assert.equal(editor.error,''); assertChosenFinancials(editor.editing,latest);
+  assert.equal(editor.processed,null,'a proposal for another photo cannot become the selected processed proposal');
+  assert(editor.editing?.conversation?.some(message=>message.id==='fresh-question'));
+  assert.equal(editor.editing?.memory?.notes,'Memory refreshed without replacing chosen financials');
+  const following={...question,id:'my-follow-up',text:'My new question after choosing the saved expense'};
+  const saved=await editor.storeEditorReceipt({...editor.editing!,conversation:[...editor.editing!.conversation!,following]},editor.editing!.receiptId,true); assert(saved);
+  assert.equal(saved.id,'replacement-draft'); assert.equal(saved.expenseId,latest.id); assertChosenFinancials(saved,latest);
+  assert.equal(editor.trip.drafts.filter(draft=>draft.expenseId===latest.id).length,1);
+  await submit(editor); assertChosenFinancials(editor.trip.expenses[0],latest); editor.openExpense(editor.trip.expenses[0]); assertChosenFinancials(editor.editing,latest);
+  assert(editor.editing?.conversation?.some(message=>message.id==='my-follow-up'));
+});
+
+test('a cached processed proposal cannot supply items after its photo changes', async () => {
+  const initial=fixture(pending('review')); const editor=controller(initial); editor.openExpense(initial.expenses[0]); await editor.checkEditorReceipt(true);
+  assert.equal(editor.processed?.receiptId,'replacement-photo'); const changed=structuredClone(initial);
+  changed.drafts[0].receiptId='unreviewed-new-photo'; changed.drafts[0].items[0].amount=9999; editor.remote(changed);
+  const entry={...editor.editing!,items:editor.editing!.items.map(item=>({...item,amount:3000})),conversation:[...editor.editing!.conversation!,{...question,id:'photo-question'}]};
+  const saved=await editor.storeEditorReceipt(entry,entry.receiptId,true); assert(saved);
+  assert.equal(saved.receiptId,'replacement-photo'); assert.equal(saved.items[0].amount,3000,'unreviewed items for another photo must not replace local values');
 });
 
 test('checking and reviewing a replacement draft retains posted and local receipt context', async () => {
