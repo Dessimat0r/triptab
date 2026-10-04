@@ -163,6 +163,32 @@ test('the Balances route renders immediately while its background ledger request
   assert.equal(editor.state.revision, 1);
 });
 
+test('the holiday and receipt editor remain usable without Intl.supportedValuesOf', () => {
+  const descriptor = Object.getOwnPropertyDescriptor(Intl, 'supportedValuesOf');
+  Object.defineProperty(Intl, 'supportedValuesOf', {value: undefined, configurable: true});
+  try {
+    const holiday = fixture(1);
+    holiday.expenses[0].timezone = 'America/Los_Angeles';
+    const editor = controller(holiday);
+    const initial = editor.render();
+    assert(initial.some(element => element.props.children === 'Dinner 0'), 'the initial holiday screen renders');
+    const expense = initial.find(element => element.props.className === 'expense');
+    assert(expense && typeof expense.props.onClick === 'function');
+    expense.props.onClick();
+    const opened = editor.render();
+    const selector = opened.find(element => element.type === 'select' && element.props.value === 'America/Los_Angeles');
+    assert(selector, 'the saved transaction time zone remains selected');
+    const options = elements(selector.props.children).filter(element => element.type === 'option').map(element => element.props.value);
+    for (const zone of ['America/Los_Angeles', 'Europe/London', 'Europe/Paris', 'Europe/Prague', 'UTC']) {
+      assert(options.includes(zone), `${zone} remains available without native time zone enumeration`);
+    }
+    assert.equal(new Set(options).size, options.length);
+  } finally {
+    if (descriptor) Object.defineProperty(Intl, 'supportedValuesOf', descriptor);
+    else Reflect.deleteProperty(Intl, 'supportedValuesOf');
+  }
+});
+
 const discussionSource = await readFile(new URL('../components/item-receipt-conversation.tsx', import.meta.url), 'utf8');
 const discussionCompiled = transpileModule(discussionSource, {compilerOptions: {module: ModuleKind.CommonJS, target: ScriptTarget.ES2022, jsx: JsxEmit.ReactJSX}}).outputText;
 test('closed item discussions render no chats, and visited chats remain mounted after collapsing', () => {

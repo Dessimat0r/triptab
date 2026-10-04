@@ -993,7 +993,7 @@ export default function Home({ children }: { children: ReactNode }) {
   const itemNames = useMemo(() => Object.fromEntries(editing?.items.map(item => [item.id, item.name]) || []), [editing?.items]);
   const estimatedCharge = useMemo(() => editing?.fx && trip ? previewTotal({ ...editing, bankAmount: undefined }, trip) : null, [editing, trip]);
   const receiptTimezones = useMemo(() => Array.from(new Set([
-    editing?.timezone || "Europe/London", "Europe/London", "Europe/Paris", "Europe/Berlin", "Europe/Rome", "Europe/Madrid", "Europe/Lisbon", "Europe/Prague", "Europe/Budapest", "Europe/Warsaw", "Europe/Athens", "Europe/Bucharest", "Europe/Zurich", "Europe/Stockholm", "Europe/Oslo", "Europe/Copenhagen", "Atlantic/Reykjavik", "Europe/Istanbul", "UTC", ...Intl.supportedValuesOf("timeZone"),
+    editing?.timezone || "Europe/London", "Europe/London", "Europe/Paris", "Europe/Berlin", "Europe/Rome", "Europe/Madrid", "Europe/Lisbon", "Europe/Prague", "Europe/Budapest", "Europe/Warsaw", "Europe/Athens", "Europe/Bucharest", "Europe/Zurich", "Europe/Stockholm", "Europe/Oslo", "Europe/Copenhagen", "Atlantic/Reykjavik", "Europe/Istanbul", "UTC", ...(typeof Intl.supportedValuesOf === "function" ? Intl.supportedValuesOf("timeZone") : []),
   ])), [editing?.timezone]);
   const name = (id: string) =>
     trip?.members.find((m) => m.id === id)?.name || "Unknown";
