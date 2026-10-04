@@ -72,16 +72,3 @@ Push notifications require Worker environment values `VAPID_PUBLIC_KEY`, `VAPID_
 GitHub hosts this source mirror. Pushing here does **not** automatically deploy or update the live app. The existing production app is published through ChatGPT Sites, whose managed source repository and deployment lifecycle are separate.
 
 For Sites changes, use the Sites build/publish workflow, including its production migrations and environment configuration. `.openai/hosting.json` identifies the existing Site and declares the `DB`, `RECEIPTS` and MCP capabilities. It contains no account credentials. Running `npm run build` or `npm start` alone does not publish anything.
-
-## Claude Code on GitHub
-
-The workflow in [`.github/workflows/claude.yml`](.github/workflows/claude.yml) uses the official [Claude Code action](https://github.com/anthropics/claude-code-action) to handle `@claude` requests in issues and pull requests. [CLAUDE.md](CLAUDE.md) supplies project instructions. This development integration is separate from the app's optional ChatGPT/Codex receipt connection.
-
-To enable it for `dessimat0r/triptab`:
-
-1. Install the [Claude GitHub app](https://github.com/apps/claude). In GitHub's repository-access selector, choose **Only select repositories** and select **triptab**.
-2. Choose how to authenticate Claude Code. If your Claude subscription supports Claude Code, run `claude setup-token` on your own computer with the official Claude Code CLI. Store the resulting token as the repository Actions secret **`CLAUDE_CODE_OAUTH_TOKEN`** under [Settings → Secrets and variables → Actions](https://github.com/Dessimat0r/triptab/settings/secrets/actions). Do not put the token in a file committed to Git or paste it into an issue, pull request or chat.
-3. Alternatively, create a repository Actions secret named **`ANTHROPIC_API_KEY`**. No workflow edit is needed: it uses `CLAUDE_CODE_OAUTH_TOKEN` when present, otherwise `ANTHROPIC_API_KEY`. Configure one authentication method. API-key usage is billed to the Anthropic API account.
-4. Make a request in an issue or pull-request comment, for example: `@claude Fix the receipt editor's horizontal overflow on 320px screens and describe your validation.` Review the run under GitHub **Actions** and review any resulting code changes before merging.
-
-The workflow limits requests to trusted repository participants. The app installation and credential secret must both be configured before requests can run successfully. If a credential expires, replace the secret through GitHub Settings rather than changing source code. Work on GitHub does **not** automatically deploy the live ChatGPT Site.
