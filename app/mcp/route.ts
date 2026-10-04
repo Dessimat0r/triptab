@@ -43,7 +43,7 @@ const tools = [
   },
   {
     name: 'remember_receipt_context',
-    description: 'Save shared receipt memory only when the user explicitly asks to remember or correct context. First read get_receipt_context for the existing draft and current revision. Supply the complete notes and aliases to retain, up to 6000 characters of notes and 50 named aliases; this replaces the draft’s saved memory. Each new alias refers to exactly one active receipt item or active trip member. scopeMemberId optionally limits an alias to its speaker and must identify the current caller for new aliases; keep unchanged aliases owned by other speakers. Do not guess an ambiguous nickname, consumption, member identity or reference. Existing unchanged aliases may be retained as history even if a target was removed, but do not use inactive references. Memory is shared across this receipt’s item chats. This tool changes memory only, preserves financial details and conversation, and never posts or changes an approved expense. Use an existing receipt draft for memory changes. ' + contextGuidance,
+    description: 'Save shared receipt memory only when the user explicitly asks to remember or correct context. First read get_receipt_context for the existing draft and current revision. Supply the complete notes and aliases to retain, up to 6000 characters of notes and 50 named aliases; this replaces the draft’s saved memory. Shared notes and unscoped aliases can be edited collaboratively. Each new alias refers to exactly one active receipt item or active trip member. scopeMemberId optionally limits an alias to its speaker and must identify the current caller for new aliases. Only the scoped speaker may rewrite or remove their aliases; retain every alias owned by other speakers unchanged, including inactive historical aliases. Do not guess an ambiguous nickname, consumption, member identity or reference. Existing unchanged aliases may be retained as history even if a target was removed, but do not use inactive references. Memory is shared across this receipt’s item chats. This tool changes memory only, preserves financial details and conversation, and never posts or changes an approved expense. Use an existing receipt draft for memory changes. ' + contextGuidance,
     inputSchema: {
       type: 'object', properties: { tripId: identifier, draftId: identifier, revision: { type: 'integer', minimum: 0 }, memory: memoryJsonSchema },
       required: ['tripId', 'draftId', 'revision', 'memory'], additionalProperties: false,
@@ -141,11 +141,11 @@ const tools = [
                     type: 'object',
                     description: 'Optional fractional cost shares, mutually exclusive with item percentages. Use only user-requested or saved allocations; never infer consumption from an image. Allocations use exactly the selected member IDs and add exactly to total. Item amount remains the full line total.',
                     properties: {
-                      total: { type: 'number', exclusiveMinimum: 0, maximum: 1000000, multipleOf: 0.000001 },
+                      total: { type: 'number', exclusiveMinimum: 0, maximum: 1000000, description: 'Positive total quantity with at most six decimal places; the server validates decimal precision exactly.' },
                       label: { type: 'string', minLength: 1, maxLength: 40, description: 'Optional user-stated unit label, such as bars, slices or portions. Omit it to retain this item’s saved label when changing its counts.' },
                       allocations: {
                         type: 'object', minProperties: 1, maxProperties: 50,
-                        additionalProperties: { type: 'number', minimum: 0, maximum: 1000000, multipleOf: 0.000001 },
+                        additionalProperties: { type: 'number', minimum: 0, maximum: 1000000, description: 'Nonnegative allocated quantity with at most six decimal places; the server validates decimal precision and the allocation sum exactly.' },
                       },
                     },
                     required: ['total', 'allocations'], additionalProperties: false,
@@ -282,6 +282,20 @@ async function consumeToolBudget(providerId: string) {
   await database.prepare('DELETE FROM auth_rate_limits WHERE key_hash IN (SELECT key_hash FROM auth_rate_limits WHERE window_start <= ? LIMIT 20)').bind(now - 86_400_000).run();
 }
 
+function toolReceipt<T extends Draft | Expense>(receipt: T): T {
+  if (!receipt.conversation) return receipt;
+  return { ...receipt, conversation: receipt.conversation.map(message => {
+    const safeMessage = { ...message };
+    // Legacy assistant stamps identify the submitting account, not the author
+    // of the answer. Human speaker context must never be inferred from them.
+    if (safeMessage.role === 'assistant') {
+      delete safeMessage.authorMemberId;
+      delete safeMessage.authorName;
+    }
+    return safeMessage;
+  }) };
+}
+
 // Only return the affected trip after a write. The persistent ledger keeps its
 // full identity metadata; the AI context does not need travellers' emails.
 function toolLedger(ledger: { data: Ledger; revision: number }, tripId?: string) {
@@ -291,7 +305,7 @@ function toolLedger(ledger: { data: Ledger; revision: number }, tripId?: string)
       delete safeMember.email;
       return safeMember;
     });
-    return tripId ? { ...trip, members } : {
+    return tripId ? { ...trip, members, expenses: trip.expenses.map(toolReceipt), drafts: trip.drafts.map(toolReceipt) } : {
       id: trip.id, name: trip.name, currency: trip.currency,
       startDate: trip.startDate, endDate: trip.endDate, members,
     };
@@ -335,11 +349,12 @@ function receiptContext(ledger: { revision: number }, trip: Trip, receipt: Draft
     ambiguous: alias.active && alias.appliesToSpeaker && aliases.some(other => other.active && other.appliesToSpeaker
       && aliasName(other.name) === aliasName(alias.name) && aliasTarget(other) !== aliasTarget(alias)),
   }));
+  const safeReceipt = toolReceipt(receipt);
   return {
     revision: ledger.revision,
     trip: { id: trip.id, name: trip.name, currency: trip.currency },
     receiptType,
-    receipt: { ...receipt, conversation: receipt.conversation ?? [], memory: { notes: savedMemory.notes, aliases: contextualAliases } },
+    receipt: { ...safeReceipt, conversation: safeReceipt.conversation ?? [], memory: { notes: savedMemory.notes, aliases: contextualAliases } },
     members: trip.members.map(member => {
       const safe = { ...member };
       delete safe.email;
@@ -359,7 +374,16 @@ function receiptContext(ledger: { revision: number }, trip: Trip, receipt: Draft
 
 function validateNewMemory(memory: ReceiptMemory, previous: ReceiptMemory | undefined, trip: Trip, draft: Draft, user: string) {
   const callerMemberId = trip.members.find(member => member.userId === user)?.id;
-  const added = memory.aliases.filter(alias => !previous?.aliases.some(old => sameAlias(alias, old)));
+  // Match individual saved entries so a complete replacement cannot silently
+  // remove, rewrite or duplicate an alias scoped to another speaker.
+  const added = [...memory.aliases];
+  for (const alias of previous?.aliases ?? []) {
+    const retainedIndex = added.findIndex(candidate => sameAlias(candidate, alias));
+    if (retainedIndex !== -1) added.splice(retainedIndex, 1);
+    else if (alias.scopeMemberId !== undefined && alias.scopeMemberId !== callerMemberId) {
+      throw new Error('Keep other travellers’ speaker-scoped aliases unchanged. Only their scoped speaker may rewrite or remove them.');
+    }
+  }
   for (const alias of added) {
     if (alias.itemId && !draft.items.some(item => item.id === alias.itemId)) throw new Error('New aliases must refer to an active item in this receipt.');
     if (alias.memberId && !trip.members.some(member => member.id === alias.memberId)) throw new Error('New aliases must refer to an active traveller in this holiday.');
