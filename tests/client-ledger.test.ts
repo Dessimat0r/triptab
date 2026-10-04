@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { rebaseLedger, equalFinancialValue } from '../lib/client-ledger';
+import { rebaseLedger, equalFinancialValue, hasNewMatchingPayment } from '../lib/client-ledger';
 import type { Ledger } from '../lib/model';
 const base: Ledger = { trips: [{ id: 't', name: 'Trip', currency: 'GBP', members: [{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }], expenses: [{ id: 'e', title: 'Dinner', date: '2026-10-04', time: '19:00', timezone: 'Europe/London', currency: 'GBP', payer: 'a', items: [{ id: 'i', name: 'Dinner', amount: 1000, members: ['a','b'] }], tax: 0, tip: 0, discount: 0 }], payments: [], drafts: [] }] };
 test('unrelated changes rebase without losing the open expense entry', () => {
@@ -38,4 +38,46 @@ test('retrying the same stable payment ID cannot duplicate the payment', () => {
   const result = rebaseLedger(base, local, local);
   assert.deepEqual(result.conflicts, []);
   assert.equal(result.data.trips[0].payments.length, 1);
+});
+
+test('a newly recorded matching transfer blocks automatic rebasing until duplicate review', () => {
+  const local = structuredClone(base), remote = structuredClone(base);
+  const payment = { id: 'local-transfer', from: 'b', to: 'a', amount: 250, date: '2026-10-04', time: '12:00', note: 'My transfer' };
+  local.trips[0].payments.push(payment);
+  remote.trips[0].payments.push({ ...payment, id: 'competing-transfer', time: '12:01', note: 'Other traveller recorded it' });
+  assert.equal(hasNewMatchingPayment(base, local, remote), true);
+  assert.equal(hasNewMatchingPayment(remote, { ...remote, trips: [{ ...remote.trips[0], payments: [...remote.trips[0].payments, payment] }] }, remote), false,
+    'the refreshed matching transfer is now visible for explicit review');
+});
+
+test('matching-payment checks preserve stable-ID retries and already-reviewed baseline duplicates', () => {
+  const local = structuredClone(base), remote = structuredClone(base);
+  const payment = { id: 'local-transfer', from: 'b', to: 'a', amount: 250, date: '2026-10-04' };
+  local.trips[0].payments.push(payment);
+  remote.trips[0].payments.push(payment, { ...payment, id: 'separate-transfer' });
+  assert.equal(hasNewMatchingPayment(base, local, remote), false, 'own stable-ID retry does not add another record');
+  const reviewedBase = structuredClone(base);
+  reviewedBase.trips[0].payments.push({ ...payment, id: 'earlier-transfer' });
+  const proposed = structuredClone(reviewedBase);
+  proposed.trips[0].payments.push(payment);
+  assert.equal(hasNewMatchingPayment(reviewedBase, proposed, reviewedBase), false, 'a previously visible duplicate was already reviewed');
+  const edited = structuredClone(reviewedBase);
+  edited.trips[0].payments[0].amount = 300;
+  const competing = structuredClone(reviewedBase);
+  competing.trips[0].payments.push({ ...payment, id: 'competing-transfer', amount: 300 });
+  assert.equal(hasNewMatchingPayment(reviewedBase, edited, competing), false, 'editing an existing transfer is not adding a duplicate');
+});
+
+test('matching-payment checks stay within the same trip, sender, recipient, amount and calendar date', () => {
+  const local = structuredClone(base);
+  const payment = { id: 'local-transfer', from: 'b', to: 'a', amount: 250, date: '2026-10-04' };
+  local.trips[0].payments.push(payment);
+  for (const changed of [{ from: 'a' }, { to: 'b' }, { amount: 251 }, { date: '2026-10-03' }]) {
+    const remote = structuredClone(base);
+    remote.trips[0].payments.push({ ...payment, ...changed, id: 'different-transfer' });
+    assert.equal(hasNewMatchingPayment(base, local, remote), false);
+  }
+  const remote = structuredClone(base);
+  remote.trips.push({ ...structuredClone(base.trips[0]), id: 'other-trip', payments: [{ ...payment, id: 'other-transfer' }] });
+  assert.equal(hasNewMatchingPayment(base, local, remote), false);
 });

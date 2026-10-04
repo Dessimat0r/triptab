@@ -4,8 +4,8 @@ import type { ConnectorBinding } from "../lib/connector-contract.mjs";
 
 export function secureResponse(request: Request, response: Response, development = false): Response {
   const headers = new Headers(response.headers);
-  // Sites can embed the app in ChatGPT. Limit framing to that trusted host and
-  // our own origin instead of SAMEORIGIN, which would break the Sites preview.
+  // Allow our own origin and the trusted ChatGPT hosts. Real hosted preview
+  // and embed compatibility still need verification against their parent chain.
   const policy = [
     "default-src 'self'",
     "base-uri 'self'",

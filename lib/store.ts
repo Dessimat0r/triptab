@@ -1,8 +1,9 @@
 import { env } from 'cloudflare:workers';
 import { ZodError } from 'zod';
-import { parseLedgerStructure, parseStoredTrip, validateLedger, type Ledger, type Trip } from './model';
-import { notifyMembers } from './notifications';
+import { LedgerValidationError, parseLedgerStructure, parseStoredTrip, validateLedger, type Ledger, type Trip } from './model';
+import { activityNotification, notifyMembers } from './notifications';
 import { AuthError, resolveIdentity, readAuthState } from './auth';
+import { markRemovedReceipts, purgeDeletingReceipts, ReceiptLifecycleError } from './receipt-lifecycle';
 
 export class RequestError extends Error {
   constructor(message: string, public readonly status = 400) {
@@ -226,7 +227,7 @@ export async function tripAccess(user: string, tripId: string): Promise<boolean>
 }
 
 export async function receiptAccess(user: string, id: string): Promise<{ owner: string; tripId: string } | null> {
-  const row = await db().prepare('SELECT r.owner, r.trip_id FROM receipts r JOIN trips t ON t.id = r.trip_id WHERE r.id = ? AND (t.owner = ? OR EXISTS (SELECT 1 FROM memberships m WHERE m.trip_id = t.id AND m.user_id = ?))').bind(id, user, user).first<{ owner: string; trip_id: string }>();
+  const row = await db().prepare("SELECT r.owner, r.trip_id FROM receipts r JOIN trips t ON t.id = r.trip_id WHERE r.id = ? AND r.state = 'active' AND (t.owner = ? OR EXISTS (SELECT 1 FROM memberships m WHERE m.trip_id = t.id AND m.user_id = ?))").bind(id, user, user).first<{ owner: string; trip_id: string }>();
   return row ? { owner: row.owner, tripId: row.trip_id } : null;
 }
 
@@ -241,7 +242,7 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
   const placeholders = tripIds.map(() => '?').join(',');
   const existingRows = tripIds.length ? await db().prepare(`SELECT id, owner, data FROM trips WHERE id IN (${placeholders})`).bind(...tripIds).all<StoredTrip>() : { results: [] as StoredTrip[] };
   const linkedRows = tripIds.length ? await db().prepare(`SELECT m.trip_id, m.user_id, m.member_id, p.email FROM memberships m LEFT JOIN profiles p ON p.id = m.user_id WHERE m.trip_id IN (${placeholders})`).bind(...tripIds).all<MembershipRow>() : { results: [] as MembershipRow[] };
-  const receiptRows = tripIds.length ? await db().prepare(`SELECT id, trip_id FROM receipts WHERE trip_id IN (${placeholders})`).bind(...tripIds).all<{ id: string; trip_id: string }>() : { results: [] as { id: string; trip_id: string }[] };
+  const receiptRows = tripIds.length ? await db().prepare(`SELECT id, trip_id FROM receipts WHERE state = 'active' AND trip_id IN (${placeholders})`).bind(...tripIds).all<{ id: string; trip_id: string }>() : { results: [] as { id: string; trip_id: string }[] };
   const profile = await db().prepare('SELECT id, email, display_name, created_at FROM profiles WHERE id = ?').bind(id).first<ProfileRow>();
   const existing = new Map(existingRows.results.map(row => [row.id, row]));
   const newTrips: Trip[] = [];
@@ -290,7 +291,7 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
     }
     for (const entry of [...trip.expenses, ...trip.drafts]) {
       if (entry.receiptId && !receiptRows.results.some(receipt => receipt.id === entry.receiptId && receipt.trip_id === trip.id)) {
-        throw new RequestError('This receipt does not belong to the trip.');
+        throw new RequestError('This receipt was removed or does not belong to the trip. Upload it again before saving.');
       }
     }
   }
@@ -305,6 +306,9 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
     if (!previous) newTrips.push(trip);
     else if (canonical(trip) !== canonical(previous)) changedTrips.push(trip);
   }
+  const receiptReferences = ledger.trips.flatMap(trip => [...trip.expenses, ...trip.drafts].flatMap(entry => entry.receiptId ? [{ id: entry.receiptId, tripId: trip.id }] : []));
+  const retainedReceiptIds = new Set(receiptReferences.map(reference => reference.id));
+  const removedReceiptIds = [...new Set([...previousTrips.values()].flatMap(trip => [...trip.expenses, ...trip.drafts].flatMap(entry => entry.receiptId && !retainedReceiptIds.has(entry.receiptId) ? [entry.receiptId] : [])))];
   const marker = crypto.randomUUID();
   const statements: D1PreparedStatement[] = [
     db().prepare("INSERT OR IGNORE INTO sync_state (id, revision, last_write) VALUES (1, 0, '')"),
@@ -313,7 +317,9 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
         AND NOT EXISTS (SELECT 1 FROM auth_links WHERE oai_user_id = ? AND user_id <> ?)
         AND NOT EXISTS (SELECT 1 FROM json_each(?) ids JOIN trips t ON t.id = ids.value
           WHERE t.owner <> ? AND NOT EXISTS (SELECT 1 FROM memberships m WHERE m.trip_id = t.id AND m.user_id = ?))
-    `).bind(marker, revision, id, id, JSON.stringify(tripIds), id, id),
+        AND NOT EXISTS (SELECT 1 FROM json_each(?) ref LEFT JOIN receipts r ON r.id = json_extract(ref.value, '$.id')
+          WHERE r.id IS NULL OR r.state <> 'active' OR r.trip_id <> json_extract(ref.value, '$.tripId'))
+    `).bind(marker, revision, id, id, JSON.stringify(tripIds), id, id, JSON.stringify(receiptReferences)),
   ];
   for (const trip of ledger.trips) {
     statements.push(db().prepare('INSERT INTO trips (id, owner, data) SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND last_write = ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data WHERE EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND last_write = ?) AND (trips.owner = ? OR EXISTS (SELECT 1 FROM memberships m WHERE m.trip_id = trips.id AND m.user_id = ?))').bind(trip.id, trip.ownerId!, JSON.stringify(trip), marker, marker, id, id));
@@ -324,13 +330,18 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
   statements.push(...activityStatements(db(), changes, { id, displayName: profile?.display_name || 'Traveller' }, marker, revision + 1, options.source));
   const results = await db().batch(statements);
   if (!results[1].meta.changes) throw new Error('CONFLICT');
+  if (removedReceiptIds.length) {
+    // Cleanup follows the successful financial commit. The atomic reference
+    // check and deleting state prevent a concurrent save from reattaching an
+    // image while R2 deletion is in progress. Failures never undo saved money.
+    await markRemovedReceipts(db(), id, removedReceiptIds).then(() => purgeDeletingReceipts(db(), bucket(), id)).catch(() => {
+      console.warn('TripTab saved the entry; receipt cleanup will retry.');
+    });
+  }
   for (const trip of changedTrips) {
-    const events = changes.filter(change => change.tripId === trip.id && change.entityType !== 'draft');
-    if (!events.length) continue;
-    const summary = events.length === 1
-      ? `${events[0].action === 'create' ? 'added' : events[0].action === 'delete' ? 'removed' : 'updated'} ${events[0].entityType === 'expense' ? 'an expense' : events[0].entityType === 'payment' ? 'a payment' : events[0].entityType === 'member' ? 'a traveller' : 'the holiday details'}`
-      : `updated ${[...new Set(events.map(event => event.entityType === 'trip' ? 'holiday details' : event.entityType === 'member' ? 'travellers' : `${event.entityType}s`))].join(' and ')}`;
-    await notifyMembers(trip.id, id, 'TripTab activity', `${profile?.display_name || 'A traveller'} ${summary}. Open TripTab to review the activity.`).catch(() => {
+    const notification = activityNotification(profile?.display_name || 'A traveller', changes.filter(change => change.tripId === trip.id));
+    if (!notification) continue;
+    await notifyMembers(trip.id, id, notification.title, notification.body).catch(() => {
       console.warn('TripTab could not queue a holiday update notification.');
     });
   }
@@ -341,7 +352,7 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
 export function failure(e: unknown) {
   // Expected validation/auth failures do not need stack traces or submitted
   // values in logs. Storage faults retain a short, value-free diagnostic.
-  if (!(e instanceof RequestError) && !(e instanceof AuthError) && !(e instanceof ZodError) && !(e instanceof Error && ['UNAUTHORIZED', 'CONFLICT'].includes(e.message))) console.error('TripTab request failed', { kind: e instanceof Error ? e.name : 'UnknownError' });
+  if (!(e instanceof RequestError) && !(e instanceof AuthError) && !(e instanceof ReceiptLifecycleError) && !(e instanceof LedgerValidationError) && !(e instanceof ZodError) && !(e instanceof Error && ['UNAUTHORIZED', 'CONFLICT'].includes(e.message))) console.error('TripTab request failed', { kind: e instanceof Error ? e.name : 'UnknownError' });
   const m = e instanceof Error ? e.message : '';
   const issue = e instanceof ZodError ? e.issues[0] : undefined;
   const knownFields = new Set(['trips', 'id', 'ownerId', 'name', 'currency', 'startDate', 'endDate', 'members', 'userId', 'email', 'expenses', 'drafts', 'payments', 'title', 'date', 'time', 'timezone', 'fx', 'rate', 'asOf', 'source', 'bankAmount', 'payer', 'items', 'amount', 'percentages', 'conversation', 'role', 'text', 'createdAt', 'replyTo', 'tax', 'tip', 'discount', 'receiptId', 'expenseId', 'status', 'from', 'to', 'note', 'method']);
@@ -349,11 +360,12 @@ export function failure(e: unknown) {
   // Zod's enum/literal messages can echo the supplied value; use a fixed message.
   const issueMessage = issue && ['invalid_enum_value', 'invalid_literal'].includes(issue.code) ? 'Choose a supported value.' : issue?.message;
   const error = issue ? `${issuePath || 'Entry'}: ${issueMessage?.slice(0, 300) || 'Check this value.'}`
-    : e instanceof RequestError || e instanceof AuthError ? (m === 'UNAUTHORIZED' ? 'Sign in to TripTab to open your ledger.' : e.message)
+    : e instanceof LedgerValidationError ? e.message
+    : e instanceof RequestError || e instanceof AuthError || e instanceof ReceiptLifecycleError ? (m === 'UNAUTHORIZED' ? 'Sign in to TripTab to open your ledger.' : e.message)
     : m === 'UNAUTHORIZED' ? 'Sign in to TripTab to open your ledger.'
     : m === 'CONFLICT' ? 'Your ledger changed in another tab or in ChatGPT. Refresh before saving again.'
     : 'Unable to complete this request. Check your entries and try again.';
-  const status = e instanceof RequestError || e instanceof AuthError ? e.status : m === 'UNAUTHORIZED' ? 401 : m === 'CONFLICT' ? 409 : 400;
+  const status = e instanceof LedgerValidationError ? 400 : e instanceof RequestError || e instanceof AuthError || e instanceof ReceiptLifecycleError ? e.status : m === 'UNAUTHORIZED' ? 401 : m === 'CONFLICT' ? 409 : 400;
   return Response.json({ error }, { status, headers: { 'Cache-Control': 'private, no-store' } });
 }
 

@@ -2,6 +2,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import ModalA11y from "@/components/modal-accessibility";
+import { useConfirmation } from "@/components/confirmation-dialog";
 import AccountPanel, { profileFromAuth, type Profile, type AuthResponse } from "@/components/account-panel";
 import AuthPanel from "@/components/auth-panel";
 import { TripSharing, JoinTrip } from "@/components/trip-sharing";
@@ -11,9 +12,12 @@ import ReceiptChat from "@/components/receipt-chat";
 import PaymentEditor from "@/components/payment-editor";
 import ActivityPanel from "@/components/activity-panel";
 import MemberStatement from "@/components/member-statement";
+import TripDetails from "@/components/trip-details";
+import DataExport from "@/components/data-export";
 import { PwaUpdatePrompt } from "@/components/pwa-controls";
 import { localDate, localTime } from "@/lib/dates";
-import { equalFinancialValue, equalSavedValue, rebaseLedger } from "@/lib/client-ledger";
+import { equalFinancialValue, equalSavedValue, hasNewMatchingPayment, rebaseLedger } from "@/lib/client-ledger";
+import type { ActivityEvent } from "@/lib/store";
 import {
   Plus,
   Plane,
@@ -140,14 +144,26 @@ export default function Home() {
     [offline, setOffline] = useState(false),
     [lastRefreshed, setLastRefreshed] = useState<Date | null>(null),
     [editorConflict, setEditorConflict] = useState<{ latest: Expense | null } | null>(null),
-    [paymentEditor, setPaymentEditor] = useState<{ entry: Payment; original?: Payment; key: string } | null>(null),
+    [paymentEditor, setPaymentEditor] = useState<{ entry: Payment; original?: Payment; tripId: string; key: string } | null>(null),
     [statement, setStatement] = useState(""),
     [referenceRate, setReferenceRate] = useState<{ rate: number; currency: Currency; date: string; time: string; timezone: string } | null>(null);
   const editorBaseline = useRef<{ tripId: string; expense?: Expense } | null>(null);
+  const savedEtag = useRef("");
+  const latestSnapshot = useRef<{ data: Ledger; revision: number }>({ data: { trips: [] }, revision: 0 });
+  const loadRequest = useRef(0);
+  const applySnapshot = useCallback((snapshot: { data: Ledger; revision: number }, etag = "", invalidateRefresh = false) => {
+    if (snapshot.revision < latestSnapshot.current.revision) return false;
+    latestSnapshot.current = snapshot;
+    savedEtag.current = etag;
+    setLedger(snapshot.data); setRevision(snapshot.revision); setLastRefreshed(new Date());
+    if (invalidateRefresh) { loadRequest.current++; setLoading(false); }
+    return true;
+  }, []);
   const trip = ledger.trips.find((t) => t.id === selected) || ledger.trips[0];
+  const { confirm, dialog: confirmationDialog, confirming } = useConfirmation(`${trip?.id || ""}:${profile?.id || ""}`);
   const load = useCallback(async () => {
+    const requestId = ++loadRequest.current;
     setLoading(true);
-    setError("");
     try {
       const r = await fetch("/api/ledger", { cache: "no-store" }),
         b = (await r.json()) as {
@@ -155,9 +171,12 @@ export default function Home() {
           revision: number;
           error: string;
         };
+      if (requestId !== loadRequest.current) return latestSnapshot.current;
       if (!r.ok) {
         if (r.status === 401) {
           setAuth(true);
+          latestSnapshot.current = { data: { trips: [] }, revision: 0 };
+          savedEtag.current = "";
           setLedger({ trips: [] });
           setRevision(0);
           setProfile(null);
@@ -165,10 +184,8 @@ export default function Home() {
         }
         throw Error(b.error);
       }
-      setLedger(b.data);
-      setRevision(b.revision);
+      if (!applySnapshot(b, r.headers.get("etag") || "")) return latestSnapshot.current;
       setAuth(false);
-      setLastRefreshed(new Date());
       const baseline = editorBaseline.current;
       if (baseline?.expense) {
         const current = b.data.trips.find(value => value.id === baseline.tripId)?.expenses.find(value => value.id === baseline.expense?.id);
@@ -176,11 +193,24 @@ export default function Home() {
       }
       return b;
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Unable to load your ledger");
+      if (requestId === loadRequest.current) setError(e instanceof Error ? e.message : "Unable to load your ledger");
     } finally {
-      setLoading(false);
+      if (requestId === loadRequest.current) setLoading(false);
     }
-  }, []);
+  }, [applySnapshot]);
+  useEffect(() => {
+    if (auth || saving || uploading || loading) return;
+    const controller = new AbortController();
+    const poll = async () => {
+      if (document.visibilityState !== "visible" || !navigator.onLine) return;
+      try {
+        const response = await fetch("/api/ledger", { method: "HEAD", cache: "no-store", signal: controller.signal, headers: savedEtag.current ? { "If-None-Match": savedEtag.current } : {} });
+        if (response.status === 401 || (response.ok && response.headers.get("etag") !== savedEtag.current)) await load();
+      } catch { /* Keep the current form; the online/focus refresh can retry. */ }
+    };
+    const timer = window.setInterval(() => void poll(), 30_000);
+    return () => { controller.abort(); window.clearInterval(timer); };
+  }, [auth, saving, uploading, loading, load]);
   useEffect(() => {
     Promise.resolve().then(() => {
       const params = new URLSearchParams(location.search);
@@ -223,6 +253,10 @@ export default function Home() {
     });
   }
   async function accountAuthenticated(p: Profile) {
+    loadRequest.current++;
+    latestSnapshot.current = { data: { trips: [] }, revision: 0 };
+    savedEtag.current = "";
+    setLedger({ trips: [] }); setRevision(0);
     setProfile(p);
     setAuth(false);
     setError("");
@@ -270,21 +304,23 @@ export default function Home() {
         const response = await fetch("/api/ledger", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ data: proposed, revision: token }) });
         const body = await response.json() as { data: Ledger; revision: number; error?: string };
         if (response.ok) {
-          setLedger(body.data); setRevision(body.revision); setLastRefreshed(new Date());
+          applySnapshot(body, response.headers.get("etag") || "", true);
           return true;
         }
         if (response.status !== 409) throw Error(body.error || "Unable to save this change.");
         const freshResponse = await fetch("/api/ledger", { cache: "no-store" });
         const fresh = await freshResponse.json() as { data: Ledger; revision: number; error?: string };
         if (!freshResponse.ok) throw Error(fresh.error || "Unable to refresh your ledger. Your edits are still here.");
-        setLedger(fresh.data); setRevision(fresh.revision); setLastRefreshed(new Date());
-        const rebased = rebaseLedger(ledger, data, fresh.data);
+        applySnapshot(fresh, freshResponse.headers.get("etag") || "", true);
+        const currentSnapshot = latestSnapshot.current;
+        if (hasNewMatchingPayment(ledger, data, currentSnapshot.data)) throw Error("Another traveller just recorded a matching payment. Your details are still here; review the duplicate warning and confirm again only if a separate transfer occurred.");
+        const rebased = rebaseLedger(ledger, data, currentSnapshot.data);
         if (rebased.conflicts.length) {
           const baseline = editorBaseline.current;
-          if (baseline?.expense) setEditorConflict({ latest: fresh.data.trips.find(t => t.id === baseline.tripId)?.expenses.find(e => e.id === baseline.expense?.id) || null });
+          if (baseline?.expense) setEditorConflict({ latest: currentSnapshot.data.trips.find(t => t.id === baseline.tripId)?.expenses.find(e => e.id === baseline.expense?.id) || null });
           throw Error("Another traveller changed the same entry. Your edits are still here; review the latest saved version before continuing.");
         }
-        proposed = rebased.data; token = fresh.revision;
+        proposed = rebased.data; token = currentSnapshot.revision;
       }
       throw Error("Your ledger changed again. Your entry is still here—press Save to try again.");
     } catch (e) {
@@ -302,7 +338,13 @@ export default function Home() {
   function editorIsCurrent(current: Trip | undefined = trip) {
     const baseline = editorBaseline.current;
     if (baseline && current?.id !== baseline.tripId) { setError("This holiday is no longer available. Your edits are still here."); return false; }
-    if (!baseline?.expense) return true;
+    if (!baseline?.expense) {
+      if (editing && current?.expenses.some(value => value.id === editing.id)) {
+        setError("This expense is already recorded. Your edits are still here; close this form and review its current version from Expenses.");
+        return false;
+      }
+      return true;
+    }
     const latest = current?.expenses.find(value => value.id === baseline.expense?.id);
     if (!equalFinancialValue(baseline.expense, latest)) {
       setEditorConflict({ latest: latest || null });
@@ -315,7 +357,7 @@ export default function Home() {
     if (!trip) return;
     editorBaseline.current = { tripId: trip.id, expense: structuredClone(expense) };
     setEditorConflict(null); setReferenceRate(null); resetReceiptReview();
-    setEditing({ ...structuredClone(expense), expenseId: expense.id });
+    setEditing({ ...structuredClone(expense), adjustmentAllocation: "selected-participants", expenseId: expense.id });
   }
   function keepExpenseEdits() {
     if (!editing || !editorConflict || !trip) return;
@@ -343,6 +385,7 @@ export default function Home() {
       id: uid(),
       title: "",
       source: "manual",
+      adjustmentAllocation: "selected-participants",
       date: today(),
       time: localTime(),
       timezone:
@@ -370,6 +413,7 @@ export default function Home() {
     setEditorConflict(null); setReferenceRate(null);
     setEditing({
       ...d,
+      adjustmentAllocation: "selected-participants",
       id: d.expenseId || d.id,
       date: d.date || today(),
       time: d.time || "12:00",
@@ -404,7 +448,7 @@ export default function Home() {
     }
     const previous = trip.drafts.find(draft => draft.id === entry.draftId || (target && draft.expenseId === target.id));
     const source = keepProposal && previous?.status === "review" && processedReceipt?.id === previous.id ? previous : entry;
-    const messages = mergeReceiptConversation(previous?.conversation, entry.conversation);
+    const messages = mergeReceiptConversation(mergeReceiptConversation(target?.conversation, previous?.conversation), entry.conversation);
     const draft: Draft = {
       id: previous?.id || entry.draftId || uid(),
       expenseId: target?.id,
@@ -427,6 +471,7 @@ export default function Home() {
       bankAmount: source.bankAmount,
       fx: source.fx,
       source: source.source || "manual",
+      adjustmentAllocation: source.adjustmentAllocation || "selected-participants",
       status: keepProposal && previous ? previous.status : "waiting",
     };
     const saved = await updateTrip({
@@ -517,11 +562,10 @@ export default function Home() {
       const response = await fetch("/api/ledger", { cache: "no-store" });
       const body = await response.json() as { data: Ledger; revision: number; error?: string };
       if (!response.ok) throw Error(body.error || "Unable to check this receipt.");
-      setLedger(body.data);
-      setRevision(body.revision);
-      setLastRefreshed(new Date());
-      editorIsCurrent(body.data.trips.find(value => value.id === trip.id));
-      const draft = body.data.trips.find(value => value.id === trip.id)?.drafts.find(value => value.id === draftId);
+      applySnapshot(body, response.headers.get("etag") || "", true);
+      const currentData = latestSnapshot.current.data;
+      editorIsCurrent(currentData.trips.find(value => value.id === trip.id));
+      const draft = currentData.trips.find(value => value.id === trip.id)?.drafts.find(value => value.id === draftId);
       if (!draft || draft.receiptId !== receiptId) throw Error("This receipt draft has changed or is no longer available. Your current edits are still here.");
       setEditing(prev => prev?.draftId === draftId ? { ...prev, conversation: draft.conversation } : prev);
       setProcessedReceipt(draft.status === "review" ? draft : null);
@@ -605,7 +649,7 @@ export default function Home() {
     if (editing.fx?.source === "manual" && editing.bankAmount === undefined) {
       const matchingReference = referenceRate && referenceRate.currency === editing.currency && referenceRate.date === editing.date && referenceRate.time === editing.time && referenceRate.timezone === editing.timezone ? referenceRate.rate : undefined;
       const suspicious = matchingReference ? Math.abs(editing.fx.rate / matchingReference - 1) > 0.1 : (["GBP", "EUR", "CHF", "USD"].includes(trip.currency) && (editing.fx.rate > 100 || editing.fx.rate < 0.0001));
-      if (suspicious && !window.confirm(`Check this manual rate: 1 ${editing.currency} = ${editing.fx.rate.toPrecision(8)} ${trip.currency}. The converted receipt is ${money(previewTotal(editing, trip) || 0, trip.currency)}. ${matchingReference ? "It differs by more than 10% from the reference rate." : "This conversion factor is unusually large or small."} Use this rate?`)) return;
+      if (suspicious && !await confirm({ title: "Check manual exchange rate", message: `1 ${editing.currency} = ${editing.fx.rate.toPrecision(8)} ${trip.currency}. The converted receipt is ${money(previewTotal(editing, trip) || 0, trip.currency)}. ${matchingReference ? "It differs by more than 10% from the reference rate." : "This conversion factor is unusually large or small."} Use this rate?`, confirmLabel: "Use this rate" })) return;
     }
     const splitError = receiptSplitError(editing) || editing.items.map(itemSplitError).find(Boolean);
     if (splitError) {
@@ -639,7 +683,7 @@ export default function Home() {
     const { draftId, ...expense } = editing;
     delete expense.expenseId;
     const latestDraft = trip.drafts.find(draft => draft.id === draftId);
-    expense.conversation = mergeReceiptConversation(latestDraft?.conversation, expense.conversation);
+    expense.conversation = mergeReceiptConversation(mergeReceiptConversation(trip.expenses.find(value => value.id === expense.id)?.conversation, latestDraft?.conversation), expense.conversation);
     const exists = trip.expenses.some((x) => x.id === expense.id);
     if (editing.expenseId && !exists) {
       setError("This expense was removed. It cannot be updated from this receipt draft.");
@@ -748,15 +792,17 @@ export default function Home() {
     if (suggestion && !updatedSuggestion) { setError("The balances changed and this transfer is no longer suggested. Check the refreshed balances before recording a payment."); return; }
     const from = current.members.find(member => member.userId === profile?.id)?.id || current.members[0].id;
     const entry: Payment = original || { id: uid(), from: updatedSuggestion?.from || from, to: updatedSuggestion?.to || current.members.find(member => member.id !== from)?.id || from, amount: updatedSuggestion?.amount || 0, date: today(), time: localTime(), timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "Europe/London" };
-    setPaymentEditor({ entry: structuredClone(entry), original: original && structuredClone(original), key: uid() });
+    setPaymentEditor({ entry: structuredClone(entry), original: original && structuredClone(original), tripId: current.id, key: uid() });
     setError("");
   }
   async function savePayment(payment: Payment) {
     if (!trip || !paymentEditor || saving) return false;
+    if (paymentEditor.tripId !== trip.id) { setError("This holiday changed. Your payment details are still here; reopen the original holiday to continue."); return false; }
     const current = trip.payments.find(value => value.id === payment.id);
+    if (current && !paymentEditor.original) { setError("This payment is already recorded. Your details are still here; close this form and review its current version from Balances."); return false; }
     if (paymentEditor.original && !current) { setError("This payment was removed. Your entered details are still here; record it as a new payment if needed."); return false; }
     if (paymentEditor.original && !equalSavedValue(paymentEditor.original, current)) {
-      if (!window.confirm(`The saved payment changed to ${name(current!.from)} paid ${name(current!.to)} ${money(current!.amount, trip.currency)} on ${current!.date}. Your version records ${name(payment.from)} paid ${name(payment.to)} ${money(payment.amount, trip.currency)} on ${payment.date}. Replace the saved payment with your version?`)) return false;
+      if (!await confirm({ title: "Compare changed payment", message: `The saved payment changed to ${name(current!.from)} paid ${name(current!.to)} ${money(current!.amount, trip.currency)} on ${current!.date}. Your version records ${name(payment.from)} paid ${name(payment.to)} ${money(payment.amount, trip.currency)} on ${payment.date}. Replace the saved payment with your version?`, confirmLabel: "Replace saved payment" })) return false;
     }
     const saved = await updateTrip({ ...trip, payments: current ? trip.payments.map(value => value.id === payment.id ? payment : value) : [...trip.payments, payment] });
     if (saved) setPaymentEditor(null);
@@ -768,6 +814,31 @@ export default function Home() {
     } catch {
       return null;
     }
+  }
+  async function reviewRestore(event: ActivityEvent) {
+    if (!trip || !event.before || event.tripId !== trip.id) return;
+    const fresh = await load();
+    const current = fresh?.data.trips.find(value => value.id === trip.id);
+    if (!current) return;
+    if (event.entityType === "payment") {
+      if (current.payments.some(value => value.id === event.entityId)) { setError("This payment is already recorded. Edit it from Balances if needed."); return; }
+      setPaymentEditor({ entry: structuredClone(event.before) as Payment, tripId: current.id, key: uid() });
+      return;
+    }
+    if (event.entityType !== "expense") return;
+    if (current.expenses.some(value => value.id === event.entityId)) { setError("This expense is already recorded. Edit its current version from Expenses."); return; }
+    const expense = structuredClone(event.before) as Expense;
+    if (expense.receiptId) {
+      try {
+        const response = await fetch("/api/receipt?id=" + encodeURIComponent(expense.receiptId), { cache: "no-store" });
+        await response.body?.cancel();
+        if (response.status === 404) delete expense.receiptId;
+        else if (!response.ok) throw Error("The receipt image could not be checked. Refresh and try restoring again.");
+      } catch (cause) { setError(cause instanceof Error ? cause.message : "Unable to check the saved receipt."); return; }
+    }
+    editorBaseline.current = { tripId: current.id };
+    setEditorConflict(null); setReferenceRate(null); resetReceiptReview(); setError("");
+    setEditing({ ...expense, adjustmentAllocation: "selected-participants", expenseId: undefined });
   }
   function previewTotal(e: Expense, t: Trip) {
     try {
@@ -901,10 +972,10 @@ export default function Home() {
               here. Reconnect before saving.
             </p>
           )}
-          <PwaUpdatePrompt canUpdate={!editing && !paymentEditor && !create && !account && !linkRequested && !saving && !uploading && view !== "settings"} />
+          <PwaUpdatePrompt canUpdate={!editing && !paymentEditor && !create && !account && !linkRequested && !confirming && !saving && !uploading && view !== "settings"} />
           {invite && (
             <JoinTrip
-              key={profile?.id || "anonymous"}
+              key={`${profile?.id || "anonymous"}:${invite}`}
               token={invite}
               onAuthenticate={requestAccount}
               onJoined={async (id) => {
@@ -1200,8 +1271,8 @@ export default function Home() {
                                   aria-label="Undo recorded payment"
                                   className="iconbutton"
                                   disabled={saving}
-                                  onClick={() => {
-                                    if (!window.confirm(`Remove the recorded payment of ${money(p.amount, trip.currency)} from ${name(p.from)} to ${name(p.to)}? It will remain in activity history.`)) return;
+                                  onClick={async () => {
+                                    if (!await confirm({ title: "Remove recorded payment?", message: `Remove the recorded payment of ${money(p.amount, trip.currency)} from ${name(p.from)} to ${name(p.to)}? It will remain in activity history.`, confirmLabel: "Remove payment", destructive: true })) return;
                                     void updateTrip({
                                       ...trip,
                                       payments: trip.payments.filter(
@@ -1219,7 +1290,7 @@ export default function Home() {
                       )}
                     </>
                   )}
-                  {view === "history" && <ActivityPanel tripId={trip.id} refreshKey={revision} currency={trip.currency} memberNames={Object.fromEntries(trip.members.map(member => [member.id, member.name]))} />}
+                  {view === "history" && <ActivityPanel tripId={trip.id} refreshKey={revision} currency={trip.currency} memberNames={Object.fromEntries(trip.members.map(member => [member.id, member.name]))} busy={saving || loading} onRestore={event => void reviewRestore(event)} />}
                   {view === "receipts" && (
                     <>
                       <div className="sectionheading">
@@ -1277,8 +1348,8 @@ export default function Home() {
                                 className="iconbutton"
                                 aria-label="Remove draft"
                                 disabled={saving}
-                                onClick={() => {
-                                  if (!window.confirm(`Remove the receipt draft “${d.title}”? Its removal will appear in activity history.`)) return;
+                                onClick={async () => {
+                                  if (!await confirm({ title: "Remove receipt draft?", message: `Remove the receipt draft “${d.title}”? Its removal will appear in activity history.`, confirmLabel: "Remove draft", destructive: true })) return;
                                   void updateTrip({
                                     ...trip,
                                     drafts: trip.drafts.filter(
@@ -1375,39 +1446,9 @@ export default function Home() {
                           </button>
                         </form>
                       </div>
-                      <TripSharing trip={trip} profile={profile} />
-                      <div className="panel settingspanel">
-                        <h3>Holiday details</h3>
-                        <form
-                          onSubmit={(e) => {
-                            e.preventDefault();
-                            const data = new FormData(e.currentTarget);
-                            updateTrip({
-                              ...trip,
-                              name: (data.get("name") as string).trim(),
-                            });
-                          }}
-                        >
-                          <label>
-                            Holiday name
-                            <input
-                              name="name"
-                              defaultValue={trip.name}
-                              key={trip.id}
-                              required
-                              maxLength={100}
-                            />
-                          </label>
-                          <button className="quiet" disabled={saving}>
-                            Save name
-                          </button>
-                        </form>
-                        <p className="footnote">
-                          Settle in {trip.currency}. Each expense keeps its
-                          original currency and transaction time; enter your
-                          bank’s charge for an exact reimbursement.
-                        </p>
-                      </div>
+                      <TripSharing key={`${trip.id}:${profile?.id || "anonymous"}`} trip={trip} profile={profile} />
+                      <TripDetails key={trip.id} trip={trip} busy={saving || loading} error={error} onSave={updateTrip} />
+                      <DataExport tripId={trip.id} compact />
                     </>
                   )}
                 </section>
@@ -1722,6 +1763,10 @@ export default function Home() {
                   prompt={receiptPrompt}
                   ready={!!processedReceipt}
                   onCapture={captureEditorReceipt}
+                  onRemove={async () => {
+                    if (!await confirm({ title: "Remove receipt image?", message: "Remove this receipt image when you save? Item details will be kept. The image will be deleted once no expense or draft uses it.", confirmLabel: "Remove image", destructive: true })) return;
+                    setEditing({ ...editing, receiptId: undefined }); setReceiptPending(false); resetReceiptReview();
+                  }}
                   onPreparingChange={setUploading}
                   onPrepare={prepareEditorReceipt}
                   onRefresh={() => checkEditorReceipt()}
@@ -1990,6 +2035,7 @@ export default function Home() {
                   <p className="footnote">
                     {editing.percentages === undefined ? "Tax, tip and discount are shared in proportion to each person’s items." : "Tax, tip and discount follow the whole receipt percentages."} Add tax only if it isn’t already in the item prices.
                   </p>
+                  {editing.percentages === undefined && editing.items.every(item => item.amount === 0) && editing.tax + editing.tip > editing.discount && <p className="notification-status" role="status">Added tax and tip on zero-priced items are shared between the people selected on those items.{editorBaseline.current?.expense?.adjustmentAllocation === undefined && editorBaseline.current?.expense ? " Saving changes the earlier split, which included every traveller." : ""}</p>}
                   <details className="import">
                     <summary>
                       Paste itemised data <ChevronDown size={15} />
@@ -2223,7 +2269,7 @@ export default function Home() {
                       disabled={saving}
                       onClick={async () => {
                         if (!editorIsCurrent()) return;
-                        if (!window.confirm(`Delete “${editing.title}” (${money(previewTotal(editing, trip) || 0, trip.currency)})? Its previous details will remain in activity history.`)) return;
+                        if (!await confirm({ title: "Delete expense?", message: `Delete “${editing.title}” (${money(previewTotal(editing, trip) || 0, trip.currency)})? Its previous details will remain in activity history.`, confirmLabel: "Delete expense", destructive: true })) return;
                         if (
                           await updateTrip({
                             ...trip,
@@ -2277,9 +2323,11 @@ export default function Home() {
           </section>
         </ModalA11y>
       )}
+      {confirmationDialog}
       {account && (
         <AccountPanel
           profile={profile}
+          trips={ledger.trips}
           onClose={() => setAccount(false)}
           onSaved={(p) => {
             setProfile(p);

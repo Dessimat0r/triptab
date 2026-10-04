@@ -1,13 +1,26 @@
-import { readLedger, writeLedger, sameOrigin, failure, readBoundedBody, ensureProfile } from '@/lib/store';
+import { db, readLedger, writeLedger, sameOrigin, failure, readBoundedBody, ensureProfile } from '@/lib/store';
+import { ledgerEtag } from '@/lib/ledger-freshness';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(r: Request) {
   try {
     const profile = await ensureProfile(r);
-    return Response.json(await readLedger(profile.id), { headers: { 'Cache-Control': 'private, no-store' } });
+    const tag = await ledgerEtag(db(), profile.id);
+    return Response.json(await readLedger(profile.id), { headers: { 'Cache-Control': 'private, no-store', ETag: tag } });
   } catch (e) {
     return failure(e);
+  }
+}
+
+export async function HEAD(request: Request) {
+  try {
+    const profile = await ensureProfile(request);
+    const tag = await ledgerEtag(db(), profile.id);
+    return new Response(null, { status: request.headers.get('if-none-match') === tag ? 304 : 200, headers: { 'Cache-Control': 'private, no-store', ETag: tag } });
+  } catch (error) {
+    const result = failure(error);
+    return new Response(null, { status: result.status, headers: result.headers });
   }
 }
 

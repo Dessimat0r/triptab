@@ -2,7 +2,9 @@
 import { useId, useState } from "react";
 import { X, UserRound, LogOut, Sparkles } from "lucide-react";
 import ModalA11y from "./modal-accessibility";
-import PwaControls from "./pwa-controls";
+import PwaControls, { clearBrowserNotifications } from "./pwa-controls";
+import DataExport from "./data-export";
+import type { Trip } from "@/lib/model";
 export type Profile = {
   id: string;
   email: string;
@@ -39,10 +41,12 @@ export default function AccountPanel({
   profile,
   onClose,
   onSaved,
+  trips = [],
 }: {
   profile: Profile | null;
   onClose: () => void;
   onSaved: (p: Profile) => void;
+  trips?: Pick<Trip, "id" | "name">[];
 }) {
   const id = useId();
   const [name, setName] = useState(profile?.displayName || ""),
@@ -305,7 +309,8 @@ export default function AccountPanel({
             holidays. ChatGPT and Codex are optional.
           </p>
         )}
-        <PwaControls />
+        {profile && <DataExport trips={trips} />}
+        <PwaControls accountId={profile?.id} />
         {profile && (
           <div className="account-signout">
             <button
@@ -321,6 +326,7 @@ export default function AccountPanel({
                     body: JSON.stringify({ action: "logout" }),
                   });
                   if (!response.ok) throw Error("Unable to sign out.");
+                  await clearBrowserNotifications().catch(() => {});
                   const destination =
                     profile.chatgptAvailable || profile.authMethod === "chatgpt"
                       ? "/signout-with-chatgpt?return_to=/"

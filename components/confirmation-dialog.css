@@ -1,0 +1,31 @@
+.confirmation-overlay {
+  z-index: 1100;
+}
+.confirmation-sheet {
+  max-width: 500px;
+  overflow-wrap: anywhere;
+}
+.confirmation-sheet h2 {
+  margin: 0 0 16px;
+  font-size: 1.25rem;
+}
+.confirmation-sheet p {
+  margin: 0 0 24px;
+  line-height: 1.6;
+  white-space: pre-line;
+}
+.confirmation-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 12px;
+}
+.confirmation-actions button {
+  min-height: 44px;
+  white-space: normal;
+}
+@media (max-width: 480px) {
+  .confirmation-overlay { padding: 16px; }
+  .confirmation-sheet { padding: 20px; max-height: calc(100dvh - 32px); }
+  .confirmation-actions button { flex: 1 1 100px; }
+}

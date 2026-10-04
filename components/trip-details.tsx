@@ -1,0 +1,125 @@
+"use client";
+
+import { useId, useState } from "react";
+import { Check } from "lucide-react";
+import { validCalendarDate } from "@/lib/dates";
+import type { Trip } from "@/lib/model";
+
+export type TripDetailsProps = {
+  trip: Trip;
+  busy: boolean;
+  error?: string;
+  onSave: (next: Trip) => Promise<boolean>;
+};
+
+type Member = Trip["members"][number];
+
+function TravellerName({ trip, member, index, busy, onSave }: {
+  trip: Trip; member: Member; index: number; busy: boolean; onSave: TripDetailsProps["onSave"];
+}) {
+  const id = useId();
+  const [draft, setDraft] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+  const [saved, setSaved] = useState(false);
+  const value = draft ?? member.name;
+  const locked = busy || submitting;
+  return <form className="traveller-name-form" onSubmit={async event => {
+    event.preventDefault();
+    if (locked) return;
+    setError("");
+    setSaved(false);
+    const name = value.trim();
+    if (!name || name.length > 50) { setError("Enter a traveller name between 1 and 50 characters."); return; }
+    if (trip.members.some(person => person.id !== member.id && person.name.trim().toLowerCase() === name.toLowerCase())) {
+      setError("Each traveller needs a different name. Add a surname or nickname."); return;
+    }
+    if (name === member.name) { setDraft(null); setSaved(true); return; }
+    setSubmitting(true);
+    try {
+      const next = { ...trip, members: trip.members.map(person => person.id === member.id ? { ...person, name } : person) };
+      if (await onSave(next)) { setDraft(null); setSaved(true); }
+      else setError("Unable to save this traveller name. Your edit is still here; try again.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Unable to save this traveller name. Your edit is still here.");
+    } finally { setSubmitting(false); }
+  }}>
+    <span className={`avatar color${index % 5}`} aria-hidden="true">{member.name.slice(0, 1).toUpperCase()}</span>
+    <div className="traveller-name-fields">
+      <label htmlFor={`${id}-name`}>Traveller {index + 1} name
+        <input id={`${id}-name`} value={value} required maxLength={50} disabled={locked} autoComplete="off" aria-describedby={`${id}-account${error ? " " + id + "-error" : ""}`} onChange={event => {
+          setDraft(event.target.value); setError(""); setSaved(false);
+        }} />
+      </label>
+      <p id={`${id}-account`} className="traveller-account-note">{member.userId ? "Account connected" : "Not linked to an account"}{member.email ? ` · ${member.email}` : ""}</p>
+      {error && <p id={`${id}-error`} className="trip-details-error" role="alert">{error}</p>}
+      {saved && <p className="trip-details-success" role="status"><Check size={15} aria-hidden="true" /> Traveller name saved.</p>}
+    </div>
+    <button type="submit" className="quiet" disabled={locked || value.trim() === member.name} aria-label={`Save traveller ${index + 1} name`}>{submitting ? "Saving…" : "Save"}</button>
+  </form>;
+}
+
+function TripDetailsForm({ trip, busy, error: externalError, onSave }: TripDetailsProps) {
+  const id = useId();
+  const [draft, setDraft] = useState<Partial<{ name: string; startDate: string; endDate: string }>>({});
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+  const [saved, setSaved] = useState(false);
+  const locked = busy || submitting;
+  const values = { name: draft.name ?? trip.name, startDate: draft.startDate ?? trip.startDate ?? "", endDate: draft.endDate ?? trip.endDate ?? "" };
+  const changed = values.name.trim() !== trip.name || values.startDate !== (trip.startDate || "") || values.endDate !== (trip.endDate || "");
+  function change(field: keyof typeof values, value: string) {
+    setDraft(previous => ({ ...previous, [field]: value })); setError(""); setSaved(false);
+  }
+  return <section className="panel trip-details-panel" aria-labelledby={`${id}-heading`}>
+    <h3 id={`${id}-heading`}>Holiday details</h3>
+    <p className="footnote">Travellers in this holiday can update its name, dates and display names.</p>
+    <form className="holiday-details-form" onSubmit={async event => {
+      event.preventDefault();
+      if (locked) return;
+      setError(""); setSaved(false);
+      const name = values.name.trim();
+      if (!name || name.length > 100) { setError("Enter a holiday name between 1 and 100 characters."); return; }
+      if (values.startDate && !validCalendarDate(values.startDate)) { setError("Enter a valid holiday start date."); return; }
+      if (values.endDate && !validCalendarDate(values.endDate)) { setError("Enter a valid holiday end date."); return; }
+      if (values.startDate && values.endDate && values.endDate < values.startDate) { setError("The end date must be on or after the start date."); return; }
+      const next: Trip = { ...trip, name };
+      if (values.startDate) next.startDate = values.startDate; else delete next.startDate;
+      if (values.endDate) next.endDate = values.endDate; else delete next.endDate;
+      setSubmitting(true);
+      try {
+        if (await onSave(next)) { setDraft({}); setSaved(true); }
+        else setError("Unable to save the holiday details. Your edits are still here; try again.");
+      } catch (cause) {
+        setError(cause instanceof Error ? cause.message : "Unable to save the holiday details. Your edits are still here.");
+      } finally { setSubmitting(false); }
+    }}>
+      <label htmlFor={`${id}-name`}>Holiday name
+        <input id={`${id}-name`} value={values.name} required maxLength={100} disabled={locked} onChange={event => change("name", event.target.value)} />
+      </label>
+      <div className="fieldpair holiday-dates">
+        <label htmlFor={`${id}-start`}>Start date (optional)
+          <input id={`${id}-start`} type="date" value={values.startDate} max={values.endDate || undefined} disabled={locked} onChange={event => change("startDate", event.target.value)} />
+        </label>
+        <label htmlFor={`${id}-end`}>End date (optional)
+          <input id={`${id}-end`} type="date" value={values.endDate} min={values.startDate || undefined} disabled={locked} onChange={event => change("endDate", event.target.value)} />
+        </label>
+      </div>
+      {(error || externalError) && <p className="error" role="alert">{externalError || error}</p>}
+      <div className="holiday-details-actions">
+        <button type="submit" className="quiet" disabled={locked || !changed}>{submitting ? "Saving…" : "Save holiday details"}</button>
+        {saved && <p className="trip-details-success" role="status"><Check size={15} aria-hidden="true" /> Holiday details saved.</p>}
+      </div>
+    </form>
+    <p className="footnote">Settle in {trip.currency}. Each expense keeps its original currency and transaction time. Saved expenses and payments keep the same traveller assignments when a display name changes.</p>
+    <div className="trip-traveller-names">
+      <h3>Traveller display names</h3>
+      <p className="footnote">These labels belong to this holiday. Connected accounts and personal profiles keep their identities.</p>
+      {trip.members.map((member, index) => <TravellerName key={member.id} trip={trip} member={member} index={index} busy={locked} onSave={onSave} />)}
+    </div>
+  </section>;
+}
+
+export default function TripDetails(props: TripDetailsProps) {
+  return <TripDetailsForm key={props.trip.id} {...props} />;
+}

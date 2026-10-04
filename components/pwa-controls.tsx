@@ -13,6 +13,33 @@ function keyBytes(v: string) {
   return Uint8Array.from(raw, (c) => c.charCodeAt(0));
 }
 
+export async function clearBrowserNotifications(registration?: ServiceWorkerRegistration, capturedSubscription?: PushSubscription) {
+  if (!("serviceWorker" in navigator)) return;
+  const reg = registration || await navigator.serviceWorker.getRegistration("/");
+  if (!reg) return;
+  const notifications = await reg.getNotifications?.();
+  for (const notification of notifications || []) notification.close();
+  const subscription = capturedSubscription || await reg.pushManager?.getSubscription();
+  if (subscription) await subscription.unsubscribe();
+}
+
+/** A browser subscription alone never means this account opted into updates. */
+export async function reconcileBrowserNotifications() {
+  if (!("serviceWorker" in navigator)) return { owned: false, publicKey: "", reset: false };
+  const reg = await navigator.serviceWorker.getRegistration("/")
+    || await navigator.serviceWorker.register("/sw.js", { scope: "/", updateViaCache: "none" });
+  const subscription = await reg.pushManager?.getSubscription();
+  const response = await fetch("/api/push", subscription ? {
+    method: "POST", headers: { "Content-Type": "application/json" }, cache: "no-store",
+    body: JSON.stringify({ mode: "status", endpoint: subscription.endpoint }),
+  } : { cache: "no-store" });
+  if (!response.ok && response.status !== 401) throw Error("Unable to check notification settings. Try again.");
+  const data = response.ok ? await response.json() as { ownsSubscription?: boolean; publicKey?: string } : {};
+  const owned = Boolean(subscription && data.ownsSubscription);
+  if (subscription && !owned) await clearBrowserNotifications(reg, subscription);
+  return { owned, publicKey: data.publicKey || "", reset: Boolean(subscription && !owned) };
+}
+
 export function PwaUpdatePrompt({ canUpdate = true }: { canUpdate?: boolean }) {
   const [waiting, setWaiting] = useState<ServiceWorker | null>(null);
   const [dismissed, setDismissed] = useState<ServiceWorker | null>(null);
@@ -83,7 +110,7 @@ export function PwaUpdatePrompt({ canUpdate = true }: { canUpdate?: boolean }) {
   </div>;
 }
 
-export default function PwaControls() {
+export default function PwaControls({ accountId }: { accountId?: string | null } = {}) {
   const [install, setInstall] = useState<InstallEvent | null>(null),
     [installed, setInstalled] = useState(false),
     [supported, setSupported] = useState(false),
@@ -114,30 +141,24 @@ export default function PwaControls() {
     window.addEventListener("beforeinstallprompt", listener);
     window.addEventListener("appinstalled", appInstalled);
     if ("serviceWorker" in navigator) {
-      navigator.serviceWorker
-        .register("/sw.js", { scope: "/", updateViaCache: "none" })
-        .then(async (reg) => {
-          const sub = await reg.pushManager?.getSubscription();
-          if (live) setEnabled(!!sub);
+      reconcileBrowserNotifications()
+        .then(result => {
+          if (!live) return;
+          setEnabled(result.owned);
+          setPublicKey(result.publicKey);
+          if (result.reset) setStatus("Notifications are off for this account. Enable them here if you want trip updates.");
         })
         .catch(() => {
           if (live)
-            setStatus("App installation is unavailable in this browser.");
+            setStatus("Notification settings are unavailable. Try again after refreshing.");
         });
-      fetch("/api/push")
-        .then((r) => r.json())
-        .then((b: unknown) => {
-          const data = b as { publicKey?: string };
-          if (live) setPublicKey(data.publicKey || "");
-        })
-        .catch(() => {});
     }
     return () => {
       live = false;
       window.removeEventListener("beforeinstallprompt", listener);
       window.removeEventListener("appinstalled", appInstalled);
     };
-  }, []);
+  }, [accountId]);
   async function toggle() {
     setBusy(true);
     setStatus("");
@@ -155,7 +176,7 @@ export default function PwaControls() {
             }),
           });
           if (!r.ok) throw Error("Unable to change notifications. Try again.");
-          await sub.unsubscribe();
+          await clearBrowserNotifications(reg, sub);
         }
         setEnabled(false);
         setStatus("Notifications turned off on this device.");
@@ -223,7 +244,7 @@ export default function PwaControls() {
       )}
       <button
         className="quiet wide"
-        disabled={busy || !supported}
+        disabled={busy || !supported || !accountId}
         onClick={toggle}
       >
         <Bell size={17} />

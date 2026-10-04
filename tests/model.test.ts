@@ -5,6 +5,7 @@ import {
   expenseTotal, itemSchema, itemShares, itemSplitError, receiptSplitError, settlements, shares, total, validateLedger,
   MAX_AMOUNT, paymentSchema, validExchangeRate,
   parseLedgerStructure, parseStoredTrip,
+  travellerFinancialPreview,
 } from '../lib/model';
 import type { Expense, Item, ReceiptMessage, Trip } from '../lib/model';
 
@@ -14,7 +15,7 @@ function expense(overrides: Partial<Expense> = {}): Expense {
     id: 'dinner', title: 'Dinner', date: '2026-08-15', time: '20:30', timezone: 'Europe/Paris',
     currency: 'EUR', payer: 'a',
     items: [{ id: 'food', name: 'Food', amount: 10001, members: ['a', 'b', 'c'] }],
-    tax: 0, tip: 0, discount: 0, fx: { rate: 0.85, asOf: '2026-08-14', source: 'reference' },
+    tax: 0, tip: 0, discount: 0, fx: { rate: 0.85, asOf: '2026-08-14', source: 'reference' }, adjustmentAllocation: 'selected-participants',
     ...overrides,
   };
 }
@@ -373,6 +374,123 @@ test('percentage costs flow through tax, tip, discount, conversion and actual ba
   assert.deepEqual(expenseShares(bankCharged, members, 'GBP'), [6861, 2940, 0]);
   assert.deepEqual(balances(trip([bankCharged])), [-6861, -2940, 9801]);
   assert.equal(sum(balances(trip([bankCharged]))), 0);
+});
+
+test('zero-priced items assign positive tax and tip only to their selected participant union', () => {
+  const dinner = expense({
+    payer: 'c',
+    items: [{ id: 'complimentary', name: 'Complimentary meal', amount: 0, members: ['b'] }],
+    tax: 101, tip: 2, discount: 1,
+  });
+  assert.equal(total(dinner), 102);
+  assert.deepEqual(shares(dinner, members), [0, 102, 0]);
+  assert.deepEqual(expenseShares(dinner, members, 'GBP'), [0, 87, 0]);
+  assert.deepEqual(balances(trip([dinner])), [0, -87, 87]);
+  validateLedger(ledger([dinner]));
+  const union = { ...dinner, tax: 101, tip: 0, discount: 0, items: [
+    { id: 'one', name: 'One', amount: 0, members: ['b'] },
+    { id: 'two', name: 'Two', amount: 0, members: ['b', 'c'] },
+    { id: 'three', name: 'Three', amount: 0, members: ['b'] },
+  ] };
+  assert.deepEqual(shares(union, members), [0, 51, 50], 'selecting someone on several items must not count them several times');
+  assert.deepEqual(expenseShares({ ...union, bankAmount: 5 }, members, 'GBP'), [0, 3, 2]);
+  assert.equal(sum(expenseShares({ ...union, bankAmount: 5 }, members, 'GBP')), 5);
+  assert.throws(() => shares({ ...dinner, items: [] }, members), /Choose at least one person/);
+});
+
+test('unversioned zero-price receipts preserve historical shares until explicitly saved with the corrected allocation rule', () => {
+  const historical = expense({
+    currency: 'GBP', fx: undefined, adjustmentAllocation: undefined,
+    items: [{ id: 'complimentary', name: 'Complimentary meal', amount: 0, members: ['b'] }],
+    tax: 100, tip: 1, discount: 0,
+  });
+  const oldTrip = trip([historical]);
+  assert.deepEqual(shares(historical, members), [34, 34, 33]);
+  assert.deepEqual(balances(oldTrip), [67, -34, -33]);
+  const parsed = parseStoredTrip(JSON.parse(JSON.stringify(oldTrip)));
+  assert.equal(parsed.expenses[0].adjustmentAllocation, undefined);
+  const untouched = validateLedger({ trips: [parsed] }, { previous: { trips: [oldTrip] } }).trips[0];
+  assert.equal(untouched.expenses[0].adjustmentAllocation, undefined);
+  assert.deepEqual(balances(untouched), [67, -34, -33]);
+  const modified = structuredClone(parsed);
+  modified.expenses[0].title = 'Reviewed complimentary meal';
+  const saved = validateLedger({ trips: [modified] }, { previous: { trips: [oldTrip] } }).trips[0];
+  assert.equal(saved.expenses[0].adjustmentAllocation, 'selected-participants');
+  assert.deepEqual(shares(saved.expenses[0], members), [0, 101, 0]);
+  assert.deepEqual(balances(saved), [101, -101, 0]);
+  const newTrip = validateLedger({ trips: [{ ...oldTrip, id: 'new-trip' }] }).trips[0];
+  assert.equal(newTrip.expenses[0].adjustmentAllocation, 'selected-participants');
+  assert.deepEqual(shares(newTrip.expenses[0], members), [0, 101, 0]);
+});
+
+test('waiting empty-item drafts accept allocation metadata without requiring completed receipt amounts', () => {
+  const holiday = trip([]);
+  holiday.drafts = [{ ...expense({ id: 'waiting', adjustmentAllocation: undefined }), items: [], fx: undefined, tax: 100, status: 'waiting' }];
+  const accepted = validateLedger({ trips: [holiday] }).trips[0].drafts[0];
+  assert.equal(accepted.adjustmentAllocation, 'selected-participants');
+  assert.equal(accepted.items.length, 0);
+  assert.equal(accepted.tax, 100);
+});
+
+test('receipt-wide percentages keep priority over selected zero-price-item participants', () => {
+  const dinner = expense({
+    items: [{ id: 'complimentary', name: 'Complimentary meal', amount: 0, members: ['b'] }],
+    tax: 101, tip: 2, discount: 1, percentages: { a: 70, c: 30 },
+  });
+  assert.deepEqual(shares(dinner, members), [71, 0, 31]);
+  assert.deepEqual(expenseShares(dinner, members, 'GBP'), [61, 0, 26]);
+  assert.deepEqual(expenseShares({ ...dinner, bankAmount: 103 }, members, 'GBP'), [72, 0, 31]);
+  validateLedger(ledger([dinner]));
+});
+
+test('traveller invitation previews exactly aggregate cost, upfront payments and transfers in settlement currency', () => {
+  const holiday = trip([
+    expense(),
+    expense({ id: 'taxi', currency: 'GBP', fx: undefined, payer: 'b', items: [{ id: 'taxi-item', name: 'Taxi', amount: 1201, members: ['a', 'b'] }] }),
+    expense({ id: 'bank', payer: 'c', bankAmount: 8777, percentages: { a: 70, b: 30 } }),
+  ]);
+  holiday.payments = [
+    { id: 'one', from: 'a', to: 'b', amount: 900, date: '2026-08-16' },
+    { id: 'two', from: 'b', to: 'a', amount: 200, date: '2026-08-16' },
+    { id: 'three', from: 'c', to: 'a', amount: 300, date: '2026-08-16' },
+  ];
+  assert.deepEqual(travellerFinancialPreview(holiday, 'a'), {
+    available: true, currency: 'GBP', expenseCount: 3, paymentCount: 3,
+    costShare: 9579, paidUpfront: 8501, paymentsSent: 900, paymentsReceived: 500, netBalance: -678,
+  });
+  assert.deepEqual(travellerFinancialPreview(holiday, 'c'), {
+    available: true, currency: 'GBP', expenseCount: 2, paymentCount: 1,
+    costShare: 2833, paidUpfront: 8777, paymentsSent: 300, paymentsReceived: 0, netBalance: 6244,
+  });
+  members.forEach((member, index) => {
+    const preview = travellerFinancialPreview(holiday, member.id);
+    assert.equal(preview.available, true);
+    if (preview.available) assert.equal(preview.netBalance, balances(holiday)[index]);
+  });
+});
+
+test('traveller invitation previews expose no invented financial amounts for invalid legacy receipts or transfers', () => {
+  const cases = [
+    trip([expense({ bankAmount: 0 })]),
+    trip([expense({ currency: 'GBP', bankAmount: 8700 })]),
+    trip([expense({ items: [{ id: 'zero', name: 'Zero', amount: 0, members: ['a'] }] })]),
+    trip([expense({ fx: { rate: 1e11, asOf: '2026-08-15', source: 'manual' } })]),
+  ];
+  const invalidPayment = trip();
+  invalidPayment.payments = [{ id: 'invalid', from: 'a', to: 'b', amount: MAX_AMOUNT + 1, date: '2026-08-16' }];
+  cases.push(invalidPayment);
+  for (const holiday of cases) {
+    const preview = travellerFinancialPreview(holiday, 'a');
+    assert.equal(preview.available, false);
+    assert.equal(preview.currency, 'GBP');
+    assert.equal(preview.expenseCount, 1);
+    assert.equal('costShare' in preview, false);
+    assert.equal('netBalance' in preview, false);
+    if (!preview.available) assert.ok(preview.message.length);
+  }
+  const missing = travellerFinancialPreview(trip(), 'missing');
+  assert.equal(missing.available, false);
+  if (!missing.available) assert.match(missing.message, /no longer in the holiday/);
 });
 
 test('rejects invalid explicit percentages in both the schema and share calculation', () => {

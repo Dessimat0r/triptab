@@ -54,14 +54,19 @@ const binding: { DB?: D1Database } = {};
 const notifications: unknown[][] = [];
 Object.defineProperty(globalThis, Symbol.for('triptab.store-test-env'), { value: binding, configurable: true });
 Object.defineProperty(globalThis, Symbol.for('triptab.store-test-notifications'), { value: notifications, configurable: true });
-const envUrl = 'data:text/javascript;base64,' + Buffer.from("export const env=globalThis[Symbol.for('triptab.store-test-env')];").toString('base64');
-const notificationUrl = 'data:text/javascript;base64,' + Buffer.from("export const notifyMembers=async(...args)=>{globalThis[Symbol.for('triptab.store-test-notifications')].push(args);};").toString('base64');
+const envUrl = 'data:text/javascript;base64,' + Buffer.from("export const env=globalThis[Symbol.for('triptab.store-test-env')]; export const waitUntil=()=>{};").toString('base64');
+const notificationStoreUrl = 'data:text/javascript;base64,' + Buffer.from("export const db=()=>{throw new Error('Notification transport must be mocked');}; export class RequestError extends Error {}").toString('base64');
+const notificationSource = transpileModule(await readFile(new URL('../lib/notifications.ts', import.meta.url), 'utf8'), { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
+  .replace("'cloudflare:workers'", JSON.stringify(envUrl)).replace("'./store'", JSON.stringify(notificationStoreUrl));
+const notificationFormatterUrl = 'data:text/javascript;base64,' + Buffer.from(notificationSource).toString('base64');
+const notificationUrl = 'data:text/javascript;base64,' + Buffer.from(`export {activityNotification} from ${JSON.stringify(notificationFormatterUrl)}; export const notifyMembers=async(...args)=>{globalThis[Symbol.for('triptab.store-test-notifications')].push(args);};`).toString('base64');
 const source = await readFile(new URL('../lib/store.ts', import.meta.url), 'utf8');
 const compiled = transpileModule(source, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
   .replace("'zod'", JSON.stringify(pathToFileURL(createRequire(import.meta.url).resolve('zod').replace(/\.cjs$/, '.js')).href))
   .replace("'cloudflare:workers'", JSON.stringify(envUrl))
   .replace("'./model'", JSON.stringify(new URL('../lib/model.ts', import.meta.url).href))
   .replace("'./auth'", JSON.stringify(new URL('../lib/auth.ts', import.meta.url).href))
+  .replace("'./receipt-lifecycle'", JSON.stringify(new URL('../lib/receipt-lifecycle.ts', import.meta.url).href))
   .replace("'./notifications'", JSON.stringify(notificationUrl));
 const storeUrl = 'data:text/javascript;base64,' + Buffer.from(compiled).toString('base64');
 const store = await import(storeUrl) as typeof import('../lib/store');
@@ -93,6 +98,20 @@ async function create(database: SQLiteD1, holiday = trip()) {
 }
 async function history(user = actor, id = 'trip-1') { return (await store.readActivity(user, id, { limit: 50 })).events; }
 function lastEntity(events: ActivityEvent[], type: string, id: string) { return events.find(event => event.entityType === type && event.entityId === id)!; }
+async function ledgerRoute() {
+  const routeSource = await readFile(new URL('../app/api/ledger/route.ts', import.meta.url), 'utf8');
+  const routeCompiled = transpileModule(routeSource, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
+    .replace("'@/lib/store'", JSON.stringify(storeUrl))
+    .replace("'@/lib/ledger-freshness'", JSON.stringify(new URL('../lib/ledger-freshness.ts', import.meta.url).href));
+  return import('data:text/javascript;base64,' + Buffer.from(routeCompiled).toString('base64')) as Promise<{ POST(request: Request): Promise<Response> }>;
+}
+function saveRequest(data: unknown, revision: number) {
+  return new Request('https://triptab.test/api/ledger', {
+    method: 'POST',
+    headers: { 'oai-authenticated-user-id': actor, 'oai-authenticated-user-email': 'owner@example.com', 'oai-authenticated-user-full-name': 'Original%20Owner', origin: 'https://triptab.test', 'content-type': 'application/json' },
+    body: JSON.stringify({ data, revision }),
+  });
+}
 
 function seedLegacy(database: SQLiteD1) {
   const holiday = trip('legacy-trip');
@@ -312,8 +331,14 @@ test('notifications describe committed actors/events and skip draft-only saves a
   assert.equal(notifications[0][2], 'TripTab activity');
   assert.match(String(notifications[0][3]), /Original Owner added an expense/);
   assert.doesNotMatch(String(notifications[0][2]), /Lisbon/);
+  state.data.trips[0].expenses.push({ ...dinner(), id: 'second' }, { ...dinner(), id: 'third' });
+  state = await store.writeLedger(actor, state.data, state.revision);
+  assert.match(String(notifications[1][3]), /Original Owner added 2 expenses/);
+  state.data.trips[0].expenses = state.data.trips[0].expenses.filter(expense => expense.id === 'dinner');
+  state = await store.writeLedger(actor, state.data, state.revision);
+  assert.match(String(notifications[2][3]), /Original Owner removed 2 expenses/);
   await assert.rejects(store.writeLedger(actor, state.data, state.revision - 1), /CONFLICT/);
-  assert.equal(notifications.length, 1);
+  assert.equal(notifications.length, 3);
 });
 
 test('history is immutable in SQLite and paginated without duplication as newer events arrive', async () => {
@@ -357,7 +382,9 @@ test('ledger HTTP saves log trusted actors and reject unauthenticated, cross-ori
   context.mock.method(console, 'error', () => {});
   const database = await storage();
   const routeSource = await readFile(new URL('../app/api/ledger/route.ts', import.meta.url), 'utf8');
-  const routeCompiled = transpileModule(routeSource, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText.replace("'@/lib/store'", JSON.stringify(storeUrl));
+  const routeCompiled = transpileModule(routeSource, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
+    .replace("'@/lib/store'", JSON.stringify(storeUrl))
+    .replace("'@/lib/ledger-freshness'", JSON.stringify(new URL('../lib/ledger-freshness.ts', import.meta.url).href));
   const route = await import('data:text/javascript;base64,' + Buffer.from(routeCompiled).toString('base64')) as { POST(request: Request): Promise<Response> };
   const headers = { 'oai-authenticated-user-id': actor, 'oai-authenticated-user-email': 'owner@example.com', 'oai-authenticated-user-full-name': 'Original%20Owner' };
   const body = JSON.stringify({ data: { trips: [trip()] }, revision: 0, actorId: 'forged', actorName: 'Forged', source: 'chatgpt' });
@@ -387,6 +414,60 @@ test('ledger validation reports the first field and does not echo arbitrary enum
   assert.match(body.error, /supported value/);
   assert.doesNotMatch(body.error, /SENSITIVE-INPUT-VALUE/);
   assert.equal(errors.mock.callCount(), 0);
+});
+
+test('ledger HTTP business validation returns actionable errors without committing data or logging submitted values', async context => {
+  const errors = context.mock.method(console, 'error', () => {});
+  const route = await ledgerRoute();
+  const cases: { name: string; change(holiday: Trip): void; message: RegExp }[] = [
+    { name: 'same-currency bank charge', change: holiday => { holiday.expenses[0].bankAmount = 100; }, message: /Remove the bank charge.*currencies are the same/ },
+    { name: 'zero receipt total', change: holiday => { holiday.expenses[0].discount = 12345; }, message: /Receipt total must be greater than zero/ },
+    { name: 'missing foreign exchange', change: holiday => { holiday.expenses[0].currency = 'EUR'; }, message: /Add an exchange rate or the actual bank charge/ },
+    { name: 'discount exceeds receipt', change: holiday => { holiday.expenses[0].discount = 12346; }, message: /Discount exceeds total/ },
+    { name: 'absurd converted amount', change: holiday => {
+      holiday.expenses[0].currency = 'EUR';
+      holiday.expenses[0].fx = { rate: 1e20, asOf: '2026-10-04', source: 'manual' };
+    }, message: /Converted amount is out of range.*Check the exchange rate/ },
+    { name: 'converted amount above the supported money limit', change: holiday => {
+      holiday.expenses[0].currency = 'EUR';
+      holiday.expenses[0].fx = { rate: 10000, asOf: '2026-10-04', source: 'manual' };
+    }, message: /Converted amount is out of range.*maximum 1,000,000 settlement currency units/ },
+    { name: 'duplicate traveller name', change: holiday => { holiday.members[1].name = ' original owner '; }, message: /Traveller names must be unique.*surname or nickname/ },
+  ];
+  for (const scenario of cases) await context.test(scenario.name, async () => {
+    const database = await storage();
+    const state = await create(database);
+    const initialEvents = count(database);
+    const original = database.sqlite.prepare('SELECT data FROM trips WHERE id=?').get('trip-1')?.data;
+    state.data.trips[0].expenses.push(dinner());
+    scenario.change(state.data.trips[0]);
+    const response = await route.POST(saveRequest(state.data, state.revision));
+    assert.equal(response.status, 400);
+    assert.equal(response.headers.get('cache-control'), 'private, no-store');
+    assert.match((await response.json() as { error: string }).error, scenario.message);
+    assert.equal(database.sqlite.prepare('SELECT data FROM trips WHERE id=?').get('trip-1')?.data, original);
+    assert.equal(database.sqlite.prepare('SELECT revision FROM sync_state WHERE id=1').get()?.revision, state.revision);
+    assert.equal(count(database), initialEvents);
+  });
+  assert.equal(errors.mock.callCount(), 0);
+});
+
+test('ledger HTTP unexpected SQLite failure remains generic and rolls back all financial and audit effects', async context => {
+  const errors = context.mock.method(console, 'error', () => {});
+  const database = await storage();
+  const state = await create(database);
+  const initialEvents = count(database);
+  const original = database.sqlite.prepare('SELECT data FROM trips WHERE id=?').get('trip-1')?.data;
+  database.sqlite.exec("CREATE TRIGGER refuse_trip_update BEFORE UPDATE ON trips BEGIN SELECT RAISE(ABORT, 'PRIVATE_DATABASE_CONFIGURATION'); END;");
+  state.data.trips[0].expenses.push(dinner());
+  const response = await (await ledgerRoute()).POST(saveRequest(state.data, state.revision));
+  assert.equal(response.status, 400);
+  assert.deepEqual(await response.json(), { error: 'Unable to complete this request. Check your entries and try again.' });
+  assert.equal(errors.mock.callCount(), 1);
+  assert.doesNotMatch(JSON.stringify(errors.mock.calls[0].arguments), /PRIVATE_DATABASE_CONFIGURATION/);
+  assert.equal(database.sqlite.prepare('SELECT data FROM trips WHERE id=?').get('trip-1')?.data, original);
+  assert.equal(database.sqlite.prepare('SELECT revision FROM sync_state WHERE id=1').get()?.revision, state.revision);
+  assert.equal(count(database), initialEvents);
 });
 
 test('unchanged historical invalid bank charges/names do not block unrelated trip saves or alter legacy money', async () => {

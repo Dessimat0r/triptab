@@ -62,7 +62,14 @@ export const invites = sqliteTable('invites', {
 export const receipts = sqliteTable('receipts', {
   id: text('id').primaryKey(), owner: text('owner').notNull(),
   tripId: text('trip_id').notNull().references(() => trips.id, { onDelete: 'cascade' }),
-}, table => [index('receipts_trip_idx').on(table.tripId)]);
+  // Empty dates on historical uploads mean "unknown", not a fabricated age.
+  createdAt: text('created_at').notNull().default(''),
+  state: text('state', { enum: ['pending', 'active', 'deleting'] }).notNull().default('active'),
+}, table => [
+  index('receipts_trip_idx').on(table.tripId),
+  index('receipts_owner_idx').on(table.owner),
+  index('receipts_cleanup_idx').on(table.state, table.createdAt),
+]);
 
 export const syncState = sqliteTable('sync_state', {
   id: integer('id').primaryKey(), revision: integer('revision').notNull().default(0), lastWrite: text('last_write').notNull().default(''),

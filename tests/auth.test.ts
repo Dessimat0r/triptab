@@ -330,8 +330,10 @@ test('HTTP auth endpoint enforces same origin, JSON, body bounds and private res
   Object.defineProperty(globalThis, Symbol.for('triptab.auth-test-store'), { value: store, configurable: true });
   const storeURL = 'data:text/javascript;base64,' + Buffer.from(`const store=globalThis[Symbol.for('triptab.auth-test-store')];${Object.keys(store).map(key => `export const ${key}=store.${key};`).join('\n')}`).toString('base64');
   const source = await readFile(new URL('../app/api/auth/route.ts', import.meta.url), 'utf8');
+  const notificationsURL = 'data:text/javascript;base64,' + Buffer.from("export const browserPushCookie=async()=> 'tt_push=; Path=/; HttpOnly; Max-Age=0'; export const revokeBrowserPush=async()=>{};").toString('base64');
   const compiled = transpileModule(source, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
     .replace("'@/lib/auth'", JSON.stringify(new URL('../lib/auth.ts', import.meta.url).href))
+    .replace("'@/lib/notifications'", JSON.stringify(notificationsURL))
     .replace("'@/lib/store'", JSON.stringify(storeURL));
   const route = await import('data:text/javascript;base64,' + Buffer.from(compiled).toString('base64')) as { POST(value: Request): Promise<Response>; GET(value: Request): Promise<Response> };
   function post(origin: string, body: string, contentType = 'application/json') {

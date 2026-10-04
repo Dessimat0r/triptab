@@ -9,6 +9,8 @@ export type ActivityPanelProps = {
   refreshKey?: number;
   currency?: Currency;
   memberNames?: Record<string, string>;
+  onRestore?: (event: ActivityEvent) => void;
+  busy?: boolean;
 };
 
 type Page = { events: ActivityEvent[]; nextCursor: number | null };
@@ -81,6 +83,10 @@ function changes(event: ActivityEvent, currency: Currency | undefined, names: Re
     if (!same(before[key], after[key])) result.push({ label, before: before[key] ? names[text(before[key])] || "Previous traveller" : "Not recorded", after: after[key] ? names[text(after[key])] || "Selected traveller" : "Not recorded" });
   }
   if (!same(before.percentages, after.percentages)) result.push({ label: "Whole-receipt split", before: percentages(before.percentages, names), after: percentages(after.percentages, names) });
+  if (!same(before.adjustmentAllocation, after.adjustmentAllocation)) {
+    const policy = (value: unknown) => value === "selected-participants" ? "People selected on receipt items" : "Earlier rule: all travellers";
+    result.push({ label: "Adjustment split when item prices are zero", before: policy(before.adjustmentAllocation), after: policy(after.adjustmentAllocation) });
+  }
   if (!same(before.fx, after.fx)) {
     const rate = (value: unknown) => {
       const fx = record(value);
@@ -125,7 +131,7 @@ function eventLabel(event: ActivityEvent, currency?: Currency): string {
   return text(snapshot.title) || text(snapshot.name) || ({ trip: "Holiday", expense: "Expense", member: "Traveller", draft: "Receipt draft" }[event.entityType]) || "Entry";
 }
 
-export default function ActivityPanel({ tripId, refreshKey = 0, currency, memberNames = {} }: ActivityPanelProps) {
+export default function ActivityPanel({ tripId, refreshKey = 0, currency, memberNames = {}, onRestore, busy = false }: ActivityPanelProps) {
   const [attempt, setAttempt] = useState(0);
   const key = `${tripId}:${refreshKey}:${attempt}`;
   const [state, setState] = useState<State>({ key: "", events: [], nextCursor: null, loading: true, error: "" });
@@ -195,6 +201,7 @@ export default function ActivityPanel({ tripId, refreshKey = 0, currency, member
                   </dl>
                 ) : <p className="footnote">Entry metadata changed.</p>}
               </details>
+              {onRestore && event.action === "delete" && event.before && ["expense", "payment"].includes(event.entityType) && <button type="button" className="quiet" disabled={busy} onClick={() => onRestore(event)}>Review {event.entityType} to restore</button>}
             </li>
           );
         })}

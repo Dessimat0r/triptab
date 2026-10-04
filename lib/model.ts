@@ -1,6 +1,14 @@
 import { z } from 'zod';
 import { validCalendarDate } from './dates';
 
+/** Deliberate, safe-to-show business-rule failures. Unexpected errors stay private. */
+export class LedgerValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'LedgerValidationError';
+  }
+}
+
 export const CURRENCIES = [
   { code: 'GBP', name: 'British pound' },
   { code: 'EUR', name: 'Euro' },
@@ -128,6 +136,7 @@ export const expenseSchema = z.object({
   currency: currencySchema.default('EUR'), fx: fxSchema.optional(), bankAmount: bankAmountSchema.optional(),
   payer: id, items: z.array(itemSchema).min(1).max(200),
   percentages: percentagesSchema.optional(),
+  adjustmentAllocation: z.literal('selected-participants').optional(),
   source: z.enum(['manual', 'ai']).optional(),
   conversation: conversationSchema.optional(),
   tax: cents, tip: cents, discount: cents, receiptId: id.optional(),
@@ -138,6 +147,7 @@ export const draftSchema = z.object({
   date: dateSchema.optional(), time: timeSchema.optional(), timezone: timezoneSchema.optional(),
   fx: fxSchema.optional(), bankAmount: bankAmountSchema.optional(),
   percentages: percentagesSchema.optional(),
+  adjustmentAllocation: z.literal('selected-participants').optional(),
   source: z.enum(['manual', 'ai']).optional(),
   conversation: conversationSchema.optional(),
   items: z.array(itemSchema).max(200), tax: cents, tip: cents, discount: cents,
@@ -207,11 +217,11 @@ export function validateLedger(data: unknown, options: { previous?: Ledger } = {
   const previous = options.previous && parseLedgerStructure(options.previous);
   const ledger = previous ? parseLedgerStructure(data) : ledgerSchema.parse(data);
   const unique = (values: string[]) => new Set(values).size === values.length;
-  if (!unique(ledger.trips.map(trip => trip.id))) throw new Error('Duplicate trips');
+  if (!unique(ledger.trips.map(trip => trip.id))) throw new LedgerValidationError('Duplicate trips');
   for (const trip of ledger.trips) {
     const prior = previous?.trips.find(value => value.id === trip.id);
     if (trip.startDate && trip.endDate && trip.endDate < trip.startDate) {
-      throw new Error('Holiday end date must be on or after its start date');
+      throw new LedgerValidationError('Holiday end date must be on or after its start date');
     }
     const memberIds = new Set(trip.members.map(member => member.id));
     const namesUnchanged = !!prior && prior.members.length === trip.members.length
@@ -221,18 +231,18 @@ export function validateLedger(data: unknown, options: { previous?: Ledger } = {
       const old = prior?.members.find(value => value.id === member.id);
       if (!old || old.name !== member.name) member.name = memberSchema.shape.name.parse(member.name);
       const name = member.name.trim().toLowerCase();
-      if (!namesUnchanged && memberNames.has(name)) throw new Error(`Traveller names must be unique. “${member.name}” is repeated; add a surname or nickname.`);
+      if (!namesUnchanged && memberNames.has(name)) throw new LedgerValidationError(`Traveller names must be unique. “${member.name}” is repeated; add a surname or nickname.`);
       memberNames.add(name);
     }
     if (memberIds.size !== trip.members.length
       || !unique([...trip.expenses, ...trip.drafts].map(expense => expense.id))
-      || !unique(trip.payments.map(payment => payment.id))) throw new Error('Duplicate IDs');
+      || !unique(trip.payments.map(payment => payment.id))) throw new LedgerValidationError('Duplicate IDs');
     const expenseIds = new Set(trip.expenses.map(expense => expense.id));
     const draftTargets = trip.drafts.flatMap(draft => draft.expenseId === undefined ? [] : [draft.expenseId]);
     if (draftTargets.some(expenseId => !expenseIds.has(expenseId))) {
-      throw new Error('Receipt draft targets an expense that is not in this trip');
+      throw new LedgerValidationError('Receipt draft targets an expense that is not in this trip');
     }
-    if (!unique(draftTargets)) throw new Error('An expense can only have one pending receipt draft');
+    if (!unique(draftTargets)) throw new LedgerValidationError('An expense can only have one pending receipt draft');
     const unchanged = new Set<Expense | Draft>();
     if (prior?.currency === trip.currency) {
       for (const entry of trip.expenses) if (sameStoredValue(entry, prior.expenses.find(old => old.id === entry.id))) unchanged.add(entry);
@@ -242,40 +252,49 @@ export function validateLedger(data: unknown, options: { previous?: Ledger } = {
       if (!unchanged.has(expense)) {
         if ('status' in expense) draftSchema.parse(expense);
         else expenseSchema.parse(expense);
+        // Keep the old absence on untouched historical records. An explicitly
+        // saved new/modified record adopts the corrected adjustment rule.
+        expense.adjustmentAllocation = 'selected-participants';
       }
       if (!unchanged.has(expense) && expense.currency === trip.currency && expense.bankAmount !== undefined) {
-        throw new Error('Remove the bank charge when the receipt and settlement currencies are the same');
+        throw new LedgerValidationError('Remove the bank charge when the receipt and settlement currencies are the same');
       }
-      if (!memberIds.has(expense.payer)) throw new Error('Choose a trip member as payer');
+      if (!memberIds.has(expense.payer)) throw new LedgerValidationError('Choose a trip member as payer');
       if (expense.percentages && Object.keys(expense.percentages).some(member => !memberIds.has(member))) {
-        throw new Error('Check receipt percentage assignments');
+        throw new LedgerValidationError('Check receipt percentage assignments');
       }
-      if (!unique(expense.items.map(item => item.id))) throw new Error('Duplicate item IDs');
+      if (!unique(expense.items.map(item => item.id))) throw new LedgerValidationError('Duplicate item IDs');
       for (const item of expense.items) {
         if (!unique(item.members) || item.members.some(member => !memberIds.has(member))) {
-          throw new Error('Check item assignments');
+          throw new LedgerValidationError('Check item assignments');
         }
       }
       if (total(expense) < 0) {
-        throw new Error('Discount exceeds total');
+        throw new LedgerValidationError('Discount exceeds total');
       }
     }
     for (const expense of trip.expenses) {
       if (unchanged.has(expense)) continue;
       if (expense.currency !== trip.currency && expense.bankAmount === undefined && !expense.fx) {
-        throw new Error('Add an exchange rate or the actual bank charge for this currency');
+        throw new LedgerValidationError('Add an exchange rate or the actual bank charge for this currency');
       }
       expenseTotal(expense, trip.currency);
     }
     for (const payment of trip.payments) {
       if (!memberIds.has(payment.from) || !memberIds.has(payment.to)
-        || payment.from === payment.to || !payment.amount) throw new Error('Invalid payment');
+        || payment.from === payment.to || !payment.amount) throw new LedgerValidationError('Invalid payment');
     }
   }
   return ledger;
 }
 
-/** Largest-remainder allocation keeps every penny and resolves ties by input order. */
+/**
+ * Largest-remainder allocation keeps every penny and resolves exact ties by
+ * input order. Items use their selected-person order; receipt percentages use
+ * their stored key order; adjustments/conversion use trip-member order.
+ * Changing the tie policy needs a versioned calculation rule, because applying
+ * a rotation to old receipts would change historical balances on the next read.
+ */
 export function allocate(amount: number, weights: number[]): number[] {
   if (!Number.isSafeInteger(amount) || amount < 0 || weights.some(weight => !Number.isFinite(weight) || weight < 0)) {
     throw new Error('Allocation needs a non-negative whole amount and finite weights');
@@ -304,11 +323,11 @@ export function allocate(amount: number, weights: number[]): number[] {
   return output;
 }
 
-type OriginalAmounts = Pick<Expense, 'items' | 'tax' | 'tip' | 'discount' | 'percentages'>;
+type OriginalAmounts = Pick<Expense, 'items' | 'tax' | 'tip' | 'discount' | 'percentages' | 'adjustmentAllocation'>;
 function addAmount(left: number, right: number): number {
   const result = left + right;
   if (!Number.isSafeInteger(left) || !Number.isSafeInteger(right) || !Number.isSafeInteger(result)) {
-    throw new Error('Amount is out of range');
+    throw new LedgerValidationError('Amount is out of range');
   }
   return result;
 }
@@ -357,14 +376,20 @@ export function shares(expense: OriginalAmounts, members: { id: string }[]): num
     itemShares(item, members).forEach((amount, index) => { sums[index] = addAmount(sums[index], amount); });
   }
   const adjustment = addAmount(addAmount(expense.tax, expense.tip), -expense.discount);
-  const amounts = allocate(Math.abs(adjustment), sums.some(Boolean) ? sums : members.map(() => 1));
+  // The corrected rule counts the selected-person union once each. Historical
+  // receipts without a version retain their old shares until explicitly saved.
+  const selected = new Set(expense.items.flatMap(item => item.members));
+  const weights = sums.some(Boolean) ? sums : expense.adjustmentAllocation === 'selected-participants'
+    ? members.map(member => selected.has(member.id) ? 1 : 0) : members.map(() => 1);
+  if (adjustment && !weights.some(Boolean)) throw new Error('Choose at least one person for receipt adjustments');
+  const amounts = allocate(Math.abs(adjustment), weights);
   return sums.map((sum, index) => addAmount(sum, adjustment < 0 ? -amounts[index] : amounts[index]));
 }
 
 /** Rates are units of settlement currency per one unit of receipt currency. */
 export function convertAmount(original: number, rate: number): number {
   if (!Number.isSafeInteger(original) || original < 0 || !validExchangeRate(rate)) {
-    throw new Error('Conversion needs a non-negative whole amount and a positive finite rate');
+    throw new LedgerValidationError('Conversion needs a non-negative whole amount and a positive finite rate');
   }
   // Parse the persisted decimal rate as a rational number, including scientific
   // notation. Rounding the rational avoids half-cent errors such as 50 * 0.29.
@@ -376,27 +401,27 @@ export function convertAmount(original: number, rate: number): number {
   const denominator = scale > 0 ? power : BigInt(1);
   const rounded = numerator / denominator + (numerator % denominator * BigInt(2) >= denominator ? BigInt(1) : BigInt(0));
   const converted = Number(rounded);
-  if (!Number.isSafeInteger(converted)) throw new Error('Converted amount is out of range');
+  if (!Number.isSafeInteger(converted)) throw new LedgerValidationError('Converted amount is out of range. Check the exchange rate and receipt amounts.');
   return converted;
 }
 
 export function expenseTotal(expense: Expense, baseCurrency: Currency): number {
   const original = total(expense);
-  if (original <= 0) throw new Error('Receipt total must be greater than zero');
+  if (original <= 0) throw new LedgerValidationError('Receipt total must be greater than zero');
   if (expense.bankAmount !== undefined) {
     if (expense.currency === baseCurrency) {
-      throw new Error('Remove the bank charge when the receipt and settlement currencies are the same');
+      throw new LedgerValidationError('Remove the bank charge when the receipt and settlement currencies are the same');
     }
     if (!Number.isSafeInteger(expense.bankAmount) || expense.bankAmount <= 0) {
-      throw new Error('The actual bank charge must be greater than zero');
+      throw new LedgerValidationError('The actual bank charge must be greater than zero');
     }
   }
   const converted = expense.bankAmount !== undefined ? expense.bankAmount
     : expense.currency === baseCurrency ? original
       : expense.fx ? convertAmount(original, expense.fx.rate) : undefined;
-  if (converted === undefined) throw new Error('Add an exchange rate or the actual bank charge for this currency');
-  if (!Number.isSafeInteger(converted) || converted > MAX_AMOUNT) throw new Error('Converted amount is out of range (maximum 1,000,000 settlement currency units)');
-  if (converted <= 0) throw new Error('Converted receipt total must be greater than zero');
+  if (converted === undefined) throw new LedgerValidationError('Add an exchange rate or the actual bank charge for this currency');
+  if (!Number.isSafeInteger(converted) || converted > MAX_AMOUNT) throw new LedgerValidationError('Converted amount is out of range (maximum 1,000,000 settlement currency units)');
+  if (converted <= 0) throw new LedgerValidationError('Converted receipt total must be greater than zero');
   return converted;
 }
 
@@ -424,6 +449,56 @@ export function balances(trip: Trip): number[] {
     result[toIndex] = addAmount(result[toIndex], -payment.amount);
   }
   return result;
+}
+
+export type TravellerFinancialPreview = {
+  available: true;
+  currency: Currency;
+  expenseCount: number;
+  paymentCount: number;
+  costShare: number;
+  paidUpfront: number;
+  paymentsSent: number;
+  paymentsReceived: number;
+  netBalance: number;
+} | {
+  available: false;
+  currency: Currency;
+  expenseCount: number;
+  paymentCount: number;
+  message: string;
+};
+
+/** Aggregates for confirming an invitation's existing traveller identity. */
+export function travellerFinancialPreview(trip: Trip, memberId: string): TravellerFinancialPreview {
+  const index = trip.members.findIndex(member => member.id === memberId);
+  const expenseCount = trip.expenses.filter(expense => expense.payer === memberId || (expense.percentages !== undefined
+    ? Object.hasOwn(expense.percentages, memberId)
+    : expense.items.some(item => item.members.includes(memberId)))).length;
+  const paymentCount = trip.payments.filter(payment => payment.from === memberId || payment.to === memberId).length;
+  const metadata = { currency: trip.currency, expenseCount, paymentCount };
+  try {
+    if (index < 0) throw new Error('This traveller is no longer in the holiday');
+    let costShare = 0;
+    let paidUpfront = 0;
+    let paymentsSent = 0;
+    let paymentsReceived = 0;
+    for (const expense of trip.expenses) {
+      costShare = addAmount(costShare, expenseShares(expense, trip.members, trip.currency)[index]);
+      if (expense.payer === memberId) paidUpfront = addAmount(paidUpfront, expenseTotal(expense, trip.currency));
+    }
+    for (const payment of trip.payments) {
+      if (!Number.isSafeInteger(payment.amount) || payment.amount <= 0 || payment.amount > MAX_AMOUNT
+        || payment.from === payment.to || !trip.members.some(member => member.id === payment.from)
+        || !trip.members.some(member => member.id === payment.to)) throw new Error('Review an invalid recorded payment');
+      if (payment.from === memberId) paymentsSent = addAmount(paymentsSent, payment.amount);
+      if (payment.to === memberId) paymentsReceived = addAmount(paymentsReceived, payment.amount);
+    }
+    const netBalance = addAmount(addAmount(addAmount(paidUpfront, -costShare), paymentsSent), -paymentsReceived);
+    return { available: true, ...metadata, costShare, paidUpfront, paymentsSent, paymentsReceived, netBalance };
+  } catch (error) {
+    return { available: false, ...metadata, message: error instanceof Error ? error.message : 'Review the holiday’s recorded amounts before relying on this balance' };
+  }
 }
 
 export function settlements(trip: Trip): { from: string; to: string; amount: number }[] {

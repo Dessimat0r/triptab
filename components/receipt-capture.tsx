@@ -1,11 +1,12 @@
 "use client";
 
 import { useId, useState, type ChangeEvent } from "react";
-import { Camera, Check, Copy, ImagePlus, RefreshCw } from "lucide-react";
+import { Camera, Check, Copy, ImagePlus, RefreshCw, Trash2 } from "lucide-react";
 
 const MAX_UPLOAD_BYTES = 5 * 1024 * 1024;
 const MAX_SOURCE_BYTES = 40 * 1024 * 1024;
-const LONG_EDGE = 2000;
+const MAX_IMAGE_PIXELS = 4_000_000;
+const MAX_IMAGE_DIMENSION = 8192;
 
 // Decode and re-encode every browser upload: canvas keeps the visible receipt,
 // honours the decoder's orientation, and does not copy camera EXIF/GPS data.
@@ -37,14 +38,22 @@ export async function prepareReceiptImage(file: File): Promise<File> {
     const width = source instanceof HTMLImageElement ? source.naturalWidth : source.width;
     const height = source instanceof HTMLImageElement ? source.naturalHeight : source.height;
     if (!width || !height) throw Error("The image has no visible pixels.");
-    const scale = Math.min(1, LONG_EDGE / Math.max(width, height));
+    // A pixel budget preserves narrow, long receipts: a 1200 × 6000 photo
+    // becomes 894 × 4472 rather than 400 × 2000. Bound extreme dimensions too,
+    // so unusually thin images cannot request an oversized mobile canvas.
+    const scale = Math.min(
+      1,
+      Math.sqrt(MAX_IMAGE_PIXELS / (width * height)),
+      MAX_IMAGE_DIMENSION / Math.max(width, height),
+    );
     const canvas = document.createElement("canvas");
-    canvas.width = Math.max(1, Math.round(width * scale));
-    canvas.height = Math.max(1, Math.round(height * scale));
+    canvas.width = Math.max(1, Math.floor(width * scale));
+    canvas.height = Math.max(1, Math.floor(height * scale));
     const context = canvas.getContext("2d");
     if (!context) throw Error("This browser cannot prepare receipt images.");
     context.fillStyle = "#fff";
     context.fillRect(0, 0, canvas.width, canvas.height);
+    context.imageSmoothingQuality = "high";
     context.drawImage(source, 0, 0, canvas.width, canvas.height);
     let encoded: Blob | null = null;
     for (const quality of [0.85, 0.7, 0.55]) {
@@ -76,6 +85,7 @@ export type ReceiptCaptureProps = {
   prompt?: string;
   onCapture: (file: File) => void | Promise<void>;
   onPreparingChange?: (preparing: boolean) => void;
+  onRemove?: () => void;
   onPrepare: () => void;
   onRefresh: () => void;
   onUseProcessed: () => void;
@@ -90,6 +100,7 @@ export default function ReceiptCapture({
   prompt,
   onCapture,
   onPreparingChange,
+  onRemove,
   onPrepare,
   onRefresh,
   onUseProcessed,
@@ -163,6 +174,9 @@ export default function ReceiptCapture({
           <a href={receiptUrl} target="_blank" rel="noreferrer">
             Open stored receipt image
           </a>
+          {onRemove && <button type="button" className="quiet wide danger" disabled={locked} onClick={onRemove}>
+            <Trash2 size={17} aria-hidden="true" /> Remove receipt image
+          </button>}
         </div>
       )}
       <p id={hintId} className="receipt-capture-hint">

@@ -18,6 +18,24 @@ export function equalFinancialValue(a: unknown, b: unknown) {
   return equalSavedValue(omitConversation(a), omitConversation(b));
 }
 
+/** A newly recorded matching transfer needs a fresh, explicit duplicate review. */
+export function hasNewMatchingPayment(base: Ledger, local: Ledger, remote: Ledger): boolean {
+  for (const trip of local.trips) {
+    const baselineIds = new Set(base.trips.find(value => value.id === trip.id)?.payments.map(payment => payment.id) || []);
+    const current = remote.trips.find(value => value.id === trip.id)?.payments || [];
+    for (const payment of trip.payments) {
+      // Existing baseline duplicates were already visible at review time. A
+      // stable ID already committed remotely is an idempotent retry, not a new
+      // second payment, even when another similar transfer also exists.
+      if (baselineIds.has(payment.id) || current.some(value => value.id === payment.id)) continue;
+      if (current.some(value => !baselineIds.has(value.id) && value.id !== payment.id
+        && value.from === payment.from && value.to === payment.to
+        && value.amount === payment.amount && value.date === payment.date)) return true;
+    }
+  }
+  return false;
+}
+
 // Apply only the user's changes to fresh data. A changed entity is never silently
 // overwritten. Receipt messages are append-only and can merge independently.
 export function rebaseLedger(base: Ledger, local: Ledger, remote: Ledger): { data: Ledger; conflicts: LedgerConflict[] } {

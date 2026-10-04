@@ -1,4 +1,5 @@
 import { owner, bucket, sameOrigin, failure, readBoundedBody, receiptKey, RequestError, ensureProfile, tripAccess, receiptAccess, db } from '@/lib/store';
+import { storeReceipt, deleteReceipt, maintainReceipts } from '@/lib/receipt-lifecycle';
 
 export const dynamic = 'force-dynamic';
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
@@ -27,17 +28,26 @@ export async function POST(r: Request) {
     if (!IMAGE_TYPES.has(type)) throw new RequestError('Use a JPEG, PNG or WebP image.');
     const bytes = await readBoundedBody(r, MAX_IMAGE_BYTES);
     if (!matchesImageType(bytes, type)) throw new RequestError('This file is not a valid JPEG, PNG or WebP image.');
+    await maintainReceipts(db(), bucket(), user).catch(() => {
+      console.warn('TripTab receipt maintenance will retry.');
+    });
     const id = crypto.randomUUID();
-    await bucket().put(receiptKey(user, id), bytes, { httpMetadata: { contentType: type } });
-    try {
-      await db().prepare('INSERT INTO receipts (id, owner, trip_id) SELECT ?, ?, t.id FROM trips t WHERE t.id = ? AND (t.owner = ? OR EXISTS (SELECT 1 FROM memberships m WHERE m.trip_id = t.id AND m.user_id = ?))').bind(id, user, tripId, user, user).run().then(result => {
-        if (!result.meta.changes) throw new RequestError('You no longer have access to this trip.', 403);
-      });
-    } catch (e) {
-      await bucket().delete(receiptKey(user, id));
-      throw e;
-    }
+    await storeReceipt(db(), bucket(), user, tripId, id, bytes, type);
     return Response.json({ receiptId: id }, { headers: { 'Cache-Control': 'private, no-store' } });
+  } catch (e) {
+    return failure(e);
+  }
+}
+
+export async function DELETE(r: Request) {
+  try {
+    sameOrigin(r);
+    const user = (await ensureProfile(r)).id;
+    const params = new URL(r.url).searchParams;
+    const id = params.get('id');
+    if (params.getAll('id').length !== 1 || !id || !RECEIPT_ID.test(id)) throw new RequestError('Invalid receipt.');
+    const result = await deleteReceipt(db(), bucket(), user, id);
+    return Response.json(result, { status: result.pending ? 202 : 200, headers: { 'Cache-Control': 'private, no-store' } });
   } catch (e) {
     return failure(e);
   }

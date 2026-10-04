@@ -184,10 +184,36 @@ const rpcSchema = z.object({
 });
 
 class RpcError extends Error {
-  constructor(public code: number, message: string, public status = 200) { super(message); }
+  constructor(public code: number, message: string, public status = 200, public retryAfter?: number) { super(message); }
 }
 
 const headers = { 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' };
+const MCP_WINDOW_MS = 60_000;
+const MCP_CALL_LIMIT = 120;
+
+async function consumeToolBudget(providerId: string) {
+  // Separate hashed namespace: AI traffic cannot reset or consume login budgets.
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`mcp:provider:${providerId}`));
+  const key = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+  const now = Date.now();
+  const cutoff = now - MCP_WINDOW_MS;
+  const database = db();
+  const consumed = await database.prepare(`
+    INSERT INTO auth_rate_limits (key_hash, window_start, attempts) VALUES (?, ?, 1)
+    ON CONFLICT(key_hash) DO UPDATE SET
+      window_start = CASE WHEN auth_rate_limits.window_start <= ? THEN ? ELSE auth_rate_limits.window_start END,
+      attempts = CASE WHEN auth_rate_limits.window_start <= ? THEN 1 ELSE auth_rate_limits.attempts + 1 END
+    WHERE auth_rate_limits.window_start <= ? OR auth_rate_limits.attempts < ?
+    RETURNING window_start
+  `).bind(key, now, cutoff, now, cutoff, cutoff, MCP_CALL_LIMIT).first<{ window_start: number }>();
+  if (!consumed) {
+    const row = await database.prepare('SELECT window_start FROM auth_rate_limits WHERE key_hash = ?').bind(key).first<{ window_start: number }>();
+    throw new RpcError(-32029, 'Too many AI requests. Try again shortly.', 429, Math.max(1, Math.ceil(((row?.window_start ?? now) + MCP_WINDOW_MS - now) / 1000)));
+  }
+  // Existing authentication windows are at most fifteen minutes. Only remove
+  // day-old rows, in bounded batches, without touching any live login bucket.
+  await database.prepare('DELETE FROM auth_rate_limits WHERE key_hash IN (SELECT key_hash FROM auth_rate_limits WHERE window_start <= ? LIMIT 20)').bind(now - 86_400_000).run();
+}
 
 // Only return the affected trip after a write. The persistent ledger keeps its
 // full identity metadata; the AI context does not need travellers' emails.
@@ -249,8 +275,14 @@ export async function POST(request: Request) {
     // profile. Browser sessions alone never authorize MCP calls, even when a
     // browser cookie and an authenticated provider header are both present.
     let user: string;
-    try { user = (await resolveIdentity(request, { allowSession: false }, db())).id; }
+    let providerId: string;
+    try {
+      const identity = await resolveIdentity(request, { allowSession: false }, db());
+      user = identity.id;
+      providerId = identity.chatgptId ?? identity.id;
+    }
     catch { throw new RpcError(-32001, 'Connect ChatGPT to use TripTab’s AI tools. Manual features work with your TripTab account.', 401); }
+    await consumeToolBudget(providerId);
     const call = callSchema.safeParse(req.params);
     if (!call.success) throw new RpcError(-32602, 'Invalid tool call parameters.');
     const { name, arguments: args } = call.data;
@@ -379,6 +411,6 @@ export async function POST(request: Request) {
     }
   } catch (error) {
     const failure = error instanceof RpcError ? error : new RpcError(-32603, 'Unable to process this request.');
-    return Response.json({ jsonrpc: '2.0', id, error: { code: failure.code, message: failure.message } }, { status: failure.status, headers });
+    return Response.json({ jsonrpc: '2.0', id, error: { code: failure.code, message: failure.message } }, { status: failure.status, headers: { ...headers, ...(failure.retryAfter ? { 'Retry-After': String(failure.retryAfter) } : {}) } });
   }
 }
