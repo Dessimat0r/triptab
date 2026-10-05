@@ -1,8 +1,9 @@
+import { transpileWithSharedImports } from './helpers/transpile';
 import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
-import { ModuleKind, ScriptTarget, transpileModule } from 'typescript';
+import { ModuleKind, ScriptTarget } from 'typescript';
 import { hashToken } from '../lib/auth';
 import type { Trip } from '../lib/model';
 import type { ActivityEvent } from '../lib/store';
@@ -47,7 +48,7 @@ Object.defineProperty(globalThis, Symbol.for('triptab.export-test-env'), { value
 const envUrl = 'data:text/javascript;base64,' + Buffer.from("export const env=globalThis[Symbol.for('triptab.export-test-env')];").toString('base64');
 const notificationUrl = 'data:text/javascript;base64,' + Buffer.from('export const activityNotification=()=>null; export const notifyMembers=async()=>{};').toString('base64');
 const storeSource = await readFile(new URL('../lib/store.ts', import.meta.url), 'utf8');
-const storeCompiled = transpileModule(storeSource, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
+const storeCompiled = transpileWithSharedImports(storeSource, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
   .replace("'cloudflare:workers'", JSON.stringify(envUrl))
   .replace("'zod'", JSON.stringify(import.meta.resolve('zod')))
   .replace("'./model'", JSON.stringify(new URL('../lib/model.ts', import.meta.url).href))
@@ -56,23 +57,20 @@ const storeCompiled = transpileModule(storeSource, { compilerOptions: { module: 
   .replace("'./activity-scope'", JSON.stringify(new URL('../lib/activity-scope.ts', import.meta.url).href))
   .replace("'./receipt-lifecycle'", JSON.stringify(new URL('../lib/receipt-lifecycle.ts', import.meta.url).href))
   .replace("'./receipt-context'", JSON.stringify(new URL('../lib/receipt-context.ts', import.meta.url).href))
-  .replaceAll("'./audit'", JSON.stringify(new URL('../lib/audit.ts', import.meta.url).href))
   .replace("'./notifications'", JSON.stringify(notificationUrl));
 const storeUrl = 'data:text/javascript;base64,' + Buffer.from(storeCompiled).toString('base64');
 const store = await import(storeUrl) as typeof import('../lib/store');
 const routeSource = await readFile(new URL('../app/api/export/route.ts', import.meta.url), 'utf8');
-const routeCompiled = transpileModule(routeSource, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
+const routeCompiled = transpileWithSharedImports(routeSource, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
   .replace("'@/lib/store'", JSON.stringify(storeUrl))
-  .replace("'@/lib/audit'", JSON.stringify(new URL('../lib/audit.ts', import.meta.url).href))
   .replace("'@/lib/model'", JSON.stringify(new URL('../lib/model.ts', import.meta.url).href));
 const route = await import('data:text/javascript;base64,' + Buffer.from(routeCompiled).toString('base64')) as { GET(request: Request): Promise<Response> };
 const accountRouteSource = await readFile(new URL('../app/api/account-activity/route.ts', import.meta.url), 'utf8');
-const accountRouteCompiled = transpileModule(accountRouteSource, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
-  .replace("'@/lib/store'", JSON.stringify(storeUrl))
-  .replace("'@/lib/audit'", JSON.stringify(new URL('../lib/audit.ts', import.meta.url).href));
+const accountRouteCompiled = transpileWithSharedImports(accountRouteSource, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
+  .replace("'@/lib/store'", JSON.stringify(storeUrl));
 const accountRoute = await import('data:text/javascript;base64,' + Buffer.from(accountRouteCompiled).toString('base64')) as { GET(request: Request): Promise<Response> };
 const entrySource = await readFile(new URL('../app/api/activity-entry/route.ts', import.meta.url), 'utf8');
-const entryCompiled = transpileModule(entrySource, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText.replace("'@/lib/store'", JSON.stringify(storeUrl));
+const entryCompiled = transpileWithSharedImports(entrySource, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText.replace("'@/lib/store'", JSON.stringify(storeUrl));
 const entryRoute = await import('data:text/javascript;base64,' + Buffer.from(entryCompiled).toString('base64')) as { GET(request: Request): Promise<Response> };
 const tokens = { owner: 'a'.repeat(43), joined: 'b'.repeat(43), outsider: 'c'.repeat(43) };
 
@@ -292,13 +290,13 @@ test('financial CSV preserves amounts and RFC4180 notes while neutralizing formu
   assert.equal(snapshot.data.trips[0].expenses[0].title, trip.expenses[0].title, 'JSON keeps the literal stored value');
 });
 
-test('real saved receipt units, memory and item conversation survive authorized JSON and item-detail CSV exports', async () => {
+test('real saved receipt purchased quantities, units, memory and item conversation survive authorized JSON and item-detail CSV exports', async () => {
   const database = await storage();
   const trip = holiday('mine', 'owner');
   const expense = trip.expenses[0];
   expense.currency = 'GBP';
   delete expense.bankAmount;
-  expense.items = [{ id: 'chocolate', name: 'Chocolate, "dark"\nThree blocks', amount: 1001, members: ['a', 'b'], units: { total: 3, label: 'blocks', allocations: { a: 2.5, b: 0.5 } } }];
+  expense.items = [{ id: 'chocolate', name: 'Chocolate, "dark"\nThree blocks', amount: 1001, members: ['a', 'b'], quantity: { total: 3, label: 'blocks', sourceText: '3 x Stck' }, units: { total: 3, label: 'blocks', allocations: { a: 2.5, b: 0.5 } } }];
   expense.memory = { notes: 'Treat "blocks" as chocolate.\nKeep this context for later questions.', aliases: [{ name: 'blocks', itemId: 'chocolate' }, { name: 'me', memberId: 'b', scopeMemberId: 'b' }] };
   expense.conversation = [{ id: 'item-question', role: 'user', text: 'Which blocks are mine?', createdAt: '2026-10-04T12:00:00Z', itemId: 'chocolate', authorMemberId: 'b', authorName: 'Bob' }];
   // Preserve a historical authored thread, then change the receipt through the
@@ -323,15 +321,15 @@ test('real saved receipt units, memory and item conversation survive authorized 
 
   const financialRows = parseCsv(await (await route.GET(request('scope=trip&tripId=mine&format=csv'))).text());
   const header = financialRows[0];
-  assert.equal(header.at(-1), 'item_details_json', 'new details append after all existing columns');
+  assert.deepEqual(header.slice(-3), ['item_details_json', 'receipt_scan_json', 'field_sources_json'], 'scan evidence appends without moving existing financial columns');
   assert.equal(header[8], 'receipt_amount');
   assert.equal(header[27], 'Alice_cost_share_hundredths');
   assert.ok(financialRows.every(row => row.length === header.length));
   assert.equal(financialRows[1][header.indexOf('receipt_amount_hundredths')], '1001', 'line amount is the full price, not a per-unit price');
   assert.equal(financialRows[1][header.indexOf('Alice_cost_share_hundredths')], '834');
   assert.equal(financialRows[1][header.indexOf('Bob_cost_share_hundredths')], '167');
-  assert.deepEqual(JSON.parse(financialRows[1].at(-1)!), expense.items);
-  assert.equal(financialRows[2].at(-1), '', 'payment rows have no item detail');
+  assert.deepEqual(JSON.parse(financialRows[1][header.indexOf('item_details_json')]), expense.items);
+  assert.equal(financialRows[2][header.indexOf('item_details_json')], '', 'payment rows have no item detail');
   const history = await json<HistoryPage>(await route.GET(request('scope=activity&tripId=mine')));
   const changed = history.events.find(event => event.entityType === 'expense' && event.entityId === expense.id && event.action === 'update');
   assert.deepEqual(changed?.after?.memory, edited.expenses[0].memory);
@@ -345,7 +343,27 @@ test('real saved receipt units, memory and item conversation survive authorized 
   const overriddenRows = parseCsv(await (await route.GET(request('scope=trip&tripId=mine&format=csv'))).text());
   assert.equal(overriddenRows[1][header.indexOf('Alice_cost_share_hundredths')], '250');
   assert.equal(overriddenRows[1][header.indexOf('Bob_cost_share_hundredths')], '751');
-  assert.deepEqual(JSON.parse(overriddenRows[1].at(-1)!), expense.items);
+  assert.deepEqual(JSON.parse(overriddenRows[1][header.indexOf('item_details_json')]), expense.items);
+});
+
+test('authorized downloads preserve independent printed evidence, field origins and source line identity', async () => {
+  const database = await storage();
+  const trip = holiday('mine', 'owner');
+  const expense = trip.expenses[0];
+  expense.items[0].scanSource = { lineIndex: 2, observedText: 'Food 100.00', confidence: 'high' };
+  expense.items[0].fieldSources = { name: 'receipt', amount: 'user' };
+  expense.fieldSources = { currency: 'receipt', payer: 'user' };
+  expense.receiptScan = { version: 1, printedSubtotal: null, printedTotal: 10000, printedCurrency: 'EUR', calculatedSubtotal: 10000, calculatedTotal: 10000, status: 'matched', warnings: [], processor: 'openai-api', imageIds: ['photo-mine'], sourceLines: [{ lineIndex: 3, kind: 'total', observedText: 'TOTAL 100.00', amount: 10000 }] };
+  database.sqlite.prepare('UPDATE trips SET data=? WHERE id=?').run(JSON.stringify(trip), 'mine');
+  const body = await json<Snapshot>(await route.GET(request('scope=trip&tripId=mine')));
+  assert.deepEqual(body.data.trips[0].expenses[0].receiptScan, expense.receiptScan);
+  const rows = parseCsv(await (await route.GET(request('scope=trip&tripId=mine&format=csv'))).text());
+  const header = rows[0];
+  assert.deepEqual(JSON.parse(rows[1][header.indexOf('receipt_scan_json')]), expense.receiptScan);
+  assert.deepEqual(JSON.parse(rows[1][header.indexOf('field_sources_json')]), expense.fieldSources);
+  assert.deepEqual(JSON.parse(rows[1][header.indexOf('item_details_json')]), expense.items);
+  assert.ok(rows.every(row => row.length === header.length));
+  assert.equal(rows[2][header.indexOf('receipt_scan_json')], '', 'payments cannot inherit receipt evidence');
 });
 
 test('history pages are bounded, cursor-complete, UTC, scoped and safe as CSV', async () => {

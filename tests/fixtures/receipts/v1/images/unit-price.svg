@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="240" viewBox="0 0 640 240">
+<title>Quantity and unit price are separate from full line amount</title>
+<defs><filter id="obscured"><feGaussianBlur stdDeviation="2.5"/></filter></defs>
+<rect width="640" height="240" fill="#fff"/>
+<g fill="#111" font-family="monospace" font-size="22">
+<text x="25" y="35" font-size="16">SYNTHETIC TEST RECEIPT — NOT A SALE</text>
+<text x="25" y="65" font-size="16">Corpus v1: unit-price</text>
+<text x="25" y="115">2 x Stck Pizza slice</text>
+<text x="25" y="145">  unit price 3.00        6.00</text>
+<text x="25" y="175">TOTAL EUR                6.00</text>
+</g>
+
+</svg>

@@ -193,8 +193,8 @@ test('account authentication starts its own refresh epoch and never reuses the p
   assert.equal(editor.revision, 1);
   assert.equal(editor.refreshKey, '"second-account"');
   assert.equal(requests, 3);
-
-
+  assert.equal(editor.receiptResets,1,'the account transition invalidates outstanding receipt work');
+  assert.equal(editor.editing,null);assert.equal(editor.receiptAI,null,'AI access belongs to the account that loaded it');
 });
 
 test('a foreground financial action starts a fresh read after an earlier background snapshot', async () => {

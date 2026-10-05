@@ -2549,7 +2549,8 @@ footer {
   gap: 8px;
   margin-top: 14px;
 }
-.receipt-capture-processing button {
+.receipt-capture-processing button,
+.receipt-capture-processing > a {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2561,6 +2562,7 @@ footer {
   font-size: 0.8rem;
   line-height: 1.4;
   white-space: normal;
+  text-decoration: none;
 }
 .receipt-capture-prompt {
   margin-top: 14px;
@@ -2582,6 +2584,9 @@ footer {
 .receipt-capture-status p {
   margin-top: 10px;
   overflow-wrap: anywhere;
+}
+.receipt-capture-status:not(:empty) {
+  margin-bottom: 14px;
 }
 @media (max-width: 900px) {
   .editor-body.with-receipt .receipt-capture {

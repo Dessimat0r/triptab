@@ -415,3 +415,21 @@ test('resolveIdentity shares the single coherent snapshot and falls back when a 
   assert.equal(fallback.id, 'legacy'); assert.equal(fallback.kind, 'chatgpt');
   await assert.rejects(resolveIdentity(request({ cookie: 'tt_session=' + tokenB }), {}, database.asD1()), /UNAUTHORIZED/);
 });
+
+test('provider headers never make a live session read probe link or credential rows', async () => {
+  const { resolveIdentity } = await import('../lib/auth');
+  const database = await storage();
+  const live = request({ cookie: 'tt_session=' + token, ...providerHeaders('linked-provider', 'a@example.com') });
+  // Poison the provider tables: reading any of their rows raises. A live session
+  // must be answered without touching them, in the same single statement that
+  // still falls back to the provider when no session resolves.
+  database.sqlite.exec('PRAGMA foreign_keys=OFF');
+  for (const table of ['auth_links', 'auth_credentials']) {
+    database.sqlite.exec(`ALTER TABLE ${table} RENAME TO ${table}_real`);
+    database.sqlite.exec(`CREATE VIEW ${table} AS SELECT * FROM ${table}_real WHERE json_extract(created_at || '{', '$') IS NULL`);
+  }
+  database.calls.length = 0;
+  const identity = await resolveIdentity(live, {}, database.asD1());
+  assert.equal(identity.kind, 'session'); assert.equal(identity.id, 'local-a'); assert.equal(database.calls.length, 1);
+  await assert.rejects(resolveIdentity(live, { allowSession: false }, database.asD1()), /malformed JSON/, 'the poison is real: provider reads do touch the tables');
+});

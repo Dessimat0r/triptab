@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { Currency } from "@/lib/model";
 import type { ActivityEvent } from "@/lib/store";
 import { formatMoney } from "@/lib/money-format";
+import { receiptWarningLabel } from "@/lib/receipt-scan";
 import "./activity-details.css";
 
 export type ActivityPanelProps = {
@@ -191,7 +192,32 @@ function itemDescription(value: unknown, currency: string | undefined, names: Re
   const split = units ? `${quantity(units.total)} ${auditText(units.label) || "units"} in total${allocations ? `\n${Object.entries(allocations).map(([id, amount]) => `${traveller(id, names)}: ${quantity(amount)} ${auditText(units.label) || "units"}`).join("\n")}` : ""}`
     : item.percentages ? percentages(item.percentages, names) : members.length ? `Shared equally by:\n${members.map(id => traveller(id, names)).join("\n")}` : "No participants";
   const participantOrder = units || item.percentages ? `Participant order:\n${members.map(id => traveller(id, names)).join("\n")}\n` : "";
-  return `${auditText(item.name) || "Item"} (item ${auditText(item.id)})\nFull line total: ${money(item.amount, currency)}\n${participantOrder}${split}`;
+  const purchased = auditRecord(item.quantity);
+  const purchasedDetail = purchased ? `Purchased quantity: ${quantity(purchased.total)} ${auditText(purchased.label) || "units"}\n${auditText(purchased.sourceText) ? `Receipt text: ${auditText(purchased.sourceText)}\n` : ""}` : "";
+  const source = auditRecord(item.scanSource);
+  const evidence = source ? `Receipt evidence: ${typeof source.lineIndex === "number" ? `line ${source.lineIndex + 1}` : "line not identified"}${source.confidence ? ` · ${auditText(source.confidence)} confidence` : ""}\n${auditText(source.observedText) ? `Observed text: ${auditText(source.observedText)}\n` : ""}` : "";
+  const provenance = item.fieldSources ? `Field origins: ${readable(item.fieldSources)}\n` : "";
+  return `${auditText(item.name) || "Description needs confirmation"} (item ${auditText(item.id)})\nFull line total: ${item.amount === null ? "Price needs confirmation" : money(item.amount, currency)}\n${purchasedDetail}${evidence}${provenance}${participantOrder}${split}`;
+}
+function scanDescription(value: unknown, currency: string | undefined): string {
+  const scan = auditRecord(value);
+  if (!scan) return "No recorded scan evidence";
+  const labels: Record<string, string> = { matched: "Matches printed total", "needs-review": "Needs review", incomplete: "Incomplete receipt evidence" };
+  const warnings = entries(scan.warnings).map(warning => `${warning.resolved ? "Reviewed" : "Needs review"}: ${auditText(warning.message) || receiptWarningLabel(auditText(warning.code))}${warning.itemId ? ` (item ${auditText(warning.itemId)})` : ""}`);
+  const lines = entries(scan.sourceLines).map(line => `${typeof line.lineIndex === "number" ? `Line ${line.lineIndex + 1}: ` : ""}${auditText(line.observedText) || auditText(line.kind)}${typeof line.amount === "number" ? ` · ${money(line.amount, currency)}` : ""}${line.mappedTo ? ` · ${auditText(line.mappedTo)}` : ""}`);
+  return [labels[auditText(scan.status)] || "Status not recorded",
+    `Printed subtotal: ${money(scan.printedSubtotal, currency)}`,
+    `Printed total: ${money(scan.printedTotal, currency)}`,
+    `Printed currency: ${auditText(scan.printedCurrency) || "Not readable"}`,
+    `Calculated total: ${money(scan.calculatedTotal, currency)}`,
+    ...(warnings.length ? ["Warnings:", ...warnings] : []),
+    ...(lines.length ? ["Source lines:", ...lines] : []),
+    ...(scan.acknowledgement ? ["Participant explicitly accepted this total difference"] : []),
+    ...(scan.missingTotalAcknowledgement ? ["Participant reviewed every line because the printed total was unavailable"] : []),
+    ...(scan.processor ? [`Processed by: ${auditText(scan.processor)}`] : []),
+    ...(scan.processedAt ? [`Processed at: ${auditTimestamp(scan.processedAt, true)}`] : []),
+    ...(Array.isArray(scan.imageIds) ? [`Source images: ${scan.imageIds.map(auditText).join(", ")}`] : []),
+  ].join("\n");
 }
 function memoryAliases(value: unknown, snapshot: Record<string, unknown>, names: Record<string, string>): string {
   if (!Array.isArray(value) || !value.length) return "No saved names";
@@ -252,6 +278,8 @@ function changes(event: ActivityEvent, currency: Currency | undefined, names: Re
   };
   for (const [key, label] of Object.entries({ name: "Name", title: "Title", currency: "Currency", date: "Transaction date", startDate: "Start date", endDate: "End date", time: "Transaction time", timezone: "Transaction timezone", method: "Payment method", note: "Note", email: "Traveller email" })) add(key, label);
   add("source", "Entry source", value => value === "ai" ? "AI assisted" : value === "manual" ? "Entered manually" : readable(value));
+  add("fieldSources", "Receipt field origins");
+  add("receiptScan", "Receipt scan review", (value, snapshot) => scanDescription(value, auditText(snapshot.currency) || currency));
   add("status", String(event.entityType) === "invite" ? "Invitation status" : "Review status", value => String(event.entityType) === "invite" && value === "pending" ? "Waiting for the traveller to join" : STATES[auditText(value)] || readable(value));
   add("memberName", "Invited traveller name");
   add("emailRestricted", "Invitation email restriction", value => value === true ? "Only the invited email can join" : value === false ? "Anyone with the link can join as this traveller" : "Not recorded");
