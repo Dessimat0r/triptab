@@ -1,3 +1,4 @@
+import { sha256Hex } from './data-utils';
 export type LedgerFreshness = {
   // Migration 0009 advances this counter atomically for every changed trips.data
   // write. Silent legacy normalization/repair need not emit participant activity.
@@ -7,11 +8,10 @@ export type LedgerFreshness = {
 
 /** Hash visible body versions, activity and authoritative member account fields. */
 export async function ledgerEtagForSnapshot({ versions, links }: LedgerFreshness): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify([
+  const tag = await sha256Hex(JSON.stringify([
     versions.map(row => [row.id, row.latest, row.dataVersion]),
     links.map(row => [row.trip_id, row.user_id, row.member_id, row.email]),
-  ])));
-  const tag = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+  ]));
   return `W/"triptab-${tag}"`;
 }
 

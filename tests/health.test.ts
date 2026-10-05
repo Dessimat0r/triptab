@@ -60,6 +60,22 @@ test('missing receipt binding also fails readiness without disclosing internal d
   const response = await GET(); assert.equal(response.status, 503); assert.deepEqual(await response.json(), { status: 'unavailable' });
 });
 
+test('readiness rejects each missing 0005 history object and metadata column even with later migrations present', async context => {
+  for (const [kind, name, table] of [
+    ['TABLE', 'account_activity_events', ''],
+    ['INDEX', 'account_activity_events_id_idx', ''], ['INDEX', 'account_activity_events_user_sequence_idx', ''],
+    ['TRIGGER', 'activity_events_no_replace', ''], ['TRIGGER', 'account_activity_events_no_update', ''],
+    ['TRIGGER', 'account_activity_events_no_delete', ''], ['TRIGGER', 'account_activity_events_no_replace', ''],
+    ['COLUMN', 'audit_id', 'invites'], ['COLUMN', 'generation', 'push_subscriptions'],
+    ['COLUMN', 'content_type', 'receipts'], ['COLUMN', 'size_bytes', 'receipts'], ['COLUMN', 'sha256', 'receipts'],
+  ]) await context.test(`${table ? table + '.' : ''}${name}`, async () => {
+    sqlite = new DatabaseSync(':memory:'); receiptBinding = true;
+    for (const file of (await readdir(new URL('../drizzle/', import.meta.url))).filter(file => file.endsWith('.sql')).sort()) sqlite.exec(await readFile(new URL('../drizzle/' + file, import.meta.url), 'utf8'));
+    sqlite.exec(kind === 'COLUMN' ? `ALTER TABLE ${table} DROP COLUMN ${name}` : `DROP ${kind} ${name}`);
+    const response = await GET(); assert.equal(response.status, 503); assert.deepEqual(await response.json(), { status: 'unavailable' });
+  });
+});
+
 test('receipt history cannot report ready without its current and historical link projections', async () => {
   sqlite = new DatabaseSync(':memory:'); receiptBinding = true;
   for (const name of (await readdir(new URL('../drizzle/', import.meta.url))).filter(name => name.endsWith('.sql') && Number(name.slice(0, 4)) <= 8).sort()) sqlite.exec(await readFile(new URL('../drizzle/' + name, import.meta.url), 'utf8'));

@@ -44,7 +44,7 @@ function financialCsv(trip: Trip): string {
     'paid_by', 'from', 'to', 'payment_method', 'note', 'tax_hundredths', 'tip_hundredths', 'discount_hundredths',
     'bank_charge_hundredths', 'fx_rate', 'fx_as_of', 'fx_source', 'receipt_id', 'entry_source', 'calculation_error',
     ...trip.members.map(member => `${member.name}_cost_share_hundredths`),
-    'item_details_json',
+    'item_details_json', 'receipt_scan_json', 'field_sources_json',
   ]];
   for (const expense of trip.expenses) {
     let original: number | undefined;
@@ -61,14 +61,15 @@ function financialCsv(trip: Trip): string {
       name(expense.payer), '', '', '', '', expense.tax, expense.tip, expense.discount,
       expense.bankAmount, expense.fx?.rate, expense.fx?.asOf, expense.fx?.source, expense.receiptId, expense.source || 'manual', calculationError,
       ...trip.members.map((_, index) => shares[index]),
-      JSON.stringify(expense.items.map(({ id, name, amount, members, percentages, units, quantity }) => ({ id, name, amount, members, percentages, units, quantity }))),
+      JSON.stringify(expense.items.map(({ id, name, amount, members, percentages, units, quantity, scanSource, fieldSources }) => ({ id, name, amount, members, percentages, units, quantity, scanSource, fieldSources }))),
+      expense.receiptScan ? JSON.stringify(expense.receiptScan) : '', expense.fieldSources ? JSON.stringify(expense.fieldSources) : '',
     ]);
   }
   for (const payment of trip.payments) {
     rows.push([
       'payment', payment.id, '', payment.date, payment.time, payment.timezone,
       '', '', '', trip.currency, payment.amount, decimal(payment.amount), '', name(payment.from), name(payment.to), payment.method, payment.note,
-      '', '', '', '', '', '', '', '', '', '', ...trip.members.map(() => ''), '',
+      '', '', '', '', '', '', '', '', '', '', ...trip.members.map(() => ''), '', '', '',
     ]);
   }
   return csv(rows);

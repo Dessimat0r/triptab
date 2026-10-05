@@ -56,3 +56,38 @@
     flex: 1 1 160px;
   }
 }
+.receipt-scan-review {
+  border: 1px solid var(--border, #d0d7de);
+  border-radius: 14px;
+  padding: 16px;
+  margin: 0 0 20px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.receipt-scan-review h3 { margin: 0 0 12px; }
+.receipt-scan-totals { display: grid; gap: 8px; margin: 12px 0; }
+.receipt-scan-totals > div { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 12px; }
+.receipt-scan-totals dd { margin: 0; font-weight: 700; }
+.receipt-scan-warnings { display: grid; gap: 12px; padding-left: 20px; }
+.receipt-scan-warnings li > span { display: block; margin-top: 4px; }
+.receipt-scan-warnings button { display: block; min-height: 44px; margin-top: 8px; }
+.receipt-review-counts, .receipt-item-source { color: var(--muted); line-height: 1.5; }
+.receipt-printed-evidence { margin-top: 12px; }
+.receipt-printed-evidence summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; }
+.receipt-total-ack { margin-top: 16px; line-height: 1.5; }
+.receipt-total-ack input { flex: 0 0 22px; width: 22px; height: 22px; }
+.receipt-save-block { flex: 1 1 100%; margin: 0; font-size: 0.85rem; }
+.receipt-no-items { padding: 16px; border: 1px dashed var(--border, #d0d7de); border-radius: 12px; }
+.receipt-view-photo { min-height: 44px; margin-bottom: 12px; }
+.receipt-photo-overlay { z-index: 120; }
+.receipt-photo-dialog { width: min(760px, 100%); max-height: calc(100dvh - 32px); overflow: hidden; display: flex; flex-direction: column; min-width: 0; }
+.receipt-photo-dialog .modalheading { gap: 12px; min-width: 0; }
+.receipt-photo-dialog .modalheading h2 { min-width: 0; overflow-wrap: anywhere; }
+.receipt-photo-dialog .modalheading button { flex-shrink: 0; }
+.receipt-photo-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.receipt-photo-controls button { min-width: 44px; min-height: 44px; }
+.receipt-photo-pan { min-width: 0; max-width: 100%; max-height: 65dvh; overflow: auto; overscroll-behavior: contain; border-radius: 8px; }
+.receipt-photo-pan img { display: block; height: auto; }
+@media (max-width: 480px) {
+  .receipt-photo-dialog { max-height: calc(100dvh - 20px); padding: 16px; }
+}

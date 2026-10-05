@@ -321,15 +321,15 @@ test('real saved receipt purchased quantities, units, memory and item conversati
 
   const financialRows = parseCsv(await (await route.GET(request('scope=trip&tripId=mine&format=csv'))).text());
   const header = financialRows[0];
-  assert.equal(header.at(-1), 'item_details_json', 'new details append after all existing columns');
+  assert.deepEqual(header.slice(-3), ['item_details_json', 'receipt_scan_json', 'field_sources_json'], 'scan evidence appends without moving existing financial columns');
   assert.equal(header[8], 'receipt_amount');
   assert.equal(header[27], 'Alice_cost_share_hundredths');
   assert.ok(financialRows.every(row => row.length === header.length));
   assert.equal(financialRows[1][header.indexOf('receipt_amount_hundredths')], '1001', 'line amount is the full price, not a per-unit price');
   assert.equal(financialRows[1][header.indexOf('Alice_cost_share_hundredths')], '834');
   assert.equal(financialRows[1][header.indexOf('Bob_cost_share_hundredths')], '167');
-  assert.deepEqual(JSON.parse(financialRows[1].at(-1)!), expense.items);
-  assert.equal(financialRows[2].at(-1), '', 'payment rows have no item detail');
+  assert.deepEqual(JSON.parse(financialRows[1][header.indexOf('item_details_json')]), expense.items);
+  assert.equal(financialRows[2][header.indexOf('item_details_json')], '', 'payment rows have no item detail');
   const history = await json<HistoryPage>(await route.GET(request('scope=activity&tripId=mine')));
   const changed = history.events.find(event => event.entityType === 'expense' && event.entityId === expense.id && event.action === 'update');
   assert.deepEqual(changed?.after?.memory, edited.expenses[0].memory);
@@ -343,7 +343,27 @@ test('real saved receipt purchased quantities, units, memory and item conversati
   const overriddenRows = parseCsv(await (await route.GET(request('scope=trip&tripId=mine&format=csv'))).text());
   assert.equal(overriddenRows[1][header.indexOf('Alice_cost_share_hundredths')], '250');
   assert.equal(overriddenRows[1][header.indexOf('Bob_cost_share_hundredths')], '751');
-  assert.deepEqual(JSON.parse(overriddenRows[1].at(-1)!), expense.items);
+  assert.deepEqual(JSON.parse(overriddenRows[1][header.indexOf('item_details_json')]), expense.items);
+});
+
+test('authorized downloads preserve independent printed evidence, field origins and source line identity', async () => {
+  const database = await storage();
+  const trip = holiday('mine', 'owner');
+  const expense = trip.expenses[0];
+  expense.items[0].scanSource = { lineIndex: 2, observedText: 'Food 100.00', confidence: 'high' };
+  expense.items[0].fieldSources = { name: 'receipt', amount: 'user' };
+  expense.fieldSources = { currency: 'receipt', payer: 'user' };
+  expense.receiptScan = { version: 1, printedSubtotal: null, printedTotal: 10000, printedCurrency: 'EUR', calculatedSubtotal: 10000, calculatedTotal: 10000, status: 'matched', warnings: [], processor: 'openai-api', imageIds: ['photo-mine'], sourceLines: [{ lineIndex: 3, kind: 'total', observedText: 'TOTAL 100.00', amount: 10000 }] };
+  database.sqlite.prepare('UPDATE trips SET data=? WHERE id=?').run(JSON.stringify(trip), 'mine');
+  const body = await json<Snapshot>(await route.GET(request('scope=trip&tripId=mine')));
+  assert.deepEqual(body.data.trips[0].expenses[0].receiptScan, expense.receiptScan);
+  const rows = parseCsv(await (await route.GET(request('scope=trip&tripId=mine&format=csv'))).text());
+  const header = rows[0];
+  assert.deepEqual(JSON.parse(rows[1][header.indexOf('receipt_scan_json')]), expense.receiptScan);
+  assert.deepEqual(JSON.parse(rows[1][header.indexOf('field_sources_json')]), expense.fieldSources);
+  assert.deepEqual(JSON.parse(rows[1][header.indexOf('item_details_json')]), expense.items);
+  assert.ok(rows.every(row => row.length === header.length));
+  assert.equal(rows[2][header.indexOf('receipt_scan_json')], '', 'payments cannot inherit receipt evidence');
 });
 
 test('history pages are bounded, cursor-complete, UTC, scoped and safe as CSV', async () => {

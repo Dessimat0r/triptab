@@ -610,7 +610,7 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
     expenses: trip.expenses.map(entry => clearAssistantAuthors({ ...entry, conversation: entry.conversation?.map(message => ({ ...message })) })),
     drafts: trip.drafts.map(entry => clearAssistantAuthors({ ...entry, conversation: entry.conversation?.map(message => ({ ...message })) })),
   }));
-  ledger = validateLedger(ledger, { previous: { trips: validationPrevious } });
+  ledger = validateLedger(ledger, { previous: { trips: validationPrevious }, source: !options.source || options.source === 'web' ? 'web' : 'mcp' });
   checkLedgerSize(ledger);
   // Diff the final validated representation, so accepted normalization of new
   // fields and every explicit legacy repair have accurate history snapshots.
