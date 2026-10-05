@@ -1,5 +1,6 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useLiveRefresh } from "./use-live-refresh";
 import { Link, Copy, Users, Check } from "lucide-react";
 import type { Trip, TravellerFinancialPreview } from "@/lib/model";
 import type { Profile } from "./account-panel";
@@ -28,28 +29,49 @@ export function TripSharing({ trip, profile, onChanged }: { trip: Trip; profile:
   const invitationKey = `${trip.id}:${profile?.id || ""}`;
   const { confirm, dialog: confirmationDialog, confirming } = useConfirmation(invitationKey);
   const listed = invitations.key === invitationKey ? invitations : { invitations: [], hasMore: false, error: undefined };
+  const activeScope = useRef(invitationKey), listRequest = useRef<AbortController | null>(null);
+  const latestLink = useRef({ id: linkId, busy });
+  useLayoutEffect(() => { activeScope.current = invitationKey; latestLink.current = { id: linkId, busy }; }, [invitationKey, linkId, busy]);
   const refreshInvitations = useCallback(async () => {
-    if (!owner) return;
+    if (!owner || activeScope.current !== invitationKey || listRequest.current) return;
+    const controller = new AbortController();
+    listRequest.current = controller;
     try {
-      const response = await fetch(`/api/invite?mode=list&tripId=${encodeURIComponent(trip.id)}`, { cache: "no-store" });
+      const response = await fetch(`/api/invite?mode=list&tripId=${encodeURIComponent(trip.id)}`, { cache: "no-store", signal: controller.signal });
       const body = await response.json() as InvitationList;
-      if (!response.ok) throw Error(body.error || "Unable to load invitations.");
+      if (controller.signal.aborted || activeScope.current !== invitationKey) return;
+      if (!response.ok) {
+        if ([401, 403].includes(response.status)) { setInvitations({ key: invitationKey, invitations: [], hasMore: false }); setLink(""); setLinkId(""); }
+        throw Error(body.error || "Unable to load invitations.");
+      }
       setInvitations({ ...body, key: invitationKey });
+      // Preserve a newly generated one-use URL during ordinary live checks;
+      // clear it only when its invitation is known to be gone.
+      if (latestLink.current.id && !body.hasMore && !body.invitations.some(invitation => invitation.id === latestLink.current.id)) { setLink(""); setLinkId(""); }
     } catch (cause) {
-      setInvitations({ key: invitationKey, invitations: [], hasMore: false, error: cause instanceof Error ? cause.message : "Unable to load invitations." });
-    }
+      if (!controller.signal.aborted && activeScope.current === invitationKey) setInvitations(previous => ({
+        ...(previous.key === invitationKey ? previous : { invitations: [], hasMore: false }), key: invitationKey,
+        error: cause instanceof Error ? cause.message : "Unable to load invitations.",
+      }));
+    } finally { if (listRequest.current === controller) listRequest.current = null; }
   }, [invitationKey, owner, trip.id]);
+  useEffect(() => () => { listRequest.current?.abort(); listRequest.current = null; }, [invitationKey]);
+  useLiveRefresh(() => { if (!latestLink.current.busy) return refreshInvitations(); }, { accountId: profile?.id, enabled: owner });
   useEffect(() => {
+    let active = true;
     Promise.resolve().then(() => {
+      if (!active || activeScope.current !== invitationKey) return;
       const ids = JSON.parse(availableKey) as string[];
       setMemberId(previous => ids.includes(previous) ? previous : ids[0] || "");
       setLink(""); setLinkId(""); setError("");
       void refreshInvitations();
     });
-  }, [trip.id, availableKey, refreshInvitations]);
+    return () => { active = false; };
+  }, [trip.id, availableKey, invitationKey, refreshInvitations]);
 
   async function createLink(target: string, inviteeEmail: string) {
     if (busy) return;
+    listRequest.current?.abort(); listRequest.current = null;
     setBusy(true); setError(""); setCopied(false);
     try {
       const response = await fetch("/api/invite", {
@@ -93,7 +115,8 @@ export function TripSharing({ trip, profile, onChanged }: { trip: Trip; profile:
     </div>}
     <section className="invite-management" aria-labelledby={`invite-list-${trip.id}`}>
       <h3 id={`invite-list-${trip.id}`}>Active invitations</h3>
-      {listed.error ? <p className="error" role="alert">{listed.error}</p> : listed.invitations.length ? <ul className="invite-management-list">
+      {listed.error && <p className="error" role="alert">{listed.error}</p>}
+      {listed.invitations.length ? <ul className="invite-management-list">
         {listed.invitations.map(invitation => <li className="invite-management-entry" key={invitation.id}>
           <div className="invite-management-details">
             <strong>{memberName(invitation)}</strong>
@@ -104,6 +127,7 @@ export function TripSharing({ trip, profile, onChanged }: { trip: Trip; profile:
             <button type="button" className="quiet" disabled={busy || confirming} onClick={() => void createLink(invitation.memberId, invitation.email || "")}>Replace link</button>
             <button type="button" className="danger quiet" disabled={busy || confirming} onClick={async () => {
               if (busy || !await confirm({ title: "Revoke invitation?", message: `Revoke the invitation for ${memberName(invitation)}? Its link will stop working.`, confirmLabel: "Revoke invitation", destructive: true })) return;
+              listRequest.current?.abort(); listRequest.current = null;
               setBusy(true); setError("");
               try {
                 const response = await fetch("/api/invite", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode: "revoke", tripId: trip.id, invitationId: invitation.id }) });
@@ -118,7 +142,7 @@ export function TripSharing({ trip, profile, onChanged }: { trip: Trip; profile:
         </li>)}
       </ul> : <p className="footnote">No active invitations.</p>}
       {listed.hasMore && <p className="footnote">More older invitations exist. Replace a traveller’s link to invalidate all their earlier unused links.</p>}
-      <button type="button" className="textbutton" disabled={busy} onClick={() => void refreshInvitations()}>Refresh invitations</button>
+      {listed.error ? <button type="button" className="textbutton" disabled={busy} onClick={() => void refreshInvitations()}>Retry invitations</button> : <p className="footnote">Invitations update automatically.</p>}
     </section>
     {error && <p className="error" role="alert">{error}</p>}
     {confirmationDialog}
@@ -129,27 +153,53 @@ type JoinInfo = {
   tripId: string; tripName: string; memberName: string; alreadyMember?: boolean;
   history: TravellerFinancialPreview; historySnapshot: string; error?: string;
 };
-export function JoinTrip({ token, onJoined, onAuthenticate }: {
-  token: string; onJoined: (id: string) => void; onAuthenticate?: () => void;
+export function JoinTrip({ token, accountId, onJoined, onAuthenticate }: {
+  token: string; accountId?: string; onJoined: (id: string) => void; onAuthenticate?: () => void;
 }) {
   const [info, setInfo] = useState<JoinInfo | null>(null),
     [error, setError] = useState(""),
     [auth, setAuth] = useState(false),
     [busy, setBusy] = useState(false),
-    [acceptedHistory, setAcceptedHistory] = useState(false);
+    [acceptedHistorySnapshot, setAcceptedHistorySnapshot] = useState<string | null>(null);
+  const acceptedHistory = !!info && acceptedHistorySnapshot === info.historySnapshot;
+  const joinScope = useRef(token), infoRequest = useRef<AbortController | null>(null), joinBusy = useRef(busy);
+  useLayoutEffect(() => { joinScope.current = token; joinBusy.current = busy; }, [token, busy]);
   const refreshInfo = useCallback(async (signal?: AbortSignal) => {
     const response = await fetch("/api/invite?token=" + encodeURIComponent(token), { cache: "no-store", signal });
     const body = await response.json() as JoinInfo;
-    if (signal?.aborted) return;
-    setAcceptedHistory(false);
-    if (!response.ok) { setAuth(response.status === 401); setInfo(null); throw Error(body.error || "Invitation unavailable."); }
-    setAuth(false); setInfo(body);
+    if (signal?.aborted || joinScope.current !== token) return;
+    if (!response.ok) {
+      if ([401, 403, 404, 410].includes(response.status)) { setAuth(response.status === 401); setInfo(null); setAcceptedHistorySnapshot(null); }
+      throw Error(body.error || "Invitation unavailable.");
+    }
+    setAuth(false); setInfo(body); setError("");
   }, [token]);
+  const checkInvitation = useCallback(async () => {
+    if (joinScope.current !== token || joinBusy.current || infoRequest.current) return;
+    const controller = new AbortController(); infoRequest.current = controller;
+    try { await refreshInfo(controller.signal); }
+    catch (cause) { if (!controller.signal.aborted && joinScope.current === token) setError(cause instanceof Error ? cause.message : "Invitation unavailable."); }
+    finally { if (infoRequest.current === controller) infoRequest.current = null; }
+  }, [token, refreshInfo]);
   useEffect(() => {
-    const controller = new AbortController();
-    void Promise.resolve().then(() => refreshInfo(controller.signal)).catch(cause => { if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : "Invitation unavailable."); });
-    return () => controller.abort();
-  }, [refreshInfo]);
+    let active = true;
+    void Promise.resolve().then(() => {
+      if (!active || joinScope.current !== token) return;
+      setInfo(null); setAcceptedHistorySnapshot(null); setError("");
+      void checkInvitation();
+    });
+    // Invitation screens can precede sign-in, so they need their own light
+    // read scheduler when the authenticated ledger scheduler is unavailable.
+    const refresh = () => { if (document.visibilityState === "visible" && navigator.onLine) void checkInvitation(); };
+    const timer = accountId ? undefined : window.setInterval(refresh, 5_000);
+    window.addEventListener("focus", refresh); window.addEventListener("online", refresh); document.addEventListener("visibilitychange", refresh);
+    return () => {
+      active = false;
+      infoRequest.current?.abort(); infoRequest.current = null;
+      if (timer !== undefined) window.clearInterval(timer); window.removeEventListener("focus", refresh); window.removeEventListener("online", refresh); document.removeEventListener("visibilitychange", refresh);
+    };
+  }, [token, accountId, checkInvitation]);
+  useLiveRefresh(checkInvitation, { accountId });
   const history = info?.history;
   const money = (value: number) => new Intl.NumberFormat("en-GB", { style: "currency", currency: history!.currency, minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value / 100);
   return <div className="panel join-panel">
@@ -162,6 +212,7 @@ export function JoinTrip({ token, onJoined, onAuthenticate }: {
       : info?.alreadyMember ? <button className="primary" onClick={() => onJoined(info.tripId)}>Open holiday</button>
       : info && history && <form onSubmit={async event => {
         event.preventDefault(); if (busy || !acceptedHistory) return;
+        infoRequest.current?.abort(); infoRequest.current = null;
         setBusy(true); setError("");
         try {
           const response = await fetch("/api/invite", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode: "accept", token, acceptHistory: true, historySnapshot: info.historySnapshot }) });
@@ -190,7 +241,7 @@ export function JoinTrip({ token, onJoined, onAuthenticate }: {
           <p className="footnote">Joining links these existing records to your account. It does not record a payment or transfer any money.</p>
         </section>
         <label className="join-history-confirm">
-          <input type="checkbox" required checked={acceptedHistory} disabled={busy} onChange={event => setAcceptedHistory(event.target.checked)} />
+          <input type="checkbox" required checked={acceptedHistory} disabled={busy} onChange={event => setAcceptedHistorySnapshot(event.target.checked ? info.historySnapshot : null)} />
           <span>I have reviewed this history and agree to join as {info.memberName}.</span>
         </label>
         <button className="primary" disabled={busy || !acceptedHistory}>{busy ? "Joining…" : "Confirm history & join holiday"}</button>

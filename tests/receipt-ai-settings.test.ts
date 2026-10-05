@@ -30,6 +30,7 @@ function controller(fetcher: (url: string, options?: RequestInit) => Promise<Res
   const values: unknown[] = [], refs: { current: unknown }[] = [], effects: (() => void | (() => void))[] = [];
   const notifications: string[] = [], redirects: string[] = [];
   let index = 0, refIndex = 0, firstRender = true, cleanup: (() => void) | undefined;
+  let refresh: (() => void | Promise<unknown>) | undefined;
   const hooks = {
     useId: () => 'receipt-ai-test',
     useCallback: (callback: unknown) => callback,
@@ -44,6 +45,7 @@ function controller(fetcher: (url: string, options?: RequestInit) => Promise<Res
   const loaded = { exports: {} as { default: React.ComponentType<{ accountId: string; verificationHref: string }> } };
   new Function('require', 'module', 'exports', 'fetch', 'window', compiled)((name: string) => {
     if (name === 'react') return hooks;
+    if (name === './use-live-refresh') return { useLiveRefresh(callback: () => void | Promise<unknown>) { refresh = callback; } };
     if (name === 'lucide-react') return { KeyRound: () => React.createElement('svg'), Trash2: () => React.createElement('svg') };
     return nodeRequire(name);
   }, loaded, loaded.exports, fetcher, {
@@ -52,6 +54,7 @@ function controller(fetcher: (url: string, options?: RequestInit) => Promise<Res
   });
   return {
     notifications, redirects,
+    refresh() { return refresh?.(); },
     render() {
       index = 0; refIndex = 0;
       const tree = (loaded.exports.default as (props: { accountId: string; verificationHref: string }) => React.ReactNode)({ accountId: 'owner', verificationHref });
@@ -291,4 +294,75 @@ test('a successful save followed by a failed status refresh remains reported as 
   assert.match(html, /API key saved/);
   assert.deepEqual(ui.notifications, ['triptab:receipt-ai-settings']);
   assert.doesNotMatch(html, /sk-test-sensitive-value|RAW_PROVIDER_ERROR|Unable to save/);
+});
+
+test('live settings checks coalesce and update status without clearing a typed replacement key', async () => {
+  let count = 0, finish!: (response: Response) => void;
+  const ui = controller(async () => ++count === 1 ? Response.json(state) : new Promise(resolve => { finish = resolve; }));
+  ui.render(); await settle();
+  (keyInput(ui.render()).props.onChange as (event: unknown) => void)({ target: { value: 'sk-test-draft-only' } });
+  ui.render();
+  const first = ui.refresh(), second = ui.refresh();
+  assert.equal(first, second);
+  assert.equal(count, 2);
+  finish(Response.json({ ...state, connected: true, apiConnected: true }));
+  await first;
+  const rendered = ui.render();
+  assert.match(rendered.html, /Shared receipt processing is ready/);
+  assert.equal(keyInput(rendered).props.value, 'sk-test-draft-only');
+});
+
+test('live settings checks never abort an active key mutation and preserve its success notice', async () => {
+  let finish!: (response: Response) => void;
+  const calls: { options?: RequestInit }[] = [];
+  const ui = controller(async (_url, options) => {
+    calls.push({ options });
+    return options?.method === 'POST' ? new Promise(resolve => { finish = resolve; }) : Response.json(state);
+  });
+  ui.render(); await settle();
+  (keyInput(ui.render()).props.onChange as (event: unknown) => void)({ target: { value: 'sk-test-to-save' } });
+  const form = ui.render().elements.find(element => element.type === 'form');
+  assert(form);
+  (form.props.onSubmit as (event: unknown) => void)({ preventDefault() {} });
+  await ui.refresh();
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].options?.signal?.aborted, false);
+  finish(Response.json({ ok: true }));
+  await settle(); ui.render();
+  await ui.refresh();
+  assert.match(ui.render().html, /API key saved/);
+  assert.equal(keyInput(ui.render()).props.value, '');
+});
+
+test('automatic settings recovery clears a read failure while keeping a typed key', async () => {
+  let failing = false;
+  const ui = controller(async () => failing ? Response.json({}, { status: 503 }) : Response.json(state));
+  ui.render(); await settle();
+  (keyInput(ui.render()).props.onChange as (event: unknown) => void)({ target: { value: 'sk-test-kept' } });
+  ui.render(); failing = true;
+  await ui.refresh();
+  assert.match(ui.render().html, /temporarily unavailable/);
+  failing = false; await ui.refresh();
+  const recovered = ui.render();
+  assert.doesNotMatch(recovered.html, /temporarily unavailable/);
+  assert.equal(keyInput(recovered).props.value, 'sk-test-kept');
+});
+
+test('a saved key with a failed status check recovers automatically without losing its save notice', async () => {
+  let checkFailed = false, recover = false;
+  const ui = controller(async (_url, options) => {
+    if (options?.method === 'POST') { checkFailed = true; return Response.json({ ok: true }); }
+    return checkFailed && !recover ? Response.json({}, { status: 503 }) : Response.json(state);
+  });
+  ui.render(); await settle();
+  (keyInput(ui.render()).props.onChange as (event: unknown) => void)({ target: { value: 'sk-test-saved' } });
+  const form = ui.render().elements.find(element => element.type === 'form');
+  assert(form);
+  (form.props.onSubmit as (event: unknown) => void)({ preventDefault() {} });
+  await settle();
+  assert.match(ui.render().html, /It will retry automatically/);
+  recover = true; await ui.refresh();
+  const restored = ui.render();
+  assert.match(restored.html, /API key saved/);
+  assert.doesNotMatch(restored.html, /could not refresh/);
 });

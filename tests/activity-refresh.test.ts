@@ -33,18 +33,21 @@ assert(panelKeys.length);
 const controllerSource = `return function controller(fetch) {
   let ledger = {trips: []}, revision = 0, activityRefreshKey = 0, loading = false, error = '', refreshError = '', auth = false, profile = {id: 'current-account'};
   let editing = {id:'private-receipt'}, receiptAI = {connected:true}, receiptResets = 0;
+  const receiptSessionScope = {current:{accountId:'current-account'}}, profileReadRequest = {current:0}, activeProfile = {current:profile};
+  const signals = [], dispatchLiveRefresh = accountId => {signals.push(accountId)}, setPaymentEditor = () => {};
+  const profileRefreshes = [], initialProfileRead = {current:accountId=>{profileRefreshes.push(accountId);}};
   const latestSnapshot = {current: {data: ledger, revision}}, savedEtag = {current: ''}, loadRequest = {current: 0}, inFlightLoad = {current: null}, editorBaseline = {current: null};
   const setLedger = next => {ledger = next}, setRevision = next => {revision = next}, setActivityRefreshKey = next => {activityRefreshKey = next};
   const setLoading = next => {loading = next}, setError = next => {error = next}, setRefreshError = next => {refreshError = next};
-  const setLastRefreshed = () => {}, setAuth = next => {auth = next}, setProfile = next => {profile = next}, setEditorConflict = () => {};
+  const setLastRefreshed = () => {}, setAuth = next => {auth = next}, setProfile = next => {profile = next;activeProfile.current=next;receiptSessionScope.current.accountId=next?.id||''}, setEditorConflict = () => {};
   const resetReceiptReview = () => {receiptResets++}, setEditing = next => {editing=next}, setReceiptAI = next => {receiptAI=next};
   ${callbacks}
   ${accountAuthenticated.getText(syntax)}
-  return {load,applySnapshot,accountAuthenticated,setError,get revision(){return revision},get ledger(){return ledger},get refreshKey(){return ${panelKeys[0]}},get panelKeys(){return [${panelKeys.join(',')}]},get loading(){return loading},get error(){return error},get refreshError(){return refreshError},get auth(){return auth},get profile(){return profile},get editing(){return editing},get receiptAI(){return receiptAI},get receiptResets(){return receiptResets}};
+  return {load,applySnapshot,accountAuthenticated,setError,get revision(){return revision},get ledger(){return ledger},get refreshKey(){return ${panelKeys[0]}},get panelKeys(){return [${panelKeys.join(',')}]},get loading(){return loading},get error(){return error},get refreshError(){return refreshError},get auth(){return auth},get profile(){return profile},get editing(){return editing},get receiptAI(){return receiptAI},get receiptResets(){return receiptResets},get signals(){return signals},get profileRefreshes(){return profileRefreshes}};
 }`;
 const compiled = transpileModule(controllerSource, { compilerOptions: { module: ModuleKind.CommonJS, target: ScriptTarget.ES2022 } }).outputText;
 type Snapshot = {data: Ledger; revision: number};
-type Controller = {load(options?: {background?: boolean;fresh?:boolean}): Promise<unknown>; applySnapshot(snapshot: Snapshot, etag?: string, invalidateRefresh?: boolean): boolean; accountAuthenticated(profile: object): Promise<void>; setError(message: string): void; revision: number; ledger: Ledger; refreshKey: string | number; panelKeys: (string | number)[]; loading: boolean; error: string; refreshError:string; auth: boolean; profile: {id: string} | null; editing:object|null;receiptAI:object|null;receiptResets:number};
+type Controller = {load(options?: {background?: boolean;fresh?:boolean}): Promise<unknown>; applySnapshot(snapshot: Snapshot, etag?: string, invalidateRefresh?: boolean): boolean; accountAuthenticated(profile: object): Promise<void>; setError(message: string): void; revision: number; ledger: Ledger; refreshKey: string | number; panelKeys: (string | number)[]; loading: boolean; error: string; refreshError:string; auth: boolean; profile: {id: string} | null; editing:object|null;receiptAI:object|null;receiptResets:number;signals:string[];profileRefreshes:string[]};
 const controller = new Function(compiled)() as (fetch: (url: string, options: RequestInit) => Promise<Response>) => Controller;
 
 test('an invitation event refreshes the History panel with no ledger revision change', async () => {
@@ -324,4 +327,41 @@ test('background refresh failures show a separate stale-data message and success
   assert.equal(editor.error,'Finish these item shares');
   fail=false; await editor.load({background:true});
   assert.equal(editor.refreshError,''); assert.equal(editor.error,'Finish these item shares');
+});
+
+ test('unchanged background ledger checks wake private mounted data without replacing the ledger', async () => {
+  const editor=controller(async()=>new Response(null,{status:304,headers:{ETag:'"saved"','X-Ledger-Revision':'5'}}));
+  const data:Ledger={trips:[]};editor.applySnapshot({data,revision:5},'"saved"');
+  await editor.load({background:true});assert.deepEqual(editor.signals,['current-account']);
+  assert.equal(editor.ledger,data);assert.equal(editor.loading,false);
+});
+ test('failed or superseded checks never wake private resources', async () => {
+  const editor=controller(async()=>new Response('Unavailable',{status:503}));
+  await editor.load({background:true});assert.deepEqual(editor.signals,[]);
+});
+
+test('a cross-tab session change reconciles the profile before accepting another account ledger', async () => {
+  for (const status of [200, 304]) {
+    const response = status === 304
+      ? new Response(null, { status, headers: { ETag: '"saved"', 'X-Ledger-Revision': '9', 'X-TripTab-Account': 'other-account' } })
+      : Response.json({ data: { trips: [{ id: 'other-private-holiday' }] }, revision: 9 }, { headers: { ETag: '"other"', 'X-TripTab-Account': 'other-account' } });
+    const app = controller(async () => response);
+    const current: Ledger = { trips: [] };
+    app.applySnapshot({ data: current, revision: 5 }, '"saved"');
+    const result = await app.load({ background: true });
+    assert.equal(result, undefined);
+    assert.equal(app.ledger, current);
+    assert.equal(app.revision, 5);
+    assert.deepEqual(app.signals, []);
+    assert.deepEqual(app.profileRefreshes, ['current-account']);
+    assert.equal(app.profile?.id, 'current-account');
+  }
+});
+
+test('a ledger carrying the authenticated account identity still updates inline', async () => {
+  const app = controller(async () => Response.json({ data: { trips: [] }, revision: 9 }, { headers: { ETag: '"next"', 'X-TripTab-Account': 'current-account' } }));
+  await app.load({ background: true });
+  assert.equal(app.revision, 9);
+  assert.deepEqual(app.signals, ['current-account']);
+  assert.deepEqual(app.profileRefreshes, []);
 });

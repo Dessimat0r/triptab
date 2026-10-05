@@ -64,6 +64,7 @@ const pushRoute = await import(pushURL) as typeof import('../app/api/push/route'
 const authURL = dataURL(compile(await readFile(new URL('../app/api/auth/route.ts', import.meta.url), 'utf8')).replace("'@/lib/store'", JSON.stringify(storeURL)).replace("'@/lib/notifications'", JSON.stringify(notificationURL)).replace("'@/lib/auth'", JSON.stringify(new URL('../lib/auth.ts', import.meta.url).href)));
 const authRoute = await import(authURL) as typeof import('../app/api/auth/route');
 const pwaURL = dataURL(compile(await readFile(new URL('../components/pwa-controls.tsx', import.meta.url), 'utf8'))
+  .replace('"@/components/use-live-refresh"', JSON.stringify(new URL('../components/use-live-refresh.ts', import.meta.url).href))
   .replace('"lucide-react"', JSON.stringify(import.meta.resolve('lucide-react'))));
 const pwa = await import(pwaURL) as typeof import('../components/pwa-controls');
 

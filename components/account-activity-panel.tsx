@@ -33,12 +33,12 @@ function accountLabel(event: AccountAuditEvent): string {
   return ({ profile: "profile", password: "password sign-in", session: event.entityId === "account" ? "other browser sessions" : "browser session", chatgpt: "ChatGPT connection", notifications: "browser notifications", language: "receipt language preferences" }[event.entityType]) || "account setting";
 }
 
-export default function AccountActivityPanel({ refreshKey = 0 }: { refreshKey?: number }) {
-  const history = useActivityPages<AccountAuditEvent>("/api/account-activity", "private-account", refreshKey, "userId");
+export default function AccountActivityPanel({ refreshKey = 0, accountId }: { refreshKey?: number; accountId?: string }) {
+  const history = useActivityPages<AccountAuditEvent>("/api/account-activity", `private-account:${accountId || ""}`, refreshKey, "userId", accountId);
   return <section className="account-section account-activity" aria-label="Private account activity" aria-busy={history.loading}>
     <h3>Account activity</h3>
     <p className="footnote">Only you can see this account history. It records profile, sign-in, connection, notification and personal language changes without passwords or sign-in credentials.</p>
-    <button type="button" className="quiet" disabled={history.loading} onClick={history.retry}>{history.error ? "Retry account activity" : "Refresh account activity"}</button>
+    {history.error ? <button type="button" className="quiet" disabled={history.loading} onClick={history.retry}>Retry account activity</button> : <p className="footnote">History updates automatically.</p>}
     {history.loading && <p role="status">{history.events.length ? "Checking account activity…" : "Loading account activity…"}</p>}
     {history.error && <p className="error" role="alert">{history.error}</p>}
     {!history.loading && !history.error && !history.events.length && <p className="footnote">No recorded account changes yet.</p>}

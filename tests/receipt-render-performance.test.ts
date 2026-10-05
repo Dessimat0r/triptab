@@ -75,6 +75,7 @@ function controller(trip: model.Trip, fetcher?: typeof fetch) {
   const exported = { exports: {} as { default: (props: {children: React.ReactNode}) => React.ReactNode } };
   new Function('require', 'module', 'exports', 'fetch', compiled)((name: string) => {
     if (name === 'react') return hooks;
+    if (name === '@/components/use-live-refresh') return {useLiveRefresh() {},dispatchLiveRefresh() {}};
     if (name === 'react/jsx-runtime') return runtime;
     if (name === '@/components/trip-language-preferences') return {useTripLanguagePreferences:()=>({preferences:{readingLanguage:'en',primaryVersion:'reading',itemVersions:{}},ready:true,busy:false,error:'',save:async()=>true}),PersonalLanguageSettings:component};
     if (name === '@/lib/model') return models;

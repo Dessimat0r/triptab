@@ -14,6 +14,7 @@ import type { ActivityEvent } from '../lib/store';
 const source = await readFile(new URL('../components/activity-panel.tsx', import.meta.url), 'utf8');
 const compiled = transpileWithSharedImports(source + '\nexport { changes, ActivityEventDetails, ActivityDetailBody };', {
   compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022, jsx: JsxEmit.ReactJSX },
+  sharedImportOverrides: { "./use-live-refresh": new URL("../components/use-live-refresh.ts", import.meta.url).href },
 }).outputText
   .replace('import "./activity-details.css";', '')
   .replace('from "@/lib/money-format"', `from ${JSON.stringify(import.meta.resolve('../lib/money-format.ts'))}`)

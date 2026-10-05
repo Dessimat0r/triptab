@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { KeyRound, Trash2 } from "lucide-react";
+import { useLiveRefresh } from "./use-live-refresh";
 import "./receipt-ai-settings.css";
 
 export type ReceiptAIStatus = {
@@ -125,6 +126,8 @@ export default function ReceiptAISettings({
   const setNotice = (next: string) => updateState({ notice: next });
   const request = useRef<AbortController | null>(null);
   const active = useRef(false);
+  const reading = useRef<{ accountId: string; controller: AbortController; promise: Promise<void> } | null>(null);
+  const loadError = useRef("");
 
   const load = useCallback(async (controller: AbortController) => {
     const response = await fetch("/api/receipt/ai-settings", {
@@ -132,24 +135,46 @@ export default function ReceiptAISettings({
     });
     if (!response.ok) throw await settingsResponseError(response, "load");
     const next = statusFromResponse(await response.json());
-    if (request.current === controller && !controller.signal.aborted) setAccountState(previous => ({
-      ...(previous.accountId === accountId ? previous : initialState(accountId)), settings: next, accountId,
-    }));
+    if (request.current === controller && !controller.signal.aborted) {
+      const recovered = loadError.current;
+      loadError.current = "";
+      setAccountState(previous => ({
+        ...(previous.accountId === accountId ? previous : initialState(accountId)), settings: next, accountId,
+        ...(recovered && previous.error === recovered ? { error: "" } : {}),
+      }));
+    }
   }, [accountId]);
 
-  useEffect(() => {
+  const refresh = useCallback(() => {
+    // Saved status reads must never cancel a key/provider mutation or clear the
+    // masked key field and its save notice while an account panel is open.
+    if (active.current) return;
+    const pending = reading.current;
+    if (pending?.accountId === accountId && request.current === pending.controller && !pending.controller.signal.aborted) return pending.promise;
     const controller = new AbortController();
     request.current?.abort();
     request.current = controller;
-    active.current = false;
-    void load(controller).catch(cause => {
-      if (!controller.signal.aborted) setAccountState(previous => ({
-        ...(previous.accountId === accountId ? previous : initialState(accountId)),
-        error: settingsFailureText(cause, operationErrorText.load), accountId,
-      }));
+    const promise = load(controller).catch(cause => {
+      if (!controller.signal.aborted && request.current === controller) {
+        loadError.current = settingsFailureText(cause, operationErrorText.load);
+        const message = loadError.current;
+        setAccountState(previous => ({
+          ...(previous.accountId === accountId ? previous : initialState(accountId)), error: message, accountId,
+        }));
+      }
     });
-    return () => { controller.abort(); request.current?.abort(); request.current = null; };
+    reading.current = { accountId, controller, promise };
+    void promise.then(() => { if (reading.current?.promise === promise) reading.current = null; });
+    return promise;
   }, [accountId, load]);
+  useLiveRefresh(refresh, { accountId });
+
+  useEffect(() => {
+    request.current?.abort();
+    active.current = false;
+    void refresh();
+    return () => { request.current?.abort(); request.current = null; };
+  }, [accountId, refresh]);
 
   function changed() {
     window.dispatchEvent(new CustomEvent("triptab:receipt-ai-settings"));
@@ -180,9 +205,13 @@ export default function ReceiptAISettings({
       setNotice(success);
       await load(controller);
     } catch (cause) {
-      if (!controller.signal.aborted) setError(updated
-        ? "Your settings were saved, but the connection status could not refresh. Reopen Your account."
-        : settingsFailureText(cause, "Could not reach TripTab. Check your connection and try again."));
+      if (!controller.signal.aborted) {
+        const message = updated
+          ? "Your settings were saved, but the connection status could not refresh. It will retry automatically."
+          : settingsFailureText(cause, "Could not reach TripTab. Check your connection and try again.");
+        if (updated) loadError.current = message;
+        setError(message);
+      }
     } finally {
       if (request.current === controller && !controller.signal.aborted) {
         active.current = false;
