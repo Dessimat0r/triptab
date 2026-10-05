@@ -193,6 +193,74 @@ test('a stale re-enable cannot refresh a browser binding transferred to another 
   assert.deepEqual(await deviceEvents(database, 'bob'), []);
 });
 
+test('receipt reply notifications reach their author even when the assistant uses that account', async context => {
+  const database = await storage();
+  database.sqlite.prepare('INSERT INTO trips (id,owner,data) VALUES (?,?,?)').run('reply-trip', 'alice', '{}');
+  for (const [user, member] of [['alice', 'author-a'], ['bob', 'author-b']]) {
+    database.sqlite.prepare('INSERT INTO memberships (trip_id,user_id,member_id) VALUES (?,?,?)').run('reply-trip', user, member);
+    await notifications.subscribe(user, endpoint(user));
+  }
+  const oldKey = environment.VAPID_PRIVATE_KEY;
+  environment.VAPID_PRIVATE_KEY = await realVapidKey();
+  const delivered: string[] = [];
+  context.mock.method(globalThis, 'fetch', async (url: string | URL | Request, init?: RequestInit) => {
+    delivered.push(String(url));
+    assert.equal(init?.body, '', 'push remains a content-free wake-up signal');
+    return new Response(null, { status: 201 });
+  });
+  try {
+    await notifications.notifyReceiptReply('reply-trip', 'alice', 'author-a');
+    await Promise.all(environment.pending);
+    assert.deepEqual(delivered, [endpoint('alice')]);
+    const inbox = await notifications.latestNotifications('alice');
+    assert.equal(inbox.length, 1);
+    assert.equal(inbox[0].title, 'Receipt reply available');
+    assert.equal(inbox[0].body, 'A reply from ChatGPT or Codex is ready. Open TripTab to read it.');
+    assert.deepEqual(await notifications.latestNotifications('bob'), []);
+    await notifications.notifyReceiptReply('reply-trip', 'bob', 'author-a');
+    await Promise.all(environment.pending);
+    assert.equal(delivered.length, 1, 'the existing thirty-second throttle covers assistant replies');
+    assert.equal((await notifications.latestNotifications('alice')).length, 2, 'throttling never drops an inbox entry');
+    await notifications.notifyMembers('reply-trip', 'alice', 'TripTab activity', 'Alice updated an expense.');
+    await Promise.all(environment.pending);
+    assert.deepEqual(delivered, [endpoint('alice'), endpoint('bob')], 'normal holiday activity still excludes its actor');
+    assert.equal((await notifications.latestNotifications('alice')).length, 2);
+  } finally { environment.VAPID_PRIVATE_KEY = oldKey; }
+});
+
+test('receipt replies target only a currently linked author and do not substitute another account', async () => {
+  const database = await storage();
+  database.sqlite.prepare('INSERT INTO trips (id,owner,data) VALUES (?,?,?)').run('reply-trip', 'bob', '{}');
+  database.sqlite.prepare('INSERT INTO memberships (trip_id,user_id,member_id) VALUES (?,?,?)').run('reply-trip', 'alice', 'author-a');
+  database.sqlite.prepare('INSERT INTO memberships (trip_id,user_id,member_id) VALUES (?,?,?)').run('reply-trip', 'bob', 'caller-b');
+  await notifications.notifyReceiptReply('reply-trip', 'bob', 'author-a');
+  await Promise.all(environment.pending);
+  assert.equal((await notifications.latestNotifications('alice')).length, 1);
+  assert.deepEqual(await notifications.latestNotifications('bob'), []);
+  database.sqlite.prepare('DELETE FROM memberships WHERE trip_id=? AND user_id=?').run('reply-trip', 'alice');
+  await notifications.notifyReceiptReply('reply-trip', 'bob', 'author-a');
+  await notifications.notifyReceiptReply('reply-trip', 'bob', 'unknown-author');
+  await Promise.all(environment.pending);
+  assert.equal((await notifications.latestNotifications('alice')).length, 1, 'a departed author receives no further update');
+  assert.deepEqual(await notifications.latestNotifications('bob'), [], 'an unknown author is never redirected to the caller');
+});
+
+test('legacy receipt questions without author IDs can notify only their caller with current holiday access', async () => {
+  const database = await storage();
+  database.sqlite.prepare('INSERT INTO trips (id,owner,data) VALUES (?,?,?)').run('reply-trip', 'bob', '{}');
+  database.sqlite.prepare('INSERT INTO memberships (trip_id,user_id,member_id) VALUES (?,?,?)').run('reply-trip', 'alice', 'caller-a');
+  await notifications.notifyReceiptReply('reply-trip', 'alice');
+  await Promise.all(environment.pending);
+  assert.equal((await notifications.latestNotifications('alice')).length, 1);
+  assert.deepEqual(await notifications.latestNotifications('bob'), []);
+  database.sqlite.prepare('DELETE FROM memberships WHERE trip_id=? AND user_id=?').run('reply-trip', 'alice');
+  await notifications.notifyReceiptReply('reply-trip', 'alice');
+  await notifications.notifyReceiptReply('missing-trip', 'bob');
+  await Promise.all(environment.pending);
+  assert.equal((await notifications.latestNotifications('alice')).length, 1);
+  assert.deepEqual(await notifications.latestNotifications('bob'), []);
+});
+
 async function notificationGroup(database: SQLiteD1, travellers: number, devices: number) {
   database.sqlite.prepare('INSERT INTO trips (id,owner,data) VALUES (?,?,?)').run('group-trip', 'bob', '{}');
   const endpoints = new Map<string, string[]>();

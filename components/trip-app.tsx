@@ -184,7 +184,6 @@ export default function Home({ children }: { children: ReactNode }) {
     [receiptProcessing, setReceiptProcessing] = useState(false),
     [receiptAI, setReceiptAI] = useState<ReceiptAIState | null>(null),
     [receiptAIConnecting, setReceiptAIConnecting] = useState(false),
-    [receiptChecking, setReceiptChecking] = useState(false),
     [processedReceipt, setProcessedReceipt] = useState<Draft | null>(null),
     [fxLoading, setFxLoading] = useState(false),
     [fxError, setFxError] = useState(""),
@@ -315,15 +314,32 @@ export default function Home({ children }: { children: ReactNode }) {
     });
     return promise;
   }, [applySnapshot]);
+  const receiptRefreshActive = !!(editing?.draftId || editing?.expenseId);
   useEffect(() => {
-    if (auth || saving || uploading || loading) return;
-    const poll = async () => {
+    if (auth || saving || uploading || loading || receiptProcessing) return;
+    const refresh = () => {
       if (document.visibilityState !== "visible" || !navigator.onLine) return;
-      await load({ background: true });
+      void load({ background: true });
     };
-    const timer = window.setInterval(() => void poll(), 30_000);
-    return () => { window.clearInterval(timer); };
-  }, [auth, saving, uploading, loading, load]);
+    const pushed = (event: MessageEvent) => {
+      if (event.data?.type === "TRIPTAB_REFRESH") refresh();
+    };
+    // One conditional-GET scheduler covers receipt and item chats, including
+    // already itemised receipts. Typing does not restart its timer. This reads
+    // saved replies only; it never starts a paid model request.
+    const timer = window.setInterval(refresh, receiptRefreshActive ? 5_000 : 30_000);
+    window.addEventListener("focus", refresh);
+    window.addEventListener("online", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    navigator.serviceWorker?.addEventListener("message", pushed);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refresh);
+      window.removeEventListener("online", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+      navigator.serviceWorker?.removeEventListener("message", pushed);
+    };
+  }, [auth, profile?.id, trip?.id, saving, uploading, loading, receiptProcessing, receiptRefreshActive, load]);
   useEffect(() => {
     let active = true;
     Promise.resolve().then(() => {
@@ -391,12 +407,6 @@ export default function Home({ children }: { children: ReactNode }) {
     // refresh after initial loading so direct links can share that request.
     void Promise.resolve().then(() => load({ background: true }));
   }, [view, load]);
-  useEffect(() => {
-    const refresh = () => { if (document.visibilityState === "visible" && !saving && !uploading) void load({ background: true }); };
-    window.addEventListener("focus", refresh);
-    document.addEventListener("visibilitychange", refresh);
-    return () => { window.removeEventListener("focus", refresh); document.removeEventListener("visibilitychange", refresh); };
-  }, [load, saving, uploading]);
   useEffect(() => { if (!editing) editorBaseline.current = null; }, [editing]);
   useEffect(() => {
     if (!trip || !editing || editorBaseline.current?.tripId !== trip.id || saving || uploading) return;
@@ -405,17 +415,6 @@ export default function Home({ children }: { children: ReactNode }) {
     // unrelated modal state must not schedule another financial comparison.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ledger, trip, editing, processedReceipt, profile?.id, saving, uploading]);
-  useEffect(() => {
-    if (!trip || !editing?.draftId || !receiptPrompt || (!receiptCopied && !receiptHandoffOpened) || receiptProcessing || saving || uploading || auth || receiptItemized) return;
-    const draft = trip.drafts.find(value => value.id === editing.draftId && value.receiptId === editing.receiptId);
-    if (!draft || draft.status !== "waiting") return;
-    // Waiting describes the saved draft, not a model job. Poll only the open
-    // receipt; returning from ChatGPT also uses the existing focus refresh.
-    const timer = window.setInterval(() => {
-      if (document.visibilityState === "visible" && navigator.onLine) void load({ background: true });
-    }, 5_000);
-    return () => window.clearInterval(timer);
-  }, [trip, editing?.draftId, editing?.receiptId, receiptPrompt, receiptCopied, receiptHandoffOpened, receiptProcessing, receiptItemized, saving, uploading, auth, load]);
   function requestAccount() {
     setAuthMode("login");
     requestAnimationFrame(() => {
@@ -656,7 +655,6 @@ export default function Home({ children }: { children: ReactNode }) {
     setReceiptProcessing(false);
     setUploading(false);
     setReceiptAIConnecting(false);
-    setReceiptChecking(false);
     setReceiptItemized(false);
     setProcessedReceipt(null);
   }
@@ -673,10 +671,17 @@ export default function Home({ children }: { children: ReactNode }) {
     const session = receiptSession.current;
     const draft = current.drafts.find(value => value.id === editing.draftId);
     const matching = draft && draft.receiptId === editing.receiptId && draft.expenseId === editing.expenseId;
+    const binding = editorDraftBinding.current;
+    // Choosing the saved expense's newer photo keeps the known discussion.
+    // Only conversation/memory may follow that binding; financial proposals
+    // still require the currently selected photo and expense to match.
+    const conversationMatches = matching || (draft && binding?.draftId === draft.id
+      && binding.receiptId === draft.receiptId && binding.expenseId === draft.expenseId
+      && draft.expenseId === editing.expenseId);
     const proposal = matchingReceiptProposal(current, editing);
     const target = current.expenses.find(value => value.id === editing.expenseId);
-    let next = { ...editing, conversation: mergeReceiptConversation(mergeReceiptConversation(target?.conversation, matching ? draft.conversation : undefined), editing.conversation),
-      memory: matching ? draft.memory ?? target?.memory ?? editing.memory : editing.memory };
+    let next = { ...editing, conversation: mergeReceiptConversation(mergeReceiptConversation(target?.conversation, conversationMatches ? draft!.conversation : undefined), editing.conversation),
+      memory: conversationMatches ? draft!.memory ?? target?.memory ?? editing.memory : editing.memory };
     let needsReview = proposal;
     const initial = initialReceiptReview.current;
     if (proposal && initial?.pendingFinancial && initial.accountId === (profile?.id || "") && initial.tripId === current.id
@@ -927,7 +932,7 @@ export default function Home({ children }: { children: ReactNode }) {
     await processEditorReceipt(draft);
   }
   async function sendReceiptQuestion(text: string, itemId?: string) {
-    if (!trip || !editing || saving || uploading || receiptChecking || receiptProcessing) return false;
+    if (!trip || !editing || saving || uploading || receiptProcessing) return false;
     const session = receiptSession.current, tripId = trip.id, accountId = profile?.id || "";
     const trimmed = text.trim();
     if (!trimmed || trimmed.length > 4000) {
@@ -957,47 +962,6 @@ export default function Home({ children }: { children: ReactNode }) {
     // full-capability connected-tool request for these discussions.
     await copyEditorReceiptPrompt(draft, question);
     return true;
-  }
-  async function checkEditorReceipt(repliesOnly = false) {
-    if (!trip || !editing) return;
-    const session = receiptSession.current, tripId = trip.id, accountId = profile?.id || "";
-    if (!editing.draftId) {
-      setError("Ask a receipt question or copy the receipt prompt first, then use your connected ChatGPT or Codex.");
-      return;
-    }
-    const draftId = editing.draftId;
-    const previous = trip.drafts.find(draft => draft.id === draftId);
-    if (!previous || (editing.expenseId && previous.expenseId !== editing.expenseId)) {
-      setError("This receipt draft has changed or is no longer available. Your current edits are still here.");
-      return;
-    }
-    const receiptId = previous.receiptId;
-    const expenseId = previous.expenseId;
-    setReceiptChecking(true);
-    setError("");
-    try {
-      const response = await fetch("/api/ledger", { cache: "no-store" });
-      const body = await response.json() as { data: Ledger; revision: number; error?: string };
-      if (!isReceiptSessionCurrent(session, tripId, accountId)) return;
-      if (!response.ok) throw Error(body.error || "Unable to check this receipt.");
-      applySnapshot(body, response.headers.get("etag") || "", true);
-      const currentData = latestSnapshot.current.data;
-      editorIsCurrent(currentData.trips.find(value => value.id === trip.id));
-      const draft = currentData.trips.find(value => value.id === trip.id)?.drafts.find(value => value.id === draftId);
-      if (!draft || draft.receiptId !== receiptId || draft.expenseId !== expenseId) throw Error("This receipt draft has changed or is no longer available. Your current edits are still here.");
-      const target = currentData.trips.find(value => value.id === trip.id)?.expenses.find(value => value.id === editing.id);
-      setEditing(prev => prev?.draftId === draftId ? { ...prev,
-        conversation: mergeReceiptConversation(mergeReceiptConversation(target?.conversation, draft.conversation), prev.conversation),
-        memory: draft.memory ?? target?.memory ?? prev.memory,
-      } : prev);
-      const matchingProposal = draft.status === "review" && draft.receiptId === editing.receiptId;
-      setProcessedReceipt(matchingProposal ? draft : null);
-      if (!matchingProposal && !repliesOnly) setError("No processed receipt has been received yet. Use Process receipt, or open ChatGPT or Codex with the TripTab tools enabled and paste the prepared prompt. Linking your account alone does not enable those tools.");
-    } catch (cause) {
-      if (isReceiptSessionCurrent(session, tripId, accountId)) setError(cause instanceof Error ? cause.message : "Unable to check this receipt.");
-    } finally {
-      if (session === receiptSession.current) setReceiptChecking(false);
-    }
   }
   function reviewProcessedReceipt() {
     if (!trip || !editing || !processedReceipt) return;
@@ -1055,7 +1019,7 @@ export default function Home({ children }: { children: ReactNode }) {
   async function submitExpense(e: React.FormEvent) {
     e.preventDefault();
     if (receiptHistoryOpen) return;
-    if (!trip || !editing || uploading || receiptChecking || saving || receiptProcessing) return;
+    if (!trip || !editing || uploading || saving || receiptProcessing) return;
     if (!editorIsCurrent()) return;
     const scanError = receiptScanSaveError(editing, { allowAcknowledgement: true, previous: editorBaseline.current?.expense });
     if (scanError) { setError(scanError); return; }
@@ -2138,7 +2102,7 @@ export default function Home({ children }: { children: ReactNode }) {
       {editing && trip && (
         <ModalA11y
           className="overlay editor-overlay"
-          onClose={() => { if (!uploading && !saving && !receiptChecking) closeReceiptEditor(); }}
+          onClose={() => { if (!uploading && !saving) closeReceiptEditor(); }}
         >
           <section
             className="modal editor"
@@ -2162,7 +2126,7 @@ export default function Home({ children }: { children: ReactNode }) {
                   type="button"
                   className="iconbutton"
                   aria-label="Close editor"
-                  disabled={uploading || saving || receiptChecking}
+                  disabled={uploading || saving}
                   onClick={closeReceiptEditor}
                 >
                   <X />
@@ -2176,7 +2140,7 @@ export default function Home({ children }: { children: ReactNode }) {
               <div className={"editor-body " + (editing.receiptId ? "with-receipt" : "")}>
                 <ReceiptCapture
                   receiptId={editing.receiptId}
-                  busy={uploading || saving || receiptChecking || receiptAIConnecting}
+                  busy={uploading || saving || receiptAIConnecting}
                   stored={!receiptPending}
                   copied={receiptCopied}
                   prompt={receiptPrompt}
@@ -2186,6 +2150,8 @@ export default function Home({ children }: { children: ReactNode }) {
                   chatgptUrl={receiptPrompt ? chatgptReceiptUrl(receiptPrompt) : undefined}
                   handoffOpened={receiptHandoffOpened}
                   assistantError={receiptHandoffError}
+                  refreshError={refreshError}
+                  offline={offline}
                   onOpenChatGPT={() => setReceiptHandoffOpened(true)}
                   onConnectChatGPT={() => setAccount(true)}
                   aiConfigured={!!receiptAI && receiptAI.accountId === profile?.id && receiptAI.configured}
@@ -2206,11 +2172,11 @@ export default function Home({ children }: { children: ReactNode }) {
                   }}
                   onPreparingChange={setUploading}
                   onPrepare={prepareEditorReceipt}
-                  onRefresh={() => checkEditorReceipt()}
+                  onRefresh={() => void load({ background: true, fresh: true })}
                   onUseProcessed={reviewProcessedReceipt}
                 />
                 <div className="edit-fields">
-                  <ExpenseIconPicker entry={editing} showLabel disabled={saving || uploading || receiptChecking} onChange={icon => setEditing(previous => previous && { ...previous, icon })} />
+                  <ExpenseIconPicker entry={editing} showLabel disabled={saving || uploading} onChange={icon => setEditing(previous => previous && { ...previous, icon })} />
                   {restoration && <RestorationNotice info={restoration} />}
                   {editing.receiptId && <ReceiptPhotoViewer receiptId={editing.receiptId} />}
                   <ReceiptScanReview entry={editing} onChange={setEditing} />
@@ -2411,8 +2377,9 @@ export default function Home({ children }: { children: ReactNode }) {
                           scopeLabel={item.name.trim() || `item ${i + 1}`}
                           itemNames={itemNames} memberNames={memberNames}
                           currentMemberId={trip.members[currentMemberIndex]?.id}
-                          memory={editing.memory} error={error} busy={uploading || saving || receiptChecking || receiptProcessing}
-                          onSend={sendReceiptQuestion} onRefresh={() => checkEditorReceipt(true)} />
+                          memory={editing.memory} error={error} busy={uploading || saving || receiptProcessing}
+                          refreshError={refreshError} offline={offline}
+                          onSend={sendReceiptQuestion} onRefresh={() => void load({ background: true, fresh: true })} />
                       </div>
                     ))}
                   </div>
@@ -2489,14 +2456,16 @@ export default function Home({ children }: { children: ReactNode }) {
                     currentMemberId={trip.members[currentMemberIndex]?.id}
                     memory={editing.memory}
                     error={error}
-                    busy={uploading || saving || receiptChecking || receiptProcessing}
+                    refreshError={refreshError}
+                    offline={offline}
+                    busy={uploading || saving || receiptProcessing}
                     onSend={sendReceiptQuestion}
-                    onRefresh={() => checkEditorReceipt(true)}
+                    onRefresh={() => void load({ background: true, fresh: true })}
                   />
                   {processedReceipt && <section className="receipt-proposal" aria-label="Proposed receipt changes">
                     <h3>Changes ready to review</h3>
                     <p className="footnote">ChatGPT has proposed an update. Review the whole receipt, including any changes outside the item you discussed, before saving.</p>
-                    <button type="button" className="primary" disabled={saving || uploading || receiptChecking || receiptProcessing} onClick={reviewProcessedReceipt}>Review proposed changes</button>
+                    <button type="button" className="primary" disabled={saving || uploading || receiptProcessing} onClick={reviewProcessedReceipt}>Review proposed changes</button>
                   </section>}
                   {editing.bankAmount !== undefined && (editing.currency === trip.currency || editing.bankAmount <= 0) && <div className="error" role="alert"><p>The saved bank charge is {money(editing.bankAmount, trip.currency)}. {editing.currency === trip.currency ? "A receipt already in the holiday currency cannot use a currency-conversion bank charge." : "A bank charge must be greater than zero."} Review it before saving.</p><button type="button" className="quiet" onClick={() => setEditing({ ...editing, bankAmount: undefined })}>Remove bank charge</button></div>}
                   {editing.currency && editing.currency !== trip.currency && (
@@ -2721,7 +2690,6 @@ export default function Home({ children }: { children: ReactNode }) {
                       saving ||
                       !!editorConflict ||
                       uploading ||
-                      receiptChecking ||
                       receiptProcessing ||
                       fxLoading ||
                       editing.bankAmount === 0 ||

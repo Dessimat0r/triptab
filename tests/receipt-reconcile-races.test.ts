@@ -22,7 +22,7 @@ function handler(name: string) {
 const factorySource = `return function createController(initialEditor, initialTrip, boundary) {
   let latestEditing = structuredClone(initialEditor), current = structuredClone(initialTrip);
   let processedReceipt = null, itemized = false;
-  const initialReceiptReview = {current:null}, reviewedReceipt = {current:null};
+  const initialReceiptReview = {current:null}, reviewedReceipt = {current:null}, editorDraftBinding = {current:null};
   const receiptSession = {current:1}, editorBaseline = {current:{tripId:initialTrip.id}};
   const profile = {id:'owner'}, updates = [];
   const {equalSavedValue,matchingReceiptProposal,mayFillInitialReceipt,receiptEditableValue,receiptProposalEditor} = boundary;

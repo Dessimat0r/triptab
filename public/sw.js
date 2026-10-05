@@ -69,6 +69,24 @@ function appUrl(value) {
   return '/';
 }
 
+async function refreshOpenClients() {
+  try {
+    const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    for (const client of windows) {
+      try {
+        if (new URL(client.url).origin !== self.location.origin) continue;
+        // A wake-up carries no account or receipt contents. Each open app reads
+        // through its current session and preserves its unsaved editor state.
+        client.postMessage({ type: 'TRIPTAB_REFRESH' });
+      } catch {
+        // A closing client must not stop other windows or their notification.
+      }
+    }
+  } catch {
+    // Window delivery is best effort; visible notifications still work.
+  }
+}
+
 self.addEventListener('push', (event) => {
   event.waitUntil((async () => {
     let title = 'TripTab update';
@@ -115,6 +133,9 @@ self.addEventListener('push', (event) => {
           url = appUrl(latest.url);
           if (typeof latest.id === 'string') tag = `triptab-${latest.id}`;
         }
+        // Both ownership and the private inbox must authorize this session
+        // before waking open windows. Polling covers offline/revoked sessions.
+        await refreshOpenClients();
       }
     } catch {
       if (!owned) return;

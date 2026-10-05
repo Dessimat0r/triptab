@@ -234,10 +234,21 @@ async function sendPush(subscription: Subscription, timeoutMs = sendTimeoutMs) {
   }
 }
 
-async function deliverNotifications(tripId: string, actor: string, title: string, body: string) {
+async function deliverNotifications(tripId: string, actor: string, title: string, body: string, replyAuthor?: string | null) {
   const deadline = Date.now() + deliveryBudgetMs;
   try {
-    const memberResult = await db().prepare('SELECT user_id FROM memberships WHERE trip_id = ? AND user_id <> ? LIMIT 50').bind(tripId, actor).all<{ user_id: string }>();
+    // Replies go to the saved question's author, including when their connected
+    // assistant saved the answer through that same account. Do not guess from a
+    // name or redirect an unlinked author's reply to the caller. Legacy messages
+    // without an author can notify only the authenticated caller while they
+    // still have access to the holiday.
+    const memberResult = replyAuthor === undefined
+      ? await db().prepare('SELECT user_id FROM memberships WHERE trip_id = ? AND user_id <> ? LIMIT 50').bind(tripId, actor).all<{ user_id: string }>()
+      : replyAuthor !== null
+        ? await db().prepare('SELECT user_id FROM memberships WHERE trip_id = ? AND member_id = ? LIMIT 1').bind(tripId, replyAuthor).all<{ user_id: string }>()
+        : await db().prepare(`SELECT ? AS user_id FROM trips t WHERE t.id = ? AND
+          (t.owner = ? OR EXISTS (SELECT 1 FROM memberships m WHERE m.trip_id = t.id AND m.user_id = ?))`)
+          .bind(actor, tripId, actor, actor).all<{ user_id: string }>();
     const users = [...new Set((memberResult.results ?? []).map(member => member.user_id))];
     if (!users.length) return;
     const now = new Date().toISOString();
@@ -290,5 +301,12 @@ async function deliverNotifications(tripId: string, actor: string, title: string
 /** Notification failures never invalidate an already-saved holiday change. */
 export async function notifyMembers(tripId: string, actor: string, title: string, body: string) {
   const delivery = deliverNotifications(tripId, actor, title, body);
+  try { waitUntil(delivery); } catch { await delivery; }
+}
+
+/** A saved answer is announced without carrying receipt or conversation text. */
+export async function notifyReceiptReply(tripId: string, caller: string, authorMemberId?: string) {
+  const delivery = deliverNotifications(tripId, caller, 'Receipt reply available',
+    'A reply from ChatGPT or Codex is ready. Open TripTab to read it.', authorMemberId ?? null);
   try { waitUntil(delivery); } catch { await delivery; }
 }
