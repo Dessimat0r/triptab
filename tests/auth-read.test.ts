@@ -1,9 +1,10 @@
+import { transpileWithSharedImports } from './helpers/transpile';
 import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { Log, LogLevel, Miniflare } from 'miniflare';
-import { ModuleKind, ScriptTarget, transpileModule } from 'typescript';
+import { ModuleKind, ScriptTarget } from 'typescript';
 import { unstable_splitSqlQuery } from 'wrangler';
 import { hashToken, readAuthState, sessionIdentity } from '../lib/auth';
 
@@ -52,7 +53,7 @@ Object.defineProperty(globalThis, Symbol.for('triptab.auth-read-test'), { value:
 const dataUrl = (value: string) => 'data:text/javascript;base64,' + Buffer.from(value).toString('base64');
 const envUrl = dataUrl("export const env=globalThis[Symbol.for('triptab.auth-read-test')];export const waitUntil=()=>{};");
 const notificationsUrl = dataUrl('export const notifyMembers=async()=>{};export const activityNotification=()=>null;');
-const compile = (value: string) => transpileModule(value, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText;
+const compile = (value: string) => transpileWithSharedImports(value, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText;
 let source = compile(await readFile(new URL('../lib/store.ts', import.meta.url), 'utf8'))
   .replace("'cloudflare:workers'", JSON.stringify(envUrl)).replace("'zod'", JSON.stringify(import.meta.resolve('zod')))
   .replace("'./notifications'", JSON.stringify(notificationsUrl));
@@ -89,8 +90,8 @@ test('established authenticated profiles have bounded D1 round trips', async con
     assert.equal(profile.id, id);
     const statements = database.calls.reduce((total, call) => total + call.sql.length, 0);
     context.diagnostic(`${label}: ${database.calls.length} D1 round trips, ${statements} statements, ${database.calls.length * database.latency}ms simulated transport floor`);
-    assert.equal(database.calls.length, 2);
-    assert.equal(statements, 2);
+    assert.equal(database.calls.length, 1);
+    assert.equal(statements, 1);
     assert.ok(database.calls.every(call => call.kind === 'read' && /^SELECT/.test(call.sql[0].trim())), 'established profile reads never attempt writes');
     assert.equal(database.sqlite.prepare('SELECT COUNT(*) AS count FROM account_activity_events').get()!.count, 0);
   });
@@ -157,11 +158,11 @@ test('stored canonical values and exact trusted email comparison remain authorit
   assert.equal(database.sqlite.prepare('SELECT COUNT(*) AS count FROM account_activity_events').get()!.count, 0);
 });
 
-test('existing session deletion or expiry between snapshot and confirmation cannot return another principal', async context => {
+test('session deletion or expiry before the coherent snapshot selects matching identity and profile', async context => {
   for (const variant of ['delete-no-provider', 'expire-no-provider', 'delete-other-provider', 'delete-same-provider']) await context.test(variant, async () => {
     const database = await storage(); let reads = 0;
     database.beforeRead = sql => {
-      if (!sql.includes('FROM auth_sessions s JOIN profiles p') || ++reads !== 2) return;
+      if (!sql.includes('LEFT JOIN auth_sessions s') || ++reads !== 1) return;
       database.beforeRead = undefined;
       if (variant.startsWith('expire')) database.sqlite.prepare('UPDATE auth_sessions SET expires_at=? WHERE token_hash=?').run('2000-01-01T00:00:00Z', database.sqlite.prepare('SELECT token_hash FROM auth_sessions WHERE user_id=?').get('local-a')!.token_hash as string);
       else database.sqlite.prepare('DELETE FROM auth_sessions WHERE user_id=?').run('local-a');
@@ -169,22 +170,23 @@ test('existing session deletion or expiry between snapshot and confirmation cann
     const headers = variant.endsWith('other-provider') ? providerHeaders('legacy', 'legacy@example.com') : variant.endsWith('same-provider') ? providerHeaders('linked-provider', 'a@example.com') : {};
     const action = store.ensureProfile(request({ cookie: 'tt_session=' + token, ...headers }));
     if (variant.endsWith('same-provider')) assert.equal((await action).id, 'local-a', 'a still-authorized same account fallback preserves prior behavior');
+    else if (variant.endsWith('other-provider')) { const current = await action; assert.equal(current.id, 'legacy'); assert.equal(current.authMethod, 'chatgpt'); }
     else await assert.rejects(action, /UNAUTHORIZED/);
-    assert.equal(reads, 2); assert.equal(database.sqlite.prepare('SELECT COUNT(*) AS count FROM account_activity_events').get()!.count, 0);
+    assert.equal(reads, 1); assert.equal(database.sqlite.prepare('SELECT COUNT(*) AS count FROM account_activity_events').get()!.count, 0);
   });
 });
 
-test('a same-account session gaining precedence between reads does not inherit verified provider email', async () => {
+test('a same-account session gaining precedence before the snapshot does not inherit verified provider email', async () => {
   const database = await storage(); let sessionReads = 0;
   const freshToken = 'c'.repeat(43); const freshHash = await hashToken(freshToken);
   database.beforeRead = sql => {
-    if (!sql.includes('FROM auth_sessions s JOIN profiles p') || ++sessionReads !== 2) return;
+    if (!sql.includes('LEFT JOIN auth_sessions s') || ++sessionReads !== 1) return;
     database.beforeRead = undefined;
     database.sqlite.prepare('INSERT INTO auth_sessions(token_hash,user_id,expires_at,created_at) VALUES(?,?,?,?)')
       .run(freshHash, 'local-a', '2099-01-01T00:00:00Z', '2026-10-04T12:00:00Z');
   };
   const profile = await store.ensureProfile(request({ cookie: 'tt_session=' + freshToken, ...providerHeaders('linked-provider', 'a@example.com') }));
-  assert.equal(sessionReads, 2); assert.equal(profile.id, 'local-a'); assert.equal(profile.authMethod, 'password');
+  assert.equal(sessionReads, 1); assert.equal(profile.id, 'local-a'); assert.equal(profile.authMethod, 'password');
   assert.equal(profile.emailVerified, false);
   assert.equal(database.sqlite.prepare('SELECT COUNT(*) AS count FROM account_activity_events').get()!.count, 0);
 });
@@ -273,4 +275,30 @@ test('native D1 accepts joined auth reads and keeps guarded provider creation an
     delete binding.DB;
     await worker.dispose();
   }
+});
+
+test('stale and expired cookie provider fallbacks use one coherent indexed auth snapshot', async () => {
+  for (const value of ['c'.repeat(43), token]) {
+    const database = await storage();
+    database.sqlite.prepare('UPDATE auth_sessions SET expires_at=? WHERE user_id=?').run('2000-01-01T00:00:00Z', 'local-a');
+    const profile = await store.ensureProfile(request({ cookie: `tt_session=${value}`, ...providerHeaders('legacy', 'legacy@example.com') }));
+    assert.equal(profile.id, 'legacy'); assert.equal(profile.authMethod, 'chatgpt');
+    assert.equal(database.calls.length, 1); assert.equal(database.calls[0].kind, 'read');
+  }
+});
+
+test('a provider link or session winning before the atomic snapshot cannot expose a stale canonical profile', async () => {
+  const database = await storage();
+  database.beforeRead = () => {
+    database.beforeRead = undefined;
+    database.sqlite.prepare('UPDATE auth_links SET user_id=? WHERE oai_user_id=?').run('local-b', 'linked-provider');
+  };
+  const profile = await store.ensureProfile(request({ cookie: 'tt_session=' + 'c'.repeat(43), ...providerHeaders('linked-provider', 'a@example.com') }));
+  assert.equal(profile.id, 'local-b'); assert.equal(profile.email, 'b@example.com'); assert.equal(profile.emailVerified, false);
+  assert.equal(database.calls.length, 1);
+  database.sqlite.prepare('DELETE FROM auth_links WHERE oai_user_id=?').run('linked-provider');
+  database.sqlite.prepare('INSERT INTO profiles(id,email,display_name,created_at) VALUES(?,?,?,?)').run('linked-provider', 'disconnected@example.test', 'Disconnected', '2026-10-04T12:00:00Z');
+  database.sqlite.prepare('INSERT INTO auth_credentials(user_id,email,password_hash,password_salt,iterations,created_at) VALUES(?,?,?,?,?,?)')
+    .run('linked-provider', 'disconnected@example.test', '0'.repeat(64), 'x'.repeat(43), 100_000, '2026-10-04T12:00:00Z');
+  await assert.rejects(store.ensureProfile(request(providerHeaders('linked-provider', 'a@example.com'))), /UNAUTHORIZED/);
 });

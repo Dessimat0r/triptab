@@ -1,9 +1,10 @@
+import { transpileWithSharedImports } from './helpers/transpile';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { createElement, type ComponentType } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { JsxEmit, ModuleKind, ScriptTarget, transpileModule } from 'typescript';
+import { JsxEmit, ModuleKind, ScriptTarget } from 'typescript';
 import type { AuditChange } from '../components/activity-panel';
 import type { ActivityEvent } from '../lib/store';
 
@@ -11,7 +12,7 @@ import type { ActivityEvent } from '../lib/store';
 // Only CSS loading and import locations are adapted for Node; diff logic and
 // descriptions remain the same code used by both history interfaces.
 const source = await readFile(new URL('../components/activity-panel.tsx', import.meta.url), 'utf8');
-const compiled = transpileModule(source + '\nexport { changes, ActivityEventDetails, ActivityDetailBody };', {
+const compiled = transpileWithSharedImports(source + '\nexport { changes, ActivityEventDetails, ActivityDetailBody };', {
   compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022, jsx: JsxEmit.ReactJSX },
 }).outputText
   .replace('import "./activity-details.css";', '')

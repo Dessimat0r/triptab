@@ -41,7 +41,7 @@ async function fixture(providerURL?: string) {
       export default { async fetch(request, env) {
         const path = new URL(request.url).pathname;
         const account = path.startsWith('/member/') ? accounts.member : accounts.owner;
-        const config = { RECEIPT_AI_TOKEN_KEY: env.TOKEN_KEY };
+        const config = { RECEIPT_AI_OWNER_EMAIL: 'dessimat0r@gmail.com', RECEIPT_AI_TOKEN_KEY: env.TOKEN_KEY };
         const input = request.method === 'POST' ? await request.json() : {};
         const submittedKey = input.replacement ? replacementKey : originalKey;
         let providerCalls = 0, transportContract = true;

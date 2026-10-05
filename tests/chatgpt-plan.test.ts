@@ -278,7 +278,7 @@ test('an explicitly reduced refresh scope never inherits old direct-plan permiss
     access_token: 'reduced-grant-access', token_type: 'Bearer', expires_in: 3600, scope: 'openid resource.invoke',
   }) }), code('permission_required'));
   const row = database.sqlite.prepare('SELECT credentials,version,refresh_until FROM chatgpt_plan_connections').get()!;
-  assert.equal(row.credentials, before); assert.equal(row.version, 1); assert.equal(row.refresh_until, 0);
+  assert.notEqual(row.credentials, before); assert.equal(row.version, 2); assert.equal(row.refresh_until, 0);
 });
 
 test('a malformed replacement refresh token cannot replace stored credentials or leave a renewal lease locked', async () => {
@@ -381,4 +381,20 @@ test('an explicitly requested reconnect can recover an unreadable old plan crede
   const start = await begin(db);
   assert.equal(start.authorize.hostname, 'auth.openai.com');
   assert.equal(db.sqlite.prepare('SELECT credentials FROM chatgpt_plan_connections WHERE user_id=?').get(owner.id)?.credentials, original);
+});
+
+test('reduced refresh permissions persist rotated credentials for safe disconnect without granting receipt access', async () => {
+  const database = await storage(); await grant(database, { expiresIn: 1 });
+  await assert.rejects(chatGPTPlanAccessToken(database.asD1(), owner.id, environment, { fetcher: async () => Response.json({
+    access_token: 'new-access', refresh_token: 'rotated-reduced-refresh', token_type: 'Bearer', expires_in: 3600, scope: 'openid resource.invoke',
+  }) }), code('permission_required'));
+  let calls = 0;
+  await assert.rejects(chatGPTPlanAccessToken(database.asD1(), owner.id, environment, { fetcher: async () => { calls++; throw Error('No refresh allowed'); } }), code('permission_required'));
+  assert.equal(calls, 0);
+  const status = await chatGPTPlanStatus(database.asD1(), owner.id, environment);
+  assert.equal(status.connected, false);
+  await disconnectChatGPTPlan(database.asD1(), owner, environment, async (_url, init) => {
+    assert.equal(new URLSearchParams(String(init?.body)).get('token'), 'rotated-reduced-refresh');
+    return new Response(null, { status: 200 });
+  });
 });
