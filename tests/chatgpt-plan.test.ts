@@ -78,8 +78,8 @@ function returned(start: Awaited<ReturnType<typeof begin>>, query: Record<string
   for (const [name, value] of Object.entries(query)) url.searchParams.set(name, value);
   return new Request(url, { headers: { cookie } });
 }
-async function grant(database: SQLiteD1, options: { expiresIn?: number; scope?: string; accessToken?: string; subject?: string } = {}) {
-  const start = await begin(database);
+async function grant(database: SQLiteD1, options: { expiresIn?: number; scope?: string; omitScope?: boolean; accessToken?: string; subject?: string; returnTo?: string } = {}) {
+  const start = await begin(database, owner, options.returnTo);
   const calls: string[] = [];
   const fetcher: typeof fetch = async (url, init) => {
     calls.push(String(url));
@@ -90,7 +90,8 @@ async function grant(database: SQLiteD1, options: { expiresIn?: number; scope?: 
     assert.equal(form.get('redirect_uri'), callback);
     assert.equal(Buffer.from(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(form.get('code_verifier')!))).toString('base64url'), start.authorize.searchParams.get('code_challenge'));
     return Response.json({ access_token: options.accessToken ?? 'access-fixture-secret', refresh_token: 'refresh-fixture-secret', token_type: 'Bearer', expires_in: options.expiresIn ?? 3600,
-      scope: options.scope ?? grantedScope, id_token: await signed(identity(start.authorize.searchParams.get('nonce')!, options.subject ? { sub: options.subject } : {})) });
+      ...(options.omitScope ? {} : { scope: options.scope ?? grantedScope }),
+      id_token: await signed(identity(start.authorize.searchParams.get('nonce')!, options.subject ? { sub: options.subject } : {})) });
   };
   const result = await finishChatGPTPlanAuthorization(database.asD1(), owner, returned(start), environment, fetcher);
   return { start, result, calls };
@@ -151,11 +152,55 @@ test('expired or replaced authorization attempts cannot complete and callback re
   await assert.rejects(finishChatGPTPlanAuthorization(database.asD1(), owner, returned(first), environment, never), code('state_invalid'));
   const expired = await begin(database); database.sqlite.exec('UPDATE chatgpt_plan_transactions SET expires_at=0');
   await assert.rejects(finishChatGPTPlanAuthorization(database.asD1(), owner, returned(expired), environment, never), code('state_invalid'));
-  for (const target of ['https://attacker.invalid', '//attacker.invalid', '/\\attacker.invalid', '/api/receipt/process', '/signin-with-chatgpt']) {
+  for (const target of ['https://attacker.invalid', '//attacker.invalid', '/\\attacker.invalid', '/x/..//attacker.invalid', '/./\\\\attacker.invalid', '/%2e%2e//attacker.invalid', '/api/receipt/process', '/signin-with-chatgpt']) {
     const start = await begin(database, owner, target);
     assert.deepEqual(await finishChatGPTPlanAuthorization(database.asD1(), owner, returned(start, { error: 'access_denied' }), environment, never), { returnTo: '/receipts', result: 'cancelled' });
   }
   assert.equal(providerCalls, 0);
+});
+
+test('successful callbacks preserve local routes but reject return paths that normalize to another host', async () => {
+  for (const target of ['/x/..//attacker.invalid', '/./\\\\attacker.invalid', '/%2e%2e//attacker.invalid']) {
+    const database = await storage();
+    const { result } = await grant(database, { returnTo: target });
+    assert.deepEqual(result, { returnTo: '/receipts', result: 'connected' });
+    assert.equal(new URL(result.returnTo, callback).origin, 'https://triptab.test');
+  }
+  const { result } = await grant(await storage(), { returnTo: '/holiday/../receipts?receiptDraft=saved-draft#review' });
+  assert.equal(result.returnTo, '/receipts?receiptDraft=saved-draft#review');
+});
+
+test('callbacks revalidate unsafe targets in transactions saved before return-path hardening', async () => {
+  for (const cancelled of [true, false]) {
+    const database = await storage(), start = await begin(database);
+    const row = database.sqlite.prepare('SELECT transaction_data FROM chatgpt_plan_transactions').get()!;
+    const [, encodedIv, encodedValue] = String(row.transaction_data).split('.');
+    const key = await crypto.subtle.importKey('raw', Buffer.from(environment.CHATGPT_PLAN_TOKEN_KEY!, 'base64url'), 'AES-GCM', false, ['encrypt', 'decrypt']);
+    const additionalData = new TextEncoder().encode('triptab-plan-v1:transaction:' + owner.id);
+    const pending = JSON.parse(new TextDecoder().decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: Buffer.from(encodedIv, 'base64url'), additionalData }, key, Buffer.from(encodedValue, 'base64url'))));
+    pending.returnTo = '//attacker.invalid';
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData }, key, new TextEncoder().encode(JSON.stringify(pending)));
+    database.sqlite.prepare('UPDATE chatgpt_plan_transactions SET transaction_data=?').run('v1.' + Buffer.from(iv).toString('base64url') + '.' + Buffer.from(encrypted).toString('base64url'));
+    const fetcher: typeof fetch = async url => {
+      assert.equal(cancelled, false, 'cancelled callbacks never call a provider');
+      if (String(url) === jwksEndpoint) return jwks();
+      assert.equal(String(url), tokenEndpoint);
+      return Response.json({ access_token: 'safe-access', refresh_token: 'safe-refresh', token_type: 'Bearer', expires_in: 3600,
+        scope: grantedScope, id_token: await signed(identity(start.authorize.searchParams.get('nonce')!)) });
+    };
+    const result = await finishChatGPTPlanAuthorization(database.asD1(), owner, returned(start, cancelled ? { error: 'access_denied' } : { code: 'synthetic-code' }), environment, fetcher);
+    assert.deepEqual(result, { returnTo: '/receipts', result: cancelled ? 'cancelled' : 'connected' });
+    assert.equal(new URL(result.returnTo, callback).origin, 'https://triptab.test');
+  }
+});
+
+test('authorization responses may omit an unchanged requested scope after verified consent', async () => {
+  const database = await storage();
+  const { result } = await grant(database, { omitScope: true });
+  assert.equal(result.result, 'connected');
+  assert.equal((await chatGPTPlanStatus(database.asD1(), owner.id, environment)).connected, true);
+  assert.equal((await chatGPTPlanAccessToken(database.asD1(), owner.id, environment)).accessToken, 'access-fixture-secret');
 });
 
 test('identity validation rejects invalid nonce, audience, authorized party and non-finite dates even when correctly signed', async () => {
@@ -209,12 +254,39 @@ test('refresh token rotation is serialized and the replacement token is stored a
   assert.equal(row.version, 2); assert.equal(row.refresh_until, 0); assert(!String(row.credentials).includes('renewed-'));
 });
 
-test('an incomplete token rotation cannot replace stored credentials or leave a renewal lease locked', async () => {
+test('refresh responses may retain the previous refresh token and granted scope while storing each new access token', async () => {
+  const database = await storage(); await grant(database, { expiresIn: 1 });
+  let calls = 0;
+  const fetcher: typeof fetch = async (url, init) => {
+    calls++; assert.equal(String(url), tokenEndpoint);
+    assert.equal(new URLSearchParams(String(init?.body)).get('refresh_token'), 'refresh-fixture-secret');
+    return Response.json({ access_token: 'renewed-access-' + calls, token_type: 'Bearer', expires_in: calls === 1 ? 1 : 3600 });
+  };
+  assert.equal((await chatGPTPlanAccessToken(database.asD1(), owner.id, environment, { fetcher })).accessToken, 'renewed-access-1');
+  assert.equal((await chatGPTPlanAccessToken(database.asD1(), owner.id, environment, { fetcher })).accessToken, 'renewed-access-2');
+  assert.equal((await chatGPTPlanAccessToken(database.asD1(), owner.id, environment)).accessToken, 'renewed-access-2');
+  assert.equal(calls, 2);
+  const row = database.sqlite.prepare('SELECT credentials,version,refresh_until FROM chatgpt_plan_connections').get()!;
+  assert.equal(row.version, 3); assert.equal(row.refresh_until, 0);
+  assert(!String(row.credentials).includes('renewed-access')); assert(!String(row.credentials).includes('refresh-fixture-secret'));
+});
+
+test('an explicitly reduced refresh scope never inherits old direct-plan permission', async () => {
   const database = await storage(); await grant(database, { expiresIn: 1 });
   const before = database.sqlite.prepare('SELECT credentials FROM chatgpt_plan_connections').get()?.credentials;
   await assert.rejects(chatGPTPlanAccessToken(database.asD1(), owner.id, environment, { fetcher: async () => Response.json({
-    access_token: 'incomplete-renewal-access', token_type: 'Bearer', expires_in: 3600, scope: grantedScope,
-  }) }), /incomplete renewal credentials/);
+    access_token: 'reduced-grant-access', token_type: 'Bearer', expires_in: 3600, scope: 'openid resource.invoke',
+  }) }), code('permission_required'));
+  const row = database.sqlite.prepare('SELECT credentials,version,refresh_until FROM chatgpt_plan_connections').get()!;
+  assert.equal(row.credentials, before); assert.equal(row.version, 1); assert.equal(row.refresh_until, 0);
+});
+
+test('a malformed replacement refresh token cannot replace stored credentials or leave a renewal lease locked', async () => {
+  const database = await storage(); await grant(database, { expiresIn: 1 });
+  const before = database.sqlite.prepare('SELECT credentials FROM chatgpt_plan_connections').get()?.credentials;
+  await assert.rejects(chatGPTPlanAccessToken(database.asD1(), owner.id, environment, { fetcher: async () => Response.json({
+    access_token: 'incomplete-renewal-access', refresh_token: '', token_type: 'Bearer', expires_in: 3600, scope: grantedScope,
+  }) }), /incomplete connection credentials/);
   const row = database.sqlite.prepare('SELECT credentials,version,refresh_until FROM chatgpt_plan_connections').get()!;
   assert.equal(row.credentials, before); assert.equal(row.version, 1); assert.equal(row.refresh_until, 0);
 });

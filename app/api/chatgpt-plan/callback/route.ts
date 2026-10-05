@@ -8,7 +8,7 @@ export async function GET(request: Request) {
     const saved = await finishChatGPTPlanAuthorization(db(), await ensureProfile(request), request, env as ChatGPTPlanEnvironment);
     returnTo = saved.returnTo; result = saved.result;
   } catch { /* Never expose OAuth codes, tokens or provider error bodies. */ }
-  const url = new URL(returnTo, request.url);
+  const url = new URL(returnTo, new URL(request.url).origin);
   url.searchParams.set('chatgpt_plan', result);
   return new Response(null, { status: 303, headers: { Location: url.toString(), 'Set-Cookie': clearChatGPTPlanCookie, 'Cache-Control': 'private, no-store' } });
 }

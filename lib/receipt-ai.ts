@@ -383,21 +383,32 @@ export function applyReceiptTranscription(_trip: Trip, draft: Draft, transcripti
       ...(item.scanSource.observedText !== null ? { observedText: item.scanSource.observedText } : {}),
       ...(item.scanSource.confidence !== null ? { confidence: item.scanSource.confidence } : {}),
     } : previous?.scanSource;
+    const canObserve = (field: 'name' | 'amount') => {
+      const source = previous?.fieldSources?.[field];
+      // A legacy saved value may have been entered or corrected by a person.
+      // Only the untouched, empty initial placeholder is safe to infer from
+      // shape; current recognized/default fields carry explicit provenance.
+      return !previous || (source === undefined ? untouched && blank(previous) : source !== 'user');
+    };
+    const readName = canObserve('name'), readAmount = canObserve('amount');
     const nextQuantity = previous ? (quantity && previous.fieldSources?.quantity !== 'user'
       && (!previous.quantity || previous.fieldSources?.quantity === 'receipt') ? quantity : previous.quantity) : quantity;
     // Recognition may correct receipt-derived text/prices; explicit human
     // confirmations, saved quantity terminology and every allocation survive.
-    if (previous) return { ...previous,
-      name: previous.fieldSources?.name === 'user' ? previous.name : item.name ?? previous.name,
-      amount: previous.fieldSources?.amount === 'user' ? previous.amount : item.amount,
-      ...(nextQuantity ? { quantity: nextQuantity } : {}),
-      ...(scanSource ? { scanSource } : {}),
-      fieldSources: { ...previous.fieldSources,
-        ...(previous.fieldSources?.name !== 'user' && item.name !== null ? { name: 'receipt' as const } : {}),
-        ...(previous.fieldSources?.amount !== 'user' ? { amount: 'receipt' as const } : {}),
+    if (previous) {
+      const itemSources = { ...previous.fieldSources,
+        ...(readName && item.name !== null ? { name: 'receipt' as const } : {}),
+        ...(readAmount ? { amount: 'receipt' as const } : {}),
         ...(quantity && nextQuantity === quantity ? { quantity: 'receipt' as const } : {}),
-      },
-    };
+      };
+      return { ...previous,
+        name: readName ? item.name ?? previous.name : previous.name,
+        amount: readAmount ? item.amount : previous.amount,
+        ...(nextQuantity ? { quantity: nextQuantity } : {}),
+        ...(scanSource ? { scanSource } : {}),
+        fieldSources: Object.keys(itemSources).length ? itemSources : undefined,
+      };
+    }
     return {
       id: crypto.randomUUID(), name: item.name ?? '', amount: item.amount, members: [],
       ...(quantity ? { quantity, units: { total: quantity.total, allocations: {}, ...(quantity.label ? { label: quantity.label } : {}) } } : {}),
@@ -435,6 +446,7 @@ export function applyReceiptTranscription(_trip: Trip, draft: Draft, transcripti
   const fieldSources = { ...draft.fieldSources };
   const canRead = (field: 'title' | 'currency' | 'date' | 'time' | 'tax' | 'tip' | 'discount') => {
     const source = fieldSources[field];
+    if ((field === 'date' || field === 'time') && draft[field] && options.readPurchaseDetails === false) return false;
     if ((field === 'date' || field === 'time') && source === 'default' && draft[field] && !options.readPurchaseDetails) return false;
     if (source !== undefined) return source !== 'user'
       && (field !== 'currency' || source === 'default' || draft.currency === null);
