@@ -26,6 +26,35 @@ const renderer = await import('data:text/javascript;base64,' + Buffer.from(compi
 };
 type HistoryDetailProps = { event: ActivityEvent; currency: 'GBP'; memberNames: Record<string, string>; actorMemberNames: Record<string, string> };
 const names = { alice: 'Alice', bob: 'Bob' };
+
+test('receipt history explains unresolved prices, independent totals and participant review without changing snapshots', () => {
+  const change = event([], []);
+  change.entityType = 'draft';
+  change.before = null;
+  change.after = {
+    id: 'expense', currency: 'EUR',
+    items: [{ id: 'dinner', name: '', amount: null, members: [], scanSource: { lineIndex: 3, observedText: '2 x Essen ?', confidence: 'low' }, fieldSources: { amount: 'receipt' } }],
+    receiptScan: { version: 1, printedSubtotal: null, printedTotal: 1250, printedCurrency: 'EUR', calculatedTotal: 0, status: 'incomplete',
+      warnings: [{ code: 'unreadable-amount', itemId: 'dinner' }, { code: 'included-tax-ambiguous', resolved: true }],
+      sourceLines: [{ lineIndex: 4, kind: 'tax-summary', observedText: 'VAT included', amount: 150, mappedTo: 'included' }],
+      processor: 'openai-api', processedAt: '2026-10-05T12:00:00Z', imageIds: ['photo-1'] },
+    fieldSources: { currency: 'receipt', payer: 'user' },
+  };
+  const original = structuredClone(change);
+  const { fields, html } = render(change);
+  const scan = fields.find(field => field.label === 'Receipt scan review')!;
+  assert.match(scan.after, /Printed subtotal: Not recorded/);
+  assert.match(scan.after, /Printed total:.*12\.50/);
+  assert.match(scan.after, /Needs review: unreadable-amount/);
+  assert.match(scan.after, /Reviewed: included-tax-ambiguous/);
+  assert.match(scan.after, /VAT included.*1\.50.*included/);
+  assert.match(scan.after, /Source images: photo-1/);
+  assert.match(html, /Price needs confirmation/);
+  assert.match(html, /line 4.*low confidence/);
+  assert.match(html, /Observed text: 2 x Essen/);
+  assert.match(html, /Receipt field origins/);
+  assert.deepEqual(change, original);
+});
 const question = { id: 'question', role: 'user', text: 'Was service included?', createdAt: '2026-10-04T12:00:00Z', itemId: 'dinner', authorMemberId: 'bob', authorName: 'Bob' };
 const assistant = { id: 'answer', role: 'assistant', text: 'Service is already included.', createdAt: '2026-10-04T12:01:00Z', itemId: 'dinner', replyTo: 'question' };
 const snapshot = (conversation: Record<string, unknown>[]) => ({ id: 'expense', currency: 'GBP', items: [{ id: 'dinner', name: 'Dinner', amount: 1000, members: ['alice', 'bob'] }], conversation });

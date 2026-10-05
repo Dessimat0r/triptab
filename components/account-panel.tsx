@@ -251,9 +251,9 @@ export default function AccountPanel({
               </p>
               {profile.chatgptConnected ? (
                 <>
-                  <p className="account-connection-status">ChatGPT is linked.</p>
+                  <p className="account-connection-status">ChatGPT identity is linked.</p>
                   <p className="footnote">
-                    Use the TripTab plugin in ChatGPT or Codex for AI assistance.
+                    External TripTab tool availability is unknown. Enable TripTab in the conversation you use for assistance. ChatGPT and Codex connections must each be checked in that client.
                   </p>
                   <button
                     className="quiet"

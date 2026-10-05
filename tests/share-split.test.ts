@@ -144,3 +144,11 @@ test('detected units allocate the exact millionth remainder across three travell
   assert.equal(scaled.reduce<number>((sum, value) => sum + value!, 0), 2 * model.UNIT_SCALE);
   assert.equal(model.itemSplitError(ui.item), null);
 });
+
+test('choosing quantity mode for an unassigned scanned line leaves traveller consumption pending', () => {
+  const ui = controller(pizza({members: [], quantity: {total: 2, label: 'slices'}}));
+  ui.click('Units');
+  assert.deepEqual(ui.item.members, []);
+  assert.deepEqual(ui.item.units, {total: 2, allocations: {}, label: 'slices'});
+  assert(model.itemSplitError(ui.item), 'pending allocations are not a valid posted financial split');
+});

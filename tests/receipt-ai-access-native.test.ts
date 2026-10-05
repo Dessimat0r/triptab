@@ -272,7 +272,7 @@ test('real workerd fetch reaches a local HTTP peer with supported request option
     assert.equal(vision.status, 200);
     assert.deepEqual(vision.result.transcription, transcription);
     assert.deepEqual(vision.result.proposal!.items[0].quantity, { total: 2, label: 'slices', sourceText: '2 x Stck' });
-    assert.deepEqual(vision.result.proposal!.items[0].units, { total: 2, label: 'slices', allocations: { 'native-owner': 1, 'native-member': 1 } });
+    assert.deepEqual(vision.result.proposal!.items[0].units, { total: 2, label: 'slices', allocations: {} });
     assert.equal(vision.result.proposal!.items[0].amount, 1001);
     assert.equal(vision.result.transportContract, true);
     assert.deepEqual(requests.map(request => [request.path, request.method]), [

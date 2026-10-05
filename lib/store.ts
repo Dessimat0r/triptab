@@ -570,7 +570,7 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
     expenses: trip.expenses.map(entry => clearAssistantAuthors({ ...entry, conversation: entry.conversation?.map(message => ({ ...message })) })),
     drafts: trip.drafts.map(entry => clearAssistantAuthors({ ...entry, conversation: entry.conversation?.map(message => ({ ...message })) })),
   }));
-  ledger = validateLedger(ledger, { previous: { trips: validationPrevious } });
+  ledger = validateLedger(ledger, { previous: { trips: validationPrevious }, source: !options.source || options.source === 'web' ? 'web' : 'mcp' });
   checkLedgerSize(ledger);
   // Diff the final validated representation, so accepted normalization of new
   // fields and every explicit legacy repair have accurate history snapshots.
@@ -642,6 +642,7 @@ export function failure(e: unknown) {
   const m = e instanceof Error ? e.message : '';
   const issue = e instanceof ZodError ? e.issues[0] : undefined;
   const knownFields = new Set(['trips', 'id', 'ownerId', 'name', 'currency', 'startDate', 'endDate', 'members', 'userId', 'email', 'expenses', 'drafts', 'payments', 'title', 'date', 'time', 'timezone', 'fx', 'rate', 'asOf', 'source', 'bankAmount', 'payer', 'items', 'amount', 'percentages', 'quantity', 'sourceText', 'units', 'total', 'allocations', 'label', 'conversation', 'role', 'text', 'createdAt', 'replyTo', 'itemId', 'authorMemberId', 'authorName', 'memory', 'notes', 'aliases', 'memberId', 'scopeMemberId', 'tax', 'tip', 'discount', 'receiptId', 'sourceDraftId', 'expenseId', 'status', 'from', 'to', 'note', 'method']);
+  for (const field of ['receiptScan', 'version', 'printedSubtotal', 'printedTotal', 'printedCurrency', 'calculatedSubtotal', 'calculatedTotal', 'warnings', 'code', 'itemIds', 'lineIndex', 'observedText', 'difference', 'resolved', 'sourceLines', 'kind', 'mappedTo', 'processedAt', 'processor', 'attemptId', 'imageIds', 'acknowledgement', 'fingerprint', 'scanSource', 'confidence', 'fieldSources']) knownFields.add(field);
   const issuePath = issue?.path.map(part => typeof part === 'number' ? String(part + 1) : knownFields.has(part) ? part : 'entry').join(' → ');
   // Zod's enum/literal messages can echo the supplied value; use a fixed message.
   const issueMessage = issue?.code === 'unrecognized_keys' ? 'Remove unsupported fields.'

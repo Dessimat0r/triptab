@@ -7,6 +7,7 @@ import * as model from '../lib/model';
 import * as dates from '../lib/dates';
 import * as clientLedger from '../lib/client-ledger';
 import * as moneyFormat from '../lib/money-format';
+import * as receiptScan from '../lib/receipt-scan';
 import * as receiptProcessing from '../lib/receipt-processing';
 import * as receiptChatgpt from '../lib/receipt-chatgpt';
 import { createSourceFile, isArrayBindingPattern, isBindingElement, isCallExpression, isFunctionDeclaration, isIdentifier, isVariableStatement, JsxEmit, ModuleKind, ScriptKind, ScriptTarget, transpileModule } from 'typescript';
@@ -80,6 +81,8 @@ function controller(trip: model.Trip, fetcher?: typeof fetch) {
     if (name === '@/lib/client-ledger') return clientLedger;
     if (name === '@/lib/money-format') return moneyFormat;
     if (name === '@/lib/receipt-processing') return receiptProcessing;
+    if (name === '@/lib/receipt-scan') return receiptScan;
+    if (name === '@/components/receipt-scan-review') return {__esModule: true, default: component, receiptMoney: (amount: number, currency: string | null) => currency ? moneyFormat.formatMoney(amount, currency) : String(amount / 100)};
     if (name === '@/lib/receipt-chatgpt') return receiptChatgpt;
     if (name === '@/components/trip-routing') return {
       TripTabRouteProvider: component, TripTabNavigation: component, TripTabLink: component,

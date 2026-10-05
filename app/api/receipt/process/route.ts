@@ -7,8 +7,16 @@ import { applyReceiptTranscription, consumeReceiptProcessBudget, processReceiptI
 export const dynamic = 'force-dynamic';
 const id = z.string().min(1).max(100);
 const requestSchema = z.object({ tripId: id, draftId: id, receiptId: id.regex(/^[-a-z0-9]+$/i), revision: z.number().int().min(0), questionId: id.optional(), readPurchaseDetails: z.boolean().optional() }).strict();
+type Operation = { attemptId: string; tripId: string; draftId: string; receiptId: string };
+function logOperation(event: string, operation: Operation, details: Record<string, string | number | undefined> = {}) {
+  // Legacy/imported IDs can contain user text. Keep operational tokens only;
+  // receipt contents, account emails and provider secrets never enter logs.
+  const ids = Object.fromEntries(Object.entries(operation).filter(([, value]) => /^[-a-zA-Z0-9_]{1,100}$/.test(value)));
+  console.info('TripTab receipt operation', { event, ...ids, ...details });
+}
 
 export async function POST(request: Request) {
+  let operation: Operation | undefined;
   try {
     sameOrigin(request);
     if (request.headers.get('sec-fetch-site') === 'cross-site') throw new RequestError('Open TripTab to process this receipt.', 403);
@@ -40,6 +48,8 @@ export async function POST(request: Request) {
     const database = db();
     const connection = await getReceiptAIAccess(request, profile, database, env as unknown as ReceiptAIEnvironment);
     await consumeReceiptProcessBudget(database, profile.id, { provider: connection.provider });
+    operation = { attemptId: crypto.randomUUID(), tripId: trip.id, draftId: draft.id, receiptId: values.receiptId };
+    logOperation('native-processing-started', operation, { provider: connection.provider });
     const transcription = await processReceiptImage({
       ...connection, trip, draft, callerMemberId: trip.members.find(member => member.userId === profile.id)?.id ?? null,
       questionId: values.questionId, image: { bytes: image, mimeType },
@@ -55,12 +65,21 @@ export async function POST(request: Request) {
       || !currentAccess || currentAccess.tripId !== trip.id || currentAccess.owner !== access.owner) {
       throw new RequestError('This receipt changed during processing. Refresh before trying again.', 409);
     }
-    const proposal = applyReceiptTranscription(currentTrip, currentDraft, transcription, undefined, { readPurchaseDetails: values.readPurchaseDetails });
+    const proposal = applyReceiptTranscription(currentTrip, currentDraft, transcription, undefined, {
+      readPurchaseDetails: values.readPurchaseDetails, attemptId: operation.attemptId,
+      processedAt: new Date().toISOString(), processor: connection.provider === 'api' ? 'native-api' : 'native-siwc',
+      imageIds: [values.receiptId],
+    });
     currentTrip.drafts[currentTrip.drafts.findIndex(value => value.id === proposal.id)] = proposal;
     const saved = await writeLedger(profile.id, latest.data, latest.revision, { source: 'web' });
     const savedDraft = saved.data.trips.find(value => value.id === trip.id)?.drafts.find(value => value.id === draft.id);
+    logOperation('native-proposal-stored', operation, {
+      status: savedDraft?.receiptScan?.status, lineCount: savedDraft?.items.length ?? 0, revision: saved.revision });
     return Response.json({ ...saved, draft: savedDraft }, { headers: { 'Cache-Control': 'private, no-store' } });
   } catch (error) {
+    if (operation) logOperation('native-processing-failed', operation, {
+      category: error instanceof ReceiptAIError || error instanceof ReceiptAIAccessError ? error.code
+        : error instanceof RequestError && error.status === 409 ? 'ledger-changed' : 'processing-failed' });
     if (error instanceof ReceiptAIError || error instanceof ReceiptAIAccessError) {
       return Response.json({ error: error.message, code: error.code }, { status: error.status, headers: { 'Cache-Control': 'private, no-store' } });
     }

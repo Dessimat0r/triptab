@@ -5,7 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { deflateSync } from 'node:zlib';
 import { Ajv } from 'ajv';
 import { transpileModule, ModuleKind, ScriptTarget } from 'typescript';
-import { expenseTotal, shares, validateLedger } from '../lib/model';
+import { expenseTotal, expenseSchema, shares, validateLedger } from '../lib/model';
 import type { Ledger, Trip, Draft } from '../lib/model';
 import type { ReceiptMemory } from '../lib/receipt-context';
 
@@ -153,6 +153,7 @@ const compiled = transpileModule(source, { compilerOptions: { module: ModuleKind
   .replace("'@/lib/model'", JSON.stringify(new URL('../lib/model.ts', import.meta.url).href))
   .replace("'@/lib/receipt-context'", JSON.stringify(new URL('../lib/receipt-context.ts', import.meta.url).href))
   .replace("'@/lib/receipt-memory-ownership'", JSON.stringify(new URL('../lib/receipt-memory-ownership.ts', import.meta.url).href))
+  .replace("'@/lib/receipt-scan'", JSON.stringify(new URL('../lib/receipt-scan.ts', import.meta.url).href))
   .replace("'zod'", JSON.stringify(import.meta.resolve('zod')));
 const route = await import('data:text/javascript;base64,' + Buffer.from(compiled).toString('base64')) as { POST(request: Request): Promise<Response> };
 type Reply = { result: { isError?: boolean; content?: { type: string; text: string }[]; tools?: { name: string; description: string; inputSchema: { properties: Record<string, unknown> }; annotations: { readOnlyHint: boolean; idempotentHint?: boolean } }[] } };
@@ -384,7 +385,7 @@ test('removed and replaced receipt photos lose native access while a still-share
   assertImageReply(await invoke('get_receipt_image', { receipt_id: 'new-photo' }), webpImage, 'image/webp');
   const { status, ...expense } = state.data.trips[0].drafts[0];
   assert.equal(status, 'review');
-  state.data.trips[0].expenses = [{ ...expense, id: 'posted-with-old-photo', receiptId: 'old-photo', date: '2026-08-15', time: '20:30', timezone: 'Europe/Lisbon' }];
+  state.data.trips[0].expenses = [{ ...expenseSchema.parse(expense), id: 'posted-with-old-photo', receiptId: 'old-photo', date: '2026-08-15', time: '20:30', timezone: 'Europe/Lisbon' }];
   assertImageReply(await invoke('get_receipt_image', { receipt_id: 'old-photo' }), jpegImage, 'image/jpeg');
   state.data.trips[0].drafts = [];
   state.data.trips[0].expenses = [];
@@ -442,7 +443,7 @@ test('image itemisation binds the saved draft, photo and revision and never modi
   const draft = state.data.trips[0].drafts[0];
   const { status, ...posted } = draft;
   assert.equal(status, 'review');
-  state.data.trips[0].expenses = [{ ...posted, id: 'posted-expense', date: '2026-08-15', time: '20:30', timezone: 'Europe/Lisbon' }];
+  state.data.trips[0].expenses = [{ ...expenseSchema.parse(posted), id: 'posted-expense', date: '2026-08-15', time: '20:30', timezone: 'Europe/Lisbon' }];
   draft.expenseId = 'posted-expense';
   draft.status = 'waiting';
   draft.items = [];
@@ -537,11 +538,11 @@ test('lists native holiday and natural-language expense tools with write annotat
       assert.equal(quantity.properties.sourceText.maxLength, 200);
       assert.deepEqual((schema.properties.items.items as unknown as { not: unknown }).not, { required: ['percentages', 'units'] });
       assert.match(tool.description, /who owes the cost/);
-      assert.match(tool.description, /never infer personal assignments or percentages/);
-      assert.match(tool.description, /never multiply it by units\.total/);
-      assert.match(tool.description, /Use units or percentages, never both/);
-      assert.match(tool.description, /unit allocations or consumption from a receipt image/);
-      assert.match(tool.description, /Purchased quantity belongs in item\.quantity independently of units cost allocations/);
+      assert.match(tool.description, /never infer them from the image/);
+      assert.match(tool.description, /not a unit price to multiply/);
+      assert.match(tool.description, /units and percentages are mutually exclusive/);
+      assert.match(tool.description, /evidence independently of personal cost choices/);
+      assert.match(tool.description, /Receipt evidence, independent printed totals and sourceLines are separate/);
       assert.match(tool.description, /Stck, Stück, pcs and pz/);
     }
   }
@@ -681,9 +682,9 @@ test('creates a complete natural-language expense draft without posting an expen
   assert.equal(draft.items[0].amount, 4500);
 });
 
-test('accepts incoming metadata overrides when updating an existing receipt draft', async () => {
+test('accepts explicit metadata patches when updating an existing receipt draft', async () => {
   reset();
-  const reply = await invoke('update_receipt_draft', { trip_id: 'trip-1', revision: 3, draft: { ...expenseDraft, id: 'draft-1' } });
+  const reply = await invoke('update_receipt_draft', { trip_id: 'trip-1', revision: 3, draft: { id: 'draft-1', metadataPatch: { fx: expenseDraft.fx, bankAmount: expenseDraft.bankAmount, date: expenseDraft.date } } });
   assert.equal(reply.result.isError, undefined);
   const draft = content(reply).data.trips[0].drafts[0];
   assert.equal(draft.fx!.rate, 0.86);
@@ -875,7 +876,7 @@ test('published purchased-quantity schemas accept decimals but reject malformed 
       assert.equal(validate(args), true, JSON.stringify(validate.errors));
       const saved = await invoke(name, args);
       assert.equal(saved.result.isError, undefined);
-      assert.deepEqual(content(saved).data.trips[0].drafts.find(value => value.id === args.draft.id)!.items[0].quantity, quantity);
+      assert.deepEqual(content(saved).data.trips[0].drafts.find(value => value.id === args.draft.id)!.items.find(item => item.id === expenseDraft.items[0].id)!.quantity, quantity);
     }
     for (const quantity of [{ total: 0 }, { total: -1 }, { total: 1000001 }, { total: 0.1000001 },
       { total: 2, label: ' ' }, { total: 2, label: 'x'.repeat(41) }, { total: 2, sourceText: 'x'.repeat(201) },
@@ -1127,7 +1128,7 @@ test('preserves whole-receipt percentages during AI corrections and accepts expl
   assert.equal(reply.result.isError, undefined);
   assert.deepEqual(content(reply).data.trips[0].drafts[0].percentages, { a: 60, b: 40 });
   const replaced = await invoke('update_receipt_draft', {
-    trip_id: 'trip-1', revision: 4, draft: { ...expenseDraft, id: 'draft-1', percentages: { b: 100 } },
+    trip_id: 'trip-1', revision: 4, draft: { id: 'draft-1', metadataPatch: { percentages: { b: 100 } } },
   });
   assert.equal(replaced.result.isError, undefined);
   assert.deepEqual(content(replaced).data.trips[0].drafts[0].percentages, { b: 100 });
@@ -1148,7 +1149,7 @@ test('rejects whole-receipt percentages with invalid totals or unknown participa
 test('receipt corrections preserve an existing expense target without changing the posted expense', async () => {
   reset();
   const expense = {
-    ...state.data.trips[0].drafts[0], id: 'posted-expense',
+    ...expenseSchema.parse(state.data.trips[0].drafts[0]), id: 'posted-expense',
     date: '2026-08-15', time: '20:30', timezone: 'Europe/Lisbon',
   };
   state.data.trips[0].expenses = [expense];
@@ -1162,11 +1163,9 @@ test('receipt corrections preserve an existing expense target without changing t
   assert.equal(holiday.drafts[0].expenseId, expense.id);
   assert.equal(holiday.drafts[0].id, 'draft-1');
   assert.equal(holiday.drafts[0].status, 'review');
-  assert.equal(holiday.drafts[0].items[0].amount, expenseDraft.items[0].amount);
+  assert.equal(holiday.drafts[0].items.find(item => item.id === expenseDraft.items[0].id)!.amount, expenseDraft.items[0].amount);
   // The persisted expense schema removes draft-only status metadata.
-  const { status, ...expectedExpense } = originalExpense;
-  assert.equal(status, 'review');
-  assert.deepEqual(holiday.expenses, [expectedExpense]);
+  assert.deepEqual(holiday.expenses, [originalExpense]);
 });
 
 test('the AI tool cannot create or change a draft’s read-only expense target', async () => {
@@ -1184,7 +1183,7 @@ test('appends and reads a receipt reply without marking it itemised or changing 
   state.data.trips[0].drafts[0].status = 'waiting';
   state.data.trips[0].drafts[0].conversation = [structuredClone(receiptQuestion)];
   state.data.trips[0].expenses = [{
-    ...initialTrip.drafts[0], id: 'posted-expense',
+    ...expenseSchema.parse(initialTrip.drafts[0]), id: 'posted-expense',
     date: '2026-08-15', time: '20:30', timezone: 'Europe/Lisbon',
   }];
   const originalExpenses = validateLedger(state.data, { previous: state.data }).trips[0].expenses;
@@ -1301,7 +1300,7 @@ test('receipt history keeps its item context if a later correction removes that 
   reset();
   state.data.trips[0].drafts[0].conversation = [{ ...receiptQuestion, itemId: 'item-1' }];
   const updated = await invoke('update_receipt_draft', {
-    trip_id: 'trip-1', revision: 3, draft: { ...expenseDraft, id: 'draft-1' },
+    trip_id: 'trip-1', revision: 3, draft: { ...expenseDraft, id: 'draft-1', removeItemIds: ['item-1'] },
   });
   assert.equal(updated.result.isError, undefined);
   const reply = await invoke('reply_to_receipt_chat', { ...receiptChatReply, revision: 4 });
@@ -1390,7 +1389,7 @@ test('receipt tool views omit legacy assistant member attribution while retainin
   assert.equal(authorName, 'Owner');
   const trip = state.data.trips[0];
   trip.drafts[0].conversation = [human, assistant];
-  trip.expenses = [{ ...initialTrip.drafts[0], id: 'posted-expense', date: '2026-08-15', time: '20:30', timezone: 'Europe/Lisbon',
+  trip.expenses = [{ ...expenseSchema.parse(initialTrip.drafts[0]), id: 'posted-expense', date: '2026-08-15', time: '20:30', timezone: 'Europe/Lisbon',
     conversation: [human, assistant] }];
   const before = structuredClone(state.data);
   for (const selector of [{ draftId: 'draft-1' }, { expenseId: 'posted-expense' }]) {
@@ -1442,7 +1441,7 @@ test('receipt context flags ambiguous aliases and never assumes a legacy questio
 test('posted receipt context is read-only and requires exactly one accessible receipt target', async () => {
   reset();
   state.data.trips[0].expenses = [{
-    ...initialTrip.drafts[0], id: 'posted-expense',
+    ...expenseSchema.parse(initialTrip.drafts[0]), id: 'posted-expense',
     date: '2026-08-15', time: '20:30', timezone: 'Europe/Lisbon',
     memory: { notes: 'Posted receipt context', aliases: [{ name: 'dinner', itemId: 'item-1' }] },
   }];
@@ -1469,7 +1468,7 @@ test('remembered receipt context persists across AI corrections without altering
   trip.drafts[0].status = 'waiting';
   trip.drafts[0].adjustmentAllocation = 'selected-participants';
   trip.drafts[0].conversation = [{ ...receiptQuestion, itemId: 'item-1', authorMemberId: 'a', authorName: 'Owner' }];
-  trip.expenses = [{ ...initialTrip.drafts[0], id: 'posted-expense', date: '2026-08-15', time: '20:30', timezone: 'Europe/Lisbon' }];
+  trip.expenses = [{ ...expenseSchema.parse(initialTrip.drafts[0]), id: 'posted-expense', date: '2026-08-15', time: '20:30', timezone: 'Europe/Lisbon' }];
   const originalDraft = structuredClone(trip.drafts[0]);
   const originalExpenses = validateLedger(state.data, { previous: state.data }).trips[0].expenses;
   const memory = {
@@ -1487,7 +1486,7 @@ test('remembered receipt context persists across AI corrections without altering
   assert.equal(retry.result.isError, undefined);
   assert.equal(contextContent(retry).revision, 4);
   assert.equal(state.writes, 1);
-  const corrected = await invoke('update_receipt_draft', { trip_id: 'trip-1', revision: 4, draft: { ...expenseDraft, id: 'draft-1' } });
+  const corrected = await invoke('update_receipt_draft', { trip_id: 'trip-1', revision: 4, draft: { ...expenseDraft, id: 'draft-1', removeItemIds: ['item-1'] } });
   assert.equal(corrected.result.isError, undefined);
   assert.deepEqual(content(corrected).data.trips[0].drafts[0].memory, memory);
   assert.deepEqual(content(corrected).data.trips[0].drafts[0].conversation, originalDraft.conversation);
@@ -1572,7 +1571,7 @@ test('Bob can edit his scoped aliases and collaborative notes/shared aliases whi
     { name: 'my drink', itemId: 'item-2', scopeMemberId: 'b' },
     { name: 'group drink', itemId: 'item-2' },
   ] };
-  trip.expenses = [{ ...initialTrip.drafts[0], id: 'posted-expense', date: '2026-08-15', time: '20:30', timezone: 'Europe/Lisbon' }];
+  trip.expenses = [{ ...expenseSchema.parse(initialTrip.drafts[0]), id: 'posted-expense', date: '2026-08-15', time: '20:30', timezone: 'Europe/Lisbon' }];
   trip.expenses = validateLedger(state.data, { previous: state.data }).trips[0].expenses;
   const before = structuredClone(state.data);
   const memory = { notes: 'Bob clarified the shared receipt notes', aliases: [
@@ -1739,7 +1738,7 @@ test('AI currency corrections clear a hidden bank charge and rate before review'
   assert.equal(bankAmount, 8700);
   assert.ok(fx);
   const reply = await invoke('update_receipt_draft', {
-    trip_id: 'trip-1', revision: 3, draft: { ...input, currency: 'GBP' },
+    trip_id: 'trip-1', revision: 3, draft: { id: input.id, metadataPatch: { currency: 'GBP' } },
   });
   assert.equal(reply.result.isError, undefined);
   const draft = content(reply).data.trips[0].drafts[0];
@@ -1757,14 +1756,14 @@ test('AI currency corrections drop stale foreign-currency charges but accept exp
   assert.equal(status, 'review');
   assert.ok(bankAmount && fx);
   const cleared = await invoke('update_receipt_draft', {
-    trip_id: 'trip-1', revision: 3, draft: { ...input, currency: 'USD' },
+    trip_id: 'trip-1', revision: 3, draft: { id: input.id, metadataPatch: { currency: 'USD' } },
   });
   assert.equal(cleared.result.isError, undefined);
   assert.equal(content(cleared).data.trips[0].drafts[0].bankAmount, undefined);
   assert.equal(content(cleared).data.trips[0].drafts[0].fx, undefined);
   const replaced = await invoke('update_receipt_draft', {
     trip_id: 'trip-1', revision: 4,
-    draft: { ...input, currency: 'CAD', bankAmount: 6100, fx: { ...fx, rate: 0.61 } },
+    draft: { id: input.id, metadataPatch: { currency: 'CAD', bankAmount: 6100, fx: { ...fx, rate: 0.61 } } },
   });
   assert.equal(replaced.result.isError, undefined);
   assert.equal(content(replaced).data.trips[0].drafts[0].bankAmount, 6100);
@@ -1780,7 +1779,7 @@ test('unchanged receipt currencies preserve omitted bank data and reject invalid
   assert.equal(content(preserved).data.trips[0].drafts[0].bankAmount, bankAmount);
   assert.deepEqual(content(preserved).data.trips[0].drafts[0].fx, fx);
   for (const fields of [{ bankAmount: 0 }, { currency: 'GBP', bankAmount: 8700 }]) {
-    const invalid = await invoke('update_receipt_draft', { trip_id: 'trip-1', revision: 4, draft: { ...input, ...fields } });
+    const invalid = await invoke('update_receipt_draft', { trip_id: 'trip-1', revision: 4, draft: { id: input.id, metadataPatch: fields } });
     assert.equal(invalid.result.isError, true);
   }
   assert.equal(state.writes, 1);
@@ -1903,4 +1902,264 @@ test('AI provider buckets are independent of other providers and live login budg
   }));
   assert.equal(reply.status, 200);
   assert.equal(rateDatabase.prepare("SELECT COUNT(*) AS count FROM auth_rate_limits WHERE key_hash <> 'live-login-bucket'").get()!.count, 2);
+});
+
+test('receipt correction upserts preserve omitted lines, manual metadata, shares and context', async () => {
+  reset();
+  const original = state.data.trips[0].drafts[0];
+  original.items.push({ id: 'item-2', name: 'Coffee', amount: 400, members: ['b'] });
+  original.items[0].percentages = { a: 75, b: 25 };
+  original.memory = { notes: 'Dinner is the shared main course.', aliases: [{ name: 'dinner', itemId: 'item-1' }] };
+  original.conversation = [{ ...receiptQuestion, itemId: 'item-1' }];
+  const before = structuredClone(original);
+  const reply = await invoke('update_receipt_draft', { trip_id: 'trip-1', revision: 3, draft: {
+    id: original.id, title: 'Invented replacement', currency: 'GBP', payer: 'b', date: '2026-10-04',
+    items: [{ id: 'item-1', name: 'Corrected main course' }],
+  } });
+  assert.equal(reply.result.isError, undefined);
+  const saved = content(reply).data.trips[0].drafts[0];
+  assert.deepEqual(saved.items, [{ ...before.items[0], name: 'Corrected main course', fieldSources: { name: 'user' } }, before.items[1]]);
+  for (const key of ['title', 'currency', 'payer', 'date', 'bankAmount', 'fx', 'conversation', 'memory'] as const) {
+    assert.deepEqual(saved[key], before[key], key);
+  }
+  assert.equal(content(reply).data.trips[0].expenses.length, 0);
+});
+
+test('explicit removal retains historical item threads and aliases as inactive receipt context', async () => {
+  reset();
+  const original = state.data.trips[0].drafts[0];
+  original.items.push({ id: 'item-2', name: 'Coffee', amount: 400, members: ['b'] });
+  original.memory = { notes: 'Original dinner reference.', aliases: [{ name: 'dinner', itemId: 'item-1' }] };
+  original.conversation = [{ ...receiptQuestion, itemId: 'item-1' }];
+  const removed = await invoke('update_receipt_draft', { trip_id: 'trip-1', revision: 3, draft: { id: original.id, removeItemIds: ['item-1'] } });
+  assert.equal(removed.result.isError, undefined);
+  const read = contextContent(await invoke('get_receipt_context', { tripId: 'trip-1', draftId: original.id, questionId: receiptQuestion.id }));
+  assert.deepEqual(read.receipt.items.map(item => item.id), ['item-2']);
+  assert.equal(read.receipt.memory.aliases[0].active, false);
+  assert.equal(read.questionContext?.itemActive, false);
+  assert.equal(read.receipt.conversation?.[0].itemId, 'item-1');
+});
+
+test('correction removals and upserts reject ambiguous or unknown IDs without changing the receipt', async () => {
+  for (const patch of [
+    { removeItemIds: ['unknown'] }, { removeItemIds: ['item-1', 'item-1'] },
+    { upsertItems: [{ id: 'item-1' }, { id: 'item-1' }] },
+    { upsertItems: [{ id: 'item-1' }], removeItemIds: ['item-1'] },
+    { items: [], upsertItems: [] },
+  ]) {
+    reset();
+    const before = structuredClone(state.data);
+    const failed = await invoke('update_receipt_draft', { trip_id: 'trip-1', revision: 3, draft: { id: 'draft-1', ...patch } });
+    assert.equal(failed.result.isError, true);
+    assert.deepEqual(state.data, before);
+    assert.equal(state.writes, 0);
+  }
+});
+
+test('MCP retains unreadable prices and unassigned purchases as incomplete draft evidence', async () => {
+  reset();
+  const saved = await invoke('update_receipt_draft', { trip_id: 'trip-1', revision: 3, draft: {
+    id: 'draft-1', removeItemIds: ['item-1'], upsertItems: [
+      { id: 'pizza', name: 'Pizza slices', amount: 800, members: [], quantity: { total: 2, label: 'slices', sourceText: '2 x Stck' }, scanSource: { lineIndex: 0, observedText: '2 x Stck Pizza 8,00', confidence: 'high' } },
+      { id: 'unclear', name: '', amount: null, members: [], scanSource: { lineIndex: 1, observedText: '... EUR ?', confidence: 'low' } },
+    ], receiptScan: { version: 1, printedTotal: 1400, printedSubtotal: null, printedCurrency: 'EUR' },
+  } });
+  assert.equal(saved.result.isError, undefined);
+  const draft = content(saved).data.trips[0].drafts[0];
+  assert.equal(draft.items[1].amount, null);
+  assert.deepEqual(draft.items.map(item => item.members), [[], []]);
+  assert.equal(draft.receiptScan?.status, 'incomplete');
+  assert.equal(draft.receiptScan?.calculatedSubtotal, 800);
+  assert.ok(draft.receiptScan?.warnings.some(warning => warning.code === 'unreadable-amount' && warning.itemId === 'unclear'));
+  assert.equal(state.data.trips[0].expenses.length, 0);
+});
+
+test('MCP independently printed totals expose discrepancies and unmapped negative source evidence', async () => {
+  reset();
+  const saved = await invoke('update_receipt_draft', { trip_id: 'trip-1', revision: 3, draft: {
+    id: 'draft-1', upsertItems: [{ id: 'item-1', amount: 1800 }],
+    receiptScan: { version: 1, printedSubtotal: 1900, printedTotal: 1700, sourceLines: [
+      { lineIndex: 2, kind: 'adjustment', observedText: '- RABATT ? -2,00', amount: -200, mappedTo: 'unmapped' },
+    ] },
+  } });
+  assert.equal(saved.result.isError, undefined);
+  const scan = content(saved).data.trips[0].drafts[0].receiptScan!;
+  assert.equal(scan.status, 'needs-review');
+  assert.equal(scan.printedTotal, 1700);
+  assert.equal(scan.calculatedTotal, 1800);
+  assert.ok(scan.warnings.some(warning => warning.code === 'total-mismatch' && warning.difference === 100));
+  assert.ok(scan.warnings.some(warning => warning.code === 'subtotal-mismatch' && warning.difference === -100));
+  assert.ok(scan.warnings.some(warning => warning.code === 'unmapped-adjustment' && warning.observedText?.includes('RABATT')));
+  assert.equal(scan.sourceLines?.[0].amount, -200);
+  assert.equal(state.data.trips[0].drafts[0].discount, 0, 'uncertain source evidence is not silently applied as a financial adjustment');
+});
+
+test('MCP cannot claim matched reconciliation, resolve warnings, acknowledge review or choose expense targets', async () => {
+  for (const patch of [
+    { receiptScan: { version: 1, printedTotal: 10000, status: 'matched' } },
+    { receiptScan: { version: 1, printedTotal: 10000, calculatedTotal: 10000 } },
+    { receiptScan: { version: 1, printedTotal: 10000, acknowledgement: { fingerprint: `scan-v1:${'a'.repeat(64)}` } } },
+    { receiptScan: { version: 1, printedTotal: 10000, warnings: [{ code: 'low-confidence', resolved: true }] } },
+    { receiptScan: { version: 1, printedTotal: 10000, fieldSources: { printedTotal: 'user' } } },
+    { fieldSources: { currency: 'user' } }, { expenseId: 'posted' }, { status: 'review' },
+  ]) {
+    reset();
+    const before = structuredClone(state.data);
+    const failed = await invoke('update_receipt_draft', { trip_id: 'trip-1', revision: 3, draft: { id: 'draft-1', ...patch } });
+    assert.equal(failed.result.isError, true, JSON.stringify(patch));
+    assert.deepEqual(state.data, before);
+    assert.equal(state.writes, 0);
+  }
+  reset();
+  state.data.trips[0].expenses = [{ ...expenseSchema.parse(initialTrip.drafts[0]), id: 'posted' }];
+  const failed = await invoke('create_expense_draft', { trip_id: 'trip-1', revision: 3, draft: { ...expenseDraft, id: 'posted' } });
+  assert.equal(failed.result.isError, true);
+  assert.equal(state.writes, 0);
+});
+
+test('MCP fills explicitly default receipt metadata while preserving user-confirmed totals and metadata', async () => {
+  reset();
+  const draft = state.data.trips[0].drafts[0];
+  savedReceiptImage();
+  draft.title = '';
+  draft.fieldSources = { title: 'default', currency: 'user', date: 'user', payer: 'user' };
+  draft.receiptScan = { version: 1, printedTotal: 10000, printedCurrency: 'EUR', status: 'matched', warnings: [], fieldSources: { printedTotal: 'user' } };
+  const saved = await invoke('update_receipt_draft', { trip_id: 'trip-1', revision: 3, draft: {
+    id: draft.id, title: 'Printed Merchant', currency: 'GBP', date: '2026-10-04', payer: 'b',
+    receiptScan: { version: 1, printedTotal: 9999, printedCurrency: 'EUR' },
+  } });
+  assert.equal(saved.result.isError, undefined);
+  const receipt = content(saved).data.trips[0].drafts[0];
+  assert.equal(receipt.title, 'Printed Merchant');
+  assert.equal(receipt.fieldSources?.title, 'receipt');
+  assert.equal(receipt.currency, 'EUR');
+  assert.equal(receipt.date, '2026-08-15');
+  assert.equal(receipt.payer, 'a');
+  assert.equal(receipt.receiptScan?.printedTotal, 10000);
+  assert.equal(receipt.receiptScan?.fieldSources?.printedTotal, 'user');
+});
+
+test('receipt memory writes return the revision required by the next item correction', async () => {
+  reset();
+  const remembered = contextContent(await invoke('remember_receipt_context', { tripId: 'trip-1', draftId: 'draft-1', revision: 3,
+    memory: { notes: 'The main course is two slices.', aliases: [{ name: 'pizza', itemId: 'item-1' }] },
+  }));
+  assert.equal(remembered.revision, 4);
+  const stale = await invoke('update_receipt_draft', { trip_id: 'trip-1', revision: 3, draft: { id: 'draft-1', upsertItems: [{ id: 'item-1', quantity: { total: 2, label: 'slices' } }] } });
+  assert.equal(stale.result.isError, true);
+  const corrected = await invoke('update_receipt_draft', { trip_id: 'trip-1', revision: remembered.revision,
+    draft: { id: 'draft-1', upsertItems: [{ id: 'item-1', quantity: { total: 2, label: 'slices' } }] },
+  });
+  assert.equal(corrected.result.isError, undefined);
+  assert.equal(content(corrected).revision, 5);
+  assert.deepEqual(content(corrected).data.trips[0].drafts[0].memory?.aliases, [{ name: 'pizza', itemId: 'item-1' }]);
+});
+
+test('receipt MCP observability records operation IDs without private receipt context or images', async () => {
+  reset();
+  savedReceiptImage();
+  state.data.trips[0].drafts[0].title = 'Private Merchant Secret';
+  state.data.trips[0].drafts[0].memory = { notes: 'Private Receipt Memory', aliases: [] };
+  const calls: unknown[][] = [];
+  const previous = console.info;
+  console.info = (...args: unknown[]) => { calls.push(args); };
+  try {
+    await invoke('get_receipt_context', { tripId: 'trip-1', draftId: 'draft-1' });
+    await invoke('get_receipt_image', { receipt_id: 'receipt-1' });
+    await invoke('update_receipt_draft', { trip_id: 'trip-1', revision: 3, draft: { id: 'draft-1', upsertItems: [{ id: 'item-1', name: 'Private corrected receipt text' }] } });
+  } finally { console.info = previous; }
+  const logged = JSON.stringify(calls);
+  for (const event of ['context-read', 'image-read', 'draft-write']) assert.match(logged, new RegExp(event));
+  assert.match(logged, /trip-1|draft-1|receipt-1/);
+  assert.doesNotMatch(logged, /Private|owner@example|data:image|iVBOR|sk-/);
+});
+
+test('published MCP schema and runtime retain pending unit quantities without inventing personal allocations', async () => {
+  reset();
+  const listed = await (await route.POST(new Request('https://triptab.test/mcp', { method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+  }))).json() as Reply;
+  const args = { trip_id: 'trip-1', revision: 3, draft: { id: 'draft-1', upsertItems: [
+    { id: 'pizza', name: 'Pizza pieces', amount: 800, members: [], quantity: { total: 2, label: 'pieces' }, units: { total: 2, label: 'pieces', allocations: {} } },
+  ], receiptScan: { version: 1, printedTotal: 10800 } } };
+  const validate = new Ajv({ strict: false, allErrors: true }).compile(listed.result.tools!.find(tool => tool.name === 'update_receipt_draft')!.inputSchema);
+  assert.equal(validate(args), true, JSON.stringify(validate.errors));
+  const saved = await invoke('update_receipt_draft', args);
+  assert.equal(saved.result.isError, undefined);
+  const item = content(saved).data.trips[0].drafts[0].items.find(item => item.id === 'pizza')!;
+  assert.deepEqual(item.members, []);
+  assert.deepEqual(item.units?.allocations, {});
+  assert.equal(state.data.trips[0].expenses.length, 0);
+});
+
+test('MCP correction invalidates prior human warning resolution after financial evidence changes', async () => {
+  reset();
+  const original = state.data.trips[0].drafts[0];
+  original.receiptScan = { version: 1, printedTotal: 10000, status: 'matched', warnings: [{ code: 'low-confidence', itemId: 'item-1', resolved: true }] };
+  const saved = await invoke('update_receipt_draft', { trip_id: 'trip-1', revision: 3, draft: {
+    id: 'draft-1', upsertItems: [{ id: 'item-1', amount: 9900 }],
+  } });
+  assert.equal(saved.result.isError, undefined);
+  const scan = content(saved).data.trips[0].drafts[0].receiptScan!;
+  assert.equal(scan.status, 'needs-review');
+  assert.equal(scan.warnings.find(warning => warning.code === 'low-confidence')?.resolved, undefined);
+});
+
+test('MCP memory and title-only corrections retain unchanged human evidence review', async () => {
+  reset();
+  const original = state.data.trips[0].drafts[0];
+  original.fieldSources = { title: 'user' };
+  original.receiptScan = { version: 1, printedTotal: 10000, status: 'matched', warnings: [{ code: 'low-confidence', itemId: 'item-1', resolved: true }] };
+  const memory = contextContent(await invoke('remember_receipt_context', { tripId: 'trip-1', draftId: 'draft-1', revision: 3,
+    memory: { notes: 'The receipt total was reviewed by a traveller.', aliases: [] },
+  }));
+  assert.equal(memory.receipt.receiptScan?.warnings[0].resolved, true);
+  const saved = await invoke('update_receipt_draft', { trip_id: 'trip-1', revision: memory.revision, draft: {
+    id: 'draft-1', metadataPatch: { title: 'Edited receipt title' },
+  } });
+  assert.equal(saved.result.isError, undefined);
+  assert.equal(content(saved).data.trips[0].drafts[0].receiptScan?.warnings[0].resolved, true);
+});
+
+test('receipt-backed AI proposals require independent printed-total review even when the client omits evidence', async () => {
+  reset();
+  savedReceiptImage();
+  const saved = await invoke('update_receipt_draft', { trip_id: 'trip-1', revision: 3, draft: {
+    id: 'draft-1', upsertItems: [{ id: 'item-1', amount: 9900 }],
+  } });
+  assert.equal(saved.result.isError, undefined);
+  const draft = content(saved).data.trips[0].drafts[0];
+  assert.equal(draft.receiptScan?.printedTotal, null);
+  assert.equal(draft.receiptScan?.status, 'incomplete');
+  assert.ok(draft.receiptScan?.warnings.some(warning => warning.code === 'missing-printed-total'));
+  assert.deepEqual(draft.receiptScan?.imageIds, ['receipt-1']);
+  assert.equal(state.data.trips[0].expenses.length, 0);
+});
+
+test('receipt recognition preserves confirmed item text, prices, quantities and personal cost choices', async () => {
+  reset();
+  const original = state.data.trips[0].drafts[0];
+  original.items[0] = { ...original.items[0], name: 'Two pizza slices', amount: 800,
+    quantity: { total: 2, label: 'slices' }, percentages: { a: 75, b: 25 },
+    fieldSources: { name: 'user', amount: 'user', quantity: 'user' },
+  };
+  const before = structuredClone(original.items[0]);
+  const saved = await invoke('update_receipt_draft', { trip_id: 'trip-1', revision: 3, draft: {
+    id: 'draft-1', upsertItems: [
+      { id: 'item-1', name: 'Pizza', amount: 1600, quantity: { total: 4, label: 'pieces' }, members: ['b'], percentages: { b: 100 } },
+      { id: 'coffee', name: 'Coffee', amount: 400, members: ['a'], percentages: { a: 100 } },
+    ], receiptScan: { version: 1, printedTotal: 1200, printedCurrency: 'EUR' },
+  } });
+  assert.equal(saved.result.isError, undefined);
+  const items = content(saved).data.trips[0].drafts[0].items;
+  assert.deepEqual(items[0], before);
+  assert.deepEqual(items[1].members, []);
+  assert.equal(items[1].percentages, undefined);
+  assert.equal(items[1].fieldSources?.amount, 'receipt');
+  const corrected = await invoke('update_receipt_draft', { trip_id: 'trip-1', revision: 4, draft: {
+    id: 'draft-1', upsertItems: [{ id: 'item-1', amount: 900 }],
+  } });
+  assert.equal(corrected.result.isError, undefined);
+  assert.equal(content(corrected).data.trips[0].drafts[0].items[0].amount, 900);
+  assert.equal(content(corrected).data.trips[0].drafts[0].items[0].fieldSources?.amount, 'user');
 });

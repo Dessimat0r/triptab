@@ -123,7 +123,7 @@ export default function ShareSplit({ members, selected, percentages, units, quan
   const activeMode = units && !alwaysPercent ? "units" : mode === "units"
     ? selected.length === 1 ? "one" : percentages ? "custom" : "equal" : mode;
   const statusId = useId();
-  const error = alwaysPercent ? receiptSplitError({ percentages: percentages || equalPercentages(selected) }) : itemSplitError({ id: "split", name: "split", amount: 0, members: selected, percentages, units });
+  const error = alwaysPercent ? receiptSplitError({ percentages: percentages || equalPercentages(selected) }) : itemSplitError({ members: selected, percentages, units });
   const percentageTotal = percentages ? Object.values(percentages).reduce((sum, value) => sum + value, 0) : selected.length ? 100 : 0;
   const unitTotal = units?.total ?? 1;
   const quantityLabel = units?.label?.trim() || "units";
@@ -133,14 +133,14 @@ export default function ShareSplit({ members, selected, percentages, units, quan
     ? scaledAllocations.reduce<number>((sum, value) => sum + value!, 0) : null;
   function chooseMode(next: typeof mode) {
     setMode(next);
-    const ids = selected.length ? selected : members.map(member => member.id);
+    const ids = selected.length ? selected : next === "units" ? [] : members.map(member => member.id);
     if (next === "one") {
       const person = ids[0];
       onChange([person], alwaysPercent ? { [person]: 100 } : undefined, undefined);
     } else if (next === "equal") {
       onChange(ids, alwaysPercent ? equalPercentages(ids) : undefined, undefined);
     } else if (next === "units") {
-      onChange(ids, undefined, units || equalUnits(ids, quantity?.total ?? 1, quantity?.label));
+      onChange(ids, undefined, units || (ids.length ? equalUnits(ids, quantity?.total ?? 1, quantity?.label) : { total: quantity?.total ?? 1, allocations: {}, ...(quantity?.label ? { label: quantity.label } : {}) }));
     } else {
       onChange(ids, percentages || equalPercentages(ids), undefined);
     }
@@ -163,6 +163,7 @@ export default function ShareSplit({ members, selected, percentages, units, quan
         <button type="button" key={value} aria-pressed={activeMode === value} className={activeMode === value ? "chosen" : ""} onClick={() => chooseMode(value)}>{label}</button>,
       )}
     </div>
+    {!selected.length && <p className="units-split-hint" role="status">Unassigned: choose who owes this item. Printed quantities do not tell us who had it.</p>}
     {activeMode === "one" ? <label className="single-share">
       Responsible for this {scope.startsWith("item") ? "item" : "receipt"}
       <select aria-label={`Person for ${scope}`} value={selected[0] || ""} onChange={event => {

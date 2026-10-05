@@ -1,0 +1,447 @@
+{
+  "review": "Receipt integrity recheck",
+  "verifiedAtUTC": "2026-10-05T03:02:43.834915+00:00",
+  "sourceBase": "a84f9f04fafcaf7cef8f6c56324a5d0f209465eb",
+  "regression": {
+    "tests": 857,
+    "passed": 857,
+    "failed": 0,
+    "typescript": "passed",
+    "lint": {
+      "errors": 0,
+      "existingWarnings": 4
+    },
+    "productionBuild": "passed"
+  },
+  "mobile": {
+    "base": "http://127.0.0.1:8799",
+    "checks": [
+      "Opening an uploaded but unprocessed photo never starts a model request, invents Item 1, or presents its zero calculation as a printed total",
+      "Detected two slices stay pending until people and counts are chosen; explicit Save posts exact line total with no extra model calls",
+      "An explicit whole-receipt percentage override can post pending item quantities; switching back to item shares reveals pending assignments and blocks another Save",
+      "UI cannot trust a forged matched status; one-cent mismatch blocks Save, explicit acknowledgement allows it, and a subsequent price change invalidates that review",
+      "Unreadable amount and currency render as unknown, never zero or a guessed currency; independent evidence remains required",
+      "Editing independently printed totals accepts incomplete decimal text safely without constructing a NaN scan",
+      "200 ordered lines and structured long warnings stay within phone/tablet viewports, and item chats remain lazy",
+      "Photo zoom leaves editing and scroll position intact; discussion saves a question and truthful external-processing state without invoking paid receipt AI",
+      "A photo captured from a blank Add expense form removes the unused placeholder until manual addition or actual recognition"
+    ],
+    "viewports": [
+      {
+        "label": "Unprocessed receipt without placeholder or unavailable tool claims",
+        "width": 320,
+        "colorScheme": "light",
+        "passed": true
+      },
+      {
+        "label": "Unprocessed receipt without placeholder or unavailable tool claims",
+        "width": 320,
+        "colorScheme": "dark",
+        "passed": true
+      },
+      {
+        "label": "Unprocessed receipt without placeholder or unavailable tool claims",
+        "width": 390,
+        "colorScheme": "light",
+        "passed": true
+      },
+      {
+        "label": "Unprocessed receipt without placeholder or unavailable tool claims",
+        "width": 390,
+        "colorScheme": "dark",
+        "passed": true
+      },
+      {
+        "label": "Unprocessed receipt without placeholder or unavailable tool claims",
+        "width": 768,
+        "colorScheme": "light",
+        "passed": true
+      },
+      {
+        "label": "Unprocessed receipt without placeholder or unavailable tool claims",
+        "width": 768,
+        "colorScheme": "dark",
+        "passed": true
+      },
+      {
+        "label": "Matched printed total with two slices and unassigned consumption",
+        "width": 320,
+        "colorScheme": "light",
+        "passed": true
+      },
+      {
+        "label": "Matched printed total with two slices and unassigned consumption",
+        "width": 320,
+        "colorScheme": "dark",
+        "passed": true
+      },
+      {
+        "label": "Matched printed total with two slices and unassigned consumption",
+        "width": 390,
+        "colorScheme": "light",
+        "passed": true
+      },
+      {
+        "label": "Matched printed total with two slices and unassigned consumption",
+        "width": 390,
+        "colorScheme": "dark",
+        "passed": true
+      },
+      {
+        "label": "Matched printed total with two slices and unassigned consumption",
+        "width": 768,
+        "colorScheme": "light",
+        "passed": true
+      },
+      {
+        "label": "Matched printed total with two slices and unassigned consumption",
+        "width": 768,
+        "colorScheme": "dark",
+        "passed": true
+      },
+      {
+        "label": "Whole-receipt percentage override preserves pending individual quantities",
+        "width": 320,
+        "colorScheme": "light",
+        "passed": true
+      },
+      {
+        "label": "Whole-receipt percentage override preserves pending individual quantities",
+        "width": 320,
+        "colorScheme": "dark",
+        "passed": true
+      },
+      {
+        "label": "Whole-receipt percentage override preserves pending individual quantities",
+        "width": 390,
+        "colorScheme": "light",
+        "passed": true
+      },
+      {
+        "label": "Whole-receipt percentage override preserves pending individual quantities",
+        "width": 390,
+        "colorScheme": "dark",
+        "passed": true
+      },
+      {
+        "label": "Whole-receipt percentage override preserves pending individual quantities",
+        "width": 768,
+        "colorScheme": "light",
+        "passed": true
+      },
+      {
+        "label": "Whole-receipt percentage override preserves pending individual quantities",
+        "width": 768,
+        "colorScheme": "dark",
+        "passed": true
+      },
+      {
+        "label": "One-cent mismatch with explicit review boundary",
+        "width": 320,
+        "colorScheme": "light",
+        "passed": true
+      },
+      {
+        "label": "One-cent mismatch with explicit review boundary",
+        "width": 320,
+        "colorScheme": "dark",
+        "passed": true
+      },
+      {
+        "label": "One-cent mismatch with explicit review boundary",
+        "width": 390,
+        "colorScheme": "light",
+        "passed": true
+      },
+      {
+        "label": "One-cent mismatch with explicit review boundary",
+        "width": 390,
+        "colorScheme": "dark",
+        "passed": true
+      },
+      {
+        "label": "One-cent mismatch with explicit review boundary",
+        "width": 768,
+        "colorScheme": "light",
+        "passed": true
+      },
+      {
+        "label": "One-cent mismatch with explicit review boundary",
+        "width": 768,
+        "colorScheme": "dark",
+        "passed": true
+      },
+      {
+        "label": "Unreadable price, missing printed total and ambiguous currency",
+        "width": 320,
+        "colorScheme": "light",
+        "passed": true
+      },
+      {
+        "label": "Unreadable price, missing printed total and ambiguous currency",
+        "width": 320,
+        "colorScheme": "dark",
+        "passed": true
+      },
+      {
+        "label": "Unreadable price, missing printed total and ambiguous currency",
+        "width": 390,
+        "colorScheme": "light",
+        "passed": true
+      },
+      {
+        "label": "Unreadable price, missing printed total and ambiguous currency",
+        "width": 390,
+        "colorScheme": "dark",
+        "passed": true
+      },
+      {
+        "label": "Unreadable price, missing printed total and ambiguous currency",
+        "width": 768,
+        "colorScheme": "light",
+        "passed": true
+      },
+      {
+        "label": "Unreadable price, missing printed total and ambiguous currency",
+        "width": 768,
+        "colorScheme": "dark",
+        "passed": true
+      },
+      {
+        "label": "Printed EUR and original GBP mismatch",
+        "width": 320,
+        "colorScheme": "light",
+        "passed": true
+      },
+      {
+        "label": "Printed EUR and original GBP mismatch",
+        "width": 320,
+        "colorScheme": "dark",
+        "passed": true
+      },
+      {
+        "label": "Printed EUR and original GBP mismatch",
+        "width": 390,
+        "colorScheme": "light",
+        "passed": true
+      },
+      {
+        "label": "Printed EUR and original GBP mismatch",
+        "width": 390,
+        "colorScheme": "dark",
+        "passed": true
+      },
+      {
+        "label": "Printed EUR and original GBP mismatch",
+        "width": 768,
+        "colorScheme": "light",
+        "passed": true
+      },
+      {
+        "label": "Printed EUR and original GBP mismatch",
+        "width": 768,
+        "colorScheme": "dark",
+        "passed": true
+      },
+      {
+        "label": "200 lines, long names and large warning set",
+        "width": 320,
+        "colorScheme": "light",
+        "passed": true
+      },
+      {
+        "label": "200 lines, long names and large warning set",
+        "width": 320,
+        "colorScheme": "dark",
+        "passed": true
+      },
+      {
+        "label": "200 lines, long names and large warning set",
+        "width": 390,
+        "colorScheme": "light",
+        "passed": true
+      },
+      {
+        "label": "200 lines, long names and large warning set",
+        "width": 390,
+        "colorScheme": "dark",
+        "passed": true
+      },
+      {
+        "label": "200 lines, long names and large warning set",
+        "width": 768,
+        "colorScheme": "light",
+        "passed": true
+      },
+      {
+        "label": "200 lines, long names and large warning set",
+        "width": 768,
+        "colorScheme": "dark",
+        "passed": true
+      },
+      {
+        "label": "Zoomed receipt photo dialog",
+        "width": 320,
+        "colorScheme": "light",
+        "passed": true
+      },
+      {
+        "label": "Zoomed receipt photo dialog",
+        "width": 320,
+        "colorScheme": "dark",
+        "passed": true
+      },
+      {
+        "label": "Zoomed receipt photo dialog",
+        "width": 390,
+        "colorScheme": "light",
+        "passed": true
+      },
+      {
+        "label": "Zoomed receipt photo dialog",
+        "width": 390,
+        "colorScheme": "dark",
+        "passed": true
+      },
+      {
+        "label": "Zoomed receipt photo dialog",
+        "width": 768,
+        "colorScheme": "light",
+        "passed": true
+      },
+      {
+        "label": "Zoomed receipt photo dialog",
+        "width": 768,
+        "colorScheme": "dark",
+        "passed": true
+      },
+      {
+        "label": "Receipt captured in a new expense removes its unused manual placeholder",
+        "width": 320,
+        "colorScheme": "light",
+        "passed": true
+      },
+      {
+        "label": "Receipt captured in a new expense removes its unused manual placeholder",
+        "width": 320,
+        "colorScheme": "dark",
+        "passed": true
+      },
+      {
+        "label": "Receipt captured in a new expense removes its unused manual placeholder",
+        "width": 390,
+        "colorScheme": "light",
+        "passed": true
+      },
+      {
+        "label": "Receipt captured in a new expense removes its unused manual placeholder",
+        "width": 390,
+        "colorScheme": "dark",
+        "passed": true
+      },
+      {
+        "label": "Receipt captured in a new expense removes its unused manual placeholder",
+        "width": 768,
+        "colorScheme": "light",
+        "passed": true
+      },
+      {
+        "label": "Receipt captured in a new expense removes its unused manual placeholder",
+        "width": 768,
+        "colorScheme": "dark",
+        "passed": true
+      }
+    ],
+    "errors": [],
+    "scope": "Compiled mobile React UI with synthetic ledger/auth/private image routes; every API boundary is intercepted. No live model requests or production data."
+  },
+  "nativeBrowserFlow": {
+    "scope": "Compiled React UI and actual production HTTP/MCP routes, auth/session, native D1/R2/CAS/audit. Isolated synthetic gateway identity; no hosted-client or vision inference claim.",
+    "checks": [
+      "Actual browser upload prepares JPEG and persists native R2 image plus waiting draft without placeholder or expense",
+      "Authenticated native MCP reads the matching saved context/revision and exact authorized R2 image bytes",
+      "Native MCP writes a matched review proposal; compiled browser retrieves actual new revision, shows items and requires allocation before Save",
+      "Explicit human global allocation and Save reach actual strict ledger/CAS boundary, persist evidence and exact amounts, and append attributable upload/draft/expense audits",
+      "Reloading the compiled app reopens the posted native D1 receipt with evidence, item identities and shares intact; no inference calls"
+    ],
+    "errors": [],
+    "requests": [
+      {
+        "path": "/api/profile",
+        "method": "GET",
+        "status": 200
+      },
+      {
+        "path": "/api/ledger",
+        "method": "GET",
+        "status": 200
+      },
+      {
+        "path": "/api/receipt/ai-status",
+        "method": "GET",
+        "status": 200
+      },
+      {
+        "path": "/api/receipt",
+        "method": "POST",
+        "status": 200
+      },
+      {
+        "path": "/api/ledger",
+        "method": "POST",
+        "status": 200
+      },
+      {
+        "path": "/api/receipt/ai-status",
+        "method": "GET",
+        "status": 200
+      },
+      {
+        "path": "/api/receipt",
+        "method": "GET",
+        "status": 200
+      },
+      {
+        "path": "/api/ledger",
+        "method": "GET",
+        "status": 200
+      },
+      {
+        "path": "/api/ledger",
+        "method": "POST",
+        "status": 200
+      },
+      {
+        "path": "/api/profile",
+        "method": "GET",
+        "status": 200
+      },
+      {
+        "path": "/api/ledger",
+        "method": "GET",
+        "status": 200
+      },
+      {
+        "path": "/api/receipt/ai-status",
+        "method": "GET",
+        "status": 200
+      },
+      {
+        "path": "/api/receipt",
+        "method": "GET",
+        "status": 200
+      }
+    ]
+  },
+  "nativeRouteTests": {
+    "file": "tests/receipt-flow-native.test.ts",
+    "passed": 2,
+    "scope": "Production HTTP/MCP/auth/session/CAS/D1/R2/audit with isolated synthetic gateway identity"
+  },
+  "limitations": [
+    "No hosted ChatGPT or Codex client acceptance was performed.",
+    "No paid model request or vision benchmark was performed.",
+    "Multiple receipt photos and first-class signed/item-specific adjustments remain separate advanced scope.",
+    "Native fixtures do not prove production gateway installation or identity."
+  ]
+}

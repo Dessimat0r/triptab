@@ -31,8 +31,8 @@ test('the saved receipt offers a native ChatGPT link and an immediately accessib
 
 test('opening or copying a request does not claim ChatGPT received or processed the receipt', () => {
   const text = visibleText(render({ handoffOpened: true, copied: true }));
-  assert.match(text, /Send the prepared request in ChatGPT with TripTab enabled/);
-  assert.match(text, /Return here after it saves the receipt details/);
+  assert.match(text, /TripTab cannot verify tools in an external conversation/);
+  assert.match(text, /no external processing is confirmed until a proposal arrives/);
   assert.match(text, /Receipt request copied\. Paste and send it/);
   assert.doesNotMatch(text, /Processing your receipt|Request sent|ChatGPT is processing|Items are ready/i);
 });
@@ -45,7 +45,7 @@ test('a linked, saved and available receipt is required before offering the Chat
     assert.doesNotMatch(html, /<a[^>]*href="https:\/\/chatgpt\.com\//);
   }
   const unlinked = visibleText(render({ connected: false }));
-  assert.match(unlinked, /Link ChatGPT tools/);
+  assert.match(unlinked, /Link ChatGPT identity/);
   assert.match(unlinked, /enter items manually at any time/);
 });
 
@@ -115,17 +115,17 @@ test('an unavailable site client offers an explicit fallback without an enabled 
 
 test('filled receipt details direct the participant to check and save rather than starting transcription again', () => {
   const html = render({ aiConfigured: true, aiConnected: true, itemized: true, handoffOpened: true, onProcess() {}, onConnectPlan() {} });
-  assert.match(visibleText(html), /Receipt details filled\. Check the items and save the expense/);
+  assert.match(visibleText(html), /Receipt details received\. Check printed totals, warnings and item shares before saving/);
   assert.doesNotMatch(visibleText(html), /Read receipt with ChatGPT|Reading receipt with ChatGPT|Connect ChatGPT plan|Return here after it saves/);
   assert.doesNotMatch(html, /<a[^>]*href="https:\/\/chatgpt\.com\//);
-  assert(html.indexOf('Receipt details filled') < html.indexOf('receipt-capture-inputs'), 'the completed status remains visible above the image and controls on mobile');
+  assert(html.indexOf('Receipt details received') < html.indexOf('receipt-capture-inputs'), 'the completed status remains visible above the image and controls on mobile');
 });
 
 test('a new incoming proposal still requires review after earlier details were filled', () => {
   const html = render({ ready: true, itemized: true });
   assert.match(visibleText(html), /Review processed receipt/);
   assert.match(visibleText(html), /Saving the expense applies your reviewed items/);
-  assert.doesNotMatch(visibleText(html), /Receipt details filled/);
+  assert.doesNotMatch(visibleText(html), /Receipt details received/);
 });
 
 test('an eligible owner can open API setup before a key is connected', () => {
@@ -173,4 +173,12 @@ test('participants without a configured shared key receive a fallback without ke
   const html = render({ aiProvider: 'api', aiConfigured: true, aiConnected: false, aiEligible: true, aiManageable: false, aiReason: 'not_connected', onProcess() {}, onConnectPlan() {} });
   assert.match(visibleText(html), /shared receipt AI is not connected yet/);
   assert.doesNotMatch(visibleText(html), /Set up receipt AI|Read receipt with AI|Verify receipt AI setup/);
+});
+
+test('identity linking explicitly leaves external tool availability unknown', () => {
+  const text = visibleText(render({connected: true, aiProvider: 'api', aiConfigured: true, aiConnected: true, onProcess() {}}));
+  assert.match(text, /ChatGPT identity: linked/);
+  assert.match(text, /External TripTab tools: availability unknown/);
+  assert.match(text, /linking an identity does not enable those tools/);
+  assert.match(text, /Read receipt with AI/, 'direct API readiness is independent of the external conversation');
 });

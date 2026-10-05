@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="1560" viewBox="0 0 640 1560">
+<title>Long single image with 45 ordered purchase lines</title>
+<defs><filter id="obscured"><feGaussianBlur stdDeviation="2.5"/></filter></defs>
+<rect width="640" height="1560" fill="#fff"/>
+<g fill="#111" font-family="monospace" font-size="22">
+<text x="25" y="35" font-size="16">SYNTHETIC TEST RECEIPT — NOT A SALE</text>
+<text x="25" y="65" font-size="16">Corpus v1: long-receipt</text>
+<text x="25" y="115">Product 01             1.00</text>
+<text x="25" y="145">Product 02             2.00</text>
+<text x="25" y="175">Product 03             3.00</text>
+<text x="25" y="205">Product 04             4.00</text>
+<text x="25" y="235">Product 05             5.00</text>
+<text x="25" y="265">Product 06             6.00</text>
+<text x="25" y="295">Product 07             7.00</text>
+<text x="25" y="325">Product 08             8.00</text>
+<text x="25" y="355">Product 09             9.00</text>
+<text x="25" y="385">Product 10             10.00</text>
+<text x="25" y="415">Product 11             11.00</text>
+<text x="25" y="445">Product 12             12.00</text>
+<text x="25" y="475">Product 13             13.00</text>
+<text x="25" y="505">Product 14             14.00</text>
+<text x="25" y="535">Product 15             15.00</text>
+<text x="25" y="565">Product 16             16.00</text>
+<text x="25" y="595">Product 17             17.00</text>
+<text x="25" y="625">Product 18             18.00</text>
+<text x="25" y="655">Product 19             19.00</text>
+<text x="25" y="685">Product 20             20.00</text>
+<text x="25" y="715">Product 21             21.00</text>
+<text x="25" y="745">Product 22             22.00</text>
+<text x="25" y="775">Product 23             23.00</text>
+<text x="25" y="805">Product 24             24.00</text>
+<text x="25" y="835">Product 25             25.00</text>
+<text x="25" y="865">Product 26             26.00</text>
+<text x="25" y="895">Product 27             27.00</text>
+<text x="25" y="925">Product 28             28.00</text>
+<text x="25" y="955">Product 29             29.00</text>
+<text x="25" y="985">Product 30             30.00</text>
+<text x="25" y="1015">Product 31             31.00</text>
+<text x="25" y="1045">Product 32             32.00</text>
+<text x="25" y="1075">Product 33             33.00</text>
+<text x="25" y="1105">Product 34             34.00</text>
+<text x="25" y="1135">Product 35             35.00</text>
+<text x="25" y="1165">Product 36             36.00</text>
+<text x="25" y="1195">Product 37             37.00</text>
+<text x="25" y="1225">Product 38             38.00</text>
+<text x="25" y="1255">Product 39             39.00</text>
+<text x="25" y="1285">Product 40             40.00</text>
+<text x="25" y="1315">Product 41             41.00</text>
+<text x="25" y="1345">Product 42             42.00</text>
+<text x="25" y="1375">Product 43             43.00</text>
+<text x="25" y="1405">Product 44             44.00</text>
+<text x="25" y="1435">Product 45             45.00</text>
+<text x="25" y="1465">SUBTOTAL EUR          1035.00</text>
+<text x="25" y="1495">TOTAL EUR             1035.00</text>
+</g>
+
+</svg>

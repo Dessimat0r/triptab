@@ -85,8 +85,7 @@ export default function ReceiptChat({ messages, busy, itemId, scopeLabel, contex
     <section className="receipt-chat" aria-labelledby={titleId} aria-busy={working} data-item-id={itemId}>
       <h3 id={titleId}>{heading}</h3>
       <p id={hintId} className="receipt-chat-hint">
-        Questions are saved here. AI is optional: use the copied question prompt in your connected ChatGPT
-        or Codex, then check for its reply. You can adjust the details yourself.
+        Questions are saved here and a prompt is prepared. Open a ChatGPT or Codex conversation with the TripTab tools enabled and use that prompt, then check for a reply. TripTab cannot verify which tools are available in an external conversation. You can also edit the receipt yourself.
       </p>
       {itemId && <p className="receipt-chat-scope">“This” refers to {itemLabel}. You can also ask about other items or the whole receipt.</p>}
       {memory && <details className="receipt-chat-memory">
@@ -114,7 +113,7 @@ export default function ReceiptChat({ messages, busy, itemId, scopeLabel, contex
                 {messageItem(message) && <span className="receipt-chat-context">{itemNames?.[messageItem(message)!] || (messageItem(message) === itemId && scopeLabel) || "Earlier item"}</span>}
                 <p className="receipt-chat-text">{message.text}</p>
                 {message.role === "user" && !answered.has(message.id) && (
-                  <span className="receipt-chat-pending">Waiting for reply</span>
+                  <span className="receipt-chat-pending">Question saved · external processing needed</span>
                 )}
               </li>
             ))}
@@ -144,7 +143,7 @@ export default function ReceiptChat({ messages, busy, itemId, scopeLabel, contex
       <div className="receipt-chat-actions">
         <button type="button" className="primary" disabled={working || !question.trim()} onClick={() => void sendQuestion()}>
           <MessageCircle size={17} aria-hidden="true" />
-          Ask ChatGPT / Codex
+          Save question & prepare prompt
         </button>
         <button type="button" className="quiet" disabled={working} onClick={onRefresh}>
           <RefreshCw size={17} aria-hidden="true" />

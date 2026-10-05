@@ -31,7 +31,7 @@ npm run install:ci
 npm run build
 ```
 
-The initial build generates `dist/server/wrangler.json`. Before the first local run, apply the nine migrations in order:
+The initial build generates `dist/server/wrangler.json`. Before the first local run, apply all eleven migrations (`0000` through `0010`) in order:
 
 ```sh
 node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file drizzle/0000_charming_zeigeist.sql
@@ -44,6 +44,7 @@ node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1
 node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file drizzle/0007_receipt_message_registry.sql
 node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file drizzle/0008_receipt_activity_scope.sql
 node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file drizzle/0009_receipt_link_projections.sql
+node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file drizzle/0010_receipt_ai_access.sql
 npm run dev
 ```
 
@@ -82,11 +83,13 @@ Server requests use the Workers-supported `redirect: 'manual'` setting and rejec
 
 Scanning or uploading saves the image and draft before reading begins. A completed, validated transcription creates a review draft; an untouched initial editor displays its items immediately. Existing or locally edited receipt details show an explicit proposal review instead. **Save expense** remains a separate approval step. Reading never posts an expense, invents exchange rates or assigns personal consumption. Failed, incomplete or stale results leave the saved receipt and manual edits available.
 
-Receipt reading also extracts purchased quantities and labels across languages, such as `2 × Stck`, pieces, slices, bottles or fractional weights. The full printed line price is kept once. New lines start with editable equal unit shares when that split is exact at the supported quantity precision; these are review defaults, not evidence of who consumed the items. Otherwise, the detected quantity stays visible and the ordinary equal cost split is retained until people allocate the units. Existing manually entered quantities, unit shares and percentage splits are preserved. Purchased quantity remains visible when a whole-receipt percentage split overrides item shares, and switching to Units uses the detected count rather than resetting it to one.
+Receipt reading also extracts purchased quantities and labels across languages, such as `2 × Stck`, pieces, slices, bottles or fractional weights. The full printed line price is kept once. New scanned lines remain unassigned until people choose their cost shares. Detected quantity and terminology stay visible independently of those shares; switching to Units uses the detected count rather than resetting it to one. Existing manually entered quantities, unit shares and percentage splits are preserved, including when a whole-receipt split takes priority.
+
+Review retains independently observed printed subtotal/total, source-line text and structured uncertainty. TripTab reconciles those totals using integer stored hundredths; unreadable prices remain unknown rather than becoming zero or disappearing. Ambiguous currency, unsupported adjustments and incomplete financial data need review before Save. A remaining total difference requires an explicit human acknowledgement that becomes invalid when relevant receipt details change. Legacy expenses without scan evidence remain unchanged.
 
 Quantity extraction uses the same single model request as itemisation. Review, editing and reply polling do not trigger additional receipt reads. The request retains receipt memory and conversation context, omits participant allocation maps that transcription cannot change, and asks for a concise summary without losing extraction warnings. Model and image quality remain unchanged; API cost depends on actual usage.
 
-Receipt and item questions retain the full connected ChatGPT/Codex MCP workflow, including aliases, memory and requested cost-share changes. **Ask ChatGPT / Codex** saves the question and prepares a prompt for that client; model processing takes place there. Returned replies and proposals refresh automatically while the receipt is open, and **Check for replies** remains available. The web app's automatic image reader is limited to transcription; it does not silently replace those tool-capable discussions. See [receipt quantities, conversations and memory](docs/receipt-context.md).
+Receipt and item questions retain the external MCP workflow, including aliases, memory and requested cost-share changes. **Ask ChatGPT / Codex** saves the question and prepares a prompt; processing requires a client conversation that actually exposes the authenticated TripTab tools. Linking an account identifies the user, but does not verify plugin installation or tools in that conversation. Opening/copying a prompt is not a model request. Returned replies and proposals refresh automatically while the receipt is open, and **Check for replies** remains available. Corrections upsert stable item IDs; omission keeps other lines and only explicit removal deletes one. The web app's automatic image reader is limited to transcription. See [receipt quantities, conversations and memory](docs/receipt-context.md) and the [receipt release runbook](docs/receipt-release-runbook.md). Actual hosted ChatGPT and Codex acceptance must be verified separately.
 
 Configure `RECEIPT_AI_TOKEN_KEY` as a Sites secret containing 32 cryptographically random bytes encoded with base64url. Keep it stable: rotating it requires keys to be entered again. `OPENAI_RECEIPT_MODEL` optionally selects a native-image/structured-output Responses model; the default is `gpt-6.1-sol`, which supports image input, streaming and structured output. Apply the new `0010_receipt_ai_access` migration once before serving this release. Earlier migration SQL must not be replayed or edited.
 

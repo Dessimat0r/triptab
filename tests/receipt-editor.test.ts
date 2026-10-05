@@ -5,8 +5,9 @@ import test from 'node:test';
 import { createSourceFile, isFunctionDeclaration, ModuleKind, ScriptKind, ScriptTarget, transpileModule } from 'typescript';
 import { equalFinancialValue, equalSavedValue } from '../lib/client-ledger';
 import { buildReceiptPrompt } from '../lib/receipt-chatgpt';
-import { isBlankReceipt, isUnchangedInitialReceipt, matchingReceiptProposal, mayFillInitialReceipt, receiptEditableValue, receiptProposalEditor } from '../lib/receipt-processing';
-import { itemSchema, itemSplitError, ledgerSchema, receiptSplitError, total, validateLedger, type Draft, type Expense, type ReceiptMessage, type Trip } from '../lib/model';
+import { isBlankReceipt, isUnchangedInitialReceipt, matchingReceiptProposal, mayFillInitialReceipt, receiptEditableValue, receiptProposalEditor, receiptEditorTotal, type ReceiptEditor } from '../lib/receipt-processing';
+import { receiptScanSaveError, receiptScanFingerprint } from '../lib/receipt-scan';
+import { itemSchema, draftItemSchema, expenseSchema, itemSplitError, ledgerSchema, receiptSplitError, total, validateLedger, type Draft, type Expense, type ReceiptMessage, type Trip } from '../lib/model';
 
 // Execute the actual page handlers against a small state/persistence boundary.
 // JSX, network, clipboard and React hooks are excluded; receipt transitions and
@@ -40,7 +41,7 @@ const controllerSource = `return function createController(initial, boundary) {
   const receiptAIStatusRequest={current:0};
   const updates = [], editorBaseline = {current:null};
   const latestSnapshot = {current:{data:{trips:[trip]},revision:0}};
-  const {itemSchema,itemSplitError,receiptSplitError,total,equalFinancialValue,equalSavedValue,buildReceiptPrompt,isBlankReceipt,isUnchangedInitialReceipt,matchingReceiptProposal,mayFillInitialReceipt,receiptEditableValue,receiptProposalEditor} = boundary;
+  const {itemSchema,draftItemSchema,expenseSchema,receiptScanSaveError,receiptEditorTotal,itemSplitError,receiptSplitError,total,equalFinancialValue,equalSavedValue,buildReceiptPrompt,isBlankReceipt,isUnchangedInitialReceipt,matchingReceiptProposal,mayFillInitialReceipt,receiptEditableValue,receiptProposalEditor} = boundary;
   const uid = boundary.uid, today = () => '2026-10-04', localTime = () => '12:00';
   const money = (amount, currency) => currency+' '+amount/100;
   const previewTotal = entry => total(entry);
@@ -94,7 +95,7 @@ const controllerSource = `return function createController(initial, boundary) {
     get restoration(){return restoration}};
 }`;
 const compiled = transpileModule(controllerSource, { compilerOptions: { module: ModuleKind.CommonJS, target: ScriptTarget.ES2022 } }).outputText;
-type Editing = Expense & { draftId?: string; expenseId?: string };
+type Editing = ReceiptEditor;
 type Controller = {
   openExpense(expense: Expense, resumeDraft?: boolean): void; openDraft(draft: Draft): void; newExpense(): void; keepExpenseEdits(): void;
   editorIsCurrent(): boolean; resetReceiptReview(): void;
@@ -113,7 +114,7 @@ type Controller = {
   restoring(): void; restoration: unknown;
 };
 const createController = new Function(compiled)() as (initial: Trip, boundary: object) => Controller;
-const controller = (trip: Trip) => createController(trip, { uid: randomUUID, ledgerSchema, itemSchema, itemSplitError, receiptSplitError, total, validateLedger, equalFinancialValue, equalSavedValue, buildReceiptPrompt, isBlankReceipt, isUnchangedInitialReceipt, matchingReceiptProposal, mayFillInitialReceipt, receiptEditableValue, receiptProposalEditor });
+const controller = (trip: Trip) => createController(trip, { uid: randomUUID, ledgerSchema, itemSchema, draftItemSchema, expenseSchema, itemSplitError, receiptSplitError, total, validateLedger, equalFinancialValue, equalSavedValue, buildReceiptPrompt, isBlankReceipt, isUnchangedInitialReceipt, matchingReceiptProposal, mayFillInitialReceipt, receiptEditableValue, receiptProposalEditor, receiptEditorTotal, receiptScanSaveError });
 const stamp = '2026-10-04T12:00:00Z';
 const question: ReceiptMessage = { id: 'question', role: 'user', text: 'Check the replacement image', createdAt: stamp };
 const reply: ReceiptMessage = { id: 'reply', role: 'assistant', replyTo: question.id, text: 'Reviewed replacement image', createdAt: stamp };
@@ -189,7 +190,7 @@ test('optional draft purchase fields inherit the posted purchase while empty rep
   const draft=pending(); delete draft.date; delete draft.time; delete draft.timezone; draft.items=[];
   const initial=fixture(draft); const editor=controller(initial); editor.openExpense(initial.expenses[0]);
   assert.equal(editor.editing?.date,posted.date); assert.equal(editor.editing?.time,posted.time); assert.equal(editor.editing?.timezone,posted.timezone);
-  assert.equal(editor.editing?.items.length,1); assert.equal(editor.editing?.items[0].name,''); assert.equal(editor.editing?.items[0].amount,0);
+  assert.equal(editor.editing?.items.length,0, 'unprocessed receipts do not create a recognised-looking placeholder');
 });
 
 test('unrelated drafts are not attached and a concurrent posted financial change still blocks a pending draft save', async () => {
@@ -206,7 +207,7 @@ function latestCorrection(expense: Expense): Expense {
     currency:'GBP',fx:undefined,bankAmount:undefined,source:'manual',items:[{id:'latest-item',name:'Bob corrected dinner',amount:3456,members:['a']}],
     percentages:{a:25,b:75},tax:80,tip:100,discount:10,adjustmentAllocation:'selected-participants'};
 }
-function assertChosenFinancials(actual: Partial<Expense> | null, latest: Expense) {
+function assertChosenFinancials(actual: Partial<Editing> | null, latest: Expense) {
   for(const key of financialFields) assert.deepEqual(actual?.[key],latest[key],key);
 }
 
@@ -421,7 +422,7 @@ test('a reading response from a previous account cannot apply its proposal', asy
   editor.network(async url=>{if(url.startsWith('/api/receipt?'))return response({receiptId:'new-photo'});started();return pendingResponse;});
   const captured=editor.captureEditorReceipt(receiptFile());await processingStarted;editor.accountSwitch();
   release(response({data:{trips:[itemizedTrip(editor.trip)]},revision:2}));await captured;
-  assert.equal(editor.trip.drafts[0].status,'waiting');assert.equal(editor.editing!.items[0].amount,0);
+  assert.equal(editor.trip.drafts[0].status,'waiting');assert.equal(editor.editing!.items.length,0);
 });
 
 test('closing and reopening while a receipt check is pending cannot apply its snapshot or stale review state', async () => {
@@ -439,7 +440,7 @@ test('native failures preserve the photo and draft with a retryable error instea
   await editor.captureEditorReceipt(receiptFile());
   assert.equal(editor.processing,false);assert.match(editor.handoffError,/unreadable/);
   assert.equal(editor.editing!.receiptId,'new-photo');assert.equal(editor.trip.drafts[0].status,'waiting');
-  assert.equal(editor.editing!.items[0].amount,0);assert(editor.prompt.includes('new-photo'));assert.equal(editor.trip.expenses.length,0);
+  assert.equal(editor.editing!.items.length,0);assert(editor.prompt.includes('new-photo')); assert.equal(editor.trip.expenses.length,0);
 });
 
 test('item share questions keep the full connected-tool handoff even when automatic receipt reading is configured', async () => {
@@ -531,4 +532,85 @@ test('a pending shared AI status refresh cannot start reading for a different ac
     assert.equal(editor.trip.drafts[0].status,'waiting');assert.equal(editor.trip.expenses.length,0);
     if(change==='account')assert.equal(editor.ai?.connected,false,'old-account status cannot update current service state');
   });
+});
+
+test('incomplete scanned items and pending quantities persist without fabricated prices or allocations and cannot post', async () => {
+  const draft = pending('review');
+  draft.expenseId = undefined;
+  draft.currency = null;
+  draft.items = [{id: 'pizza', name: 'Pizza slices', amount: null, members: [], quantity: {total: 2, label: 'slices'}, units: {total: 2, allocations: {}, label: 'slices'}}];
+  draft.receiptScan = {version: 1, printedTotal: 1200, status: 'incomplete', warnings: [{code: 'ambiguous-currency'}]};
+  const initial = fixture(draft); initial.expenses = [];
+  const editor = controller(initial); editor.openDraft(draft);
+  assert.equal(editor.editing?.items[0].amount, null);
+  assert.equal(editor.editing?.currency, null);
+  const stored = await editor.storeEditorReceipt(editor.editing!, draft.receiptId);
+  assert.equal(stored?.items[0].amount, null);
+  assert.deepEqual(stored?.items[0].members, []);
+  assert.deepEqual(stored?.items[0].units?.allocations, {});
+  await submit(editor);
+  assert.match(editor.error, /Complete unreadable receipt values/);
+  assert.equal(editor.trip.expenses.length, 0);
+});
+
+test('Save checks independent totals and explicit reviewed differences before posting', async () => {
+  const draft = pending('review'); draft.expenseId = undefined; draft.fx = undefined; draft.bankAmount = undefined;
+  draft.currency = 'GBP'; draft.items = [{id: 'pizza', name: 'Pizza', amount: 1200, members: ['a']}];
+  draft.tax = 0; draft.tip = 0; draft.discount = 0;
+  draft.receiptScan = {version: 1, printedTotal: 1201, printedCurrency: 'GBP', status: 'matched', warnings: []};
+  const initial = fixture(draft); initial.expenses = [];
+  const editor = controller(initial); editor.openDraft(draft);
+  await submit(editor); assert.match(editor.error, /do not match the printed receipt/); assert.equal(editor.trip.expenses.length, 0);
+  editor.edit({receiptScan: {...editor.editing!.receiptScan!, acknowledgement: {fingerprint: receiptScanFingerprint(editor.editing!)}}});
+  await submit(editor); assert.equal(editor.error, ''); assert.equal(editor.trip.expenses.length, 1);
+  assert.equal(editor.trip.expenses[0].items[0].amount, 1200);
+  assert.equal(editor.trip.expenses[0].receiptScan?.printedTotal, 1201);
+});
+
+test('receipt proposals replace defaults while preserving user-confirmed fields and clearing obsolete currency conversion', () => {
+  const initial = fixture(), editor = controller(initial); editor.openDraft(initial.drafts[0]);
+  const current = {...editor.editing!, title: 'My title', payer: 'a', currency: 'GBP' as const, fieldSources: {title: 'user' as const, payer: 'user' as const, currency: 'default' as const}};
+  const proposal = {...initial.drafts[0], title: 'Scanned title', payer: 'b', currency: 'EUR' as const, fieldSources: {title: 'receipt' as const, currency: 'receipt' as const, payer: 'default' as const}};
+  const merged = receiptProposalEditor(current, proposal);
+  assert.equal(merged.title, 'My title'); assert.equal(merged.payer, 'a'); assert.equal(merged.currency, 'EUR');
+  assert.equal(merged.fx, undefined); assert.equal(merged.bankAmount, undefined);
+  assert.equal(merged.fieldSources?.title, 'user'); assert.equal(merged.fieldSources?.currency, 'receipt');
+});
+
+test('whole-receipt percentages save scanned pending quantities without inventing consumption, and item mode requires allocation', async () => {
+  const draft = pending('review'); draft.expenseId = undefined; draft.currency = 'GBP'; draft.fx = undefined; draft.bankAmount = undefined;
+  draft.items = [{id: 'pizza', name: 'Pizza slices', amount: 1200, members: [], quantity: {total: 2, label: 'slices'}, units: {total: 2, allocations: {}, label: 'slices'}}];
+  draft.percentages = {a: 30, b: 70}; draft.tax = 0; draft.tip = 0; draft.discount = 0;
+  draft.receiptScan = {version: 1, printedTotal: 1200, printedCurrency: 'GBP', status: 'matched', warnings: []};
+  const initial = fixture(draft); initial.expenses = [];
+  const editor = controller(initial); editor.openDraft(draft); await submit(editor);
+  assert.equal(editor.error, ''); assert.equal(editor.trip.expenses.length, 1);
+  const saved = editor.trip.expenses[0]; assert.deepEqual(saved.items[0].members, []); assert.deepEqual(saved.items[0].units?.allocations, {});
+  assert.deepEqual(saved.percentages, {a: 30, b: 70}); assert.equal(saved.items[0].quantity?.total, 2);
+  editor.openExpense(saved); editor.edit({percentages: undefined}); await submit(editor);
+  assert.match(editor.error, /cost shares|person/); assert.deepEqual(editor.trip.expenses[0], saved, 'removing the override cannot silently post an unassigned item');
+});
+
+test('a question about unfinished pending quantities preserves the last complete draft allocation context', async () => {
+  const draft = pending('review'); draft.expenseId = undefined; draft.percentages = undefined; draft.fx = undefined; draft.bankAmount = undefined;
+  draft.items = [{id: 'pizza', name: 'Pizza slices', amount: 1200, members: [], quantity: {total: 2, label: 'slices'}, units: {total: 2, allocations: {}, label: 'slices'}}];
+  const initial = fixture(draft); initial.expenses = [];
+  const editor = controller(initial); editor.openDraft(draft);
+  editor.edit({items: [{...editor.editing!.items[0], members: ['a'], units: {total: 2, label: 'slices', allocations: {a: NaN}}}]});
+  assert.equal(await editor.sendReceiptQuestion('Please finish these shares', 'pizza'), true);
+  const stored = editor.trip.drafts[0]; assert.deepEqual(stored.items[0].members, []); assert.deepEqual(stored.items[0].units?.allocations, {});
+  assert.match(stored.conversation!.at(-1)!.text, /Alice: not entered slices/);
+  assert(Number.isNaN(editor.editing!.items[0].units?.allocations.a), 'typing remains in the live editor for correction');
+  assert.equal(editor.trip.expenses.length, 0);
+});
+
+test('opening a legacy populated draft does not relabel saved metadata as replaceable defaults', () => {
+  const initial = fixture(); const editor = controller(initial); delete initial.drafts[0].fieldSources;
+  editor.openDraft(initial.drafts[0]);
+  assert.equal(editor.editing?.fieldSources?.title, undefined);
+  assert.equal(editor.editing?.fieldSources?.currency, undefined);
+  assert.equal(editor.editing?.fieldSources?.payer, undefined);
+  assert.equal(editor.editing?.fieldSources?.date, undefined);
+  assert.equal(editor.editing?.fieldSources?.time, undefined);
+  assert.equal(editor.editing?.fieldSources?.tax, undefined);
 });
