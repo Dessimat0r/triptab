@@ -1,7 +1,8 @@
+import { transpileWithSharedImports } from './helpers/transpile';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
-import { ModuleKind, ScriptTarget, transpileModule } from 'typescript';
+import { ModuleKind, ScriptTarget } from 'typescript';
 
 let authenticated = true;
 Object.defineProperty(globalThis, Symbol.for('triptab.fx-test-owner'), {
@@ -16,7 +17,7 @@ export const owner = globalThis[Symbol.for('triptab.fx-test-owner')];
 // The route, date comparisons and provider validation are real; authentication
 // and the external reference-rate service are the only substituted boundaries.
 const source = await readFile(new URL('../app/api/fx/route.ts', import.meta.url), 'utf8');
-const compiled = transpileModule(source, {
+const compiled = transpileWithSharedImports(source, {
   compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 },
 }).outputText
   .replace("'@/lib/store'", JSON.stringify(ownerUrl))
@@ -37,8 +38,9 @@ test('a local evening uses the recorded local date and accepts the latest earlie
   context.mock.timers.enable({ apis: ['Date'], now });
   authenticated = true;
   let providerCalls = 0;
-  context.mock.method(globalThis, 'fetch', async (url: URL | string | Request) => {
+  context.mock.method(globalThis, 'fetch', async (url: URL | string | Request, init?: RequestInit) => {
     providerCalls++;
+    assert.equal(init?.redirect, 'manual');
     const parsed = new URL(String(url));
     assert.equal(parsed.pathname, '/v1/2026-10-04');
     assert.equal(parsed.searchParams.get('base'), 'EUR');
@@ -103,11 +105,16 @@ test('provider failures retain the bank-charge and manual-rate fallback', async 
   context.mock.timers.enable({ apis: ['Date'], now });
   authenticated = true;
   let providerStatus = 404;
-  context.mock.method(globalThis, 'fetch', async () => new Response('', { status: providerStatus }));
-  for (const status of [404, 422, 503]) {
+  let providerCalls = 0;
+  context.mock.method(globalThis, 'fetch', async (_url: URL | string | Request, init?: RequestInit) => {
+    providerCalls++; assert.equal(init?.redirect, 'manual');
+    return new Response('', { status: providerStatus, headers: { Location: 'https://attacker.invalid' } });
+  });
+  for (const status of [301, 302, 307, 308, 404, 422, 503]) {
     providerStatus = status;
     const response = await GET(request());
-    assert.equal(response.status, status === 503 ? 502 : 422);
+    assert.equal(response.status, status === 404 || status === 422 ? 422 : 502);
     assert.match((await response.json() as { error: string }).error, /actual converted card charge or a manual exchange rate/);
   }
+  assert.equal(providerCalls, 7, 'redirects do not trigger a request to the location header');
 });

@@ -1,9 +1,10 @@
+import { transpileWithSharedImports } from './helpers/transpile';
 import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import vm from 'node:vm';
-import { JsxEmit, ModuleKind, ScriptTarget, transpileModule } from 'typescript';
+import { JsxEmit, ModuleKind, ScriptTarget } from 'typescript';
 import { performAuthAction } from '../lib/auth';
 import { readAccountActivity } from '../lib/audit';
 
@@ -54,18 +55,16 @@ Object.defineProperty(globalThis, Symbol.for('triptab.notifications-test-env'), 
 Object.defineProperty(globalThis, Symbol.for('triptab.notifications-test-store'), { value: store, configurable: true });
 const envURL = 'data:text/javascript;base64,' + Buffer.from("export const env=globalThis[Symbol.for('triptab.notifications-test-env')]; export const waitUntil=task=>env.pending.push(task);").toString('base64');
 const storeURL = 'data:text/javascript;base64,' + Buffer.from(`const store=globalThis[Symbol.for('triptab.notifications-test-store')];${Object.keys(store).map(name => `export const ${name}=store.${name};`).join('\n')}`).toString('base64');
-function compile(source: string) { return transpileModule(source, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022, jsx: JsxEmit.ReactJSX } }).outputText; }
+function compile(source: string) { return transpileWithSharedImports(source, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022, jsx: JsxEmit.ReactJSX } }).outputText; }
 function dataURL(source: string) { return 'data:text/javascript;base64,' + Buffer.from(source).toString('base64'); }
-const auditURL = new URL('../lib/audit.ts', import.meta.url).href;
-const notificationURL = dataURL(compile(await readFile(new URL('../lib/notifications.ts', import.meta.url), 'utf8')).replace("'cloudflare:workers'", JSON.stringify(envURL)).replace("'./store'", JSON.stringify(storeURL)).replace("'./audit'", JSON.stringify(auditURL)));
+const notificationURL = dataURL(compile(await readFile(new URL('../lib/notifications.ts', import.meta.url), 'utf8')).replace("'cloudflare:workers'", JSON.stringify(envURL)).replace("'./store'", JSON.stringify(storeURL)));
 const notifications = await import(notificationURL) as typeof import('../lib/notifications');
 const pushURL = dataURL(compile(await readFile(new URL('../app/api/push/route.ts', import.meta.url), 'utf8')).replace("'@/lib/store'", JSON.stringify(storeURL)).replace("'@/lib/notifications'", JSON.stringify(notificationURL)).replace("'zod'", JSON.stringify(import.meta.resolve('zod'))));
 const pushRoute = await import(pushURL) as typeof import('../app/api/push/route');
-const authURL = dataURL(compile(await readFile(new URL('../app/api/auth/route.ts', import.meta.url), 'utf8')).replace("'@/lib/store'", JSON.stringify(storeURL)).replace("'@/lib/notifications'", JSON.stringify(notificationURL)).replace("'@/lib/auth'", JSON.stringify(new URL('../lib/auth.ts', import.meta.url).href)).replace("'@/lib/audit'", JSON.stringify(auditURL)));
+const authURL = dataURL(compile(await readFile(new URL('../app/api/auth/route.ts', import.meta.url), 'utf8')).replace("'@/lib/store'", JSON.stringify(storeURL)).replace("'@/lib/notifications'", JSON.stringify(notificationURL)).replace("'@/lib/auth'", JSON.stringify(new URL('../lib/auth.ts', import.meta.url).href)));
 const authRoute = await import(authURL) as typeof import('../app/api/auth/route');
 const pwaURL = dataURL(compile(await readFile(new URL('../components/pwa-controls.tsx', import.meta.url), 'utf8'))
-  .replace('"react"', JSON.stringify(import.meta.resolve('react'))).replace('"lucide-react"', JSON.stringify(import.meta.resolve('lucide-react')))
-  .replace('"react/jsx-runtime"', JSON.stringify(import.meta.resolve('react/jsx-runtime'))));
+  .replace('"lucide-react"', JSON.stringify(import.meta.resolve('lucide-react'))));
 const pwa = await import(pwaURL) as typeof import('../components/pwa-controls');
 
 async function storage() {

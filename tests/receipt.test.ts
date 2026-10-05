@@ -1,3 +1,4 @@
+import { transpileWithSharedImports } from './helpers/transpile';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFile, readdir } from 'node:fs/promises';
@@ -5,7 +6,7 @@ import { createRequire } from 'node:module';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
-import { ModuleKind, ScriptTarget, transpileModule } from 'typescript';
+import { ModuleKind, ScriptTarget } from 'typescript';
 import {
   activateReceipt, deleteReceipt, maintainReceipts, maintainSystemReceipts, markRemovedReceipts,
   purgeDeletingReceipts, RECEIPT_LIMITS, ReceiptLifecycleError, reserveReceipt,
@@ -84,20 +85,20 @@ const dataUrl = (source: string) => 'data:text/javascript;base64,' + Buffer.from
 const envUrl = dataUrl("export const env=globalThis[Symbol.for('triptab.receipt-test-env')];");
 const lifecycleUrl = new URL('../lib/receipt-lifecycle.ts', import.meta.url).href;
 const storeSource = await readFile(new URL('../lib/store.ts', import.meta.url), 'utf8');
-const storeCompiled = transpileModule(storeSource, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
+const storeCompiled = transpileWithSharedImports(storeSource, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
   .replace("'zod'", JSON.stringify(pathToFileURL(createRequire(import.meta.url).resolve('zod').replace(/\.cjs$/, '.js')).href))
   .replace("'cloudflare:workers'", JSON.stringify(envUrl))
   .replace("'./model'", JSON.stringify(new URL('../lib/model.ts', import.meta.url).href))
   .replace("'./receipt-memory-ownership'", JSON.stringify(new URL('../lib/receipt-memory-ownership.ts', import.meta.url).href))
   .replace("'./receipt-context'", JSON.stringify(new URL('../lib/receipt-context.ts', import.meta.url).href))
   .replace("'./auth'", JSON.stringify(new URL('../lib/auth.ts', import.meta.url).href))
-  .replaceAll("'./audit'", JSON.stringify(new URL('../lib/audit.ts', import.meta.url).href))
+  .replace("'./activity-scope'", JSON.stringify(new URL('../lib/activity-scope.ts', import.meta.url).href))
   .replace("'./receipt-lifecycle'", JSON.stringify(lifecycleUrl))
   .replace("'./notifications'", JSON.stringify(dataUrl('export const activityNotification=()=>null; export const notifyMembers=async()=>{};')));
 const storeUrl = dataUrl(storeCompiled);
 const store = await import(storeUrl) as typeof import('../lib/store');
 const routeSource = await readFile(new URL('../app/api/receipt/route.ts', import.meta.url), 'utf8');
-const routeCompiled = transpileModule(routeSource, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
+const routeCompiled = transpileWithSharedImports(routeSource, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
   .replace("'@/lib/store'", JSON.stringify(storeUrl))
   .replace("'@/lib/receipt-lifecycle'", JSON.stringify(lifecycleUrl));
 const route = await import(dataUrl(routeCompiled)) as typeof import('../app/api/receipt/route');

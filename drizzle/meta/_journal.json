@@ -57,6 +57,27 @@
       "when": 1791134137415,
       "tag": "0007_receipt_message_registry",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1791134415312,
+      "tag": "0008_receipt_activity_scope",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1791140634479,
+      "tag": "0009_receipt_link_projections",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1791157832361,
+      "tag": "0010_receipt_ai_access",
+      "breakpoints": true
     }
   ]
 }

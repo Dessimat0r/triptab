@@ -1,0 +1,310 @@
+import assert from 'node:assert/strict';
+import { createHash, randomBytes } from 'node:crypto';
+import { readFile, readdir } from 'node:fs/promises';
+import { createServer } from 'node:http';
+import { fileURLToPath } from 'node:url';
+import test from 'node:test';
+import { build } from 'esbuild';
+import { createFetchMock, Log, LogLevel, Miniflare } from 'miniflare';
+import { unstable_splitSqlQuery } from 'wrangler';
+
+const owner = { id: 'native-owner', email: 'dessimat0r@gmail.com', displayName: 'Native owner' };
+const member = { id: 'native-member', email: 'member@example.test', displayName: 'Native member' };
+const originalKey = 'sk-native-' + 'A'.repeat(60);
+const replacementKey = 'sk-native-' + 'B'.repeat(60);
+const privateMessage = 'Provider diagnostics must never expose this message';
+const sessionTokens = { owner: 'O'.repeat(43), member: 'M'.repeat(43) };
+type NativeDatabase = Awaited<ReturnType<Miniflare['getD1Database']>>;
+type Result = {
+  connected?: boolean; manageable?: boolean; provider?: string;
+  usesOriginal?: boolean; usesReplacement?: boolean;
+  model?: string; transcription?: { title: string; items: { name: string; amount: number; quantity?: { total: number; label: string | null; sourceText: string | null } }[] };
+  proposal?: { items: { amount: number; quantity?: { total: number; label?: string; sourceText?: string }; units?: { total: number; label?: string; allocations: Record<string, number> } }[] };
+  error?: string; code?: string;
+  diagnostic?: { code: string; providerStatus?: number; providerCode?: string; networkErrorName?: string; timedOut: boolean };
+  providerCalls: number; transportContract: boolean;
+};
+
+async function fixture(providerURL?: string) {
+  // Bundle the production library without replacing its auth, crypto, or SQL.
+  // D1 operations always run in workerd. Ordinary scenarios fake only the
+  // provider transport; the local-peer regression uses real native fetch.
+  const project = fileURLToPath(new URL('../', import.meta.url));
+  const bundled = await build({
+    stdin: { resolveDir: project, sourcefile: 'receipt-ai-native-worker.ts', contents: `
+      import { saveReceiptAISettings, removeReceiptAIKey, getReceiptAIAccess, receiptAIKeyCheckDiagnostic } from './lib/receipt-ai-access.ts';
+      import { processReceiptImage, getChatGPTPlanModel, applyReceiptTranscription } from './lib/receipt-ai.ts';
+      const accounts = ${JSON.stringify({ owner, member })};
+      const originalKey = ${JSON.stringify(originalKey)};
+      const replacementKey = ${JSON.stringify(replacementKey)};
+      const providerURL = ${JSON.stringify(providerURL || null)};
+      export default { async fetch(request, env) {
+        const path = new URL(request.url).pathname;
+        const account = path.startsWith('/member/') ? accounts.member : accounts.owner;
+        const config = { RECEIPT_AI_OWNER_EMAIL: 'dessimat0r@gmail.com', RECEIPT_AI_TOKEN_KEY: env.TOKEN_KEY };
+        const input = request.method === 'POST' ? await request.json() : {};
+        const submittedKey = input.replacement ? replacementKey : originalKey;
+        let providerCalls = 0, transportContract = true;
+        const provider = async (url, init) => {
+          providerCalls++;
+          transportContract = ['https://api.openai.com/v1/models', 'https://api.openai.com/v1/responses'].includes(String(url))
+            && new Headers(init.headers).get('authorization') === 'Bearer ' + submittedKey
+            && init.redirect === 'manual' && init.signal instanceof AbortSignal && !init.signal.aborted;
+          if (!transportContract) throw new Error('Unexpected provider transport');
+          // This path uses the real Workers fetch implementation against only
+          // the local peer. It validates RequestInit without a network mock.
+          if (providerURL) return fetch(providerURL + new URL(String(url)).pathname,
+            input.legacyRedirect ? { ...init, redirect: 'error' } : init);
+          if (input.transportError) throw new TypeError(${JSON.stringify(privateMessage)} + ' ' + submittedKey);
+          const status = input.providerStatus || 200;
+          return Response.json(status === 200 ? { data: [] } : {
+            error: { code: input.providerCode, message: ${JSON.stringify(privateMessage)} + ' ' + submittedKey }
+          }, { status });
+        };
+        try {
+          if (path.endsWith('/catalogue')) {
+            const model = await getChatGPTPlanModel(submittedKey, 'gpt-6.1-sol', request.signal, provider);
+            return Response.json({ model, providerCalls, transportContract });
+          }
+          if (path.endsWith('/vision')) {
+            const trip = { id: 'native-trip', name: 'Native holiday', currency: 'GBP',
+              members: [{ id: 'native-owner', name: 'Native owner' }, { id: 'native-member', name: 'Native member' }],
+              expenses: [], payments: [], drafts: [] };
+            const draft = { id: 'native-draft', title: 'Native receipt', currency: 'GBP', payer: 'native-owner',
+              items: [], tax: 0, tip: 0, discount: 0, status: 'waiting' };
+            const transcription = await processReceiptImage({ accessToken: submittedKey, provider: 'api', model: 'gpt-6.1-sol',
+              trip, draft,
+              callerMemberId: 'native-owner', image: { bytes: new Uint8Array([137, 80, 78, 71]), mimeType: 'image/png' }
+            }, { signal: request.signal, fetcher: provider });
+            const proposal = applyReceiptTranscription(trip, draft, transcription);
+            return Response.json({ transcription, proposal, providerCalls, transportContract });
+          }
+          if (path.endsWith('/access')) {
+            const access = await getReceiptAIAccess(request, account, env.DB, config);
+            return Response.json({ provider: access.provider,
+              usesOriginal: access.accessToken === originalKey, usesReplacement: access.accessToken === replacementKey,
+              providerCalls, transportContract });
+          }
+          const result = path.endsWith('/remove')
+            ? await removeReceiptAIKey(request, account, env.DB, config)
+            : await saveReceiptAISettings(request, account, env.DB, config, { apiKey: submittedKey }, provider);
+          return Response.json({ ...result, providerCalls, transportContract });
+        } catch (error) {
+          return Response.json({ error: error.message, code: error.code, diagnostic: receiptAIKeyCheckDiagnostic(error),
+            providerCalls, transportContract }, { status: error.status || 500 });
+        }
+      } };`
+    },
+    bundle: true, write: false, format: 'esm', platform: 'browser', target: 'es2022',
+  });
+  const fetchMock = createFetchMock();
+  fetchMock.disableNetConnect();
+  const worker = new Miniflare({
+    modules: true, script: bundled.outputFiles[0].text,
+    compatibilityDate: '2026-05-15',
+    bindings: { TOKEN_KEY: randomBytes(32).toString('base64url') },
+    d1Databases: { DB: 'receipt-ai-access-native' }, d1Persist: false,
+    log: new Log(LogLevel.NONE), ...(providerURL ? {} : { fetchMock }),
+  });
+  try {
+    const database = await worker.getD1Database('DB');
+    for (const file of (await readdir(new URL('../drizzle/', import.meta.url))).filter(name => name.endsWith('.sql')).sort()) {
+      for (const sql of unstable_splitSqlQuery(await readFile(new URL('../drizzle/' + file, import.meta.url), 'utf8'))) {
+        await database.prepare(sql).run();
+      }
+    }
+    const now = new Date().toISOString();
+    for (const [name, account] of Object.entries({ owner, member })) {
+      await database.batch([
+        database.prepare('INSERT INTO profiles(id,email,display_name,created_at) VALUES(?,?,?,?)')
+          .bind(account.id, account.email, account.displayName, now),
+        database.prepare('INSERT INTO auth_sessions(token_hash,user_id,expires_at,created_at) VALUES(?,?,?,?)')
+          .bind(createHash('sha256').update(sessionTokens[name as keyof typeof sessionTokens]).digest('hex'),
+            account.id, new Date(Date.now() + 600_000).toISOString(), now),
+      ]);
+    }
+    await database.prepare('INSERT INTO auth_links(oai_user_id,user_id,created_at) VALUES(?,?,?)')
+      .bind('native-provider', owner.id, now).run();
+    return { worker, database };
+  } catch (error) { await worker.dispose(); throw error; }
+}
+
+async function call(worker: Miniflare, path: string, body: Record<string, unknown> = {}, bootstrap = false) {
+  const account = path.startsWith('/member/') ? 'member' : 'owner';
+  const response = await worker.dispatchFetch('https://triptab.test' + path, {
+    method: path.endsWith('/access') ? 'GET' : 'POST',
+    headers: bootstrap ? { 'oai-authenticated-user-id': 'native-provider', 'oai-authenticated-user-email': owner.email }
+      : { cookie: `tt_session=${sessionTokens[account]}` },
+    ...(path.endsWith('/access') ? {} : { body: JSON.stringify(body) }),
+  });
+  const text = await response.text();
+  assert(!text.includes(originalKey) && !text.includes(replacementKey), 'native responses must not disclose provider keys');
+  assert(!text.includes(privateMessage), 'raw provider and transport messages must not become public errors');
+  return { status: response.status, result: JSON.parse(text) as Result };
+}
+async function snapshot(database: NativeDatabase) {
+  const row = await database.prepare("SELECT * FROM receipt_ai_settings WHERE id='shared'").first();
+  const history = (await database.prepare("SELECT * FROM account_activity_events WHERE entity_id='receipt-processing' ORDER BY sequence").all()).results;
+  assert(!JSON.stringify({ row, history }).includes(originalKey) && !JSON.stringify({ row, history }).includes(replacementKey));
+  return { row, history };
+}
+async function bootstrap(worker: Miniflare) {
+  const saved = await call(worker, '/owner/save', {}, true);
+  assert.equal(saved.status, 200);
+  assert.equal(saved.result.connected, true);
+  assert.equal(saved.result.manageable, true);
+  assert.equal(saved.result.providerCalls, 1);
+  assert.equal(saved.result.transportContract, true);
+}
+
+test('native workerd bootstraps the shared owner key, permits member processing, replaces and removes it without disclosure', async () => {
+  const { worker, database } = await fixture();
+  try {
+    await bootstrap(worker);
+    const first = await snapshot(database);
+    assert.equal(first.row?.user_id, owner.id);
+    assert.equal(first.row?.version, 1);
+    assert.equal(first.history.length, 1);
+    const memberAccess = await call(worker, '/member/access');
+    assert.equal(memberAccess.status, 200);
+    assert.equal(memberAccess.result.usesOriginal, true);
+    assert.equal(memberAccess.result.providerCalls, 0);
+    const denied = await call(worker, '/member/save', { replacement: true });
+    assert.equal(denied.status, 403);
+    assert.equal(denied.result.providerCalls, 0);
+    assert.deepEqual(await snapshot(database), first);
+    const replaced = await call(worker, '/owner/save', { replacement: true });
+    assert.equal(replaced.status, 200);
+    assert.equal(replaced.result.connected, true);
+    assert.equal(replaced.result.transportContract, true);
+    const second = await snapshot(database);
+    assert.notEqual(second.row?.api_key_encrypted, first.row?.api_key_encrypted);
+    assert.equal(second.row?.version, 2);
+    assert.equal(second.history.length, 2);
+    assert.equal((await call(worker, '/member/access')).result.usesReplacement, true);
+    const removed = await call(worker, '/owner/remove');
+    assert.equal(removed.status, 200);
+    assert.equal(removed.result.connected, false);
+    const final = await snapshot(database);
+    assert.equal(final.row?.api_key_encrypted, null);
+    assert.equal(final.row?.version, 3);
+    assert.equal(final.history.length, 3);
+    assert.equal((await call(worker, '/member/access')).status, 503);
+  } finally { await worker.dispose(); }
+});
+
+test('native provider failures have safe categories and preserve the shared key and account history', async t => {
+  const scenarios = [
+    { name: 'rejected key', providerStatus: 401, providerCode: 'invalid_api_key', status: 400, code: 'key_rejected' },
+    { name: 'restricted key', providerStatus: 403, providerCode: 'insufficient_permissions', status: 403, code: 'key_permission_denied' },
+    { name: 'rate limit', providerStatus: 429, providerCode: 'rate_limit_exceeded', status: 429, code: 'key_check_rate_limited' },
+    { name: 'provider unavailable', providerStatus: 503, providerCode: 'server_error', status: 503, code: 'key_check_server_error' },
+    { name: 'transport failure', transportError: true, status: 503, code: 'key_check_unavailable' },
+  ];
+  for (const scenario of scenarios) await t.test(scenario.name, async () => {
+    const { worker, database } = await fixture();
+    try {
+      await bootstrap(worker);
+      const before = await snapshot(database);
+      const rejected = await call(worker, '/owner/save', { replacement: true, ...scenario });
+      assert.equal(rejected.status, scenario.status);
+      assert.equal(rejected.result.code, scenario.code);
+      assert.equal(rejected.result.providerCalls, 1);
+      assert.equal(rejected.result.transportContract, true);
+      assert.deepEqual(rejected.result.diagnostic, 'providerStatus' in scenario ? {
+        code: scenario.code, timedOut: false, providerStatus: scenario.providerStatus, providerCode: scenario.providerCode,
+      } : { code: scenario.code, timedOut: false, networkErrorName: 'TypeError' });
+      assert.deepEqual(await snapshot(database), before, 'a refused replacement must preserve ciphertext, version, and history');
+      const access = await call(worker, '/member/access');
+      assert.equal(access.status, 200);
+      assert.equal(access.result.usesOriginal, true);
+      assert.equal(access.result.usesReplacement, false);
+    } finally { await worker.dispose(); }
+  });
+});
+
+test('real workerd fetch reaches a local HTTP peer with supported request options and never follows redirects carrying keys or receipt data', async () => {
+  const requests: { path: string; method: string; authorization: string | undefined; body: string }[] = [];
+  let redirect = false;
+  const transcription = { title: 'Native pizza counter', currency: 'GBP', items: [{ id: null, name: 'Pizza slices', amount: 1001,
+    quantity: { total: 2, label: 'slices', sourceText: '2 x Stck' } }],
+    tax: 0, tip: 0, discount: 0, printedTotal: 1001, date: null, time: null, summary: 'Read two slices for review.' };
+  const peer = createServer((request, response) => {
+    const chunks: Buffer[] = [];
+    request.on('data', chunk => { chunks.push(Buffer.from(chunk)); });
+    request.on('end', () => {
+      requests.push({ path: request.url || '', method: request.method || '', authorization: request.headers.authorization,
+        body: Buffer.concat(chunks).toString() });
+      if (redirect) {
+        response.writeHead(307, { location: '/redirect-target' });
+        response.end(privateMessage);
+      } else if (request.url === '/v1/responses') {
+        response.writeHead(200, { 'content-type': 'text/event-stream' });
+        response.end(`data: ${JSON.stringify({ type: 'response.completed', response: { status: 'completed', error: null,
+          output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: JSON.stringify(transcription) }] }] } })}\n\n`);
+      } else {
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ models: [{ slug: 'gpt-6.1-sol', visibility: 'list' }] }));
+      }
+    });
+  });
+  await new Promise<void>(resolve => { peer.listen(0, '127.0.0.1', resolve); });
+  const address = peer.address();
+  assert(address && typeof address === 'object');
+  let worker: Miniflare | undefined;
+  try {
+    const native = await fixture(`http://127.0.0.1:${address.port}`);
+    worker = native.worker;
+    // A negative control reproduces the production failure in the native
+    // runtime, before any request reaches the local peer.
+    const unsupported = await call(worker, '/owner/save', { legacyRedirect: true }, true);
+    assert.equal(unsupported.status, 503);
+    assert.deepEqual(unsupported.result.diagnostic, { code: 'key_check_unavailable', timedOut: false, networkErrorName: 'TypeError' });
+    assert.equal(requests.length, 0);
+    assert.equal((await snapshot(native.database)).row, null);
+
+    await bootstrap(worker);
+    const before = await snapshot(native.database);
+    const catalogue = await call(worker, '/owner/catalogue');
+    assert.equal(catalogue.status, 200);
+    assert.equal(catalogue.result.model, 'gpt-6.1-sol');
+    const vision = await call(worker, '/owner/vision');
+    assert.equal(vision.status, 200);
+    assert.deepEqual(vision.result.transcription, transcription);
+    assert.deepEqual(vision.result.proposal!.items[0].quantity, { total: 2, label: 'slices', sourceText: '2 x Stck' });
+    assert.deepEqual(vision.result.proposal!.items[0].units, { total: 2, label: 'slices', allocations: {} });
+    assert.equal(vision.result.proposal!.items[0].amount, 1001);
+    assert.equal(vision.result.transportContract, true);
+    assert.deepEqual(requests.map(request => [request.path, request.method]), [
+      ['/v1/models', 'GET'], ['/v1/models', 'GET'], ['/v1/responses', 'POST'],
+    ]);
+    assert(requests.every(request => request.authorization === `Bearer ${originalKey}`));
+    const imageRequest = JSON.parse(requests[2].body);
+    assert.equal(imageRequest.model, 'gpt-6.1-sol');
+    assert.equal(imageRequest.input[0].content[1].detail, 'high');
+    assert.match(imageRequest.input[0].content[1].image_url, /^data:image\/png;base64,/);
+
+    redirect = true;
+    const rejected = await call(worker, '/owner/save', { replacement: true });
+    assert.equal(rejected.status, 400);
+    assert.equal(rejected.result.code, 'key_check_request_rejected');
+    assert.deepEqual(rejected.result.diagnostic, { code: 'key_check_request_rejected', timedOut: false, providerStatus: 307 });
+    assert.deepEqual(await snapshot(native.database), before);
+    for (const path of ['/owner/catalogue', '/owner/vision']) {
+      const result = await call(worker, path);
+      assert.equal(result.status, 502);
+      assert.equal(result.result.code, 'openai_redirect_rejected');
+      assert.equal(result.result.providerCalls, 1);
+      assert.equal(result.result.transportContract, true);
+      assert.equal(result.result.transcription, undefined);
+    }
+    assert.equal(requests.length, 6);
+    assert(requests.every(request => request.path !== '/redirect-target'), 'redirects must never forward keys, receipt images, or context');
+    assert.deepEqual(await snapshot(native.database), before);
+    assert.equal((await call(worker, '/member/access')).result.usesOriginal, true);
+  } finally {
+    await worker?.dispose();
+    peer.closeAllConnections();
+    await new Promise<void>((resolve, reject) => { peer.close(error => { if (error) reject(error); else resolve(); }); });
+  }
+});

@@ -1,3 +1,4 @@
+import { encodeBase64url as base64url, sha256Hex } from './data-utils';
 import { env, waitUntil } from 'cloudflare:workers';
 import { db, RequestError } from './store';
 import { accountAuditStatement, type ActivityEntity } from './audit';
@@ -50,13 +51,8 @@ export async function subscriptionCount(user: string) {
   return row?.count ?? 0;
 }
 
-async function endpointHash(endpoint: string) {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(endpoint));
-  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
-}
-
 export async function browserPushCookie(request: Request, endpoint?: string) {
-  const value = endpoint ? await endpointHash(validatePushEndpoint(endpoint)) : '';
+  const value = endpoint ? await sha256Hex(validatePushEndpoint(endpoint)) : '';
   return `${PUSH_COOKIE}=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${endpoint ? 30 * 24 * 60 * 60 : 0}${new URL(request.url).protocol === 'https:' ? '; Secure' : ''}`;
 }
 
@@ -73,7 +69,7 @@ export async function revokeBrowserPush(request: Request, user: string) {
   const hash = matches[0].slice(PUSH_COOKIE.length + 1);
   if (!/^[a-f0-9]{64}$/.test(hash)) return;
   const rows = await db().prepare('SELECT endpoint FROM push_subscriptions WHERE user_id = ? LIMIT 5').bind(user).all<{ endpoint: string }>();
-  const hashes = await Promise.all(rows.results.map(row => endpointHash(row.endpoint)));
+  const hashes = await Promise.all(rows.results.map(row => sha256Hex(row.endpoint)));
   const index = hashes.indexOf(hash);
   if (index >= 0) await removeSubscription(user, rows.results[index].endpoint, 'logout_or_account_switch');
 }
@@ -90,7 +86,7 @@ export async function subscribe(user: string, rawEndpoint: unknown) {
   const existing = await database.prepare('SELECT user_id FROM push_subscriptions WHERE endpoint = ?').bind(endpoint).first<{ user_id: string }>();
   if (existing && existing.user_id !== user) throw new RequestError('This browser subscription belongs to another account. Reset browser notifications before enabling them here.', 409);
   if (!existing && await subscriptionCount(user) >= subscriptionsPerUser) throw new RequestError('Notifications are already enabled on five browsers. Disable one before adding another.');
-  const entityId = await endpointHash(endpoint);
+  const entityId = await sha256Hex(endpoint);
   const name = await actorName(database, user);
   const guard = 'NOT EXISTS (SELECT 1 FROM push_subscriptions WHERE endpoint = ?) AND (SELECT COUNT(*) FROM push_subscriptions WHERE user_id = ?) < 5';
   const results = await database.batch([
@@ -133,7 +129,7 @@ async function removeSubscription(user: string, endpoint: string, reason: 'disab
   if (!previous || (expectedGeneration !== undefined && previous.generation !== expectedGeneration)) return;
   const source = reason === 'provider_expired' ? 'system' : 'web';
   const name = source === 'system' ? 'TripTab system' : await actorName(database, user);
-  const entityId = await endpointHash(endpoint);
+  const entityId = await sha256Hex(endpoint);
   const service = new URL(endpoint).hostname;
   const guard = 'EXISTS (SELECT 1 FROM push_subscriptions WHERE endpoint = ? AND user_id = ? AND generation = ?)';
   const results = await database.batch([
@@ -179,12 +175,6 @@ export function activityNotification(actorName: string, changes: readonly Notifi
     }
   }
   return { title: 'TripTab activity', body: `${actor} ${summary}. Open TripTab to review the activity.` };
-}
-
-function base64url(value: Uint8Array) {
-  let binary = '';
-  for (let i = 0; i < value.length; i += 8192) binary += String.fromCharCode(...value.slice(i, i + 8192));
-  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
 async function signingKey() {

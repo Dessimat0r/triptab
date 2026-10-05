@@ -1,8 +1,9 @@
+import { transpileWithSharedImports } from './helpers/transpile';
 import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
-import { ModuleKind, ScriptTarget, transpileModule } from 'typescript';
+import { ModuleKind, ScriptTarget } from 'typescript';
 import {
   AuthError, hashPassword, hashToken, performAuthAction, readAuthState,
   resolveIdentity, sessionIdentity, verifyPassword, consumeAuthRateLimit, cleanupExpiredAuthData,
@@ -69,7 +70,7 @@ async function register(database: SQLiteD1, email = 'traveller@example.com') {
 }
 
 async function logoutRoute(database: SQLiteD1, revokePush = async () => {}) {
-  const compiled = transpileModule(await readFile(new URL('../app/api/auth/route.ts', import.meta.url), 'utf8'), {
+  const compiled = transpileWithSharedImports(await readFile(new URL('../app/api/auth/route.ts', import.meta.url), 'utf8'), {
     compilerOptions: { target: ScriptTarget.ES2022, module: ModuleKind.CommonJS },
   }).outputText;
   const loaded = { exports: {} as { POST(request: Request): Promise<Response> } };
@@ -191,7 +192,7 @@ test('logout still revokes its cookie when the optional identity read fails and 
   const local = await register(database);
   const originalPrepare = database.prepare.bind(database);
   database.prepare = (sql: string) => {
-    if (sql.includes('FROM auth_sessions s JOIN profiles')) throw new Error('PRIVATE_DATABASE_ID and profile contents');
+    if (sql.includes('LEFT JOIN auth_sessions s')) throw new Error('PRIVATE_DATABASE_ID and profile contents');
     return originalPrepare(sql);
   };
   const warnings: unknown[][] = [], originalWarn = console.warn;
@@ -474,7 +475,7 @@ test('HTTP auth endpoint enforces same origin, JSON, body bounds and private res
   const storeURL = 'data:text/javascript;base64,' + Buffer.from(`const store=globalThis[Symbol.for('triptab.auth-test-store')];${Object.keys(store).map(key => `export const ${key}=store.${key};`).join('\n')}`).toString('base64');
   const source = await readFile(new URL('../app/api/auth/route.ts', import.meta.url), 'utf8');
   const notificationsURL = 'data:text/javascript;base64,' + Buffer.from("export const browserPushCookie=async()=> 'tt_push=; Path=/; HttpOnly; Max-Age=0'; export const revokeBrowserPush=async()=>{};").toString('base64');
-  const compiled = transpileModule(source, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
+  const compiled = transpileWithSharedImports(source, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
     .replace("'@/lib/auth'", JSON.stringify(new URL('../lib/auth.ts', import.meta.url).href))
     .replace("'@/lib/notifications'", JSON.stringify(notificationsURL))
     .replace("'@/lib/store'", JSON.stringify(storeURL));

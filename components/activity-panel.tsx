@@ -1,12 +1,19 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Currency } from "@/lib/model";
 import type { ActivityEvent } from "@/lib/store";
+import { formatMoney } from "@/lib/money-format";
+import { receiptWarningLabel } from "@/lib/receipt-scan";
 import "./activity-details.css";
 
 export type ActivityPanelProps = {
   tripId: string;
+  expenseId?: string;
+  draftId?: string;
+  title?: string;
+  description?: string;
+  emptyText?: string;
   refreshKey?: string | number;
   currency?: Currency;
   memberNames?: Record<string, string>;
@@ -134,21 +141,24 @@ export function auditText(value: unknown): string { return typeof value === "str
 export function auditRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
 }
+let timestampFormatter: Intl.DateTimeFormat | undefined;
 export function auditTimestamp(value: unknown, exact = false): string {
   const text = auditText(value);
   const date = new Date(text);
   if (!text || !Number.isFinite(date.getTime())) return "Date unavailable";
-  return exact ? date.toISOString() + " (UTC)" : new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "long" }).format(date);
+  return exact ? date.toISOString() + " (UTC)" : (timestampFormatter ??= new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "long" })).format(date);
 }
 export function auditSource(value: string): string {
   return value === "chatgpt" ? "via ChatGPT/Codex" : value === "system" ? "by TripTab system" : "in TripTab";
 }
+let amountFormatter: Intl.NumberFormat | undefined;
+let quantityFormatter: Intl.NumberFormat | undefined;
 function money(value: unknown, currency?: string): string {
   if (typeof value !== "number" || !Number.isFinite(value)) return "Not recorded";
   try {
-    if (currency) return new Intl.NumberFormat("en-GB", { style: "currency", currency, minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value / 100);
+    if (currency) return formatMoney(value, currency);
   } catch {}
-  return `${new Intl.NumberFormat("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value / 100)} (holiday currency)`;
+  return `${(amountFormatter ??= new Intl.NumberFormat("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 })).format(value / 100)} (holiday currency)`;
 }
 function traveller(value: unknown, names: Record<string, string>): string {
   const id = auditText(value);
@@ -165,7 +175,7 @@ function percentages(value: unknown, names: Record<string, string>): string {
   return Object.entries(entries).map(([id, percent]) => `${traveller(id, names)}: ${percent}%`).join("\n") || "No participants";
 }
 function quantity(value: unknown): string {
-  return typeof value === "number" && Number.isFinite(value) ? new Intl.NumberFormat("en-GB", { maximumFractionDigits: 6 }).format(value) : "Not recorded";
+  return typeof value === "number" && Number.isFinite(value) ? (quantityFormatter ??= new Intl.NumberFormat("en-GB", { maximumFractionDigits: 6 })).format(value) : "Not recorded";
 }
 function itemName(snapshot: Record<string, unknown>, id: unknown): string {
   const item = (Array.isArray(snapshot.items) ? snapshot.items : []).map(auditRecord).find(value => value?.id === id);
@@ -182,7 +192,32 @@ function itemDescription(value: unknown, currency: string | undefined, names: Re
   const split = units ? `${quantity(units.total)} ${auditText(units.label) || "units"} in total${allocations ? `\n${Object.entries(allocations).map(([id, amount]) => `${traveller(id, names)}: ${quantity(amount)} ${auditText(units.label) || "units"}`).join("\n")}` : ""}`
     : item.percentages ? percentages(item.percentages, names) : members.length ? `Shared equally by:\n${members.map(id => traveller(id, names)).join("\n")}` : "No participants";
   const participantOrder = units || item.percentages ? `Participant order:\n${members.map(id => traveller(id, names)).join("\n")}\n` : "";
-  return `${auditText(item.name) || "Item"} (item ${auditText(item.id)})\nFull line total: ${money(item.amount, currency)}\n${participantOrder}${split}`;
+  const purchased = auditRecord(item.quantity);
+  const purchasedDetail = purchased ? `Purchased quantity: ${quantity(purchased.total)} ${auditText(purchased.label) || "units"}\n${auditText(purchased.sourceText) ? `Receipt text: ${auditText(purchased.sourceText)}\n` : ""}` : "";
+  const source = auditRecord(item.scanSource);
+  const evidence = source ? `Receipt evidence: ${typeof source.lineIndex === "number" ? `line ${source.lineIndex + 1}` : "line not identified"}${source.confidence ? ` · ${auditText(source.confidence)} confidence` : ""}\n${auditText(source.observedText) ? `Observed text: ${auditText(source.observedText)}\n` : ""}` : "";
+  const provenance = item.fieldSources ? `Field origins: ${readable(item.fieldSources)}\n` : "";
+  return `${auditText(item.name) || "Description needs confirmation"} (item ${auditText(item.id)})\nFull line total: ${item.amount === null ? "Price needs confirmation" : money(item.amount, currency)}\n${purchasedDetail}${evidence}${provenance}${participantOrder}${split}`;
+}
+function scanDescription(value: unknown, currency: string | undefined): string {
+  const scan = auditRecord(value);
+  if (!scan) return "No recorded scan evidence";
+  const labels: Record<string, string> = { matched: "Matches printed total", "needs-review": "Needs review", incomplete: "Incomplete receipt evidence" };
+  const warnings = entries(scan.warnings).map(warning => `${warning.resolved ? "Reviewed" : "Needs review"}: ${auditText(warning.message) || receiptWarningLabel(auditText(warning.code))}${warning.itemId ? ` (item ${auditText(warning.itemId)})` : ""}`);
+  const lines = entries(scan.sourceLines).map(line => `${typeof line.lineIndex === "number" ? `Line ${line.lineIndex + 1}: ` : ""}${auditText(line.observedText) || auditText(line.kind)}${typeof line.amount === "number" ? ` · ${money(line.amount, currency)}` : ""}${line.mappedTo ? ` · ${auditText(line.mappedTo)}` : ""}`);
+  return [labels[auditText(scan.status)] || "Status not recorded",
+    `Printed subtotal: ${money(scan.printedSubtotal, currency)}`,
+    `Printed total: ${money(scan.printedTotal, currency)}`,
+    `Printed currency: ${auditText(scan.printedCurrency) || "Not readable"}`,
+    `Calculated total: ${money(scan.calculatedTotal, currency)}`,
+    ...(warnings.length ? ["Warnings:", ...warnings] : []),
+    ...(lines.length ? ["Source lines:", ...lines] : []),
+    ...(scan.acknowledgement ? ["Participant explicitly accepted this total difference"] : []),
+    ...(scan.missingTotalAcknowledgement ? ["Participant reviewed every line because the printed total was unavailable"] : []),
+    ...(scan.processor ? [`Processed by: ${auditText(scan.processor)}`] : []),
+    ...(scan.processedAt ? [`Processed at: ${auditTimestamp(scan.processedAt, true)}`] : []),
+    ...(Array.isArray(scan.imageIds) ? [`Source images: ${scan.imageIds.map(auditText).join(", ")}`] : []),
+  ].join("\n");
 }
 function memoryAliases(value: unknown, snapshot: Record<string, unknown>, names: Record<string, string>): string {
   if (!Array.isArray(value) || !value.length) return "No saved names";
@@ -243,6 +278,8 @@ function changes(event: ActivityEvent, currency: Currency | undefined, names: Re
   };
   for (const [key, label] of Object.entries({ name: "Name", title: "Title", currency: "Currency", date: "Transaction date", startDate: "Start date", endDate: "End date", time: "Transaction time", timezone: "Transaction timezone", method: "Payment method", note: "Note", email: "Traveller email" })) add(key, label);
   add("source", "Entry source", value => value === "ai" ? "AI assisted" : value === "manual" ? "Entered manually" : readable(value));
+  add("fieldSources", "Receipt field origins");
+  add("receiptScan", "Receipt scan review", (value, snapshot) => scanDescription(value, auditText(snapshot.currency) || currency));
   add("status", String(event.entityType) === "invite" ? "Invitation status" : "Review status", value => String(event.entityType) === "invite" && value === "pending" ? "Waiting for the traveller to join" : STATES[auditText(value)] || readable(value));
   add("memberName", "Invited traveller name");
   add("emailRestricted", "Invitation email restriction", value => value === true ? "Only the invited email can join" : value === false ? "Anyone with the link can join as this traveller" : "Not recorded");
@@ -253,7 +290,7 @@ function changes(event: ActivityEvent, currency: Currency | undefined, names: Re
   add("fx", "Exchange rate", value => {
     const fx = auditRecord(value); return fx ? `Rate: ${fx.rate}\nAs of: ${auditText(fx.asOf)}\nSource: ${auditText(fx.source)}` : "No recorded rate";
   });
-  for (const [key, label, entity] of [["receiptId", "Receipt image", "Image"], ["expenseId", "Receipt review target", "Expense"], ["userId", "Traveller account", "Account"], ["ownerId", "Holiday organiser account", "Account"], ["uploaderId", "Image uploaded by", "Account"], ["initiatorId", "Cleanup initiated by account", "Account"]]) add(key, label, value => entity === "Account" ? accountReference(value, accountNames) : reference(value, entity));
+  for (const [key, label, entity] of [["receiptId", "Receipt image", "Image"], ["sourceDraftId", "Linked receipt draft", "Draft"], ["expenseId", "Receipt review target", "Expense"], ["userId", "Traveller account", "Account"], ["ownerId", "Holiday organiser account", "Account"], ["uploaderId", "Image uploaded by", "Account"], ["initiatorId", "Cleanup initiated by account", "Account"]]) add(key, label, value => entity === "Account" ? accountReference(value, accountNames) : reference(value, entity));
   for (const [key, label, entity] of [["memberOrder", "Traveller order", "Traveller"], ["expenseOrder", "Expense order", "Expense"], ["paymentOrder", "Payment order", "Payment"], ["draftOrder", "Receipt draft order", "Draft"]]) add(key, label, value => order(value, id => key === "memberOrder" ? traveller(id, names) : `${entity} ${id}`));
   handled.add("items");
   const oldItems = new Map(entries(before.items).map(item => [auditText(item.id), item])), newItems = new Map(entries(after.items).map(item => [auditText(item.id), item]));
@@ -315,40 +352,68 @@ function eventLabel(event: ActivityEvent, currency?: Currency): string {
   return auditText(snapshot.title) || auditText(snapshot.name) || labels[entity] || "Entry";
 }
 
-export default function ActivityPanel({ tripId, refreshKey = 0, currency, memberNames = {}, actorMemberNames = {}, onRestore, busy = false }: ActivityPanelProps) {
-  const history = useActivityPages<ActivityEvent>(`/api/activity?tripId=${encodeURIComponent(tripId)}`, tripId, refreshKey);
-  return <section className="activity-panel" aria-label="Holiday activity" aria-busy={history.loading}>
-    <h2 className="subheading">Activity</h2>
-    <p className="footnote">See who changed this holiday and the complete details before and after each change. Earlier records remain in the history.</p>
-    <button type="button" className="quiet" disabled={history.loading} onClick={history.retry}>{history.error ? "Retry activity" : "Refresh activity"}</button>
+type ActivityDetailProps = Pick<ActivityPanelProps, "currency"> & {
+  event: ActivityEvent;
+  memberNames: Record<string, string>;
+  actorMemberNames: Record<string, string>;
+};
+
+function ActivityDetailBody({ event, currency, memberNames, actorMemberNames }: ActivityDetailProps) {
+  const fields = useMemo(() => changes(event, currency, memberNames, actorMemberNames), [event, currency, memberNames, actorMemberNames]);
+  const actor = event.actorName || "Traveller", tripName = actorMemberNames[event.actorId];
+  const snapshot = event.after || event.before || {};
+  return <>
+    <dl className="activity-identifiers">
+      <div><dt>Recorded at</dt><dd><time dateTime={event.createdAt}>{auditTimestamp(event.createdAt, true)}</time></dd></div>
+      <div><dt>Changed by</dt><dd>{actor}{tripName ? ` · current traveller name: ${tripName}` : ""}<br />{event.source === "system" ? "System reference" : "Account"} {event.actorId}</dd></div>
+      <div><dt>Record</dt><dd>{eventLabel(event, currency)} · {event.entityId}</dd></div>
+      <div><dt>Change reference</dt><dd>{event.id} · holiday revision {event.revision}</dd></div>
+      {event.entityType === "invite" && <div><dt>Invitation for</dt><dd>{auditText(snapshot.memberName) || memberNames[auditText(snapshot.memberId)] || "Earlier traveller"} · traveller {auditText(snapshot.memberId)}</dd></div>}
+      {event.entityType === "receipt" && <>
+        {!!snapshot.uploaderId && <div><dt>Image uploaded by</dt><dd>{accountReference(snapshot.uploaderId, actorMemberNames)}</dd></div>}
+        {!!snapshot.initiatorId && <div><dt>Cleanup initiated by</dt><dd>{auditText(snapshot.initiatorName) || accountReference(snapshot.initiatorId, actorMemberNames)} · account {auditText(snapshot.initiatorId)}</dd></div>}
+        {!!snapshot.sha256 && <div><dt>Image checksum (SHA-256)</dt><dd>{auditText(snapshot.sha256)}</dd></div>}
+      </>}
+    </dl>
+    <p className="footnote">Traveller references use current holiday names with stable IDs. Message authors retain their recorded names.</p>
+    {event.snapshotOmitted ? <p className="footnote">The full before and after details are too large for this history page. They remain saved. <a href={event.snapshotDownload} download>Download full shared history entry</a> to inspect the original snapshots, including shared traveller contacts.</p>
+      : <ActivityChanges fields={fields} before={!!event.before} after={!!event.after} />}
+  </>;
+}
+
+function ActivityEventDetails(props: ActivityDetailProps) {
+  const [visited, setVisited] = useState(false);
+  // Closed rows need only their summary. Keep the body mounted after its first
+  // expansion so closing and refreshing preserve the reader's details.
+  return <details onToggle={event => { if (event.currentTarget.open) setVisited(true); }}>
+    <summary>View {props.event.action === "update" ? "changes" : "details"}</summary>
+    {visited && <ActivityDetailBody {...props} />}
+  </details>;
+}
+
+export default function ActivityPanel({ tripId, expenseId, draftId, title, description, emptyText, refreshKey = 0, currency, memberNames = {}, actorMemberNames = {}, onRestore, busy = false }: ActivityPanelProps) {
+  const scope = expenseId ? { kind: "expenseId", id: expenseId } : draftId ? { kind: "draftId", id: draftId } : null;
+  const query = new URLSearchParams({ tripId });
+  if (scope) query.set(scope.kind, scope.id);
+  const history = useActivityPages<ActivityEvent>(`/api/activity?${query.toString()}`, JSON.stringify([tripId, scope?.kind, scope?.id]), refreshKey);
+  const heading = title ?? (scope ? "Receipt history" : "Activity");
+  const help = description ?? (scope
+    ? "See who changed this receipt, its reviews and images, with the complete details before and after each change."
+    : "See who changed this holiday and the complete details before and after each change. Earlier records remain in the history.");
+  return <section className={`activity-panel${scope ? " receipt-activity" : ""}`} aria-label={scope ? heading : "Holiday activity"} aria-busy={history.loading}>
+    <h2 className="subheading">{heading}</h2>
+    {help && <p className="footnote">{help}</p>}
+    <button type="button" className="quiet" disabled={history.loading} onClick={history.retry}>{history.error ? scope ? "Retry receipt history" : "Retry activity" : scope ? "Refresh receipt history" : "Refresh activity"}</button>
     {history.loading && !history.events.length && <p role="status">Loading activity…</p>}
     {history.loading && !!history.events.length && <p role="status">Checking for changes…</p>}
     {history.error && <p className="error" role="alert">{history.error}</p>}
-    {!history.loading && !history.error && !history.events.length && <p className="footnote">No recorded changes yet. Activity starts when this version of TripTab saves a change.</p>}
+    {!history.loading && !history.error && !history.events.length && <p className="footnote">{emptyText ?? (scope ? "No recorded changes for this receipt yet." : "No recorded changes yet. Activity starts when this version of TripTab saves a change.")}</p>}
     <ol className="activity-list">{history.events.map(event => {
       const actor = event.actorName || "Traveller", tripName = actorMemberNames[event.actorId];
-      const snapshot = event.after || event.before || {};
       return <li key={event.id} className="activity-event">
         <p><strong>{actor}{tripName && tripName !== actor ? ` (${tripName})` : ""}</strong> {({ create: "created", update: "updated", delete: "removed" }[event.action]) || "changed"} <strong>{eventLabel(event, currency)}</strong></p>
         <p className="footnote"><time dateTime={event.createdAt}>{auditTimestamp(event.createdAt)}</time> · {auditSource(event.source)}</p>
-        <details>
-          <summary>View {event.action === "update" ? "changes" : "details"}</summary>
-          <dl className="activity-identifiers">
-            <div><dt>Recorded at</dt><dd><time dateTime={event.createdAt}>{auditTimestamp(event.createdAt, true)}</time></dd></div>
-            <div><dt>Changed by</dt><dd>{actor}{tripName ? ` · current traveller name: ${tripName}` : ""}<br />{event.source === "system" ? "System reference" : "Account"} {event.actorId}</dd></div>
-            <div><dt>Record</dt><dd>{eventLabel(event, currency)} · {event.entityId}</dd></div>
-            <div><dt>Change reference</dt><dd>{event.id} · holiday revision {event.revision}</dd></div>
-            {event.entityType === "invite" && <div><dt>Invitation for</dt><dd>{auditText(snapshot.memberName) || memberNames[auditText(snapshot.memberId)] || "Earlier traveller"} · traveller {auditText(snapshot.memberId)}</dd></div>}
-            {event.entityType === "receipt" && <>
-              {!!snapshot.uploaderId && <div><dt>Image uploaded by</dt><dd>{accountReference(snapshot.uploaderId, actorMemberNames)}</dd></div>}
-              {!!snapshot.initiatorId && <div><dt>Cleanup initiated by</dt><dd>{auditText(snapshot.initiatorName) || accountReference(snapshot.initiatorId, actorMemberNames)} · account {auditText(snapshot.initiatorId)}</dd></div>}
-              {!!snapshot.sha256 && <div><dt>Image checksum (SHA-256)</dt><dd>{auditText(snapshot.sha256)}</dd></div>}
-            </>}
-          </dl>
-          <p className="footnote">Traveller references use current holiday names with stable IDs. Message authors retain their recorded names.</p>
-    {event.snapshotOmitted ? <p className="footnote">The full before and after details are too large for this history page. They remain saved. <a href={event.snapshotDownload} download>Download full shared history entry</a> to inspect the original snapshots, including shared traveller contacts.</p>
-      : <ActivityChanges fields={changes(event, currency, memberNames, actorMemberNames)} before={!!event.before} after={!!event.after} />}
-        </details>
+        <ActivityEventDetails event={event} currency={currency} memberNames={memberNames} actorMemberNames={actorMemberNames} />
         {onRestore && event.action === "delete" && event.before && ["expense", "payment"].includes(event.entityType) && <button type="button" className="quiet" disabled={busy} onClick={() => onRestore(event)}>Review {event.entityType} to restore</button>}
       </li>;
     })}</ol>
