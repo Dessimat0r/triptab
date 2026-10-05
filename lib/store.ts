@@ -1,6 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { ZodError } from 'zod';
 import { LedgerValidationError, parseLedgerStructure, parseStoredTrip, validateLedger, type Ledger, type ReceiptMessage, type Trip } from './model';
+import type { LedgerFreshness } from './ledger-freshness';
 import { activityNotification, notifyMembers } from './notifications';
 import { AuthError, resolveIdentity, readAuthState } from './auth';
 import { markRemovedReceipts, purgeDeletingReceipts, ReceiptLifecycleError } from './receipt-lifecycle';
@@ -252,14 +253,17 @@ export async function ensureProfile(request: Request, options: { allowSession?: 
     emailVerified: identity.kind === 'chatgpt' && !!identity.emailVerified && identity.email === profile.email && state.emailVerified };
 }
 
-/** Body, revision and freshness metadata from the same D1 transaction. */
-export async function readLedgerSnapshot(id: string) {
+type LedgerSnapshot = { data: Ledger; revision: number; freshness: LedgerFreshness };
+/** Body, revision and optional freshness metadata from the same D1 transaction. */
+export async function readLedgerSnapshot(id: string): Promise<LedgerSnapshot>;
+export async function readLedgerSnapshot(id: string, options: { includeFreshness: false }): Promise<{ data: Ledger; revision: number }>;
+export async function readLedgerSnapshot(id: string, options: { includeFreshness?: boolean } = {}) {
   // Drive these reads from the indexed owner/member ID sets rather than scanning
   // every trip (or every membership) in the database.
   const visibleIds = 'SELECT id FROM trips WHERE owner = ? UNION SELECT trip_id FROM memberships WHERE user_id = ?';
   const results = await db().batch([
-    db().prepare(`SELECT t.id, t.owner, t.data, t.receipt_link_version AS dataVersion,
-      COALESCE((SELECT e.sequence FROM activity_events e WHERE e.trip_id = t.id ORDER BY e.sequence DESC LIMIT 1), 0) AS latest
+    db().prepare(`SELECT t.id, t.owner, t.data${options.includeFreshness === false ? '' : `, t.receipt_link_version AS dataVersion,
+      COALESCE((SELECT e.sequence FROM activity_events e WHERE e.trip_id = t.id ORDER BY e.sequence DESC LIMIT 1), 0) AS latest`}
       FROM trips t WHERE t.id IN (${visibleIds}) ORDER BY t.id`).bind(id, id),
     db().prepare('SELECT COALESCE((SELECT revision FROM sync_state WHERE id = 1), 0) AS revision'),
     db().prepare(`SELECT m.trip_id, m.user_id, m.member_id, p.email FROM memberships m JOIN trips t ON t.id = m.trip_id
@@ -283,11 +287,13 @@ export async function readLedgerSnapshot(id: string) {
     return trip;
   });
   const revision = (results[1].results as { revision: number }[])[0]?.revision || 0;
-  return { data: { trips }, revision, freshness: { versions: rows.map(row => ({ id: row.id, latest: row.latest, dataVersion: row.dataVersion })), links } };
+  const result = { data: { trips }, revision };
+  return options.includeFreshness === false ? result : { ...result,
+    freshness: { versions: rows.map(row => ({ id: row.id, latest: row.latest, dataVersion: row.dataVersion })), links } };
 }
 
 export async function readLedger(id: string): Promise<{ data: Ledger; revision: number }> {
-  const { data, revision } = await readLedgerSnapshot(id);
+  const { data, revision } = await readLedgerSnapshot(id, { includeFreshness: false });
   return { data, revision };
 }
 
@@ -482,7 +488,9 @@ async function validateTripReceiptMemory(trip: Trip, previous: Trip | undefined,
   return changed;
 }
 
-export async function writeLedger(id: string, data: unknown, revision: unknown, options: { source?: ActivitySource } = {}) {
+export async function writeLedger(id: string, data: unknown, revision: unknown, options: { source?: ActivitySource; includeFreshness: true }): Promise<LedgerSnapshot>;
+export async function writeLedger(id: string, data: unknown, revision: unknown, options?: { source?: ActivitySource; includeFreshness?: false }): Promise<{ data: Ledger; revision: number }>;
+export async function writeLedger(id: string, data: unknown, revision: unknown, options: { source?: ActivitySource; includeFreshness?: boolean } = {}) {
   // Parse bounded structure first. New financial rules are applied after access
   // checks, with trusted stored snapshots allowing unchanged legacy entries to
   // remain available until their owner explicitly repairs them.
@@ -632,7 +640,7 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
     });
   }
   // Omitted trips remain available: ledger saves never delete shared records.
-  return readLedger(id);
+  return options.includeFreshness ? readLedgerSnapshot(id) : readLedger(id);
 }
 
 export function failure(e: unknown) {

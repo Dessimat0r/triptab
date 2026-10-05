@@ -1762,6 +1762,9 @@ test('ledger reads seek only indexed accessible trips and memberships, retaining
   assert.equal(snapshot.data.trips[1].members[0].userId,actor);
   assert.equal(snapshot.data.trips[1].members[0].email,'owner@example.com');
   assert.deepEqual(Object.keys(await store.readLedger(actor)).sort(),['data','revision']);
+  assert.equal(batches[1].length, 3, 'MCP-style body reads retain one coherent transaction');
+  assert.ok(!batches[1].some(statement => /activity_events|receipt_link_version/.test(statement.sql)),
+    'body-only readers do not compute freshness metadata they discard');
   for(const statement of batches[0].filter(value=>value.sql.includes('FROM trips WHERE owner'))) {
     const plan=database.sqlite.prepare('EXPLAIN QUERY PLAN '+statement.sql).all(actor,actor).map(row=>String(row.detail));
     assert.ok(plan.some(line=>line.includes('trips_owner_idx') && line.includes('SEARCH')),JSON.stringify(plan));
@@ -1787,6 +1790,30 @@ test('full ledger GET body, authoritative email, revision and ETag share one dat
   assert.ok(bodyBatches[0].some(statement=>statement.sql.includes('FROM sync_state')));
   assert.ok(bodyBatches[0].some(statement=>statement.sql.includes('p.email')));
   assert.equal(batches.filter(statements=>statements[0].sql.includes('SELECT t.id,') && !statements[0].sql.includes('t.data')).length,1,'only the explicit verification reads freshness metadata');
+});
+
+test('real ledger POST returns its saved body/revision/tag from one response snapshot and the next refresh is conditional', async () => {
+  const database = await storage(); const initial = await create(database);
+  const changed = structuredClone(initial.data); changed.trips[0].expenses.push(dinner());
+  const batches: SQLiteStatement[][] = [];
+  database.beforeBatch = statements => { batches.push(statements); };
+  const route = await ledgerRoute();
+  const response = await route.POST(saveRequest(changed, initial.revision));
+  assert.equal(response.status, 200);
+  const body = await response.json() as Awaited<ReturnType<typeof store.readLedger>>;
+  assert.equal(body.revision, 2); assert.deepEqual(body.data.trips[0].expenses,
+    changed.trips[0].expenses.map(expense => ({ ...expense, adjustmentAllocation: 'selected-participants' })));
+  assert.deepEqual(Object.keys(body).sort(), ['data', 'revision']);
+  assert.equal(response.headers.get('x-ledger-revision'), String(body.revision));
+  const tag = response.headers.get('etag'); assert(tag);
+  const reads = batches.filter(statements => statements.some(statement => statement.sql.includes('t.data')));
+  assert.equal(reads.length, 1, 'one returned snapshot, with existing preimage authorization checks retained');
+  assert.ok(reads[0].some(statement => statement.sql.includes('activity_events')), 'the returned snapshot includes coherent freshness');
+  assert.equal(tag, await ledgerEtag(database.asD1(), actor));
+  batches.length = 0;
+  const unchanged = await route.GET(ledgerReadRequest(tag));
+  assert.equal(unchanged.status, 304);
+  assert.ok(!batches.some(statements => statements.some(statement => statement.sql.includes('t.data'))), 'post-save polling does not reload financial JSON');
 });
 
 test('unchanged conditional ledger GET avoids receipt JSON and updates the unrelated global CAS revision', async () => {

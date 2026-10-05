@@ -41,7 +41,10 @@ const boundary = {
       WHERE m.trip_id IN (SELECT trip_id FROM memberships WHERE user_id='bob') ORDER BY m.trip_id,m.member_id,m.user_id`).all();
     return { data: { trips: [] }, revision: Number(sqlite.prepare('SELECT revision FROM sync_state').get()?.revision), freshness: { versions, links } };
   },
-  writeLedger: async () => ({}), sameOrigin: () => {}, readBoundedBody: async () => new Uint8Array(),
+  writeLedger: async (_user: string, _data: unknown, _revision: unknown, options: { includeFreshness?: boolean }) => {
+    assert.equal(options.includeFreshness, true, 'the route requests freshness from the write response snapshot');
+    return boundary.readLedgerSnapshot();
+  }, sameOrigin: () => {}, readBoundedBody: async () => new TextEncoder().encode(JSON.stringify({ data: { trips: [] }, revision: 19 })),
   failure: () => Response.json({ error: 'Sign in' }, { status: 401, headers: { 'Cache-Control': 'private, no-store' } }),
 };
 Object.defineProperty(globalThis, Symbol.for('triptab.freshness-boundary'), { value: boundary, configurable: true });
@@ -49,7 +52,7 @@ const boundaryUrl = 'data:text/javascript;base64,' + Buffer.from(`const boundary
 const route = transpileModule(await readFile(new URL('../app/api/ledger/route.ts', import.meta.url), 'utf8'), { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
   .replace("'@/lib/store'", JSON.stringify(boundaryUrl))
   .replace("'@/lib/ledger-freshness'", JSON.stringify(new URL('../lib/ledger-freshness.ts', import.meta.url).href));
-const { GET, HEAD } = await import('data:text/javascript;base64,' + Buffer.from(route).toString('base64')) as typeof import('../app/api/ledger/route');
+const { GET, HEAD, POST } = await import('data:text/javascript;base64,' + Buffer.from(route).toString('base64')) as typeof import('../app/api/ledger/route');
 
 test('freshness tag follows only visible trips and live membership', async () => {
   const before = await ledgerEtag(database, 'bob');
@@ -115,6 +118,19 @@ test('full GET uses its body snapshot tag and preserves the public ledger shape'
   assert.deepEqual(await response.json(),{data:{trips:[]},revision:19});
   assert.equal(response.headers.get('etag'),await ledgerEtag(database,'bob'));
   assert.equal(response.headers.get('x-ledger-revision'),'19');
+});
+test('a save response retains a coherent conditional-refresh tag without a second metadata or body read', async () => {
+  authenticated = true;
+  const calls = snapshotCalls; queries.length = 0;
+  const response = await POST(new Request('https://triptab.test/api/ledger', { method: 'POST' }));
+  assert.equal(response.status, 200); assert.equal(snapshotCalls, calls + 1);
+  assert.equal(queries.length, 0, 'no separate freshness read after the response snapshot');
+  assert.deepEqual(await response.json(), { data: { trips: [] }, revision: 19 }, 'internal freshness stays out of the API body');
+  const tag = response.headers.get('etag'); assert.equal(tag, await ledgerEtag(database, 'bob'));
+  assert.equal(response.headers.get('x-ledger-revision'), '19');
+  const conditional = await GET(new Request('https://triptab.test/api/ledger', { headers: { 'If-None-Match': tag! } }));
+  assert.equal(conditional.status, 304); assert.equal(snapshotCalls, calls + 1);
+  assert.equal(response.headers.get('cache-control'), 'private, no-store');
 });
 test('authenticated conditional HEAD returns no ledger body and private caching', async () => {
   authenticated = true;
