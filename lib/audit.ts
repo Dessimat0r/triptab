@@ -55,7 +55,7 @@ export function activityStatements(database: D1Database, changes: ActivityChange
   return statements;
 }
 
-export type AccountAuditEntity = 'profile' | 'password' | 'session' | 'chatgpt' | 'notifications';
+export type AccountAuditEntity = 'profile' | 'password' | 'session' | 'chatgpt' | 'notifications' | 'language';
 export type AccountAuditChange = {
   userId: string; actorName: string; entityType: AccountAuditEntity; entityId: string;
   action: ActivityChange['action']; before: Record<string, unknown> | null; after: Record<string, unknown> | null;

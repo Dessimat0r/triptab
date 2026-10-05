@@ -16,14 +16,14 @@ export type InitialReceiptReview = {
 // and draft bookkeeping. Cosmetic icon choices are merged separately so they
 // do not prevent initial itemisation. An incoming proposal must not erase them.
 export function receiptEditableValue(entry: ReceiptEditor) {
-  const { title, date, time, timezone, currency, payer, items, tax, tip, discount, percentages, fx, bankAmount, receiptScan, fieldSources } = entry;
-  return { title, date, time, timezone, currency, payer, items, tax, tip, discount, percentages, fx, bankAmount, receiptScan, fieldSources };
+  const { title, date, time, timezone, currency, payer, items, tax, tip, discount, percentages, fx, bankAmount, receiptScan, fieldSources, receiptLanguage, detectedLanguage } = entry;
+  return { title, date, time, timezone, currency, payer, items, tax, tip, discount, percentages, fx, bankAmount, receiptScan, fieldSources, receiptLanguage, detectedLanguage };
 }
 
 export function isBlankReceipt(entry: ReceiptEditor) {
   return !entry.expenseId && !entry.title.trim() && !entry.tax && !entry.tip && !entry.discount
     && entry.percentages === undefined && entry.fx === undefined && entry.bankAmount === undefined
-    && entry.items.every(item => !item.name.trim() && !item.amount && item.quantity === undefined && item.units === undefined && item.percentages === undefined);
+    && entry.items.every(item => !item.name.trim() && !Object.values(item.translations ?? {}).some(value=>value?.text.trim()) && !item.amount && item.quantity === undefined && item.units === undefined && item.percentages === undefined);
 }
 
 export function matchingReceiptProposal(trip: Trip, editor: ReceiptEditor) {
@@ -46,7 +46,7 @@ export function mayFillInitialReceipt(initial: InitialReceiptReview | null, acco
 
 export function receiptProposalEditor(editor: ReceiptEditor, draft: Draft): ReceiptEditor {
   const next = { ...editor, ...draft, id: editor.id, draftId: draft.id, expenseId: draft.expenseId,
-    icon: editor.icon,
+    icon: editor.icon, receiptLanguage: editor.receiptLanguage, languageViewId: editor.languageViewId || editor.expenseId || editor.id,
     date: draft.date || editor.date, time: draft.time || editor.time, timezone: draft.timezone || editor.timezone };
   // A proposal may replace defaults, but user-confirmed purchase details stay
   // authoritative even when a later external client carries older metadata.

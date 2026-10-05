@@ -64,8 +64,8 @@ export const receiptScanSchema = z.object({
 export type ReceiptScan = z.infer<typeof receiptScanSchema>;
 export type ReceiptScanWarning = z.infer<typeof receiptScanWarningSchema>;
 /** The empty placeholder row a new draft starts with; nothing a person could have typed. */
-export function blankReceiptItem(item: { name: string; amount: number | null; quantity?: unknown; scanSource?: unknown }) {
-  return !item.name.trim() && item.amount === 0 && item.quantity === undefined && item.scanSource === undefined;
+export function blankReceiptItem(item: { name: string; amount: number | null; quantity?: unknown; scanSource?: unknown; translations?: Record<string,{text:string}|undefined> }) {
+  return !item.name.trim() && item.amount === 0 && item.quantity === undefined && item.scanSource === undefined && !Object.values(item.translations ?? {}).some(value=>value?.text.trim());
 }
 /**
  * Whether recognition may fill a saved item field whose provenance is unknown.
@@ -287,7 +287,7 @@ export function receiptScanFingerprint(entry: ScannableReceipt): string {
   const scan = reconcileReceiptScan(entry);
   const financialSources = Object.fromEntries(Object.entries(entry.fieldSources || {})
     .filter(([field]) => ['currency', 'tax', 'tip', 'discount'].includes(field)));
-  return `scan-v1:${sha256(canonical({ currency: entry.currency, items: entry.items,
+  return `scan-v1:${sha256(canonical({ currency: entry.currency, items: entry.items.map(item=>Object.fromEntries(Object.entries(item).filter(([key])=>key!=="translations"&&key!=="nameLanguage"))),
     tax: entry.tax, tip: entry.tip, discount: entry.discount, percentages: entry.percentages,
     fieldSources: Object.keys(financialSources).length ? financialSources : undefined,
     receiptScan: scan && { version: scan.version, printedCurrency: scan.printedCurrency, printedSubtotal: scan.printedSubtotal,

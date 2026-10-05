@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { validCalendarDate } from './dates';
 import { receiptMemorySchema } from './receipt-context';
 import { expenseIconSchema } from './expense-icons';
+import { languageSchema, receiptLanguageSchema, itemTranslationsSchema } from './receipt-languages';
 import { fieldSourcesSchema, itemFieldSourcesSchema, scanSourceSchema, receiptScanSchema,
   reconcileReceiptScan, receiptScanSaveError, receiptScanHumanReviewChanged } from './receipt-scan';
 
@@ -186,6 +187,7 @@ const conversationSchema = z.array(receiptMessageSchema).max(100).superRefine((m
 
 const rawItemSchema = z.object({
   id, name: z.string().min(1).max(200), amount: cents, members: z.array(id).min(1).max(50),
+  nameLanguage:languageSchema.optional(), translations:itemTranslationsSchema.optional(),
   quantity: receiptQuantitySchema.optional(),
   percentages: z.record(id, z.number().finite().min(0).max(100)).optional(),
   units: unitsSchema.optional(),
@@ -241,6 +243,8 @@ const expenseItemSchema = rawItemSchema.extend({
 const expenseBaseSchema = z.object({
   id, title: z.string().min(1).max(200), date: dateSchema,
   icon: expenseIconSchema.optional(),
+  receiptLanguage:receiptLanguageSchema.optional(), detectedLanguage:languageSchema.optional(),
+  languageViewId:id.optional(),
   // Provenance may reference a consumed or deleted draft retained in history.
   sourceDraftId: id.optional(),
   time: timeSchema.default('12:00'), timezone: timezoneSchema.default('Europe/London'),
@@ -270,6 +274,8 @@ export const expenseSchema = expenseBaseSchema.superRefine(expenseItemAllocation
 export const draftSchema = z.object({
   id, title: z.string().max(200), receiptId: id.optional(), expenseId: id.optional(),
   icon: expenseIconSchema.optional(),
+  receiptLanguage:receiptLanguageSchema.optional(), detectedLanguage:languageSchema.optional(),
+  languageViewId:id.optional(),
   currency: currencySchema.nullable().default('EUR'),
   date: dateSchema.optional(), time: timeSchema.optional(), timezone: timezoneSchema.optional(),
   fx: fxSchema.optional(), bankAmount: bankAmountSchema.optional(),
@@ -291,6 +297,7 @@ export const paymentSchema = z.object({
 const memberSchema = z.object({ id, name: z.string().trim().min(1).max(50), userId: accountId.optional(), email: z.string().email().optional() });
 export const tripSchema = z.object({
   id, ownerId: accountId.optional(), name: z.string().min(1).max(100), currency: currencySchema,
+  receiptLanguage:receiptLanguageSchema.optional(),
   startDate: dateSchema.optional(), endDate: dateSchema.optional(),
   members: z.array(memberSchema).min(1).max(50),
   expenses: z.array(expenseSchema).max(1000), drafts: z.array(draftSchema).max(100),

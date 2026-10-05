@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { languageSchema, receiptLanguageSchema, itemTranslationsSchema, RECEIPT_LANGUAGES } from '@/lib/receipt-languages';
+import { readTripLanguagePreferences } from '@/lib/trip-language-preferences';
 import { readLedger, writeLedger, bucket, receiptKey, receiptAccess, ensureProfile, db } from '@/lib/store';
 import { hashToken, resolveIdentity } from '@/lib/auth';
 import { draftSchema, tripSchema, draftUnitsSchema, receiptQuantitySchema, CURRENCIES, type Currency, type Trip, type Ledger, type Draft, type Expense } from '@/lib/model';
@@ -65,6 +67,7 @@ const tools: MCPTool[] = [
         name: { type: 'string', minLength: 1, maxLength: 100 },
         currency: { type: 'string', enum: currencies },
         travellers: { type: 'array', minItems: 1, maxItems: 50, items: { type: 'string', minLength: 1, maxLength: 50 } },
+        receiptLanguage: {type:'string',enum:[...RECEIPT_LANGUAGES.map(([code])=>code),'auto'],description:'Optional shared starting hint for receipt scanning; outliers are detected independently.'},
         startDate: { type: 'string', format: 'date' },
         endDate: { type: 'string', format: 'date' },
       },
@@ -197,6 +200,10 @@ const publishedUnits = (publishedItem.properties as Record<string, ToolSchema>).
 (publishedItem.properties as Record<string, ToolSchema>).scanSource = {
   type: 'object', properties: { lineIndex: { type: 'integer', minimum: 0, maximum: 1000 }, observedText: { type: 'string', maxLength: 1000 }, confidence: { type: 'string', enum: ['high', 'medium', 'low'] } }, additionalProperties: false,
 };
+(publishedItem.properties as Record<string, ToolSchema>).nameLanguage = {type:'string',enum:RECEIPT_LANGUAGES.map(([code])=>code),description:'Language of the original name, independently detected for outliers.'};
+(publishedItem.properties as Record<string, ToolSchema>).translations = {type:'object',propertyNames:{enum:RECEIPT_LANGUAGES.map(([code])=>code)},additionalProperties:{type:'object',properties:{text:{type:'string',maxLength:200},sourceText:{type:'string',maxLength:200},pairedText:{type:'string',maxLength:200},sourceLanguage:{type:'string',enum:RECEIPT_LANGUAGES.map(([code])=>code)},provenance:{type:'string',enum:['ai','user']}},required:['text','sourceText','pairedText','provenance'],additionalProperties:false},description:'Reading names keyed by ISO language code. Set sourceText to the original name and pairedText to the corresponding reading name. The server assigns AI provenance; recognition preserves manual translations.'};
+publishedMetadata.receiptLanguage = {anyOf:[{type:'string',enum:[...RECEIPT_LANGUAGES.map(([code])=>code),'auto']},{type:'null'}],description:'Explicit receipt language override, auto to ignore the trip hint, null to inherit the trip.'};
+publishedMetadata.detectedLanguage = {type:'string',enum:RECEIPT_LANGUAGES.map(([code])=>code),description:'Actual language inferred from the image, retaining outliers.'};
 const metadataProperties = { ...publishedMetadata };
 delete metadataProperties.id;
 delete metadataProperties.receiptId;
@@ -279,10 +286,13 @@ const createArgs = z.object({
   name: z.string().trim().min(1).max(100),
   currency: z.enum(currencies),
   travellers: z.array(z.string().trim().min(1).max(50)).min(1).max(50),
+  receiptLanguage: receiptLanguageSchema.optional(),
   startDate: tripSchema.shape.startDate,
   endDate: tripSchema.shape.endDate,
 }).strict().refine(value => !value.startDate || !value.endDate || value.endDate >= value.startDate, 'Holiday end date must be on or after its start date');
 const metadataInput = z.object({
+  receiptLanguage: receiptLanguageSchema.nullable().optional(),
+  detectedLanguage: languageSchema.optional(),
   title: z.string().max(200).optional(),
   payer: idSchema.optional(),
   percentages: z.record(z.number().finite().min(0).max(100)).nullable().optional(),
@@ -299,6 +309,8 @@ const metadataInput = z.object({
 const itemPatchSchema = z.object({
   id: idSchema,
   name: z.string().max(200).optional(),
+  nameLanguage: languageSchema.optional(),
+  translations: itemTranslationsSchema.optional(),
   amount: z.number().int().min(0).max(100000000).nullable().optional(),
   quantity: receiptQuantitySchema.optional(),
   members: z.array(idSchema).max(50).optional(),
@@ -403,7 +415,7 @@ function toolLedger(ledger: { data: Ledger; revision: number }, tripId?: string)
     });
     return tripId ? { ...trip, members, expenses: trip.expenses.map(toolReceipt), drafts: trip.drafts.map(toolReceipt) } : {
       id: trip.id, name: trip.name, currency: trip.currency,
-      startDate: trip.startDate, endDate: trip.endDate, members,
+      startDate: trip.startDate, endDate: trip.endDate, receiptLanguage: trip.receiptLanguage, members,
     };
   });
   return {
@@ -421,7 +433,7 @@ function aliasActive(alias: ReceiptMemory['aliases'][number], trip: Trip, receip
     && (!alias.scopeMemberId || trip.members.some(member => member.id === alias.scopeMemberId));
 }
 
-function receiptContext(ledger: { revision: number }, trip: Trip, receipt: Draft | Expense, receiptType: 'draft' | 'expense', user: string, questionId?: string) {
+async function receiptContext(ledger: { revision: number }, trip: Trip, receipt: Draft | Expense, receiptType: 'draft' | 'expense', user: string, questionId?: string) {
   const question = questionId ? receipt.conversation?.find(message => message.id === questionId && message.role === 'user') : undefined;
   if (questionId && !question) throw new Error('Choose an existing user question in this receipt conversation.');
   const callerMemberId = trip.members.find(member => member.userId === user)?.id ?? null;
@@ -445,7 +457,8 @@ function receiptContext(ledger: { revision: number }, trip: Trip, receipt: Draft
   const safeReceipt = toolReceipt(receipt);
   return {
     revision: ledger.revision,
-    trip: { id: trip.id, name: trip.name, currency: trip.currency },
+    readingLanguage: (await readTripLanguagePreferences(db(),user,trip.id)).preferences.readingLanguage,
+    trip: { id: trip.id, name: trip.name, currency: trip.currency, receiptLanguage: trip.receiptLanguage ?? "auto" },
     receiptType,
     receipt: { ...safeReceipt, conversation: safeReceipt.conversation ?? [], memory: { notes: savedMemory.notes, aliases: contextualAliases } },
     members: trip.members.map(member => {
@@ -542,7 +555,7 @@ export async function POST(request: Request) {
         const trip = ledger.data.trips.find(trip => trip.id === values.tripId);
         const receipt = values.draftId ? trip?.drafts.find(draft => draft.id === values.draftId) : trip?.expenses.find(expense => expense.id === values.expenseId);
         if (!trip || !receipt) throw new Error('Receipt not found in your ledger.');
-        result = receiptContext(ledger, trip, receipt, values.draftId ? 'draft' : 'expense', user, values.questionId);
+        result = await receiptContext(ledger, trip, receipt, values.draftId ? 'draft' : 'expense', user, values.questionId);
         logReceiptTool('context-read', { tripId: trip.id, ...(values.draftId ? { draftId: receipt.id } : { expenseId: receipt.id }), revision: ledger.revision });
       } else if (name === 'remember_receipt_context') {
         const values = memoryArgs.parse(args);
@@ -551,13 +564,13 @@ export async function POST(request: Request) {
         if (!trip || !draft) throw new Error('Receipt draft not found in your ledger.');
         validateNewMemory(values.memory, draft.memory, trip, draft, user);
         if (JSON.stringify(values.memory) === JSON.stringify(draft.memory)) {
-          result = receiptContext(ledger, trip, draft, 'draft', user);
+          result = await receiptContext(ledger, trip, draft, 'draft', user);
         } else {
           if (values.revision !== ledger.revision) throw new Error('Your ledger changed. Read get_receipt_context again before updating this receipt memory.');
           draft.memory = values.memory;
           const saved = await writeLedger(user, ledger.data, ledger.revision, { source: 'chatgpt' });
           const savedTrip = saved.data.trips.find(value => value.id === trip.id)!;
-          result = receiptContext(saved, savedTrip, savedTrip.drafts.find(value => value.id === draft.id)!, 'draft', user);
+          result = await receiptContext(saved, savedTrip, savedTrip.drafts.find(value => value.id === draft.id)!, 'draft', user);
           logReceiptTool('memory-write', { tripId: trip.id, draftId: draft.id, revision: saved.revision });
         }
       } else if (name === 'get_receipt_image') {
@@ -625,6 +638,7 @@ export async function POST(request: Request) {
           }
           const holiday: Trip = {
             id: tripId, ownerId: user, name: values.name, currency: values.currency,
+            receiptLanguage: values.receiptLanguage,
             startDate: values.startDate, endDate: values.endDate,
             members: values.travellers.map((name, index) => ({ id: crypto.randomUUID(), name: index === 0 ? profile.displayName.slice(0, 50) : name })),
             expenses: [], drafts: [], payments: [],
@@ -654,6 +668,7 @@ export async function POST(request: Request) {
         const mergedItems = incomingItems.map(item => {
           const previous = priorItems.find(value => value.id === item.id);
           const next = { name: '', amount: null, members: [] as string[], ...previous, ...item };
+          if(item.translations)next.translations={...previous?.translations,...Object.fromEntries(Object.entries(item.translations).map(([language,value])=>[language,{...value,provenance:'ai' as const}]))};
           if (item.quantity !== undefined) next.quantity = {
             ...item.quantity,
             label: item.quantity.label ?? previous?.quantity?.label,
@@ -677,7 +692,11 @@ export async function POST(request: Request) {
             const protectAmount = !!previous && (previous.fieldSources?.amount === 'user' || (previous.fieldSources?.amount === undefined && !mayRecognizeUnknownProvenance('amount', previous)));
             const protectQuantity = !!previous && (previous.fieldSources?.quantity === 'user'
               || (previous.quantity !== undefined && previous.fieldSources?.quantity === undefined));
-            if (protectName) next.name = previous!.name;
+            if (protectName) {next.name = previous!.name;if(item.name!==undefined&&item.name!==previous!.name)next.nameLanguage=previous!.nameLanguage;}
+            if(item.translations){
+              if(protectName&&item.name!==undefined&&item.name!==previous!.name)next.translations=previous!.translations;
+              else for(const [language,value] of Object.entries(previous?.translations??{}))if(value?.provenance==='user')next.translations={...next.translations,[language]:value};
+            }
             if (protectAmount) next.amount = previous!.amount;
             if (protectQuantity) next.quantity = previous!.quantity;
             next.members = previous?.members ?? [];
@@ -711,13 +730,14 @@ export async function POST(request: Request) {
         const defaultReceiptMetadata = recognition && existing?.receiptId ? Object.fromEntries(Object.entries(legacyMetadata).filter(([key, value]) => value !== undefined
           && ['title', 'currency', 'date', 'time', 'tax', 'tip', 'discount'].includes(key)
           && existing.fieldSources?.[key as keyof NonNullable<Draft['fieldSources']>] === 'default')) : {};
+        const observedLanguage = recognition ? legacyMetadata.detectedLanguage : undefined;
         if (existing) {
           const ignoredChanges = Object.keys(legacyMetadata).filter(key => legacyMetadata[key as keyof typeof legacyMetadata] !== undefined
-            && !(key in (metadataPatch ?? {})) && !(key in defaultReceiptMetadata)
+            && !(recognition && key==='detectedLanguage') && !(key in (metadataPatch ?? {})) && !(key in defaultReceiptMetadata)
             && JSON.stringify(legacyMetadata[key as keyof typeof legacyMetadata]) !== JSON.stringify(existing[key as keyof Draft]));
           if (ignoredChanges.length) throw new Error('To change saved purchase details, use metadataPatch. Legacy draft metadata cannot update an existing draft.');
         }
-        const metadata = existing ? { ...defaultReceiptMetadata, ...metadataPatch } : { ...legacyMetadata, ...metadataPatch };
+        const metadata = existing ? { ...defaultReceiptMetadata, ...(observedLanguage?{detectedLanguage:observedLanguage}:{}), ...metadataPatch } : { ...legacyMetadata, ...metadataPatch };
         const cleanMetadata = Object.fromEntries(Object.entries(metadata).map(([key, value]) => [key, value === null && key !== 'currency' ? undefined : value]));
         const currencyChanged = existing && metadata.currency !== undefined && metadata.currency !== existing.currency;
         const fieldSources = {
@@ -735,6 +755,7 @@ export async function POST(request: Request) {
           ...existing,
           ...cleanMetadata,
           id: draftId,
+          languageViewId: existing?.languageViewId || existing?.expenseId || draftId,
           source: 'ai' as const,
           expenseId: existing?.expenseId,
           conversation: existing?.conversation,

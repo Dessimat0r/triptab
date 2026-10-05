@@ -3,10 +3,13 @@
 import { useId, useState } from "react";
 import { Check } from "lucide-react";
 import { validCalendarDate } from "@/lib/dates";
+import { TripReceiptLanguage } from "@/components/receipt-language-select";
+import { receiptLanguageSchema } from "@/lib/receipt-languages";
 import type { Trip } from "@/lib/model";
 
 export type TripDetailsProps = {
   trip: Trip;
+  accountId?: string;
   busy: boolean;
   error?: string;
   onSave: (next: Trip) => Promise<boolean>;
@@ -59,15 +62,15 @@ function TravellerName({ trip, member, index, busy, onSave }: {
   </form>;
 }
 
-function TripDetailsForm({ trip, busy, error: externalError, onSave }: TripDetailsProps) {
+function TripDetailsForm({ trip, accountId, busy, error: externalError, onSave }: TripDetailsProps) {
   const id = useId();
-  const [draft, setDraft] = useState<Partial<{ name: string; startDate: string; endDate: string }>>({});
+  const [draft, setDraft] = useState<Partial<{ name: string; startDate: string; endDate: string; receiptLanguage: string }>>({});
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [saved, setSaved] = useState(false);
   const locked = busy || submitting;
-  const values = { name: draft.name ?? trip.name, startDate: draft.startDate ?? trip.startDate ?? "", endDate: draft.endDate ?? trip.endDate ?? "" };
-  const changed = values.name.trim() !== trip.name || values.startDate !== (trip.startDate || "") || values.endDate !== (trip.endDate || "");
+  const values = { name: draft.name ?? trip.name, startDate: draft.startDate ?? trip.startDate ?? "", endDate: draft.endDate ?? trip.endDate ?? "", receiptLanguage: draft.receiptLanguage ?? trip.receiptLanguage ?? "auto" };
+  const changed = values.name.trim() !== trip.name || values.startDate !== (trip.startDate || "") || values.endDate !== (trip.endDate || "") || values.receiptLanguage !== (trip.receiptLanguage || "auto");
   function change(field: keyof typeof values, value: string) {
     setDraft(previous => ({ ...previous, [field]: value })); setError(""); setSaved(false);
   }
@@ -84,6 +87,7 @@ function TripDetailsForm({ trip, busy, error: externalError, onSave }: TripDetai
       if (values.endDate && !validCalendarDate(values.endDate)) { setError("Enter a valid holiday end date."); return; }
       if (values.startDate && values.endDate && values.endDate < values.startDate) { setError("The end date must be on or after the start date."); return; }
       const next: Trip = { ...trip, name };
+      if (values.receiptLanguage !== (trip.receiptLanguage || "auto")) next.receiptLanguage = receiptLanguageSchema.parse(values.receiptLanguage);
       if (values.startDate) next.startDate = values.startDate; else delete next.startDate;
       if (values.endDate) next.endDate = values.endDate; else delete next.endDate;
       setSubmitting(true);
@@ -105,6 +109,7 @@ function TripDetailsForm({ trip, busy, error: externalError, onSave }: TripDetai
           <input id={`${id}-end`} type="date" value={values.endDate} min={values.startDate || undefined} disabled={locked} onChange={event => change("endDate", event.target.value)} />
         </label>
       </div>
+      <TripReceiptLanguage value={receiptLanguageSchema.parse(values.receiptLanguage)} onChange={value=>change("receiptLanguage",value)} destination={()=>values.name} busy={locked} accountId={accountId} tripId={trip.id} />
       {(error || externalError) && <p className="error" role="alert">{externalError || error}</p>}
       <div className="holiday-details-actions">
         <button type="submit" className="quiet" disabled={locked || !changed}>{submitting ? "Saving…" : "Save holiday details"}</button>

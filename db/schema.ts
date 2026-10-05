@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, uniqueIndex, index, check } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, text, integer, uniqueIndex, index, check, primaryKey } from 'drizzle-orm/sqlite-core';
 import { sql } from 'drizzle-orm';
 
 // Keep the original table so existing migration history remains intact.
@@ -81,6 +81,13 @@ export const invites = sqliteTable('invites', {
   tripId: text('trip_id').notNull().references(() => trips.id, { onDelete: 'cascade' }),
   memberId: text('member_id').notNull(), email: text('email'), expiresAt: text('expires_at').notNull(), usedBy: text('used_by'), createdBy: text('created_by').notNull(),
 });
+
+// Personal views do not belong to the shared holiday ledger.
+export const tripLanguagePreferences = sqliteTable('trip_language_preferences', {
+  userId:text('user_id').notNull().references(()=>profiles.id,{onDelete:'cascade'}),
+  tripId:text('trip_id').notNull().references(()=>trips.id,{onDelete:'cascade'}),
+  data:text('data').notNull(), revision:integer('revision').notNull().default(1),
+}, table=>[primaryKey({columns:[table.userId,table.tripId]}),index('trip_language_preferences_trip_idx').on(table.tripId)]);
 
 export const receipts = sqliteTable('receipts', {
   id: text('id').primaryKey(), owner: text('owner').notNull(),
@@ -167,7 +174,7 @@ export const accountActivityEvents = sqliteTable('account_activity_events', {
   sequence: integer('sequence').primaryKey({ autoIncrement: true }),
   id: text('id').notNull(), userId: text('user_id').notNull(),
   actorName: text('actor_name').notNull(), createdAt: text('created_at').notNull(),
-  entityType: text('entity_type', { enum: ['profile', 'password', 'session', 'chatgpt', 'notifications'] }).notNull(),
+  entityType: text('entity_type', { enum: ['profile', 'password', 'session', 'chatgpt', 'notifications', 'language'] }).notNull(),
   entityId: text('entity_id').notNull(), action: text('action', { enum: ['create', 'update', 'delete'] }).notNull(),
   before: text('before_data'), after: text('after_data'),
   source: text('source', { enum: ['web', 'chatgpt', 'system'] }).notNull(),

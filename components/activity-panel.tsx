@@ -1,4 +1,5 @@
 "use client";
+import { languageName } from "@/lib/receipt-languages";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Currency } from "@/lib/model";
@@ -197,8 +198,10 @@ function itemDescription(value: unknown, currency: string | undefined, names: Re
   const purchasedDetail = purchased ? `Purchased quantity: ${quantity(purchased.total)} ${auditText(purchased.label) || "units"}\n${auditText(purchased.sourceText) ? `Receipt text: ${auditText(purchased.sourceText)}\n` : ""}` : "";
   const source = auditRecord(item.scanSource);
   const evidence = source ? `Receipt evidence: ${typeof source.lineIndex === "number" ? `line ${source.lineIndex + 1}` : "line not identified"}${source.confidence ? ` · ${auditText(source.confidence)} confidence` : ""}\n${auditText(source.observedText) ? `Observed text: ${auditText(source.observedText)}\n` : ""}` : "";
+  const translations = auditRecord(item.translations);
+  const bilingual = `${item.nameLanguage ? `Original language: ${languageName(item.nameLanguage)}\n` : ""}${translations ? Object.entries(translations).map(([code,value])=>{const translation=auditRecord(value);return `${languageName(code)}: ${auditText(translation?.text)}\nTranslated from: ${auditText(translation?.sourceText)}\nLast paired reading name: ${auditText(translation?.pairedText)}\nTranslation origin: ${auditText(translation?.provenance)}\n`;}).join("") : ""}`;
   const provenance = item.fieldSources ? `Field origins: ${readable(item.fieldSources)}\n` : "";
-  return `${auditText(item.name) || "Description needs confirmation"} (item ${auditText(item.id)})\nFull line total: ${item.amount === null ? "Price needs confirmation" : money(item.amount, currency)}\n${purchasedDetail}${evidence}${provenance}${participantOrder}${split}`;
+  return `${auditText(item.name) || "Description needs confirmation"} (item ${auditText(item.id)})\nFull line total: ${item.amount === null ? "Price needs confirmation" : money(item.amount, currency)}\n${bilingual}${purchasedDetail}${evidence}${provenance}${participantOrder}${split}`;
 }
 function scanDescription(value: unknown, currency: string | undefined): string {
   const scan = auditRecord(value);
@@ -278,6 +281,9 @@ function changes(event: ActivityEvent, currency: Currency | undefined, names: Re
     if (!same(before[key], after[key])) result.push({ label, before: describe(before[key], before), after: describe(after[key], after) });
   };
   for (const [key, label] of Object.entries({ name: "Name", title: "Title", currency: "Currency", date: "Transaction date", startDate: "Start date", endDate: "End date", time: "Transaction time", timezone: "Transaction timezone", method: "Payment method", note: "Note", email: "Traveller email" })) add(key, label);
+  add("receiptLanguage", "Receipt language setting", languageName);
+  add("detectedLanguage", "Detected receipt language", languageName);
+  handled.add("languageViewId");
   add("source", "Entry source", value => value === "ai" ? "AI assisted" : value === "manual" ? "Entered manually" : readable(value));
   add("icon", "Icon & background", value => {
     const icon = expenseIconSchema.safeParse(value);

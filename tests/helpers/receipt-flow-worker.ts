@@ -35,10 +35,12 @@ export async function createReceiptFlowWorker(options: { seedTrip?: boolean } = 
       import * as notifications from './app/api/notifications/route.ts';
       import * as push from './app/api/push/route.ts';
       import * as exports from './app/api/export/route.ts';
+      import * as tripLanguage from './app/api/trip-language/route';
+      import * as translate from './app/api/receipt/translate/route';
       const routes = { '/api/ledger': ledger, '/api/receipt': receipt, '/mcp': mcp,
         '/api/profile': profile, '/api/activity': activity, '/api/activity-entry': activityEntry, '/api/account-activity': accountActivity,
         '/api/receipt/ai-status': aiStatus, '/api/notifications': notifications, '/api/push': push,
-        '/api/export': exports };
+        '/api/trip-language':tripLanguage, '/api/receipt/translate':translate, '/api/export': exports };
       export default { async fetch(request) {
         const route = routes[new URL(request.url).pathname];
         const handler = route && route[request.method];

@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { bucket, db, ensureProfile, failure, readBoundedBody, readLedger, receiptAccess, receiptKey, RequestError, sameOrigin, writeLedger } from '@/lib/store';
 import { getReceiptAIAccess, ReceiptAIAccessError, type ReceiptAIEnvironment } from '@/lib/receipt-ai-access';
 import { applyReceiptTranscription, consumeReceiptProcessBudget, processReceiptImage, ReceiptAIError } from '@/lib/receipt-ai';
+import { readTripLanguagePreferences } from '@/lib/trip-language-preferences';
 
 export const dynamic = 'force-dynamic';
 const id = z.string().min(1).max(100);
@@ -52,12 +53,13 @@ export async function POST(request: Request) {
     if (!image.length || image.byteLength > 5 * 1024 * 1024) throw new RequestError('Use a receipt image no larger than 5 MB.', 413);
     const signal = AbortSignal.any([request.signal, AbortSignal.timeout(90_000)]);
     const database = db();
+    const {preferences:{readingLanguage}} = await readTripLanguagePreferences(database,profile.id,trip.id);
     const connection = await getReceiptAIAccess(request, profile, database, env as unknown as ReceiptAIEnvironment);
     await consumeReceiptProcessBudget(database, profile.id, { provider: connection.provider });
     operation = { attemptId: crypto.randomUUID(), tripId: trip.id, draftId: draft.id, receiptId: values.receiptId };
     logOperation('native-processing-started', operation, { provider: connection.provider });
     const transcription = await processReceiptImage({
-      ...connection, trip, draft, callerMemberId: trip.members.find(member => member.userId === profile.id)?.id ?? null,
+      ...connection, trip, draft, readingLanguage, callerMemberId: trip.members.find(member => member.userId === profile.id)?.id ?? null,
       questionId: values.questionId, image: { bytes: image, mimeType },
     }, { signal });
     // An unrelated ledger edit does not invalidate a paid transcription. Rebase
@@ -72,7 +74,7 @@ export async function POST(request: Request) {
       const currentDraft = currentTrip?.drafts.find(value => value.id === draft.id);
       const currentAccess = await receiptAccess(profile.id, values.receiptId);
       if (!currentTrip || !currentDraft || JSON.stringify(currentDraft) !== JSON.stringify(draft)
-        || currentTrip.ownerId !== trip.ownerId || JSON.stringify(currentTrip.members) !== JSON.stringify(trip.members)
+        || currentTrip.ownerId !== trip.ownerId || currentTrip.receiptLanguage !== trip.receiptLanguage || JSON.stringify(currentTrip.members) !== JSON.stringify(trip.members)
         || !currentAccess || currentAccess.tripId !== trip.id || currentAccess.owner !== access.owner) {
         throw new RequestError('This receipt changed during processing. Refresh before trying again.', 409);
       }
@@ -83,7 +85,7 @@ export async function POST(request: Request) {
       }
       const tripSnapshot = structuredClone(currentTrip);
       const proposal = applyReceiptTranscription(currentTrip, currentDraft, transcription, undefined, {
-        readPurchaseDetails: values.readPurchaseDetails, attemptId: operation.attemptId,
+        readingLanguage, readPurchaseDetails: values.readPurchaseDetails, attemptId: operation.attemptId,
         processedAt: new Date().toISOString(), processor: connection.provider === 'api' ? 'native-api' : 'native-siwc',
         imageIds: [values.receiptId],
       });
