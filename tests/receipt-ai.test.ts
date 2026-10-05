@@ -242,7 +242,6 @@ test('plan models use account-visible server ordering and an explicit preference
   } });
   assert.deepEqual(requests, ['https://api.openai.com/v1/models', 'https://api.openai.com/v1/responses']);
 });
-
 test('model catalogues and receipt image processing refuse redirects without forwarding keys, images or saved context', async () => {
   for (const status of [301, 302, 303, 307, 308]) for (const mode of ['catalogue', 'receipt'] as const) {
     let calls = 0, cancelled = false;
