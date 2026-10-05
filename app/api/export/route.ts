@@ -1,5 +1,6 @@
 import { db, failure, owner, readActivity, RequestError } from '@/lib/store';
 import { expenseShares, expenseTotal, parseStoredTrip, total, type Trip } from '@/lib/model';
+import { tripLanguagePreferencesSchema } from '@/lib/receipt-languages';
 import { readAccountActivity } from '@/lib/audit';
 
 export const dynamic = 'force-dynamic';
@@ -61,7 +62,7 @@ function financialCsv(trip: Trip): string {
       name(expense.payer), '', '', '', '', expense.tax, expense.tip, expense.discount,
       expense.bankAmount, expense.fx?.rate, expense.fx?.asOf, expense.fx?.source, expense.receiptId, expense.source || 'manual', calculationError,
       ...trip.members.map((_, index) => shares[index]),
-      JSON.stringify(expense.items.map(({ id, name, amount, members, percentages, units, quantity, scanSource, fieldSources }) => ({ id, name, amount, members, percentages, units, quantity, scanSource, fieldSources }))),
+      JSON.stringify(expense.items.map(({ id, name, nameLanguage, translations, amount, members, percentages, units, quantity, scanSource, fieldSources }) => ({ id, name, nameLanguage, translations, amount, members, percentages, units, quantity, scanSource, fieldSources }))),
       expense.receiptScan ? JSON.stringify(expense.receiptScan) : '', expense.fieldSources ? JSON.stringify(expense.fieldSources) : '',
     ]);
   }
@@ -159,7 +160,18 @@ export async function GET(request: Request) {
           UNION SELECT json_extract(j.value, '$.receiptId') FROM json_each(t.data, '$.drafts') j
         ) ORDER BY r.id LIMIT 1100
       `).bind(tripId!, actor, actor).all<{ id: string; trip_id: string }>()).results.map(row => ({ id: row.id, tripId: row.trip_id })) : undefined;
-      body = format === 'json' ? JSON.stringify({ schemaVersion: 1, exportedAt, amountScale: 100, profile: ownProfile, data: { trips }, ...(receiptMetadata ? { receiptMetadata } : {}) }) : financialCsv(trips[0]);
+      let languagePreferences: {tripId:string;preferences:ReturnType<typeof tripLanguagePreferencesSchema.parse>}[]|undefined;
+      if(scope==='account'){
+        const preferenceAccess=`p.user_id=? AND ${ACCESS}`;
+        const preferenceBytes=`SELECT COALESCE(SUM(length(CAST(p.data AS BLOB))),0) FROM trip_language_preferences p JOIN trips t ON t.id=p.trip_id WHERE ${preferenceAccess}`;
+        const [size,rows]=await db().batch([
+          db().prepare(`SELECT (${preferenceBytes}) AS bytes`).bind(actor,actor,actor),
+          db().prepare(`SELECT p.trip_id,p.data FROM trip_language_preferences p JOIN trips t ON t.id=p.trip_id WHERE ${preferenceAccess} AND (${preferenceBytes})<=? ORDER BY p.trip_id`).bind(actor,actor,actor,actor,actor,actor,MAX_SNAPSHOT_BYTES),
+        ]);
+        if(Number((size.results[0] as {bytes:number}).bytes)>MAX_SNAPSHOT_BYTES)throw new RequestError('Your language preference export is too large.',413);
+        languagePreferences=(rows.results as {trip_id:string;data:string}[]).map(row=>({tripId:row.trip_id,preferences:tripLanguagePreferencesSchema.parse(JSON.parse(row.data))}));
+      }
+      body = format === 'json' ? JSON.stringify({ schemaVersion: 1, exportedAt, amountScale: 100,...(languagePreferences?{languagePreferences}:{}), profile: ownProfile, data: { trips }, ...(receiptMetadata ? { receiptMetadata } : {}) }) : financialCsv(trips[0]);
     }
     if (new TextEncoder().encode(body).byteLength > MAX_DOWNLOAD_BYTES) throw new RequestError('This export is too large. Choose a smaller holiday or history page.', 413);
     const safeId = tripId?.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 60);

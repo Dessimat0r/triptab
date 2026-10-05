@@ -1,4 +1,5 @@
 import { sha256Hex } from './data-utils';
+import { languageSchema, RECEIPT_LANGUAGES, mergeScannedNames, receiptLanguageHint, type ReceiptLanguage } from './receipt-languages';
 import { DEFAULT_RECEIPT_MODEL } from './receipt-ai-config';
 import { z } from 'zod';
 import { CURRENCIES, MAX_AMOUNT, MAX_UNITS, draftSchema, receiptQuantitySchema, total, type Currency, type Draft, type Trip } from './model';
@@ -39,9 +40,12 @@ const transcriptionSourceLineSchema = transcriptionSourceSchema.extend({
 export const receiptTranscriptionSchema = z.object({
   title: z.string().trim().min(1).max(200).nullable(),
   currency: z.enum(currencies).nullable(),
+  detectedLanguage: languageSchema.nullable().optional(),
   items: z.array(z.object({
     id: z.string().min(1).max(100).nullable(),
     name: z.string().trim().min(1).max(200).nullable(),
+    nameLanguage: languageSchema.nullable().optional(),
+    translatedName: z.string().trim().min(1).max(200).nullable().optional(),
     amount: amount.nullable(),
     quantity: transcriptionQuantitySchema.nullable().optional(),
     scanSource: transcriptionSourceSchema.optional(),
@@ -62,6 +66,7 @@ const money = { type: 'integer', minimum: 0, maximum: MAX_AMOUNT };
 // format bounds remain enforced by receiptTranscriptionSchema on every result.
 const nullableText = () => ({ type: ['string', 'null'] });
 const nullableMoney = { ...money, type: ['integer', 'null'] };
+const nullableLanguage = { type: ['string', 'null'], enum: [...RECEIPT_LANGUAGES.map(([code])=>code), null] };
 const sourceProperties = {
   lineIndex: { type: ['integer', 'null'], minimum: 0, maximum: 1000 },
   observedText: nullableText(), confidence: { type: ['string', 'null'], enum: ['high', 'medium', 'low', null] },
@@ -70,10 +75,11 @@ const transcriptionJsonSchema = {
   type: 'object', additionalProperties: false,
   properties: {
     title: nullableText(), currency: { type: ['string', 'null'], enum: [...currencies, null] },
+    detectedLanguage: nullableLanguage,
     items: { type: 'array', maxItems: 200, items: {
       type: 'object', additionalProperties: false,
       properties: {
-        id: nullableText(), name: nullableText(), amount: nullableMoney,
+        id: nullableText(), name: nullableText(), nameLanguage: nullableLanguage, translatedName: nullableText(), amount: nullableMoney,
         quantity: {
           type: ['object', 'null'], additionalProperties: false,
           properties: {
@@ -84,7 +90,7 @@ const transcriptionJsonSchema = {
         },
         scanSource: { type: 'object', additionalProperties: false, properties: sourceProperties, required: Object.keys(sourceProperties) },
       },
-      required: ['id', 'name', 'amount', 'quantity', 'scanSource'],
+      required: ['id', 'name', 'nameLanguage', 'translatedName', 'amount', 'quantity', 'scanSource'],
     } },
     tax: nullableMoney, tip: nullableMoney, discount: nullableMoney,
     printedSubtotal: nullableMoney, printedTotal: nullableMoney,
@@ -103,7 +109,7 @@ const transcriptionJsonSchema = {
     date: nullableText(), time: nullableText(),
     summary: { type: 'string' },
   },
-  required: ['title', 'currency', 'items', 'tax', 'tip', 'discount', 'printedSubtotal', 'printedTotal', 'warnings', 'sourceLines', 'date', 'time', 'summary'],
+  required: ['title', 'currency', 'detectedLanguage', 'items', 'tax', 'tip', 'discount', 'printedSubtotal', 'printedTotal', 'warnings', 'sourceLines', 'date', 'time', 'summary'],
 };
 
 const INSTRUCTIONS = `Read the attached receipt image natively and return a receipt transcription for human review.
@@ -112,6 +118,7 @@ Use integer hundredths of a major currency unit: 12.34 is 1234, including curren
 Each item's amount is the full printed line amount. Never multiply it again by printed quantity. Do not infer personal consumption, payer, percentages or unit allocations.
 Extract purchased quantity separately when clear, with a positive total up to 1000000 and at most six decimal places. Recognize country-specific counts and measures, including Stck, St., Stück, pcs, pz, ud and printed multipliers such as 2 x Stck. Use a concise meaningful English label such as pieces, slices, bottles or kg, informed by the receipt, merchant/menu and saved context. For pizza, use slices when slice/portion wording or convincing pizza-counter context supports it; pizza alone may mean whole pizzas, so do not guess slices. For 2 x 500 ml bottles use total 2 and label bottles, not 1000 ml, unless the receipt explicitly charges by volume. Preserve legible quantity text as sourceText, or null when unavailable. An ambiguous or unreadable quantity must be null, with the uncertainty explained briefly in summary. Unknown labels must be null. Quantity is what was purchased, never evidence of who consumed it.
 Keep an existing item id only when it is the same physical receipt line; new lines use null. Preserve receipt order. Do not invent identifiers. Omitted existing lines are retained by the server, never deleted by a scan.
+Keep item.name in the receipt's original language, preserving legible product names. Return translatedName in the requested readingLanguage, or null when unreadable. Detect the receipt's actual language as detectedLanguage and each item's nameLanguage when clear. A trip language is a starting hint, not a restriction: outliers and mixed-language restaurants may differ. An explicit receipt-language override takes priority. Never translate observedText or quantity.sourceText; these remain printed evidence. Do not invent a language when uncertain.
 Read the original printed currency, merchant, lines, date and time when legible. Normalize dates as YYYY-MM-DD and times as HH:mm in 24-hour form. Ambiguous or unreadable dates/times must be null and explained in summary. Unknown title/currency/printedSubtotal/printedTotal must be null. A bare ambiguous $ is not a currency identification.
 Read printedSubtotal and printedTotal independently from observed receipt text, never derive them from the item sum. The server performs reconciliation. For multiple totals select the actual bill grand total, not cash tender, change, card currency conversion or included VAT. Flag ambiguous totals as image-may-be-incomplete.
 Do not invent unreadable values, use zero for unreadable prices or add balancing lines. Retain each visible purchased line with a null name or amount when unreadable and flag uncertain-description or unreadable-amount; an unreadable receipt may have no items.
@@ -201,11 +208,14 @@ export async function getChatGPTPlanModel(accessToken: string, preferred?: strin
   return selected;
 }
 
-function receiptContext(trip: Trip, draft: Draft, callerMemberId: string | null, questionId?: string) {
+function receiptContext(trip: Trip, draft: Draft, callerMemberId: string | null, questionId?: string, readingLanguage:ReceiptLanguage='en') {
   const question = questionId ? draft.conversation?.find(message => message.id === questionId && message.role === 'user') : undefined;
   if (questionId && !question) throw new ReceiptAIError('Choose a saved user question from this receipt.', 400);
   return {
-    callerMemberId, questionId: question?.id ?? null,
+    callerMemberId, questionId: question?.id ?? null, readingLanguage,
+    tripReceiptLanguageHint: trip.receiptLanguage ?? 'auto',
+    receiptLanguageHint: receiptLanguageHint(trip,draft) ?? 'auto',
+    receiptLanguageOverride: draft.receiptLanguage ?? null,
     speakerMemberId: question ? question.authorMemberId ?? null : callerMemberId,
     questionItemId: question?.itemId ?? null,
     members: trip.members.map(({ id, name }) => ({ id, name })),
@@ -213,7 +223,8 @@ function receiptContext(trip: Trip, draft: Draft, callerMemberId: string | null,
       title: draft.title, currency: draft.currency,
       // Extraction needs receipt evidence and terminology, not financial
       // allocation maps. Those stay authoritative in server-side projection.
-      items: draft.items.map(({ id, name, amount, quantity, units, scanSource, fieldSources }) => ({ id, name, amount,
+      items: draft.items.map(({ id, name, nameLanguage, translations, amount, quantity, units, scanSource, fieldSources }) => ({ id, name, amount,
+        ...(nameLanguage?{nameLanguage}:{}), ...(translations?.[readingLanguage]?{readingName:translations[readingLanguage]}:{}),
         ...(quantity ? { quantity } : {}), ...(units ? { units: { total: units.total, ...(units.label ? { label: units.label } : {}) } } : {}),
         ...(scanSource ? { scanSource } : {}), ...(fieldSources ? { fieldSources } : {}),
       })),
@@ -244,7 +255,7 @@ function receiptContext(trip: Trip, draft: Draft, callerMemberId: string | null,
   };
 }
 
-async function completedReceipt(response: Response, provider: 'api' | 'siwc'): Promise<ReceiptTranscription> {
+async function completedStructured<T>(response: Response, provider: 'api' | 'siwc', schema:z.ZodType<T>, maxResultBytes=1_000_000): Promise<T> {
   if (!response.headers.get('content-type')?.toLowerCase().startsWith('text/event-stream') || !response.body) {
     throw new ReceiptAIError('OpenAI did not return a completed receipt stream.');
   }
@@ -252,7 +263,7 @@ async function completedReceipt(response: Response, provider: 'api' | 'siwc'): P
   // Deltas, event envelopes and the completed result repeat output. Bound that
   // transport separately from a single event/final result so a valid receipt
   // does not fail merely because the provider streamed it in small increments.
-  const maxResultBytes = 1_000_000, maxEventBytes = 6 * maxResultBytes + 16_384;
+  const maxEventBytes = 6 * maxResultBytes + 16_384;
   // JSON may escape each result byte to six transport bytes. Responses repeats
   // text in deltas, done, content-part, output-item and completed events; leave
   // one further bounded event's room for their envelopes and progress events.
@@ -276,7 +287,7 @@ async function completedReceipt(response: Response, provider: 'api' | 'siwc'): P
     const text = parts.join('');
     if (encoder.encode(text).byteLength > maxResultBytes) throw new ReceiptAIError('OpenAI returned a receipt result that is too large.');
     try {
-      const result = receiptTranscriptionSchema.safeParse(JSON.parse(text));
+      const result = schema.safeParse(JSON.parse(text));
       if (result.success) return result.data;
     } catch { /* Return a safe error without echoing model output. */ }
     throw new ReceiptAIError('The AI returned invalid receipt fields. Your saved receipt is unchanged.');
@@ -336,13 +347,13 @@ async function completedReceipt(response: Response, provider: 'api' | 'siwc'): P
 
 export async function processReceiptImage(input: {
   accessToken: string; model?: string; provider: 'api' | 'siwc'; trip: Trip; draft: Draft; callerMemberId: string | null; questionId?: string;
-  image: { bytes: Uint8Array; mimeType: string };
+  readingLanguage?:ReceiptLanguage; image: { bytes: Uint8Array; mimeType: string };
 }, options: { signal?: AbortSignal; fetcher?: typeof fetch } = {}) {
   const { bytes, mimeType } = input.image;
   if (!['image/jpeg', 'image/png', 'image/webp'].includes(mimeType) || !bytes.byteLength || bytes.byteLength > 5 * 1024 * 1024) {
     throw new ReceiptAIError('Use a saved JPEG, PNG or WebP receipt no larger than 5 MB.', 400);
   }
-  const context = JSON.stringify(receiptContext(input.trip, input.draft, input.callerMemberId, input.questionId));
+  const context = JSON.stringify(receiptContext(input.trip, input.draft, input.callerMemberId, input.questionId, input.readingLanguage));
   if (context.length > 500_000) throw new ReceiptAIError('This receipt context is too large to process. Use manual item entry.', 413);
   const fetcher = options.fetcher ?? fetch;
   const model = input.provider === 'siwc' ? await getChatGPTPlanModel(input.accessToken, input.model, options.signal, fetcher) : input.model || DEFAULT_RECEIPT_MODEL;
@@ -366,11 +377,11 @@ export async function processReceiptImage(input: {
     try { body = JSON.parse(await boundedText(response)); } catch { /* Admission errors may be non-JSON. */ }
     throw providerError(response.status, body, input.provider);
   }
-  return completedReceipt(response, input.provider);
+  return completedStructured(response, input.provider, receiptTranscriptionSchema);
 }
 
 export function applyReceiptTranscription(_trip: Trip, draft: Draft, transcription: ReceiptTranscription, questionId?: string, options: {
-  readPurchaseDetails?: boolean; attemptId?: string; processedAt?: string; processor?: 'native-api' | 'native-siwc'; imageIds?: string[];
+  readingLanguage?:ReceiptLanguage; readPurchaseDetails?: boolean; attemptId?: string; processedAt?: string; processor?: 'native-api' | 'native-siwc'; imageIds?: string[];
 } = {}): Draft {
   const result = receiptTranscriptionSchema.safeParse(transcription);
   if (!result.success) throw new ReceiptAIError('The AI returned invalid receipt fields. Your saved receipt is unchanged.');
@@ -420,20 +431,24 @@ export function applyReceiptTranscription(_trip: Trip, draft: Draft, transcripti
         ...(readAmount ? { amount: 'receipt' as const } : {}),
         ...(quantity && nextQuantity === quantity ? { quantity: 'receipt' as const } : {}),
       };
-      return { ...previous,
+      const next = { ...previous,
         name: readName ? item.name ?? previous.name : previous.name,
+        ...(readName && item.name!==null && (item.nameLanguage || value.detectedLanguage) ? {nameLanguage:item.nameLanguage || value.detectedLanguage!} : {}),
         amount: readAmount ? item.amount : previous.amount,
         ...(nextQuantity ? { quantity: nextQuantity } : {}),
         ...(scanSource ? { scanSource } : {}),
         fieldSources: Object.keys(itemSources).length ? itemSources : undefined,
       };
+      return mergeScannedNames(previous,next,next.name===item.name?(item.nameLanguage ?? value.detectedLanguage ?? undefined):undefined,options.readingLanguage,
+        next.name===item.name?item.translatedName:undefined);
     }
-    return {
+    const next = {
       id: crypto.randomUUID(), name: item.name ?? '', amount: item.amount, members: [],
       ...(quantity ? { quantity, units: { total: quantity.total, allocations: {}, ...(quantity.label ? { label: quantity.label } : {}) } } : {}),
       ...(scanSource ? { scanSource } : {}),
       fieldSources: { name: 'receipt' as const, amount: 'receipt' as const, ...(quantity ? { quantity: 'receipt' as const } : {}) },
     };
+    return mergeScannedNames(undefined,next,item.nameLanguage ?? value.detectedLanguage ?? undefined,options.readingLanguage,item.translatedName);
   });
   // A scan is an upsert, never implicit deletion. Preserve logical row order,
   // IDs, discussions and aliases even when the model omits an existing line.
@@ -509,6 +524,7 @@ export function applyReceiptTranscription(_trip: Trip, draft: Draft, transcripti
   if (sourceLines.length > 1000 || uniqueWarnings.length > 1000) throw new ReceiptAIError('This receipt has reached its scan evidence limit. Your saved evidence is unchanged; review it before rescanning.', 422);
   const proposal = draftSchema.parse({
     ...draft, title, currency, date, time, items, ...adjustments, fieldSources,
+    ...(value.detectedLanguage?{detectedLanguage:value.detectedLanguage}:{}),
     fx: currency === draft.currency ? draft.fx : undefined,
     bankAmount: currency === draft.currency ? draft.bankAmount : undefined,
     source: 'ai', status: 'review', adjustmentAllocation: 'selected-participants',
@@ -559,4 +575,22 @@ export async function consumeReceiptProcessBudget(database: D1Database, userId: 
   // so shared auth/MCP cleanup cannot erase a live daily spending limit.
   const sharedDay = await consume(`triptab:receipt-process:shared-api-day:${day}`, day + 86_400_000);
   if (!sharedDay || sharedDay.attempts > 500) throw new ReceiptAIError('TripTab receipt-processing limit reached for today. Try again after midnight UTC.', 429, 'receipt_processing_shared_daily_limit');
+}
+
+/** One bounded text-only request using the same server-side provider and stream validation. */
+export async function processStructuredText<T>(input:{accessToken:string;model?:string;provider:'api'|'siwc';instructions:string;context:unknown;
+  schema:z.ZodType<T>;jsonSchema:Record<string,unknown>;maxOutputTokens:number},options:{signal?:AbortSignal;fetcher?:typeof fetch}={}):Promise<T>{
+  const fetcher=options.fetcher??fetch;
+  const model=input.provider==='siwc'?await getChatGPTPlanModel(input.accessToken,input.model,options.signal,fetcher):input.model||DEFAULT_RECEIPT_MODEL;
+  const context=JSON.stringify(input.context);
+  if(new TextEncoder().encode(context).byteLength>150_000)throw new ReceiptAIError('Too many names to translate at once.',413);
+  const response=await requestProvider('https://api.openai.com/v1/responses',{
+    method:'POST',signal:options.signal,redirect:'manual',headers:{Authorization:`Bearer ${input.accessToken}`,'Content-Type':'application/json'},
+    body:JSON.stringify({model,store:false,stream:true,...(input.provider==='api'?{max_output_tokens:input.maxOutputTokens,
+      ...(model===DEFAULT_RECEIPT_MODEL?{reasoning:{effort:'low'}}:{})}:{}),instructions:input.instructions,
+      input:[{role:'user',content:[{type:'input_text',text:context}]}],
+      text:{format:{type:'json_schema',name:'triptab_language',strict:true,schema:input.jsonSchema}}}),
+  },fetcher);
+  if(!response.ok){let body:unknown;try{body=JSON.parse(await boundedText(response));}catch{}throw providerError(response.status,body,input.provider);}
+  return completedStructured(response,input.provider,input.schema,Math.min(250_000,input.maxOutputTokens*16));
 }

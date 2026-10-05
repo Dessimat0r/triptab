@@ -190,3 +190,10 @@ test('history distinguishes purchased quantities from cost allocations and escap
   assert.doesNotMatch(html, /<script>/);
   assert.deepEqual(change, original);
 });
+
+test('receipt translation-only history shows original and changed reading names',()=>{
+  const change=event([],[]);
+  change.before!.items=[{id:'dinner',name:'Acqua',nameLanguage:'it',amount:1000,members:['alice'],translations:{en:{text:'Water',sourceText:'Acqua',pairedText:'Water',sourceLanguage:'it',provenance:'ai'}}}];
+  change.after!.items=[{...(change.before!.items as Record<string,unknown>[])[0],translations:{en:{text:'Sparkling water',sourceText:'Acqua',pairedText:'Water',sourceLanguage:'it',provenance:'user'}}}];
+  const {fields,html}=render(change);assert.equal(fields.length,1);assert.match(html,/Original language: Italian/);assert.match(html,/English: Water/);assert.match(html,/English: Sparkling water/);assert.match(html,/Translation origin: user/);
+});

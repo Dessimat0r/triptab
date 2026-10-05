@@ -24,6 +24,10 @@ import "@/components/receipt-history-view.css";
 import "@/components/receipt-editor-layout.css";
 import MemberStatement from "@/components/member-statement";
 import TripDetails from "@/components/trip-details";
+import { useTripLanguagePreferences, PersonalLanguageSettings } from "@/components/trip-language-preferences";
+import { TripReceiptLanguage, ReceiptLanguageSelect } from "@/components/receipt-language-select";
+import ReceiptItemNames, { TranslateMissingNames } from "@/components/receipt-item-names";
+import type { ReceiptLanguage } from "@/lib/receipt-languages";
 import DataExport from "@/components/data-export";
 import { PwaUpdatePrompt } from "@/components/pwa-controls";
 import { localDate, localTime } from "@/lib/dates";
@@ -223,6 +227,9 @@ export default function Home({ children }: { children: ReactNode }) {
     return true;
   }, []);
   const trip = ledger.trips.find((t) => t.id === selected) || ledger.trips[0];
+  const languageSettings = useTripLanguagePreferences(profile?.id || "", trip?.id || "");
+  const [newTripLanguage,setNewTripLanguage] = useState<ReceiptLanguage | "auto">("auto");
+  const createForm = useRef<HTMLFormElement>(null);
   useEffect(() => {
     receiptSessionScope.current = { accountId: profile?.id || "", tripId: trip?.id || "" };
     const session = receiptSession, initial = initialReceiptReview;
@@ -600,6 +607,7 @@ export default function Home({ children }: { children: ReactNode }) {
     setEditorConflict(null); setReferenceRate(null);
     const entry: ReceiptEditor = {
       ...draft,
+      languageViewId: draft.languageViewId || existing?.languageViewId || draft.expenseId || draft.id,
       adjustmentAllocation: "selected-participants",
       id: draft.expenseId || draft.id,
       date: draft.date || existing?.date || today(),
@@ -721,6 +729,9 @@ export default function Home({ children }: { children: ReactNode }) {
       expenseId: target?.id,
       title: source.title.trim() || "Receipt",
       icon: entry.icon,
+      receiptLanguage: entry.receiptLanguage,
+      detectedLanguage: source.detectedLanguage,
+      languageViewId: entry.languageViewId || entry.expenseId || entry.id,
       receiptId,
       currency: source.currency,
       date: source.date || undefined,
@@ -996,7 +1007,7 @@ export default function Home({ children }: { children: ReactNode }) {
       setError("Check for the latest processed receipt before reviewing it.");
       return;
     }
-    openDraft({ ...latest, icon: editing.icon, conversation: mergeReceiptConversation(latest.conversation, editing.conversation) });
+    openDraft({ ...latest, icon: editing.icon, receiptLanguage: editing.receiptLanguage, languageViewId: editing.languageViewId || editing.expenseId || editing.id, conversation: mergeReceiptConversation(latest.conversation, editing.conversation) });
   }
   async function upload(file: File) {
     if (!trip) return;
@@ -1101,6 +1112,7 @@ export default function Home({ children }: { children: ReactNode }) {
       return;
     }
     const awaitingReply = !!latestDraft && hasPendingReceiptQuestions(expense.conversation);
+    expense.languageViewId = editing.languageViewId || editing.expenseId || editing.id;
     if (!exists && expense.id === draftId && awaitingReply) expense.id = uid();
     const retainedDraft: Draft | null = awaitingReply && latestDraft ? {
       ...expense,
@@ -1126,7 +1138,7 @@ export default function Home({ children }: { children: ReactNode }) {
       if (!Array.isArray(rows) || !rows.length || rows.length > 200)
         throw Error();
       const items = rows.map(
-        (r: { name: string; amount: number; members?: string[]; percentages?: Record<string, number>; units?: Item["units"]; quantity?: Item["quantity"] }) => {
+        (r: { name: string; nameLanguage?: Item["nameLanguage"]; translations?: Item["translations"]; amount: number; members?: string[]; percentages?: Record<string, number>; units?: Item["units"]; quantity?: Item["quantity"] }) => {
           if (
             typeof r.name !== "string" ||
             !r.name.trim() ||
@@ -1139,6 +1151,8 @@ export default function Home({ children }: { children: ReactNode }) {
           return itemSchema.parse({
             id: uid(),
             name: r.name,
+            nameLanguage: r.nameLanguage,
+            translations: r.translations,
             amount: r.amount,
             members,
             percentages: r.percentages,
@@ -1596,7 +1610,8 @@ export default function Home({ children }: { children: ReactNode }) {
                         </form>
                       </div>
                       <TripSharing key={`${trip.id}:${profile?.id || "anonymous"}`} trip={trip} profile={profile} onChanged={load} />
-                      <TripDetails key={trip.id} trip={trip} busy={saving || loading} error={error} onSave={updateTrip} />
+                      <TripDetails key={trip.id} trip={trip} accountId={profile?.id} busy={saving || loading} error={error} onSave={updateTrip} />
+                      <PersonalLanguageSettings settings={languageSettings} />
                       <DataExport key={`${profile?.id || "anonymous"}:${trip.id}`} tripId={trip.id} compact />
                     </>
                   );
@@ -1969,6 +1984,7 @@ export default function Home({ children }: { children: ReactNode }) {
               </button>
             </div>
             <form
+              ref={createForm}
               onSubmit={async (e) => {
                 e.preventDefault();
                 const f = new FormData(e.currentTarget);
@@ -1990,6 +2006,7 @@ export default function Home({ children }: { children: ReactNode }) {
                   id: uid(),
                   name: (f.get("name") as string).trim(),
                   currency: f.get("currency") as Currency,
+                  receiptLanguage: newTripLanguage,
                   startDate: (f.get("startDate") as string) || undefined,
                   endDate: (f.get("endDate") as string) || undefined,
                   members: names.map((name) => ({ id: uid(), name })),
@@ -2000,7 +2017,7 @@ export default function Home({ children }: { children: ReactNode }) {
                 if (await save({ trips: [...ledger.trips, t] })) {
                   closeReceiptEditor(); setSelected(t.id);
                   setView("expenses");
-                  setCreate(false);
+                  setCreate(false); setNewTripLanguage("auto");
                 }
               }}
             >
@@ -2014,6 +2031,7 @@ export default function Home({ children }: { children: ReactNode }) {
                   autoFocus
                 />
               </label>
+              <TripReceiptLanguage value={newTripLanguage} onChange={setNewTripLanguage} destination={() => (createForm.current?.elements.namedItem("name") as HTMLInputElement | null)?.value || ""} accountId={profile?.id} />
               <label>
                 Travellers
                 <textarea
@@ -2323,6 +2341,7 @@ export default function Home({ children }: { children: ReactNode }) {
                       <ShareSplit members={trip.members} selected={Object.keys(editing.percentages)} percentages={editing.percentages} scope="receipt" alwaysPercent onChange={(ids, percentages) => setEditing(prev => prev && { ...prev, percentages: percentages || equalPercentages(ids) })} />
                     </>}
                   </div>
+                  <ReceiptLanguageSelect tripLanguage={trip.receiptLanguage} value={editing.receiptLanguage} detected={editing.detectedLanguage} onChange={receiptLanguage=>setEditing(previous=>previous&&{...previous,receiptLanguage})} />
                   <div className="itemsheading">
                     <h3>Items</h3>
                     <span className="muted">
@@ -2332,29 +2351,17 @@ export default function Home({ children }: { children: ReactNode }) {
                   <p className="itemhint">
                     {editing.percentages === undefined ? "Choose who shares each item, equally, by percentage or by quantity." : "Enter the receipt items. The whole receipt percentages determine each person’s share."}
                   </p>
+                  <TranslateMissingNames key={`${profile?.id}:${trip.id}:${editing.id}`} accountId={profile?.id || ""} trip={trip} receipt={editing} settings={languageSettings} onUpdate={(id,change)=>setEditing(previous=>previous&&previous.id===editing.id&&previous.receiptLanguage===editing.receiptLanguage?{...previous,items:previous.items.map(item=>item.id===id?change(item):item)}:previous)} />
+                  {languageSettings.error && <p className="error" role="alert">{languageSettings.error}</p>}
                   {!editing.items.length && <p className="receipt-no-items" role="status">No itemisation received yet. Process the stored receipt, or add its items manually.</p>}
                   <div className="items">
                     {editing.items.map((item, i) => (
                       <div className="item" key={item.id}>
                         <div className="item-top">
                           <span className="itemnumber">{i + 1}</span>
-                          <input
-                            aria-label={"Item " + (i + 1) + " name"}
-                            placeholder="Item name"
-                            value={item.name}
-                            required
-                            maxLength={200}
-                            onChange={(e) =>
-                              setEditing({
-                                ...editing,
-                                items: editing.items.map((x) =>
-                                  x.id === item.id
-                                    ? { ...x, name: e.target.value, fieldSources: { ...x.fieldSources, name: "user" as const } }
-                                    : x,
-                                ),
-                              })
-                            }
-                          />
+                          <ReceiptItemNames accountId={profile?.id || ""} trip={trip} receipt={editing} item={item} index={i} settings={languageSettings}
+                            onUpdate={change=>setEditing(previous=>previous&&previous.id===editing.id&&previous.receiptLanguage===editing.receiptLanguage
+                              ?{...previous,items:previous.items.map(current=>current.id===item.id?change(current):current)}:previous)} />
                           <div className="moneyinput">
                             <Amount
                               label={"Item " + (i + 1) + " total"}

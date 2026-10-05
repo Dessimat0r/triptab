@@ -76,6 +76,7 @@ function controller(trip: model.Trip, fetcher?: typeof fetch) {
   new Function('require', 'module', 'exports', 'fetch', compiled)((name: string) => {
     if (name === 'react') return hooks;
     if (name === 'react/jsx-runtime') return runtime;
+    if (name === '@/components/trip-language-preferences') return {useTripLanguagePreferences:()=>({preferences:{readingLanguage:'en',primaryVersion:'reading',itemVersions:{}},ready:true,busy:false,error:'',save:async()=>true}),PersonalLanguageSettings:component};
     if (name === '@/lib/model') return models;
     if (name === '@/lib/dates') return dates;
     if (name === '@/lib/client-ledger') return clientLedger;

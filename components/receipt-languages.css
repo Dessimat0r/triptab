@@ -1,0 +1,32 @@
+.item-bilingual-names { min-width: 0; max-width: 100%; flex: 1 1 0; display: grid; gap: 4px; }
+.item-name-row { display: flex; gap: 4px; min-width: 0; align-items: flex-end; }
+.item-name-field { flex: 1 1 0; min-width: 0; }
+.item-name-field input { width: 100%; min-width: 0; margin: 0; }
+.item-name-caption { display: block; color: var(--muted); font-size: 0.68rem; line-height: 1.4; overflow-wrap: anywhere; }
+.item-name-row.secondary input { font-size: 0.8rem; padding: 7px 9px; }
+.item-name-row.primary input { font-weight: 600; }
+.editor .translation-refresh { flex: 0 0 36px; width: 36px; min-height: 40px; padding: 8px; }
+.item-language-actions { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; min-width: 0; }
+.item-language-actions select { width: auto; max-width: 100%; margin: 0; padding: 4px 24px 4px 6px; font-size: 0.68rem; min-height: 32px; color: var(--muted); background-color: transparent; }
+.editor .translation-undo { min-height: 32px; padding: 4px 6px; font-size: 0.75rem; display: inline-flex; align-items: center; gap: 4px; }
+.translation-stale { color: var(--muted); }
+.translation-spinner { animation: translation-spin 1s linear infinite; }
+@keyframes translation-spin { to { transform: rotate(360deg); } }
+.trip-receipt-language { display: grid; gap: 8px; min-width: 0; }
+.trip-receipt-language button { justify-self: start; }
+.trip-receipt-language .footnote { margin: 0 0 8px; }
+.receipt-language-control { margin: 12px 0; }
+.receipt-language-control small { color: var(--muted); }
+.missing-name-translations { margin: 0 0 12px; min-width: 0; }
+.personal-language-settings { margin-top: 20px; }
+@media (max-width: 480px) {
+  .editor .item-name-field input { font-size: 16px; }
+  .editor .item-top { display: grid; grid-template-columns: 16px minmax(0,1fr) 44px; }
+  .editor .item-top > .itemnumber { grid-column: 1; grid-row: 1; }
+  .editor .item-top > .item-bilingual-names { grid-column: 2 / -1; grid-row: 1; }
+  .editor .item-top { align-items: start; }
+  .editor .item-top > .moneyinput { grid-column: 2; grid-row: 2; }
+  .editor .item-top > .iconbutton { grid-column: 3; grid-row: 2; }
+  .personal-language-settings .fieldpair { grid-template-columns: minmax(0,1fr); }
+}
+@media (prefers-reduced-motion: reduce) { .translation-spinner { animation: none; } }

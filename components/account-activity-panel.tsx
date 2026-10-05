@@ -1,5 +1,6 @@
 "use client";
 
+import { languageName } from "@/lib/receipt-languages";
 import type { AccountAuditEvent } from "@/lib/audit";
 import { ActivityChanges, auditRecord, auditSource, auditText, auditTimestamp, useActivityPages, type AuditChange } from "./activity-panel";
 
@@ -9,6 +10,11 @@ function accountChanges(event: AccountAuditEvent): AuditChange[] {
     if (!Object.is(before[key], after[key])) result.push({ label, before: format(before[key]), after: format(after[key]) });
   };
   const yesNo = (value: unknown) => value === true ? "Yes" : value === false ? "No" : "Not recorded";
+  add("readingLanguage", "Reading language", languageName);
+  const display=(value:unknown)=>value==="reading"?"Reading language first":value==="receipt"?"Receipt original first":"Holiday display default";
+  add("primaryVersion", "Holiday display preference", display);
+  add("itemVersion", "Item display preference", display);
+  add("itemKey", "Receipt item", value=>auditText(value)||"Not recorded");
   add("displayName", "Profile display name", value => auditText(value) || "Not recorded");
   add("hasPassword", "Password sign-in available", yesNo);
   add("active", event.entityId === "account" ? "Other browser sessions active" : "Browser session active", yesNo);
@@ -24,14 +30,14 @@ function accountChanges(event: AccountAuditEvent): AuditChange[] {
 }
 
 function accountLabel(event: AccountAuditEvent): string {
-  return ({ profile: "profile", password: "password sign-in", session: event.entityId === "account" ? "other browser sessions" : "browser session", chatgpt: "ChatGPT connection", notifications: "browser notifications" }[event.entityType]) || "account setting";
+  return ({ profile: "profile", password: "password sign-in", session: event.entityId === "account" ? "other browser sessions" : "browser session", chatgpt: "ChatGPT connection", notifications: "browser notifications", language: "receipt language preferences" }[event.entityType]) || "account setting";
 }
 
 export default function AccountActivityPanel({ refreshKey = 0 }: { refreshKey?: number }) {
   const history = useActivityPages<AccountAuditEvent>("/api/account-activity", "private-account", refreshKey, "userId");
   return <section className="account-section account-activity" aria-label="Private account activity" aria-busy={history.loading}>
     <h3>Account activity</h3>
-    <p className="footnote">Only you can see this account history. It records profile, sign-in, connection and notification changes without passwords or sign-in credentials.</p>
+    <p className="footnote">Only you can see this account history. It records profile, sign-in, connection, notification and personal language changes without passwords or sign-in credentials.</p>
     <button type="button" className="quiet" disabled={history.loading} onClick={history.retry}>{history.error ? "Retry account activity" : "Refresh account activity"}</button>
     {history.loading && <p role="status">{history.events.length ? "Checking account activity…" : "Loading account activity…"}</p>}
     {history.error && <p className="error" role="alert">{history.error}</p>}

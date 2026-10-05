@@ -1069,6 +1069,7 @@ const routeCode = transpileWithSharedImports(routeSource, { compilerOptions: { m
   .replace("'cloudflare:workers'", JSON.stringify(dataUrl('export const env={};')))
   .replace("'@/lib/store'", JSON.stringify(storeUrl)).replace("'@/lib/receipt-ai-access'", JSON.stringify(accessUrl))
   .replace("'@/lib/receipt-ai'", JSON.stringify(new URL('../lib/receipt-ai.ts', import.meta.url).href))
+  .replace("'@/lib/trip-language-preferences'", JSON.stringify(dataUrl('export const readTripLanguagePreferences=async()=>({preferences:{readingLanguage:"en"},revision:0});')))
   .replace("'zod'", JSON.stringify(import.meta.resolve('zod')));
 const route = await import(dataUrl(routeCode)) as { POST(request: Request): Promise<Response> };
 const requestBody = { tripId: trip.id, draftId: draft.id, receiptId: 'photo' };
