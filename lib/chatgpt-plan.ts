@@ -97,9 +97,12 @@ export async function chatGPTPlanStatus(database: D1Database, userId: string, en
   } catch { return { configured: true, connected: false, reason: 'not_connected' as const }; }
 }
 function safeReturnTo(value: unknown) {
-  if (typeof value !== 'string' || value.length > 1500 || !value.startsWith('/') || value.startsWith('//')) return '/receipts';
+  if (typeof value !== 'string' || value.length > 1500 || !value.startsWith('/') || value.startsWith('//') || value.includes('\\')) return '/receipts';
   const url = new URL(value, 'https://triptab.invalid');
-  return url.origin === 'https://triptab.invalid' && !url.pathname.startsWith('/api/') && !['/signin-with-chatgpt', '/signout-with-chatgpt', '/callback'].includes(url.pathname)
+  // Dot segments can turn an apparently local path into //host. Reject the
+  // normalized form too, because the callback resolves it a second time.
+  return url.origin === 'https://triptab.invalid' && !url.pathname.startsWith('//') && !url.pathname.includes('\\')
+    && !url.pathname.startsWith('/api/') && !['/signin-with-chatgpt', '/signout-with-chatgpt', '/callback'].includes(url.pathname)
     ? url.pathname + url.search + url.hash : '/receipts';
 }
 export async function startChatGPTPlanAuthorization(database: D1Database, userId: string, request: Request, environment: ChatGPTPlanEnvironment, returnTo?: unknown) {
@@ -201,10 +204,15 @@ export async function verifyChatGPTPlanIdentity(idToken: string, clientId: strin
 function tokensFromResponse(body: Record<string, unknown>, identity: { subject: string; email?: string }, previous?: Credentials): Credentials {
   if (typeof body.access_token !== 'string' || !body.access_token || typeof body.token_type !== 'string' || body.token_type.toLowerCase() !== 'bearer'
     || typeof body.expires_in !== 'number' || !Number.isFinite(body.expires_in) || body.expires_in <= 0 || body.expires_in > 86_400
-    || typeof body.scope !== 'string' || typeof body.id_token !== 'string' && !previous) throw new ChatGPTPlanError('ChatGPT returned incomplete connection credentials.', 502);
+    || body.scope !== undefined && typeof body.scope !== 'string'
+    || body.refresh_token !== undefined && (typeof body.refresh_token !== 'string' || !body.refresh_token)
+    || typeof body.id_token !== 'string' && !previous) throw new ChatGPTPlanError('ChatGPT returned incomplete connection credentials.', 502);
   return { accessToken: body.access_token, refreshToken: typeof body.refresh_token === 'string' ? body.refresh_token : previous?.refreshToken,
     idToken: typeof body.id_token === 'string' ? body.id_token : previous!.idToken, subject: identity.subject, email: identity.email,
-    scopes: body.scope.split(/\s+/).filter(Boolean), expiresAt: Date.now() + body.expires_in * 1000 };
+    // OAuth omits an unchanged scope, and may omit a replacement refresh token.
+    // An explicit scope still replaces the old grant, including lost permission.
+    scopes: typeof body.scope === 'string' ? body.scope.split(/\s+/).filter(Boolean) : previous?.scopes ?? SCOPE.split(/\s+/),
+    expiresAt: Date.now() + body.expires_in * 1000 };
 }
 export async function finishChatGPTPlanAuthorization(database: D1Database, user: { id: string; displayName: string }, request: Request, environment: ChatGPTPlanEnvironment, fetcher: typeof fetch = fetch) {
   const config = requireConfiguration(environment), url = new URL(request.url);
@@ -215,7 +223,9 @@ export async function finishChatGPTPlanAuthorization(database: D1Database, user:
     .bind(await digest(state), user.id, Date.now()).first<{ transaction_data: string }>();
   if (!row) throw new ChatGPTPlanError('This ChatGPT connection attempt expired or was already used.', 400, 'state_invalid');
   const pending = await unseal<Transaction>(row.transaction_data, user.id, 'transaction', config.key);
-  if (url.searchParams.has('error')) return { returnTo: pending.returnTo, result: 'cancelled' as const };
+  // Revalidate saved transactions created before return-path hardening as well.
+  const returnTo = safeReturnTo(pending.returnTo);
+  if (url.searchParams.has('error')) return { returnTo, result: 'cancelled' as const };
   const code = url.searchParams.get('code');
   if (!code || code.length > 4096 || url.searchParams.getAll('code').length !== 1) throw new ChatGPTPlanError('ChatGPT did not return a valid authorization code.', 400);
   // workerd supports manual redirects. Never follow a redirect with OAuth credentials.
@@ -237,7 +247,7 @@ export async function finishChatGPTPlanAuthorization(database: D1Database, user:
       ON CONFLICT(user_id) DO UPDATE SET credentials=excluded.credentials,version=chatgpt_plan_connections.version+1,refresh_until=0`).bind(user.id, encrypted),
     accountAuditStatement(database, { userId: user.id, actorName: user.displayName, entityType: 'chatgpt', entityId: 'chatgpt-plan', action: 'update', before: null, after: { connected: true, planUsageEnabled: granted } }),
   ]);
-  return { returnTo: pending.returnTo, result: granted ? 'connected' as const : 'permission_required' as const };
+  return { returnTo, result: granted ? 'connected' as const : 'permission_required' as const };
 }
 
 export async function chatGPTPlanAccessToken(database: D1Database, userId: string, environment: ChatGPTPlanEnvironment, options: { signal?: AbortSignal; fetcher?: typeof fetch } = {}) {
@@ -265,8 +275,6 @@ export async function chatGPTPlanAccessToken(database: D1Database, userId: strin
       if (terminal) await database.prepare('DELETE FROM chatgpt_plan_connections WHERE user_id=? AND version=? AND refresh_until=?').bind(userId, row.version, lease).run();
       throw new ChatGPTPlanError(terminal ? 'Reconnect ChatGPT to renew receipt processing.' : 'ChatGPT could not renew the connection. Try again shortly.', terminal ? 401 : 503, terminal ? 'not_connected' : 'refresh_unavailable');
     }
-    // Rotating grants must return the replacement refresh token atomically.
-    if (typeof body.refresh_token !== 'string' || !body.refresh_token) throw new ChatGPTPlanError('ChatGPT returned incomplete renewal credentials. Try reconnecting.', 502);
     let identity = { subject: saved.subject, email: saved.email };
     if (typeof body.id_token === 'string') {
       identity = await verifyChatGPTPlanIdentity(body.id_token, config.clientId, undefined, fetcher, options.signal);
