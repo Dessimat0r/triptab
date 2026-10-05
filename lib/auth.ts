@@ -101,11 +101,48 @@ function sessionToken(request: Request) {
   const token = matches[0].slice(SESSION_COOKIE.length + 1);
   return /^[A-Za-z0-9_-]{43}$/.test(token) ? token : null;
 }
+type ProfileStateRow = ProfileRow & { has_password: number; chatgpt_linked: number };
+type ProviderStateRow = { [Key in keyof ProfileStateRow]: ProfileStateRow[Key] | null } & { linked_user_id: string | null; legacy_disconnected: number };
+type AuthSnapshot = { identity: AuthIdentity; row: ProfileStateRow | null };
+
+async function sessionRow(request: Request, database: D1Database): Promise<ProfileStateRow | null> {
+  const token = sessionToken(request);
+  if (!token) return null;
+  return database.prepare(`SELECT p.id,p.email,p.display_name,p.created_at,
+    EXISTS (SELECT 1 FROM auth_credentials c WHERE c.user_id = p.id) AS has_password,
+    EXISTS (SELECT 1 FROM auth_links l WHERE l.user_id = p.id) AS chatgpt_linked
+    FROM auth_sessions s JOIN profiles p ON p.id = s.user_id WHERE s.token_hash = ? AND s.expires_at > ?`)
+    .bind(await hashToken(token), new Date().toISOString()).first<ProfileStateRow>();
+}
+async function providerRow(provider: AuthIdentity, database: D1Database): Promise<ProviderStateRow> {
+  // Resolve the canonical link, profile and flags in one indexed snapshot.
+  // Disconnection checks the raw provider ID even if that profile is missing.
+  const row = await database.prepare(`SELECT p.id,p.email,p.display_name,p.created_at,l.user_id AS linked_user_id,
+    EXISTS (SELECT 1 FROM auth_credentials c WHERE c.user_id = p.id) AS has_password,
+    EXISTS (SELECT 1 FROM auth_links linked WHERE linked.user_id = p.id) AS chatgpt_linked,
+    EXISTS (SELECT 1 FROM auth_credentials c WHERE c.user_id = identity.provider_id) AS legacy_disconnected
+    FROM (SELECT ? AS provider_id) identity
+    LEFT JOIN auth_links l ON l.oai_user_id = identity.provider_id
+    LEFT JOIN profiles p ON p.id = COALESCE(l.user_id, identity.provider_id)`)
+    .bind(provider.id).first<ProviderStateRow>();
+  if (!row) throw new Error('UNAUTHORIZED');
+  return row;
+}
+function providerIdentity(provider: AuthIdentity, row: ProviderStateRow): AuthIdentity | null {
+  if (row.linked_user_id !== null) {
+    if (!row.id || row.email === null || row.display_name === null) return null;
+    return { ...provider, id: row.id, email: row.email, displayName: row.display_name, emailVerified: provider.email === row.email };
+  }
+  return row.legacy_disconnected ? null : provider;
+}
 export async function sessionIdentity(request: Request, database: D1Database): Promise<AuthIdentity | null> {
   const token = sessionToken(request);
   if (!token) return null;
-  const row = await database.prepare('SELECT p.id, p.email, p.display_name FROM auth_sessions s JOIN profiles p ON p.id = s.user_id WHERE s.token_hash = ? AND s.expires_at > ?')
-    .bind(await hashToken(token), new Date().toISOString()).first<{ id: string; email: string; display_name: string }>();
+  // Identity-only consumers, including exports, do not need credential or
+  // provider flags. Keep their authorization read confined to the session.
+  const row = await database.prepare(`SELECT p.id,p.email,p.display_name
+    FROM auth_sessions s JOIN profiles p ON p.id = s.user_id WHERE s.token_hash = ? AND s.expires_at > ?`)
+    .bind(await hashToken(token), new Date().toISOString()).first<Pick<ProfileRow, 'id' | 'email' | 'display_name'>>();
   return row ? { id: row.id, email: row.email, displayName: row.display_name, kind: 'session' } : null;
 }
 export async function resolveIdentity(request: Request, options: { allowSession?: boolean } = {}, database: D1Database): Promise<AuthIdentity> {
@@ -116,62 +153,87 @@ export async function resolveIdentity(request: Request, options: { allowSession?
   }
   const provider = trustedChatGPTIdentity(request);
   if (!provider) throw new Error('UNAUTHORIZED');
-  const link = await database.prepare('SELECT p.id, p.email, p.display_name FROM auth_links l JOIN profiles p ON p.id = l.user_id WHERE l.oai_user_id = ?')
-    .bind(provider.id).first<{ id: string; email: string; display_name: string }>();
-  if (link) return { ...provider, id: link.id, email: link.email, displayName: link.display_name, emailVerified: provider.email === link.email };
-  // Legacy profiles retain their exact IDs and receipt paths. Adding a password
-  // also creates an explicit link; removing that link then really disconnects it.
-  const disconnected = await database.prepare('SELECT 1 AS found FROM auth_credentials WHERE user_id = ?').bind(provider.id).first();
-  if (disconnected) throw new Error('UNAUTHORIZED');
-  return provider;
+  const identity = providerIdentity(provider, await providerRow(provider, database));
+  if (!identity) throw new Error('UNAUTHORIZED');
+  return identity;
 }
-
+async function authSnapshot(request: Request, database: D1Database, provider: AuthIdentity | null, options: { allowSession?: boolean }): Promise<AuthSnapshot | null> {
+  if (options.allowSession !== false) {
+    const row = await sessionRow(request, database);
+    if (row) return { identity: { id: row.id, email: row.email, displayName: row.display_name, kind: 'session' }, row };
+    if ((request.headers.get('cookie') || '').split(';').some(value => value.trim() === `${SIGNED_OUT_COOKIE}=1`)) return null;
+  }
+  if (!provider) return null;
+  const row = await providerRow(provider, database);
+  const identity = providerIdentity(provider, row);
+  if (!identity) return null;
+  return { identity, row: row.id ? row as ProfileStateRow : null };
+}
+async function createProviderProfile(identity: AuthIdentity, database: D1Database, request?: Request, options: { allowSession?: boolean; requireIdentityEmail?: boolean } = {}) {
+  if (identity.kind !== 'chatgpt' || !identity.email) throw new Error('UNAUTHORIZED');
+  const providerId = identity.chatgptId || identity.id;
+  // The application profile boundary historically allows an 80-character
+  // email-name fallback; auth/account creation retains its 50-character rule.
+  const displayName = options.requireIdentityEmail
+    ? (identity.displayName || identity.email.split('@')[0]).slice(0, 80)
+    : displayNameValue(identity.displayName, identity.email);
+  const token = options.allowSession !== false && request ? sessionToken(request) : null;
+  const sessionHash = token ? await hashToken(token) : null;
+  await database.batch([
+    database.prepare(`INSERT INTO profiles (id,email,display_name,created_at)
+      SELECT ?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM auth_links WHERE oai_user_id = ? AND user_id <> ?)
+        AND (? = ? OR EXISTS (SELECT 1 FROM auth_links WHERE oai_user_id = ? AND user_id = ?))
+        AND (NOT EXISTS (SELECT 1 FROM auth_credentials WHERE user_id = ?)
+          OR EXISTS (SELECT 1 FROM auth_links WHERE oai_user_id = ? AND user_id = ?))
+        AND (? IS NULL OR NOT EXISTS (SELECT 1 FROM auth_sessions s JOIN profiles p ON p.id = s.user_id
+          WHERE s.token_hash = ? AND s.expires_at > ?))
+      ON CONFLICT(id) DO NOTHING`)
+      .bind(identity.id, identity.email, displayName, new Date().toISOString(), providerId, identity.id,
+        identity.id, providerId, providerId, identity.id, providerId, providerId, identity.id,
+        sessionHash, sessionHash, new Date().toISOString()),
+    accountAuditStatement(database, { userId: identity.id, actorName: displayName, entityType: 'profile', entityId: identity.id,
+      action: 'create', before: null, after: { displayName }, source: 'chatgpt' }, { sql: 'changes() > 0', bindings: [] }),
+  ]);
+}
 async function profileRow(identity: AuthIdentity, database: D1Database): Promise<ProfileRow> {
-  let row = await database.prepare('SELECT id, email, display_name, created_at FROM profiles WHERE id = ?').bind(identity.id).first<ProfileRow>();
+  let row = await database.prepare('SELECT id,email,display_name,created_at FROM profiles WHERE id = ?').bind(identity.id).first<ProfileRow>();
   if (!row) {
-    if (identity.kind !== 'chatgpt' || !identity.email) throw new Error('UNAUTHORIZED');
-    const displayName = displayNameValue(identity.displayName, identity.email);
-    await database.batch([
-      database.prepare(`INSERT INTO profiles (id, email, display_name, created_at)
-        SELECT ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM auth_links WHERE oai_user_id = ? AND user_id <> ?)
-        ON CONFLICT(id) DO NOTHING`)
-        .bind(identity.id, identity.email, displayName, new Date().toISOString(), identity.id, identity.id),
-      accountAuditStatement(database, { userId: identity.id, actorName: displayName, entityType: 'profile', entityId: identity.id,
-        action: 'create', before: null, after: { displayName }, source: 'chatgpt' }, { sql: 'changes() > 0', bindings: [] }),
-    ]);
-    row = await database.prepare('SELECT id, email, display_name, created_at FROM profiles WHERE id = ?').bind(identity.id).first<ProfileRow>();
+    await createProviderProfile(identity, database);
+    row = await database.prepare('SELECT id,email,display_name,created_at FROM profiles WHERE id = ?').bind(identity.id).first<ProfileRow>();
   }
   if (!row) throw new Error('UNAUTHORIZED');
   return row;
 }
-export async function readAuthState(request: Request, database: D1Database, options: { allowSession?: boolean } = {}): Promise<AuthState> {
+export async function readAuthState(request: Request, database: D1Database, options: { allowSession?: boolean; requireIdentityEmail?: boolean } = {}): Promise<AuthState> {
   const provider = trustedChatGPTIdentity(request);
-  let identity: AuthIdentity;
-  try { identity = await resolveIdentity(request, options, database); }
-  catch (error) {
-    if (!(error instanceof Error) || error.message !== 'UNAUTHORIZED') throw error;
-    return { authenticated: false, hasPassword: false, chatgptLinked: false, chatgptAvailable: !!provider, emailVerified: false };
+  let snapshot = await authSnapshot(request, database, provider, options);
+  if (!snapshot) return { authenticated: false, hasPassword: false, chatgptLinked: false, chatgptAvailable: !!provider, emailVerified: false };
+  // ensureProfile historically requires an identity email even for an existing
+  // unlinked provider profile. Auth status alone retains its existing behavior.
+  if (options.requireIdentityEmail) {
+    const email = snapshot.identity.email?.trim().toLowerCase();
+    if (!email || email.length > 320 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('UNAUTHORIZED');
   }
-  const row = await profileRow(identity, database);
-  const results = await database.batch([
-    database.prepare('SELECT 1 AS found FROM auth_credentials WHERE user_id = ?').bind(identity.id),
-    database.prepare('SELECT oai_user_id FROM auth_links WHERE user_id = ?').bind(identity.id),
-  ]);
-  const hasPassword = results[0].results.length > 0;
-  const chatgptLinked = results[1].results.length > 0 || identity.kind === 'chatgpt';
+  if (!snapshot.row) {
+    const id = snapshot.identity.id;
+    await createProviderProfile(snapshot.identity, database, request, options);
+    snapshot = await authSnapshot(request, database, provider, options);
+    // Guarded creation and its audit must never return a different account if
+    // linking, credential disconnection or session precedence changed mid-read.
+    if (!snapshot?.row || snapshot.identity.id !== id) throw new Error('UNAUTHORIZED');
+  }
+  const { identity, row } = snapshot;
+  const hasPassword = !!row.has_password;
+  const chatgptLinked = !!row.chatgpt_linked || identity.kind === 'chatgpt';
   const emailVerified = identity.kind === 'chatgpt' && !!identity.emailVerified && identity.email === row.email;
   return {
     authenticated: true, profile: {
       id: row.id, email: row.email, displayName: row.display_name, createdAt: row.created_at,
       authMethod: identity.kind === 'session' ? 'password' : 'chatgpt', hasPassword, chatgptConnected: chatgptLinked, emailVerified,
     },
-    hasPassword,
-    chatgptLinked,
-    chatgptAvailable: !!provider,
-    emailVerified,
+    hasPassword, chatgptLinked, chatgptAvailable: !!provider, emailVerified,
   };
 }
-
 function cookie(request: Request, token: string, expired = false) {
   const url = new URL(request.url);
   const local = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) && url.protocol === 'http:';
@@ -179,6 +241,13 @@ function cookie(request: Request, token: string, expired = false) {
 }
 function signedOutCookie(request: Request, signedOut: boolean) {
   return cookie(request, signedOut ? '1' : '', !signedOut).replace(`${SESSION_COOKIE}=`, `${SIGNED_OUT_COOKIE}=`);
+}
+/** Clear browser credentials even when an optional logout audit cannot load. */
+export function signedOutAuthResult(request: Request): { state: AuthState; cookie: string; additionalCookies: string[] } {
+  return {
+    state: { authenticated: false, hasPassword: false, chatgptLinked: false, chatgptAvailable: !!trustedChatGPTIdentity(request), emailVerified: false },
+    cookie: cookie(request, '', true), additionalCookies: [signedOutCookie(request, true)],
+  };
 }
 type MutationGate = { sql: string; bindings: unknown[] };
 async function prepareSession(user: string, actorName: string, request: Request, database: D1Database, gate?: MutationGate) {
@@ -383,7 +452,7 @@ async function unlinkChatGPT(request: Request, database: D1Database) {
   return { state: await readAuthState(request, database) };
 }
 export async function performAuthAction(request: Request, body: Record<string, unknown>, database: D1Database): Promise<{ state: AuthState; cookie?: string; additionalCookies?: string[] }> {
-  if (['register', 'login', 'set_password', 'logout'].includes(String(body.action))) await cleanupExpiredAuthData(database);
+  if (['register', 'login', 'set_password'].includes(String(body.action))) await cleanupExpiredAuthData(database);
   switch (body.action) {
     case 'register': return register(request, body, database);
     case 'login': return login(request, body, database);
@@ -406,21 +475,61 @@ export async function performAuthAction(request: Request, body: Record<string, u
     case 'logout': {
       const token = sessionToken(request);
       let actor: AuthIdentity | null = null;
-      try { actor = await resolveIdentity(request, {}, database); }
-      catch (error) { if (!(error instanceof Error) || error.message !== 'UNAUTHORIZED') throw error; }
-      if (actor) {
-        const profile = await profileRow(actor, database);
-        const event = { userId: actor.id, actorName: profile.display_name, entityType: 'session' as const, entityId: 'browser',
+      let actorName: string | undefined;
+      try {
+        actor = await resolveIdentity(request, {}, database);
+        // A session identity already came from its stored profile. A provider
+        // signout must never create a missing profile merely to log an event.
+        actorName = actor.kind === 'session' ? actor.displayName :
+          (await database.prepare('SELECT display_name FROM profiles WHERE id = ?').bind(actor.id).first<{ display_name: string }>())?.display_name;
+      } catch (error) {
+        if (!(error instanceof Error) || error.message !== 'UNAUTHORIZED') console.warn('TripTab could not load the logout audit actor.');
+      }
+      const statements: D1PreparedStatement[] = [];
+      let logoutAudit: Parameters<typeof accountAuditStatement>[1] | undefined;
+      let providerAuditGate: { sql: string; bindings: unknown[] } | undefined;
+      // Possession of this opaque cookie is sufficient to revoke it, including
+      // orphaned, expired or signed-out sessions with no resolvable profile.
+      if (token) statements.push(database.prepare('DELETE FROM auth_sessions WHERE token_hash = ?').bind(await hashToken(token)));
+      if (actor && actorName !== undefined) {
+        const event = { userId: actor.id, actorName, entityType: 'session' as const, entityId: 'browser',
           action: 'delete' as const, before: { active: true }, after: { active: false }, source: actor.kind === 'chatgpt' ? 'chatgpt' as const : 'web' as const };
-        if (actor.kind === 'session' && token) await database.batch([
-          database.prepare('DELETE FROM auth_sessions WHERE token_hash = ? AND user_id = ?').bind(await hashToken(token), actor.id),
-          accountAuditStatement(database, event, { sql: 'changes() > 0', bindings: [] }),
-        ]);
-        else await database.batch([accountAuditStatement(database, event,
-          { sql: 'NOT EXISTS (SELECT 1 FROM auth_links WHERE oai_user_id = ? AND user_id <> ?)', bindings: [actor.id, actor.id] })]);
+        logoutAudit = event;
+        if (actor.kind === 'session' && token) statements.push(accountAuditStatement(database, event, { sql: 'changes() > 0', bindings: [] }));
+        else {
+          providerAuditGate = {
+          sql: 'EXISTS (SELECT 1 FROM profiles WHERE id = ?) AND NOT EXISTS (SELECT 1 FROM auth_links WHERE oai_user_id = ? AND user_id <> ?)',
+          bindings: [actor.id, actor.chatgptId || actor.id, actor.id],
+          };
+          statements.push(accountAuditStatement(database, event, providerAuditGate));
+        }
+      }
+      // When an actor is known, revocation and its audit still commit together.
+      if (statements.length) {
+        try { await database.batch(statements); }
+        catch (error) {
+          // Signout must revoke a credential even when audit storage prevents
+          // the normal atomic batch. Retry its exact deletion independently;
+          // an audit outage must never leave a usable copy of this cookie.
+          if (token) {
+            const tokenHash = await hashToken(token);
+            const revoked = await database.prepare('DELETE FROM auth_sessions WHERE token_hash = ?').bind(tokenHash).run();
+            if (revoked.meta.changes && logoutAudit) {
+              try {
+                const result = await database.batch([accountAuditStatement(database, logoutAudit, {
+                  sql: `NOT EXISTS (SELECT 1 FROM auth_sessions WHERE token_hash = ?)${providerAuditGate ? ` AND ${providerAuditGate.sql}` : ''}`,
+                  bindings: [tokenHash, ...(providerAuditGate?.bindings || [])],
+                })]);
+                if (result[0].meta.changes) return signedOutAuthResult(request);
+              } catch { /* Report the original failure after preserving revocation. */ }
+            }
+          }
+          console.warn('TripTab logout audit did not complete.');
+          throw error;
+        }
       }
       // The provider's own session belongs to ChatGPT; it cannot be signed out here.
-      return { state: { authenticated: false, hasPassword: false, chatgptLinked: false, chatgptAvailable: !!trustedChatGPTIdentity(request), emailVerified: false }, cookie: cookie(request, '', true), additionalCookies: [signedOutCookie(request, true)] };
+      return signedOutAuthResult(request);
     }
     default: throw new AuthError('Choose a valid account action.');
   }

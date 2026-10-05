@@ -70,6 +70,9 @@ const accountRouteCompiled = transpileModule(accountRouteSource, { compilerOptio
   .replace("'@/lib/store'", JSON.stringify(storeUrl))
   .replace("'@/lib/audit'", JSON.stringify(new URL('../lib/audit.ts', import.meta.url).href));
 const accountRoute = await import('data:text/javascript;base64,' + Buffer.from(accountRouteCompiled).toString('base64')) as { GET(request: Request): Promise<Response> };
+const entrySource = await readFile(new URL('../app/api/activity-entry/route.ts', import.meta.url), 'utf8');
+const entryCompiled = transpileModule(entrySource, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText.replace("'@/lib/store'", JSON.stringify(storeUrl));
+const entryRoute = await import('data:text/javascript;base64,' + Buffer.from(entryCompiled).toString('base64')) as { GET(request: Request): Promise<Response> };
 const tokens = { owner: 'a'.repeat(43), joined: 'b'.repeat(43), outsider: 'c'.repeat(43) };
 
 function holiday(id: string, owner: string): Trip {
@@ -146,7 +149,7 @@ test('account JSON requires a real session and includes only own profile and cur
   assert.equal(shared.profile.id, 'joined');
 });
 
-test('joined and owner JSON downloads omit other traveller contacts while preserving own details and receipt text', async () => {
+test('JSON downloads preserve organiser typed unlinked contacts and redact other linked accounts', async () => {
   const database = await storage();
   const trip = holiday('shared', 'outsider');
   trip.members = [
@@ -178,7 +181,10 @@ test('joined and owner JSON downloads omit other traveller contacts while preser
       assert.equal(body.profile.email, actor === 'joined' ? 'joined@example.com' : 'host-contact@example.com');
       const exported = body.data.trips.find(value => value.id === 'shared')!;
       assert.equal(exported.members.find(member => member.userId === actor)!.email, actor === 'joined' ? 'joined@example.com' : 'host-contact@example.com');
-      assert.ok(exported.members.filter(member => member.userId !== actor).every(member => !Object.hasOwn(member, 'email')));
+      assert.ok(exported.members.filter(member => member.userId && member.userId !== actor).every(member => !Object.hasOwn(member, 'email')));
+      const unlinked = exported.members.find(member => member.id === 'c')!;
+      if (actor === 'outsider') assert.equal(unlinked.email, 'joined@example.com', 'the organiser retains typed contacts for unlinked travellers');
+      else assert.equal(Object.hasOwn(unlinked, 'email'), false, 'email equality never grants a participant unlinked contact export permission');
       assert.deepEqual(exported.members.map(member => member.name), savedTrip.members.map(member => member.name));
       assert.deepEqual(exported.expenses, savedTrip.expenses, 'expense split IDs, memory and authored receipt text stay unchanged');
       assert.deepEqual(exported.drafts, savedTrip.drafts, 'draft context has no traveller contact objects to redact');
@@ -407,7 +413,7 @@ test('private account history API and exports stay owner-scoped with complete sa
 test('membership changes are rechecked in data queries and remove access to later exports', async () => {
   const database = await storage();
   database.beforeRead = sql => {
-    if (/WITH candidates/.test(sql)) { database.beforeRead = undefined; database.sqlite.prepare('DELETE FROM memberships WHERE trip_id=? AND user_id=?').run('shared', 'joined'); }
+    if (/AS metadataBytes/.test(sql)) { database.beforeRead = undefined; database.sqlite.prepare('DELETE FROM memberships WHERE trip_id=? AND user_id=?').run('shared', 'joined'); }
   };
   const response = await route.GET(request('scope=activity&tripId=shared', 'joined'));
   if (response.status === 200) assert.deepEqual((await json<HistoryPage>(response)).events, []);
@@ -431,6 +437,70 @@ test('history byte budgets return smaller complete pages and oversized account e
   database.sqlite.prepare('INSERT INTO trips (id,owner,data) VALUES (?,?,?)').run('oversized', 'owner', JSON.stringify({ ...oversized, name: 'x'.repeat(4_200_000) }));
   assert.equal((await route.GET(request())).status, 413);
   assert.equal((await route.GET(request('scope=trip&tripId=mine'))).status, 200);
+});
+
+test('oversized shared history exports keep every event and explicitly link to a complete bounded snapshot download', async () => {
+  const database = await storage();
+  const title = '🥐'.repeat(1_100_000);
+  seedEvent(database, 'mine', title);
+  const stored = database.sqlite.prepare('SELECT id,after_data FROM activity_events WHERE trip_id=? ORDER BY sequence DESC LIMIT 1').get('mine')!;
+  const response = await route.GET(request('scope=activity&tripId=mine'));
+  assert.equal(response.status, 200);
+  const page = await json<HistoryPage>(response);
+  assert.equal(page.events[0].id, stored.id);
+  assert.equal(page.events[0].snapshotOmitted, true);
+  assert.equal(page.events[0].after, null);
+  assert.equal(page.events.length, 2, 'the large newest entry does not hide older changes');
+  assert.equal(page.nextCursor, null);
+  const rows = parseCsv(await (await route.GET(request('scope=activity&tripId=mine&format=csv'))).text());
+  assert.equal(rows[1][rows[0].indexOf('snapshots_omitted')], 'true');
+  assert.match(rows[1][rows[0].indexOf('shared_entry_download')], /api\/activity-entry\?/);
+
+  const firstQuery = database.queries.length;
+  const download = await entryRoute.GET(request(`tripId=mine&eventId=${stored.id}`));
+  assert.equal(download.status, 200);
+  assert.equal(download.headers.get('cache-control'), 'private, no-store');
+  assert.match(download.headers.get('content-disposition')!, /attachment; filename="triptab-shared-history-/);
+  const full = await json<ActivityEvent>(download);
+  assert.equal(full.after?.title, title, 'UTF-8 characters remain intact across SQL chunk boundaries');
+  assert.equal(full.before, null);
+  assert.ok(database.queries.slice(firstQuery).filter(sql => /SELECT substr/.test(sql)).length > 1, 'the original snapshot is read in bounded chunks');
+  assert.ok(database.queries.slice(firstQuery).every(sql => !/SELECT e\.\*/.test(sql)), 'the full route never fetches an unbounded snapshot row');
+  assert.equal(database.sqlite.prepare('SELECT after_data FROM activity_events WHERE id=?').get(stored.id)!.after_data, stored.after_data);
+});
+
+test('full shared history downloads use current trip access without exposing other trips or private account events', async () => {
+  const database = await storage();
+  const foreign = database.sqlite.prepare('SELECT id FROM activity_events WHERE trip_id=?').get('secret')!.id;
+  const shared = database.sqlite.prepare('SELECT id FROM activity_events WHERE trip_id=?').get('shared')!.id;
+  assert.equal((await entryRoute.GET(request(`tripId=shared&eventId=${shared}`, 'joined'))).status, 200);
+  assert.equal((await entryRoute.GET(request(`tripId=secret&eventId=${foreign}`, 'owner'))).status, 404);
+  assert.equal((await entryRoute.GET(request(`tripId=mine&eventId=${foreign}`, 'owner'))).status, 404);
+  assert.equal((await entryRoute.GET(request(`tripId=shared&eventId=${shared}`, null))).status, 401);
+  for (const query of [`tripId=shared&eventId=${shared}&eventId=x`, `tripId=shared&eventId=${shared}&accountId=joined`, 'tripId=&eventId=x', 'tripId=shared']) assert.equal((await entryRoute.GET(request(query, 'joined'))).status, 400, query);
+  assert.equal((await entryRoute.GET(request(`tripId=shared&eventId=${shared}`, 'joined', { origin: 'https://evil.test' }))).status, 403);
+  database.sqlite.prepare('INSERT INTO account_activity_events(id,user_id,actor_name,created_at,entity_type,entity_id,action,before_data,after_data,source) VALUES(?,?,?,?,?,?,?,?,?,?)')
+    .run('private-account-event', 'joined', 'Joined', '2026-10-05T12:00:00Z', 'profile', 'joined', 'update', null, JSON.stringify({ displayName: 'Private profile change' }), 'web');
+  assert.equal((await entryRoute.GET(request('tripId=shared&eventId=private-account-event', 'joined'))).status, 404);
+});
+
+test('revoking shared membership or a browser session stops a full history stream before its remaining snapshot chunks', async () => {
+  for (const revoke of ['membership', 'session']) {
+    const database = await storage();
+    seedEvent(database, 'shared', 'Private trailing evidence. '.repeat(20_000));
+    const eventId = database.sqlite.prepare('SELECT id FROM activity_events WHERE trip_id=? ORDER BY sequence DESC LIMIT 1').get('shared')!.id;
+    let chunks = 0;
+    database.beforeRead = sql => {
+      if (/SELECT substr/.test(sql) && ++chunks === 1) {
+        if (revoke === 'membership') database.sqlite.prepare('DELETE FROM memberships WHERE trip_id=? AND user_id=?').run('shared', 'joined');
+        else database.sqlite.prepare('DELETE FROM auth_sessions WHERE user_id=?').run('joined');
+      }
+    };
+    const response = await entryRoute.GET(request(`tripId=shared&eventId=${eventId}`, 'joined'));
+    assert.equal(response.status, 200);
+    await assert.rejects(response.text(), /could not complete/);
+    assert.ok(chunks <= 2, 'revocation prevents further snapshot queries from succeeding');
+  }
 });
 
 test('malformed options and legacy calculation failures never discard saved records', async () => {

@@ -1511,7 +1511,7 @@ export default function Home() {
                       </div>
                       <TripSharing key={`${trip.id}:${profile?.id || "anonymous"}`} trip={trip} profile={profile} onChanged={load} />
                       <TripDetails key={trip.id} trip={trip} busy={saving || loading} error={error} onSave={updateTrip} />
-                      <DataExport tripId={trip.id} compact />
+                      <DataExport key={`${profile?.id || ""}:${trip.id}`} tripId={trip.id} compact />
                     </>
                   )}
                 </section>
