@@ -9,11 +9,82 @@ export type ReceiptAIEnvironment = ChatGPTPlanEnvironment & {
 };
 type Account = { id: string; email: string; displayName: string };
 type SettingsRow = { user_id: string; api_key_encrypted: string | null; provider: 'api' | 'siwc'; version: number };
+type KeyCheckDiagnostic = {
+  providerStatus?: number;
+  providerCode?: string;
+  networkErrorName?: string;
+  timedOut: boolean;
+};
 export class ReceiptAIAccessError extends Error {
-  constructor(message: string, public readonly status = 400, public readonly code = 'receipt_ai_error') { super(message); }
+  constructor(message: string, public readonly status = 400, public readonly code = 'receipt_ai_error', public readonly keyCheck?: KeyCheckDiagnostic) { super(message); }
 }
 const OWNER_EMAIL = 'dessimat0r@gmail.com';
-const DEFAULT_MODEL = 'gpt-4.1-mini';
+const DEFAULT_MODEL = 'gpt-6.1-sol';
+const KEY_CHECK_CODES = new Set(['key_rejected', 'key_permission_denied', 'key_check_rate_limited', 'key_check_unavailable', 'key_check_timeout', 'key_check_server_error', 'key_check_request_rejected']);
+const PROVIDER_CODES = new Set(['invalid_api_key', 'insufficient_quota', 'rate_limit_exceeded', 'permission_denied', 'insufficient_permissions', 'unsupported_country_region_territory', 'server_error', 'service_unavailable', 'project_not_found']);
+const NETWORK_NAMES = new Set(['Error', 'TypeError', 'NetworkError', 'AbortError', 'TimeoutError', 'SecurityError', 'NotSupportedError']);
+
+// Both the public error and logged diagnostics use fixed values. Never return or
+// log provider messages, response bodies, headers or exception messages/stacks.
+export function receiptAIKeyCheckDiagnostic(error: unknown) {
+  if (!(error instanceof ReceiptAIAccessError) || !KEY_CHECK_CODES.has(error.code) || !error.keyCheck) return null;
+  const value = error.keyCheck;
+  return { code: error.code, timedOut: value.timedOut === true,
+    ...(Number.isInteger(value.providerStatus) && value.providerStatus! >= 100 && value.providerStatus! <= 599 ? { providerStatus: value.providerStatus } : {}),
+    ...(typeof value.providerCode === 'string' && PROVIDER_CODES.has(value.providerCode) ? { providerCode: value.providerCode } : {}),
+    ...(typeof value.networkErrorName === 'string' && NETWORK_NAMES.has(value.networkErrorName) ? { networkErrorName: value.networkErrorName } : {}),
+  };
+}
+async function providerKeyCheckCode(response: Response, signal: AbortSignal): Promise<string | undefined> {
+  if (!response.body) return;
+  const reader = response.body.getReader();
+  const abort = () => { void reader.cancel().catch(() => {}); };
+  signal.addEventListener('abort', abort, { once: true });
+  try {
+    if (signal.aborted) return;
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    while (true) {
+      const part = await reader.read();
+      if (part.done) break;
+      size += part.value.byteLength;
+      if (size > 16_384) return;
+      chunks.push(part.value);
+    }
+    const bytes = new Uint8Array(size);
+    let offset = 0;
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+    const body: unknown = JSON.parse(new TextDecoder().decode(bytes));
+    const code = body && typeof body === 'object' ? (body as { error?: { code?: unknown } }).error?.code : undefined;
+    return typeof code === 'string' && PROVIDER_CODES.has(code) ? code : undefined;
+  } catch { return; }
+  finally {
+    signal.removeEventListener('abort', abort);
+    await reader.cancel().catch(() => {});
+    reader.releaseLock();
+  }
+}
+async function verifyAPIKey(request: Request, key: string, fetcher: typeof fetch) {
+  let response: Response, timeout: AbortSignal | undefined, signal: AbortSignal | undefined;
+  try {
+    timeout = AbortSignal.timeout(15_000);
+    signal = AbortSignal.any([request.signal, timeout]);
+    response = await fetcher('https://api.openai.com/v1/models', { headers: { Authorization: `Bearer ${key}` }, redirect: 'error', signal });
+  } catch (error) {
+    const name = error instanceof Error || error instanceof DOMException ? error.name : undefined;
+    const timedOut = timeout?.aborted === true || name === 'TimeoutError';
+    throw new ReceiptAIAccessError(timedOut ? 'OpenAI took too long to verify the key. Try again shortly.' : 'TripTab could not connect to OpenAI to verify the key. Try again shortly.',
+      timedOut ? 504 : 503, timedOut ? 'key_check_timeout' : 'key_check_unavailable',
+      { timedOut, ...(name && NETWORK_NAMES.has(name) ? { networkErrorName: name } : {}) });
+  }
+  if (response.ok) { await response.body?.cancel().catch(() => {}); return; }
+  const diagnostic = { providerStatus: response.status, providerCode: await providerKeyCheckCode(response, signal), timedOut: timeout.aborted };
+  if (response.status === 401) throw new ReceiptAIAccessError('OpenAI rejected that API key. Check the key and try again.', 400, 'key_rejected', diagnostic);
+  if (response.status === 403) throw new ReceiptAIAccessError('OpenAI denied this key permission to verify models. Check the key and project permissions.', 403, 'key_permission_denied', diagnostic);
+  if (response.status === 429) throw new ReceiptAIAccessError('OpenAI limited the key check. Check API billing or try again shortly.', 429, 'key_check_rate_limited', diagnostic);
+  if (response.status >= 500) throw new ReceiptAIAccessError('OpenAI is temporarily unable to verify the key. Try again shortly.', 503, 'key_check_server_error', diagnostic);
+  throw new ReceiptAIAccessError('OpenAI could not accept the key-check request. Check the key and project permissions.', 400, 'key_check_request_rejected', diagnostic);
+}
 function decode(value: string): Uint8Array<ArrayBuffer> {
   if (!/^[A-Za-z0-9_-]+$/.test(value)) throw Error();
   return Uint8Array.from(atob(value.replace(/-/g, '+').replace(/_/g, '/')), character => character.charCodeAt(0));
@@ -156,15 +227,9 @@ export async function saveReceiptAISettings(request: Request, profile: Account, 
   let encrypted = state.row?.api_key_encrypted || null;
   if (input.apiKey !== undefined) {
     const key = typeof input.apiKey === 'string' ? input.apiKey.trim() : '';
-    if (!/^sk-[A-Za-z0-9_-]{16,512}$/.test(key)) throw new ReceiptAIAccessError('Enter a valid OpenAI API key.');
+    if (!/^sk-[A-Za-z0-9_-]{16,512}$/.test(key)) throw new ReceiptAIAccessError('Enter a valid OpenAI API key.', 400, 'key_invalid_format');
     await setupBudget(database, profile.id);
-    let response: Response;
-    try {
-      response = await fetcher('https://api.openai.com/v1/models', { headers: { Authorization: `Bearer ${key}` }, redirect: 'error',
-        signal: AbortSignal.any([request.signal, AbortSignal.timeout(15_000)]) });
-    } catch { throw new ReceiptAIAccessError('OpenAI could not verify the key. Try again shortly.', 503, 'key_check_unavailable'); }
-    await response.body?.cancel().catch(() => {});
-    if (!response.ok) throw new ReceiptAIAccessError(response.status === 401 || response.status === 403 ? 'OpenAI did not accept that API key. Check its permissions and try again.' : 'OpenAI could not verify the key. Try again shortly.', response.status === 401 || response.status === 403 ? 400 : 503, 'key_check_failed');
+    await verifyAPIKey(request, key, fetcher);
     encrypted = await encryptedKey(key, profile.id, state.secret);
   }
   const provider = input.provider === 'siwc' ? 'siwc' : input.provider === 'api' || input.apiKey !== undefined ? 'api' : state.row?.provider || 'api';

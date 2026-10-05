@@ -26,6 +26,63 @@ const reasonText: Record<NonNullable<ReceiptAIStatus["reason"]>, string> = {
   permission_required: "Connect your ChatGPT plan and grant permission to use it for receipt reading.",
 };
 
+type SettingsOperation = "load" | "save-key" | "change-provider" | "remove-key" | "connect-plan";
+const requestErrorText: Record<string, string> = {
+  key_invalid_format: "Enter a valid OpenAI API key beginning with sk-.",
+  key_rejected: "OpenAI rejected this API key. Check that it is correct and has not been revoked, then try again.",
+  key_permission_denied: "This API key lacks the required permissions. Check the key's OpenAI project settings and try again.",
+  key_check_unavailable: "TripTab could not reach OpenAI to check the key. Try again shortly.",
+  key_check_timeout: "OpenAI took too long to check the key. Try again shortly.",
+  key_check_server_error: "OpenAI could not check the key right now. Try again shortly.",
+  key_check_request_rejected: "OpenAI could not accept the key-check request. Check the key's project settings and try again.",
+  key_check_rate_limited: "OpenAI is limiting key-check requests. Wait a moment and try again.",
+  rate_limited: "Too many key setup attempts. Wait a minute before trying again.",
+  verification_required: "Continue with ChatGPT to verify your owner account before changing receipt AI settings.",
+  account_restricted: "Only the verified site owner can manage the shared receipt AI settings.",
+  account_changed: "Your account or ChatGPT link changed. Sign in again before changing receipt AI settings.",
+  settings_changed: "Receipt AI settings changed while you were updating them. Reopen Your account and try again.",
+  not_configured: "This site's encrypted key storage must be configured before an API key can be saved.",
+  not_connected: "Shared receipt processing is not connected yet.",
+  key_unavailable: "The saved key could not be opened. Save a replacement key to restore receipt processing.",
+  siwc_disabled: "ChatGPT plan processing is switched off. Choose OpenAI API key.",
+  permission_required: "Reconnect your ChatGPT plan and allow receipt processing.",
+  connection_invalid: "Reconnect your ChatGPT plan to restore receipt processing.",
+  authorization_failed: "Your ChatGPT plan connection could not be completed. Try connecting again.",
+};
+const operationErrorText: Record<SettingsOperation, string> = {
+  load: "Unable to load receipt AI settings. Try again.",
+  "save-key": "Unable to save the API key. Try again.",
+  "change-provider": "Unable to change the receipt AI provider. Try again.",
+  "remove-key": "Unable to remove the API key. Try again.",
+  "connect-plan": "Unable to connect your ChatGPT plan. Try again.",
+};
+class SettingsRequestError extends Error {}
+
+async function settingsResponseError(response: Response, operation: SettingsOperation) {
+  // Only fixed internal codes select locally written text. Error descriptions,
+  // echoed request fields and unknown codes must never reach the interface.
+  let code: unknown;
+  try {
+    const body: unknown = await response.json();
+    if (body && typeof body === "object") code = (body as Record<string, unknown>).code;
+  } catch { /* A proxy can return HTML or an empty response. Use status only. */ }
+  if (typeof code === "string" && Object.prototype.hasOwnProperty.call(requestErrorText, code)) return new SettingsRequestError(requestErrorText[code]);
+  if (code === "key_check_failed") return new SettingsRequestError(response.status === 400
+    ? "OpenAI did not accept this key. Check the key and its project permissions, then try again."
+    : "OpenAI could not verify the key right now. Try again shortly.");
+  if (code === "receipt_ai_error" && response.status === 400 && operation === "save-key") return new SettingsRequestError(requestErrorText.key_invalid_format);
+  if (response.status === 401) return new SettingsRequestError("Your sign-in has expired. Sign in again and reopen Your account.");
+  if (response.status === 403) return new SettingsRequestError("This change was not permitted. Reopen Your account and try again.");
+  if (response.status === 409) return new SettingsRequestError(requestErrorText.settings_changed);
+  if (response.status === 429) return new SettingsRequestError("Too many requests. Wait a minute and try again.");
+  if (response.status >= 500) return new SettingsRequestError("Receipt AI settings are temporarily unavailable. Try again shortly.");
+  return new SettingsRequestError(operationErrorText[operation]);
+}
+
+function settingsFailureText(cause: unknown, fallback: string) {
+  return cause instanceof SettingsRequestError ? cause.message : fallback;
+}
+
 const initialState = (accountId: string) => ({
   accountId, settings: null as ReceiptAIStatus | null, apiKey: "", busy: false, error: "", notice: "",
 });
@@ -76,7 +133,7 @@ export default function ReceiptAISettings({
     const response = await fetch("/api/receipt/ai-settings", {
       cache: "no-store", credentials: "same-origin", signal: controller.signal,
     });
-    if (!response.ok) throw Error(response.status === 401 ? "Sign in to manage receipt AI." : "Unable to load receipt AI settings. Try again.");
+    if (!response.ok) throw await settingsResponseError(response, "load");
     const next = statusFromResponse(await response.json());
     if (request.current === controller && !controller.signal.aborted) setAccountState(previous => ({
       ...(previous.accountId === accountId ? previous : initialState(accountId)), settings: next, accountId,
@@ -88,10 +145,10 @@ export default function ReceiptAISettings({
     request.current?.abort();
     request.current = controller;
     active.current = false;
-    void load(controller).catch(() => {
+    void load(controller).catch(cause => {
       if (!controller.signal.aborted) setAccountState(previous => ({
         ...(previous.accountId === accountId ? previous : initialState(accountId)),
-        error: "Unable to load receipt AI settings. Try again.", accountId,
+        error: settingsFailureText(cause, operationErrorText.load), accountId,
       }));
     });
     return () => { controller.abort(); request.current?.abort(); request.current = null; };
@@ -112,24 +169,22 @@ export default function ReceiptAISettings({
     setError("");
     setNotice("");
     let updated = false;
+    const operation: SettingsOperation = method === "DELETE" ? "remove-key" : body && "apiKey" in body ? "save-key" : "change-provider";
     try {
       const response = await fetch("/api/receipt/ai-settings", {
         method, credentials: "same-origin", signal: controller.signal,
         ...(body ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {}),
       });
-      // Provider responses are never rendered: they must not echo credentials.
-      if (!response.ok) throw Error("Unable to update receipt AI settings.");
+      if (!response.ok) throw await settingsResponseError(response, operation);
       if (controller.signal.aborted || request.current !== controller) return;
       updated = true;
       changed();
       setNotice(success);
       await load(controller);
-    } catch {
+    } catch (cause) {
       if (!controller.signal.aborted) setError(updated
         ? "Your settings were saved, but the connection status could not refresh. Reopen Your account."
-        : (method === "DELETE"
-          ? "Unable to remove the API key. Try again."
-          : "Unable to save receipt AI settings. Check your verified account and try again."));
+        : settingsFailureText(cause, "Could not reach TripTab. Check your connection and try again."));
     } finally {
       if (request.current === controller && !controller.signal.aborted) {
         active.current = false;
@@ -151,14 +206,14 @@ export default function ReceiptAISettings({
         method: "POST", credentials: "same-origin", signal: controller.signal,
         headers: { "Content-Type": "application/json" }, body: JSON.stringify({ returnTo: "/receipts" }),
       });
-      if (!response.ok) throw Error("Unable to connect your ChatGPT plan.");
+      if (!response.ok) throw await settingsResponseError(response, "connect-plan");
       const body = await response.json() as { authorizationUrl?: unknown };
       if (typeof body.authorizationUrl !== "string") throw Error("Unable to connect your ChatGPT plan.");
       const authorization = new URL(body.authorizationUrl);
       if (authorization.protocol !== "https:" || authorization.hostname !== "auth.openai.com" || authorization.username || authorization.password) throw Error("Unable to connect your ChatGPT plan.");
       if (!controller.signal.aborted && request.current === controller) window.location.assign(authorization.href);
-    } catch {
-      if (!controller.signal.aborted) setError("Unable to connect your ChatGPT plan. Try again.");
+    } catch (cause) {
+      if (!controller.signal.aborted) setError(settingsFailureText(cause, operationErrorText["connect-plan"]));
     } finally {
       if (request.current === controller && !controller.signal.aborted) {
         active.current = false;
@@ -204,7 +259,7 @@ export default function ReceiptAISettings({
             <input id={`${id}-api-key`} name="receipt-ai-api-key" type="password" value={apiKey} autoComplete="off" autoCapitalize="none" autoCorrect="off" spellCheck={false}
               required maxLength={512} disabled={busy} aria-describedby={`${id}-key-hint`} onChange={event => setApiKey(event.target.value)} />
           </label>
-          <small id={`${id}-key-hint`} className="muted">The shared key is encrypted on the server and never shown again. This field clears after submission.</small>
+          <small id={`${id}-key-hint`} className="muted">Use a key created in your TripTab OpenAI project. The shared key is encrypted on the server and never shown again. This field clears after submission.</small>
           <button type="submit" className="quiet" disabled={busy || !apiKey.trim()}>{busy ? "Saving…" : (settings.apiConnected ? "Replace API key" : "Save API key")}</button>
         </form>}
         {settings.apiConnected && <button type="button" className="quiet danger" disabled={busy} onClick={() => void update(undefined, "DELETE", "API key removed.")}><Trash2 size={17} aria-hidden="true" />Remove API key</button>}

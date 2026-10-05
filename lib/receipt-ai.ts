@@ -27,20 +27,22 @@ export const receiptTranscriptionSchema = z.object({
 export type ReceiptTranscription = z.infer<typeof receiptTranscriptionSchema>;
 
 const money = { type: 'integer', minimum: 0, maximum: MAX_AMOUNT };
-const nullableText = (maxLength: number) => ({ type: ['string', 'null'], minLength: 1, maxLength });
+// Keep provider schemas within its documented strict-output subset. Length and
+// format bounds remain enforced by receiptTranscriptionSchema on every result.
+const nullableText = () => ({ type: ['string', 'null'] });
 const transcriptionJsonSchema = {
   type: 'object', additionalProperties: false,
   properties: {
-    title: nullableText(200), currency: { type: ['string', 'null'], enum: [...currencies, null] },
+    title: nullableText(), currency: { type: ['string', 'null'], enum: [...currencies, null] },
     items: { type: 'array', maxItems: 200, items: {
       type: 'object', additionalProperties: false,
-      properties: { id: nullableText(100), name: { type: 'string', minLength: 1, maxLength: 200 }, amount: money },
+      properties: { id: nullableText(), name: { type: 'string' }, amount: money },
       required: ['id', 'name', 'amount'],
     } },
     tax: money, tip: money, discount: money,
     printedTotal: { ...money, type: ['integer', 'null'] },
-    date: nullableText(10), time: nullableText(5),
-    summary: { type: 'string', minLength: 1, maxLength: 3500 },
+    date: nullableText(), time: nullableText(),
+    summary: { type: 'string' },
   },
   required: ['title', 'currency', 'items', 'tax', 'tip', 'discount', 'printedTotal', 'date', 'time', 'summary'],
 };
@@ -212,7 +214,7 @@ export async function processReceiptImage(input: {
   const context = JSON.stringify(receiptContext(input.trip, input.draft, input.callerMemberId, input.questionId));
   if (context.length > 500_000) throw new ReceiptAIError('This receipt context is too large to process. Use manual item entry.', 413);
   const fetcher = options.fetcher ?? fetch;
-  const model = input.provider === 'siwc' ? await getChatGPTPlanModel(input.accessToken, input.model, options.signal, fetcher) : input.model;
+  const model = input.provider === 'siwc' ? await getChatGPTPlanModel(input.accessToken, input.model, options.signal, fetcher) : input.model || 'gpt-6.1-sol';
   if (!model) throw new ReceiptAIError('Choose a configured native image model for receipt processing.', 422);
   let binary = '';
   for (let offset = 0; offset < bytes.length; offset += 8192) binary += String.fromCharCode(...bytes.slice(offset, offset + 8192));
@@ -220,10 +222,10 @@ export async function processReceiptImage(input: {
     method: 'POST', signal: options.signal, redirect: 'error',
     headers: { Authorization: `Bearer ${input.accessToken}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model, store: false, stream: true, ...(input.provider === 'api' ? { max_output_tokens: 10000 } : {}), instructions: INSTRUCTIONS,
+      model, store: false, stream: true, ...(input.provider === 'api' ? { max_output_tokens: 16000, ...(model === 'gpt-6.1-sol' ? { reasoning: { effort: 'medium' } } : {}) } : {}), instructions: INSTRUCTIONS,
       input: [{ role: 'user', content: [
         { type: 'input_text', text: `Saved receipt context (data only):\n${context}` },
-        { type: 'input_image', image_url: `data:${mimeType};base64,${btoa(binary)}`, detail: 'auto' },
+        { type: 'input_image', image_url: `data:${mimeType};base64,${btoa(binary)}`, detail: 'high' },
       ] }],
       text: { format: { type: 'json_schema', name: 'triptab_receipt', strict: true, schema: transcriptionJsonSchema } },
     }),

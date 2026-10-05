@@ -2,8 +2,9 @@ import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { readFile, readdir } from 'node:fs/promises';
 import test from 'node:test';
+import { ModuleKind, ScriptTarget, transpileModule } from 'typescript';
 import { hashToken } from '../lib/auth';
-import { getReceiptAIAccess, receiptAIStatus, saveReceiptAISettings, removeReceiptAIKey, ReceiptAIAccessError, type ReceiptAIEnvironment } from '../lib/receipt-ai-access';
+import { getReceiptAIAccess, receiptAIStatus, saveReceiptAISettings, removeReceiptAIKey, receiptAIKeyCheckDiagnostic, ReceiptAIAccessError, type ReceiptAIEnvironment } from '../lib/receipt-ai-access';
 
 class Statement {
   private values: (string | number | null)[] = [];
@@ -142,7 +143,7 @@ test('verified owner saves a validated encrypted key, then uses it with its own 
   assert.equal(String(row(db)?.api_key_encrypted).includes(key), false);
   assert.equal(String(row(db)?.api_key_encrypted).startsWith('v1.'), true);
   const access = await getReceiptAIAccess(request(), owner, db.database, config);
-  assert.deepEqual(access, { accessToken: key, model: 'gpt-4.1-mini', provider: 'api' });
+  assert.deepEqual(access, { accessToken: key, model: 'gpt-6.1-sol', provider: 'api' });
   assert.equal((await receiptAIStatus(request(), owner, db.database, config)).connected, true);
   const audit = db.sqlite.prepare('SELECT after_data FROM account_activity_events WHERE entity_id=?').get('receipt-processing');
   assert.deepEqual(JSON.parse(String(audit?.after_data)), { keyConfigured: true, provider: 'api' });
@@ -159,7 +160,7 @@ test('all authenticated participants use the same server-only API key while only
     assert.equal(status.manageable, false); assert.equal(status.managementReason, 'account_restricted');
     assert.equal(status.reason, undefined);
     assert.doesNotMatch(JSON.stringify(status), /sk-test-|api_key_encrypted|owner-provider/);
-    assert.deepEqual(await getReceiptAIAccess(request(account), profile, db.database, config), { accessToken: key, model: 'gpt-4.1-mini', provider: 'api' });
+    assert.deepEqual(await getReceiptAIAccess(request(account), profile, db.database, config), { accessToken: key, model: 'gpt-6.1-sol', provider: 'api' });
     for (const body of [{ apiKey: replacement }, { provider: 'api' }, { provider: 'siwc' }]) {
       await assert.rejects(saveReceiptAISettings(request(account), profile, db.database, config, body, forbiddenFetch), { status: 403 });
     }
@@ -205,10 +206,106 @@ test('invalid provider keys and transient verification failures preserve the sav
   const db = await storage();
   await saveReceiptAISettings(request('owner', true), owner, db.database, config, { apiKey: key }, keyCheck());
   const before = row(db);
-  await assert.rejects(saveReceiptAISettings(request(), owner, db.database, config, { apiKey: replacement }, keyCheck(replacement, 401)), { code: 'key_check_failed' });
+  await assert.rejects(saveReceiptAISettings(request(), owner, db.database, config, { apiKey: replacement }, keyCheck(replacement, 401)), { code: 'key_rejected' });
   await assert.rejects(saveReceiptAISettings(request(), owner, db.database, config, { apiKey: replacement }, (async () => { throw Error('network'); }) as typeof fetch), { code: 'key_check_unavailable' });
   assert.deepEqual(row(db), before);
   assert.equal((await getReceiptAIAccess(request(), owner, db.database, config)).accessToken, key);
+});
+
+test('key checks classify provider rejection, permission, rate limits and outages without saving or revealing provider text', async () => {
+  for (const [providerStatus, status, code, providerCode] of [
+    [401, 400, 'key_rejected', 'invalid_api_key'],
+    [403, 403, 'key_permission_denied', 'insufficient_permissions'],
+    [429, 429, 'key_check_rate_limited', 'insufficient_quota'],
+    [503, 503, 'key_check_server_error', 'server_error'],
+    [400, 400, 'key_check_request_rejected', replacement],
+  ] as const) {
+    const db = await storage();
+    await saveReceiptAISettings(request('owner', true), owner, db.database, config, { apiKey: key }, keyCheck());
+    const before = row(db), history = db.sqlite.prepare('SELECT * FROM account_activity_events').all();
+    await assert.rejects(saveReceiptAISettings(request(), owner, db.database, config, { apiKey: replacement }, (async () => Response.json({
+      error: { code: providerCode, message: `Private provider text: ${replacement}`, type: replacement },
+    }, { status: providerStatus })) as typeof fetch), error => {
+      assert(error instanceof ReceiptAIAccessError);
+      assert.equal(error.status, status); assert.equal(error.code, code);
+      assert.deepEqual(receiptAIKeyCheckDiagnostic(error), { code, providerStatus, timedOut: false,
+        ...(providerCode === replacement ? {} : { providerCode }) });
+      assert.equal(JSON.stringify(error).includes(replacement), false);
+      assert.equal(error.message.includes(replacement), false);
+      return true;
+    });
+    assert.deepEqual(row(db), before);
+    assert.deepEqual(db.sqlite.prepare('SELECT * FROM account_activity_events').all(), history);
+  }
+});
+
+test('connection failures log only whitelisted exception names and distinguish deadline timeout from cancellation', async t => {
+  for (const name of ['TypeError', 'AbortError', 'TimeoutError', replacement]) {
+    const db = await storage();
+    const exception = new Error(`Secret exception details ${replacement}`); exception.name = name;
+    await assert.rejects(saveReceiptAISettings(request('owner', true), owner, db.database, config, { apiKey: key }, (async () => { throw exception; }) as typeof fetch), error => {
+      assert(error instanceof ReceiptAIAccessError);
+      const timedOut = name === 'TimeoutError';
+      assert.equal(error.status, timedOut ? 504 : 503);
+      assert.deepEqual(receiptAIKeyCheckDiagnostic(error), { code: timedOut ? 'key_check_timeout' : 'key_check_unavailable', timedOut,
+        ...(name === replacement ? {} : { networkErrorName: name }) });
+      assert.equal(JSON.stringify(error).includes(replacement), false);
+      return true;
+    });
+    assert.equal(row(db), undefined);
+    assert.equal(db.sqlite.prepare('SELECT count(*) AS n FROM account_activity_events').get()?.n, 0);
+  }
+  // A real expired deadline also counts as a timeout if a fetch implementation
+  // reports AbortError rather than TimeoutError for its cancelled request.
+  const deadline = AbortSignal.abort(new DOMException('Timeout', 'TimeoutError'));
+  t.mock.method(AbortSignal, 'timeout', () => deadline);
+  const db = await storage();
+  await assert.rejects(saveReceiptAISettings(request('owner', true), owner, db.database, config, { apiKey: key }, (async (_url, init) => {
+    assert.equal(init?.signal?.aborted, true);
+    throw new DOMException(`Private ${replacement}`, 'AbortError');
+  }) as typeof fetch), error => {
+    assert(error instanceof ReceiptAIAccessError);
+    assert.deepEqual(receiptAIKeyCheckDiagnostic(error), { code: 'key_check_timeout', networkErrorName: 'AbortError', timedOut: true });
+    return true;
+  });
+});
+
+test('key-check diagnostics bound and discard malformed or oversized upstream bodies without losing the HTTP status', async () => {
+  for (const body of ['not-json', JSON.stringify({ error: { code: 'invalid_api_key', message: replacement.repeat(300) } })]) {
+    const db = await storage();
+    await assert.rejects(saveReceiptAISettings(request('owner', true), owner, db.database, config, { apiKey: key }, (async () => new Response(body, { status: 401 })) as typeof fetch), error => {
+      assert.deepEqual(receiptAIKeyCheckDiagnostic(error), { code: 'key_rejected', providerStatus: 401, timedOut: false });
+      return true;
+    });
+  }
+  const db = await storage();
+  await assert.rejects(saveReceiptAISettings(request('owner', true), owner, db.database, config, { apiKey: replacement.slice(3) }, forbiddenFetch), { code: 'key_invalid_format', status: 400 });
+  assert.equal(row(db), undefined);
+});
+
+test('settings HTTP errors expose only fixed public messages and log filtered value-free key-check diagnostics', async t => {
+  const logs: unknown[][] = [];
+  t.mock.method(console, 'error', (...values: unknown[]) => { logs.push(values); });
+  const source = await readFile(new URL('../app/api/receipt/ai-settings/route.ts', import.meta.url), 'utf8');
+  const compiled = transpileModule(source, { compilerOptions: { module: ModuleKind.CommonJS, target: ScriptTarget.ES2022 } }).outputText;
+  const accessError = new ReceiptAIAccessError('OpenAI is temporarily unable to verify the key. Try again shortly.', 503, 'key_check_server_error',
+    { providerStatus: 503, providerCode: 'server_error', networkErrorName: replacement, timedOut: false });
+  const route = { exports: {} as { POST: (request: Request) => Promise<Response> } };
+  new Function('require', 'module', 'exports', compiled)((name: string) => {
+    if (name === 'cloudflare:workers') return { env: config };
+    if (name === '@/lib/store') return { db: () => undefined, ensureProfile: async () => owner,
+      sameOrigin() {}, readBoundedBody: async (request: Request) => new Uint8Array(await request.arrayBuffer()),
+      RequestError: Error, failure: () => Response.json({ error: 'Unable to save' }, { status: 400 }) };
+    if (name === '@/lib/receipt-ai-access') return { ReceiptAIAccessError, receiptAIKeyCheckDiagnostic, saveReceiptAISettings: async () => { throw accessError; } };
+    throw Error(`Unexpected route dependency: ${name}`);
+  }, route, route.exports);
+  const response = await route.exports.POST(new Request('https://triptab.test/api/receipt/ai-settings', { method: 'POST', body: JSON.stringify({ apiKey: replacement }) }));
+  assert.equal(response.status, 503);
+  assert.equal(response.headers.get('cache-control'), 'private, no-store');
+  assert.deepEqual(await response.json(), { error: accessError.message, code: 'key_check_server_error' });
+  assert.deepEqual(logs, [['TripTab receipt AI key verification failed', { code: 'key_check_server_error', providerStatus: 503, providerCode: 'server_error', timedOut: false }]]);
+  assert.equal(JSON.stringify(logs).includes(replacement), false);
+  assert.equal(receiptAIKeyCheckDiagnostic(new Error(replacement)), null);
 });
 
 test('SIWC defaults off and cannot be selected through forged settings', async () => {
@@ -262,7 +359,7 @@ test('API-key verification requests are bounded per account', async () => {
   const db = await storage();
   let calls = 0;
   const fetcher = (async () => { calls++; return new Response(null, { status: 401 }); }) as typeof fetch;
-  for (let i = 0; i < 6; i++) await assert.rejects(saveReceiptAISettings(request('owner', true), owner, db.database, config, { apiKey: key }, fetcher), { code: 'key_check_failed' });
+  for (let i = 0; i < 6; i++) await assert.rejects(saveReceiptAISettings(request('owner', true), owner, db.database, config, { apiKey: key }, fetcher), { code: 'key_rejected' });
   await assert.rejects(saveReceiptAISettings(request('owner', true), owner, db.database, config, { apiKey: key }, fetcher), { code: 'rate_limited' });
   assert.equal(calls, 6);
 });

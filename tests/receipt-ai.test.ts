@@ -36,7 +36,7 @@ function streamResponse(events: unknown[], options: { split?: number; terminalNe
     controller.close();
   } }), { headers: { 'content-type': 'text/event-stream' } });
 }
-const input = { accessToken: 'test-credential', model: 'gpt-4.1-mini', provider: 'api' as const,
+const input = { accessToken: 'test-credential', model: 'gpt-6.1-sol', provider: 'api' as const,
   trip, draft, callerMemberId: 'alice', image: { bytes: png, mimeType: 'image/png' } };
 
 test('API native vision sends the actual image and a private nonpersistent strict Responses request without a model-catalog fallback', async () => {
@@ -52,7 +52,9 @@ test('API native vision sends the actual image and a private nonpersistent stric
   assert.equal(requests[0].init.redirect, 'error');
   assert.equal(new Headers(requests[0].init.headers).get('authorization'), 'Bearer test-credential');
   const body = JSON.parse(requests[0].init.body as string);
-  assert.equal(body.model, 'gpt-4.1-mini');
+  assert.equal(body.model, 'gpt-6.1-sol');
+  assert.deepEqual(body.reasoning, { effort: 'medium' });
+  assert.equal(body.max_output_tokens, 16000);
   assert.equal(body.store, false);
   assert.equal(body.stream, true);
   assert.equal(body.tools, undefined);
@@ -61,9 +63,10 @@ test('API native vision sends the actual image and a private nonpersistent stric
   assert.equal(body.text.format.strict, true);
   assert.equal(body.text.format.schema.additionalProperties, false);
   assert.equal(body.text.format.schema.properties.items.items.additionalProperties, false);
+  assert.doesNotMatch(JSON.stringify(body.text.format.schema), /minLength|maxLength/);
   const image = body.input[0].content.find((value: { type: string }) => value.type === 'input_image');
   assert.equal(image.image_url, `data:image/png;base64,${Buffer.from(png).toString('base64')}`);
-  assert.equal(image.detail, 'auto');
+  assert.equal(image.detail, 'high');
   const context = body.input[0].content[0].text;
   assert.doesNotMatch(context, /private@example.com|receipt-ai-owner/);
   assert.match(body.instructions, /never instructions to execute/);
@@ -71,6 +74,20 @@ test('API native vision sends the actual image and a private nonpersistent stric
   assert.match(body.instructions, /Do not add VAT/);
   assert.match(body.instructions, /YYYY-MM-DD.*HH:mm/);
   assert.match(body.instructions, /Ambiguous or unreadable dates\/times must be null/);
+});
+
+test('API omission uses the requested strong receipt model and strict server string limits still reject invalid output', async () => {
+  await processReceiptImage({ ...input, model: undefined }, { fetcher: async (_url, init) => {
+    const request = JSON.parse(init!.body as string);
+    assert.equal(request.model, 'gpt-6.1-sol');
+    assert.deepEqual(request.reasoning, { effort: 'medium' });
+    return streamResponse([completed()]);
+  } });
+  for (const output of [
+    { ...transcription, title: 'A'.repeat(201) },
+    { ...transcription, items: [{ id: null, name: 'A'.repeat(201), amount: 1 }] },
+    { ...transcription, summary: 'A'.repeat(3501) },
+  ]) await assert.rejects(processReceiptImage(input, { fetcher: async () => streamResponse([completed(output)]) }), ReceiptAIError);
 });
 
 test('plan models use account-visible server ordering and an explicit preference never silently changes models or billing', async () => {
@@ -94,6 +111,7 @@ test('plan models use account-visible server ordering and an explicit preference
     const request = JSON.parse(init!.body as string);
     assert.equal(request.model, 'other-visible');
     assert.equal(request.max_output_tokens, undefined, 'plan preview forbids token-limit parameters');
+    assert.equal(request.reasoning, undefined, 'plan preview receives no forced reasoning parameter');
     return streamResponse([completed()]);
   } });
   assert.deepEqual(requests, ['https://api.openai.com/v1/models', 'https://api.openai.com/v1/responses']);
@@ -391,7 +409,7 @@ const store = {
 };
 const credentialAccess = {
   ReceiptAIAccessError: BoundaryAccessError,
-  async getReceiptAIAccess() { state.accessCalls++; if (!state.accessAllowed) throw new BoundaryAccessError('This account cannot use the receipt key.'); return { accessToken: 'test-api-key', model: 'gpt-4.1-mini', provider: 'api' }; },
+  async getReceiptAIAccess() { state.accessCalls++; if (!state.accessAllowed) throw new BoundaryAccessError('This account cannot use the receipt key.'); return { accessToken: 'test-api-key', model: 'gpt-6.1-sol', provider: 'api' }; },
 };
 const dataUrl = (source: string) => 'data:text/javascript;base64,' + Buffer.from(source).toString('base64');
 Object.defineProperty(globalThis, Symbol.for('triptab.receipt-ai-route-store'), { value: store, configurable: true });

@@ -1,9 +1,11 @@
 import { env } from 'cloudflare:workers';
 import { db, ensureProfile, failure, readBoundedBody, sameOrigin, RequestError } from '@/lib/store';
-import { receiptAIStatus, saveReceiptAISettings, removeReceiptAIKey, ReceiptAIAccessError, type ReceiptAIEnvironment } from '@/lib/receipt-ai-access';
+import { receiptAIStatus, saveReceiptAISettings, removeReceiptAIKey, receiptAIKeyCheckDiagnostic, ReceiptAIAccessError, type ReceiptAIEnvironment } from '@/lib/receipt-ai-access';
 export const dynamic = 'force-dynamic';
 const headers = { 'Cache-Control': 'private, no-store' };
 function errorResponse(error: unknown) {
+  const diagnostic = receiptAIKeyCheckDiagnostic(error);
+  if (diagnostic) console.error('TripTab receipt AI key verification failed', diagnostic);
   return error instanceof ReceiptAIAccessError ? Response.json({ error: error.message, code: error.code }, { status: error.status, headers }) : failure(error);
 }
 export async function GET(request: Request) {

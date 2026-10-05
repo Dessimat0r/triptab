@@ -115,7 +115,7 @@ test('submitting a key sends it only to the same-origin server, immediately clea
   await settle();
   rendered = ui.render();
   assert.doesNotMatch(rendered.html, /sk-test-ephemeral-key/);
-  assert.match(rendered.html, /Unable to save receipt AI settings/);
+  assert.match(rendered.html, /Receipt AI settings are temporarily unavailable/);
   assert.equal(keyInput(rendered).props.value, '');
 });
 
@@ -192,4 +192,80 @@ test('the future enabled ChatGPT plan mode lets a participant connect their own 
   assert.equal(post?.url, '/api/chatgpt-plan/start');
   assert.deepEqual(JSON.parse(String(post?.options?.body)), { returnTo: '/receipts' });
   assert.deepEqual(ui.redirects, ['https://auth.openai.com/oauth/authorize?client_id=test']);
+});
+
+async function failedKeySave(failure: () => Promise<Response>) {
+  const ui = controller(async (_url, options) => options?.method === 'POST' ? failure() : Response.json(state));
+  ui.render(); await settle();
+  (keyInput(ui.render()).props.onChange as (event: unknown) => void)({ target: { value: 'sk-test-sensitive-value' } });
+  const form = ui.render().elements.find(element => element.type === 'form');
+  assert(form);
+  (form.props.onSubmit as (event: unknown) => void)({ preventDefault() {} });
+  await settle();
+  const rendered = ui.render();
+  assert.equal(keyInput(rendered).props.value, '', 'a failed save never retains the submitted key');
+  assert.doesNotMatch(rendered.html, /sk-test-sensitive-value|RAW_PROVIDER_ERROR/);
+  assert.deepEqual(ui.notifications, [], 'a rejected save must not announce a settings change');
+  return rendered.html;
+}
+
+test('key saving distinguishes provider failure, key permissions, owner verification and concurrent changes using fixed local messages', async () => {
+  const cases = [
+    { code: 'key_invalid_format', status: 400, message: /Enter a valid OpenAI API key beginning with sk-/ },
+    { code: 'receipt_ai_error', status: 400, message: /Enter a valid OpenAI API key beginning with sk-/ },
+    { code: 'key_rejected', status: 400, message: /OpenAI rejected this API key/ },
+    { code: 'key_permission_denied', status: 400, message: /lacks the required permissions/ },
+    { code: 'key_check_failed', status: 400, message: /OpenAI did not accept this key/ },
+    { code: 'key_check_failed', status: 503, message: /OpenAI could not verify the key right now/ },
+    { code: 'key_check_unavailable', status: 503, message: /could not reach OpenAI to check the key/ },
+    { code: 'key_check_timeout', status: 504, message: /OpenAI took too long to check the key/ },
+    { code: 'key_check_server_error', status: 503, message: /OpenAI could not check the key right now/ },
+    { code: 'key_check_request_rejected', status: 400, message: /OpenAI could not accept the key-check request/ },
+    { code: 'key_check_rate_limited', status: 429, message: /OpenAI is limiting key-check requests/ },
+    { code: 'rate_limited', status: 429, message: /Too many key setup attempts/ },
+    { code: 'verification_required', status: 403, message: /verify your owner account/ },
+    { code: 'account_restricted', status: 403, message: /Only the verified site owner/ },
+    { code: 'account_changed', status: 401, message: /Your account or ChatGPT link changed/ },
+    { code: 'settings_changed', status: 409, message: /settings changed while you were updating them/ },
+    { code: 'not_configured', status: 503, message: /encrypted key storage must be configured/ },
+  ];
+  for (const item of cases) {
+    const html = await failedKeySave(async () => Response.json({ code: item.code, error: 'RAW_PROVIDER_ERROR sk-test-sensitive-value', apiKey: 'sk-test-sensitive-value' }, { status: item.status }));
+    assert.match(html, item.message, `safe error ${item.code}/${item.status}`);
+    if (item.code.startsWith('key_check')) assert.doesNotMatch(html, /verify your owner account|Check your verified account/);
+  }
+});
+
+test('unrecognized error codes and non-JSON failures use safe status messages without exposing response text', async () => {
+  for (const code of ['sk-test-sensitive-value', 'constructor', '__proto__', ['key_rejected']]) {
+    const html = await failedKeySave(async () => Response.json({ code, error: 'RAW_PROVIDER_ERROR sk-test-sensitive-value' }, { status: 503 }));
+    assert.match(html, /Receipt AI settings are temporarily unavailable/);
+  }
+  const html = await failedKeySave(async () => new Response('<html>RAW_PROVIDER_ERROR sk-test-sensitive-value</html>', { status: 502, headers: { 'Content-Type': 'text/html' } }));
+  assert.match(html, /Receipt AI settings are temporarily unavailable/);
+});
+
+test('a browser network failure does not imply the signed-in owner needs verification', async () => {
+  const html = await failedKeySave(async () => { throw new TypeError('RAW_PROVIDER_ERROR sk-test-sensitive-value'); });
+  assert.match(html, /Could not reach TripTab\. Check your connection and try again/);
+  assert.doesNotMatch(html, /verify your owner account|Check your verified account/);
+});
+
+test('a successful save followed by a failed status refresh remains reported as saved', async () => {
+  let gets = 0;
+  const ui = controller(async (_url, options) => {
+    if (options?.method === 'POST') return Response.json({ ok: true });
+    return ++gets === 1 ? Response.json(state) : Response.json({ code: 'account_changed', error: 'RAW_PROVIDER_ERROR' }, { status: 401 });
+  });
+  ui.render(); await settle();
+  (keyInput(ui.render()).props.onChange as (event: unknown) => void)({ target: { value: 'sk-test-sensitive-value' } });
+  const form = ui.render().elements.find(element => element.type === 'form');
+  assert(form);
+  (form.props.onSubmit as (event: unknown) => void)({ preventDefault() {} });
+  await settle();
+  const html = ui.render().html;
+  assert.match(html, /Your settings were saved, but the connection status could not refresh/);
+  assert.match(html, /API key saved/);
+  assert.deepEqual(ui.notifications, ['triptab:receipt-ai-settings']);
+  assert.doesNotMatch(html, /sk-test-sensitive-value|RAW_PROVIDER_ERROR|Unable to save/);
 });
