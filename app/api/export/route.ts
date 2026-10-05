@@ -61,7 +61,7 @@ function financialCsv(trip: Trip): string {
       name(expense.payer), '', '', '', '', expense.tax, expense.tip, expense.discount,
       expense.bankAmount, expense.fx?.rate, expense.fx?.asOf, expense.fx?.source, expense.receiptId, expense.source || 'manual', calculationError,
       ...trip.members.map((_, index) => shares[index]),
-      JSON.stringify(expense.items.map(({ id, name, amount, members, percentages, units }) => ({ id, name, amount, members, percentages, units }))),
+      JSON.stringify(expense.items.map(({ id, name, amount, members, percentages, units, quantity }) => ({ id, name, amount, members, percentages, units, quantity }))),
     ]);
   }
   for (const payment of trip.payments) {

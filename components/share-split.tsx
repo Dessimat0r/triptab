@@ -101,11 +101,12 @@ function PercentageInput({ value, onChange, label, describedBy, invalid }: {
   </span>;
 }
 
-export default function ShareSplit({ members, selected, percentages, units, scope, alwaysPercent = false, onChange }: {
+export default function ShareSplit({ members, selected, percentages, units, quantity, scope, alwaysPercent = false, onChange }: {
   members: Trip["members"];
   selected: string[];
   percentages?: Record<string, number>;
   units?: Item["units"];
+  quantity?: Item["quantity"];
   scope: string;
   alwaysPercent?: boolean;
   onChange: (selected: string[], percentages?: Record<string, number>, units?: Item["units"]) => void;
@@ -139,7 +140,7 @@ export default function ShareSplit({ members, selected, percentages, units, scop
     } else if (next === "equal") {
       onChange(ids, alwaysPercent ? equalPercentages(ids) : undefined, undefined);
     } else if (next === "units") {
-      onChange(ids, undefined, units || equalUnits(ids, 1));
+      onChange(ids, undefined, units || equalUnits(ids, quantity?.total ?? 1, quantity?.label));
     } else {
       onChange(ids, percentages || equalPercentages(ids), undefined);
     }

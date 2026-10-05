@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { createSourceFile, isFunctionDeclaration, ModuleKind, ScriptKind, ScriptTarget, transpileModule } from 'typescript';
 import { equalSavedValue } from '../lib/client-ledger';
-import { matchingReceiptProposal, mayFillInitialReceipt, receiptEditableValue, receiptProposalEditor, type InitialReceiptReview, type ReceiptEditor } from '../lib/receipt-processing';
+import { isBlankReceipt, matchingReceiptProposal, mayFillInitialReceipt, receiptEditableValue, receiptProposalEditor, type InitialReceiptReview, type ReceiptEditor } from '../lib/receipt-processing';
 import type { Draft, ReceiptMessage, Trip } from '../lib/model';
 
 // React handlers capture immutable values from one render. Keep those values
@@ -98,6 +98,44 @@ test('an initial itemisation is confirmed only after its accepted values render'
   assert.equal(editor.itemized, true); assert.equal(editor.proposal, null); assert.equal(editor.initial, null);
   editor.change({items:[{...editor.editing.items[0],amount:1400}]}); editor.reconcile(); editor.flush();
   assert.equal(editor.editing.items[0].amount, 1400, 'later local edits cannot trigger another automatic fill');
+});
+
+test('detected purchase quantity and its default units populate an untouched editor without overwriting newer local allocations', () => {
+  const trip = proposedTrip();
+  const quantity = { total: 2, label: 'slices', sourceText: '2 × Stck Pizza' };
+  const units = { total: 2, label: 'slices', allocations: { alice: 1, bob: 1 } };
+  trip.drafts[0].items[0] = { ...trip.drafts[0].items[0], quantity, units };
+  const editor = controller(blankEditor(), trip);
+  editor.initialise(); editor.reconcile(); editor.flush(); editor.reconcile(); editor.flush();
+  assert.deepEqual(editor.editing.items[0].quantity, quantity);
+  assert.deepEqual(editor.editing.items[0].units, units);
+  assert.equal(editor.itemized, true);
+  assert.equal(editor.editing.items[0].amount, 1200);
+
+  const changed = controller(blankEditor(), trip);
+  changed.initialise(); changed.reconcile();
+  const manual = { total: 2, label: 'pieces', allocations: { alice: 2, bob: 0 } };
+  changed.change({ items: [{ ...blankEditor().items[0], name: 'My pizza', amount: 1200, units: manual }] });
+  changed.flush(); changed.reconcile(); changed.flush();
+  assert.deepEqual(changed.editing.items[0].units, manual);
+  assert.equal(changed.editing.items[0].quantity, undefined, 'the proposal cannot silently replace a newer manual item');
+  assert.deepEqual(changed.proposal?.items[0].quantity, quantity);
+  assert.equal(changed.itemized, false);
+});
+
+test('entering only a purchase quantity makes the blank editor nonblank and prevents queued automatic replacement', () => {
+  const entry = blankEditor(), editor = controller(entry);
+  assert.equal(isBlankReceipt(entry), true);
+  editor.initialise(); editor.reconcile();
+  const quantity = { total: 2, label: 'pieces' };
+  editor.change({ items: [{ ...entry.items[0], quantity }] });
+  assert.equal(isBlankReceipt(editor.editing), false);
+  editor.flush(); editor.reconcile(); editor.flush();
+  assert.deepEqual(editor.editing.items[0].quantity, quantity);
+  assert.equal(editor.editing.items[0].amount, 0);
+  assert.equal(editor.editing.items[0].name, '');
+  assert.equal(editor.itemized, false);
+  assert.equal(editor.proposal?.items[0].amount, 1200, 'automatic itemisation remains available for explicit review');
 });
 
 test('a replacement proposal between automatic fill and confirmation remains available for Review', () => {

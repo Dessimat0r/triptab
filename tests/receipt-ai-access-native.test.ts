@@ -18,7 +18,8 @@ type NativeDatabase = Awaited<ReturnType<Miniflare['getD1Database']>>;
 type Result = {
   connected?: boolean; manageable?: boolean; provider?: string;
   usesOriginal?: boolean; usesReplacement?: boolean;
-  model?: string; transcription?: { title: string; items: { name: string; amount: number }[] };
+  model?: string; transcription?: { title: string; items: { name: string; amount: number; quantity?: { total: number; label: string | null; sourceText: string | null } }[] };
+  proposal?: { items: { amount: number; quantity?: { total: number; label?: string; sourceText?: string }; units?: { total: number; label?: string; allocations: Record<string, number> } }[] };
   error?: string; code?: string;
   diagnostic?: { code: string; providerStatus?: number; providerCode?: string; networkErrorName?: string; timedOut: boolean };
   providerCalls: number; transportContract: boolean;
@@ -32,7 +33,7 @@ async function fixture(providerURL?: string) {
   const bundled = await build({
     stdin: { resolveDir: project, sourcefile: 'receipt-ai-native-worker.ts', contents: `
       import { saveReceiptAISettings, removeReceiptAIKey, getReceiptAIAccess, receiptAIKeyCheckDiagnostic } from './lib/receipt-ai-access.ts';
-      import { processReceiptImage, getChatGPTPlanModel } from './lib/receipt-ai.ts';
+      import { processReceiptImage, getChatGPTPlanModel, applyReceiptTranscription } from './lib/receipt-ai.ts';
       const accounts = ${JSON.stringify({ owner, member })};
       const originalKey = ${JSON.stringify(originalKey)};
       const replacementKey = ${JSON.stringify(replacementKey)};
@@ -66,12 +67,17 @@ async function fixture(providerURL?: string) {
             return Response.json({ model, providerCalls, transportContract });
           }
           if (path.endsWith('/vision')) {
+            const trip = { id: 'native-trip', name: 'Native holiday', currency: 'GBP',
+              members: [{ id: 'native-owner', name: 'Native owner' }, { id: 'native-member', name: 'Native member' }],
+              expenses: [], payments: [], drafts: [] };
+            const draft = { id: 'native-draft', title: 'Native receipt', currency: 'GBP', payer: 'native-owner',
+              items: [], tax: 0, tip: 0, discount: 0, status: 'waiting' };
             const transcription = await processReceiptImage({ accessToken: submittedKey, provider: 'api', model: 'gpt-6.1-sol',
-              trip: { members: [{ id: 'native-owner', name: 'Native owner' }] },
-              draft: { title: 'Native receipt', currency: 'GBP', items: [], tax: 0, tip: 0, discount: 0 },
+              trip, draft,
               callerMemberId: 'native-owner', image: { bytes: new Uint8Array([137, 80, 78, 71]), mimeType: 'image/png' }
             }, { signal: request.signal, fetcher: provider });
-            return Response.json({ transcription, providerCalls, transportContract });
+            const proposal = applyReceiptTranscription(trip, draft, transcription);
+            return Response.json({ transcription, proposal, providerCalls, transportContract });
           }
           if (path.endsWith('/access')) {
             const access = await getReceiptAIAccess(request, account, env.DB, config);
@@ -220,8 +226,9 @@ test('native provider failures have safe categories and preserve the shared key 
 test('real workerd fetch reaches a local HTTP peer with supported request options and never follows redirects carrying keys or receipt data', async () => {
   const requests: { path: string; method: string; authorization: string | undefined; body: string }[] = [];
   let redirect = false;
-  const transcription = { title: 'Native shop', currency: 'GBP', items: [{ id: null, name: 'Coffee', amount: 250 }],
-    tax: 0, tip: 0, discount: 0, printedTotal: 250, date: null, time: null, summary: 'Read the receipt for review.' };
+  const transcription = { title: 'Native pizza counter', currency: 'GBP', items: [{ id: null, name: 'Pizza slices', amount: 1001,
+    quantity: { total: 2, label: 'slices', sourceText: '2 x Stck' } }],
+    tax: 0, tip: 0, discount: 0, printedTotal: 1001, date: null, time: null, summary: 'Read two slices for review.' };
   const peer = createServer((request, response) => {
     const chunks: Buffer[] = [];
     request.on('data', chunk => { chunks.push(Buffer.from(chunk)); });
@@ -264,6 +271,9 @@ test('real workerd fetch reaches a local HTTP peer with supported request option
     const vision = await call(worker, '/owner/vision');
     assert.equal(vision.status, 200);
     assert.deepEqual(vision.result.transcription, transcription);
+    assert.deepEqual(vision.result.proposal!.items[0].quantity, { total: 2, label: 'slices', sourceText: '2 x Stck' });
+    assert.deepEqual(vision.result.proposal!.items[0].units, { total: 2, label: 'slices', allocations: { 'native-owner': 1, 'native-member': 1 } });
+    assert.equal(vision.result.proposal!.items[0].amount, 1001);
     assert.equal(vision.result.transportContract, true);
     assert.deepEqual(requests.map(request => [request.path, request.method]), [
       ['/v1/models', 'GET'], ['/v1/models', 'GET'], ['/v1/responses', 'POST'],

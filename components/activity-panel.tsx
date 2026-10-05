@@ -191,7 +191,9 @@ function itemDescription(value: unknown, currency: string | undefined, names: Re
   const split = units ? `${quantity(units.total)} ${auditText(units.label) || "units"} in total${allocations ? `\n${Object.entries(allocations).map(([id, amount]) => `${traveller(id, names)}: ${quantity(amount)} ${auditText(units.label) || "units"}`).join("\n")}` : ""}`
     : item.percentages ? percentages(item.percentages, names) : members.length ? `Shared equally by:\n${members.map(id => traveller(id, names)).join("\n")}` : "No participants";
   const participantOrder = units || item.percentages ? `Participant order:\n${members.map(id => traveller(id, names)).join("\n")}\n` : "";
-  return `${auditText(item.name) || "Item"} (item ${auditText(item.id)})\nFull line total: ${money(item.amount, currency)}\n${participantOrder}${split}`;
+  const purchased = auditRecord(item.quantity);
+  const purchasedDetail = purchased ? `Purchased quantity: ${quantity(purchased.total)} ${auditText(purchased.label) || "units"}\n${auditText(purchased.sourceText) ? `Receipt text: ${auditText(purchased.sourceText)}\n` : ""}` : "";
+  return `${auditText(item.name) || "Item"} (item ${auditText(item.id)})\nFull line total: ${money(item.amount, currency)}\n${purchasedDetail}${participantOrder}${split}`;
 }
 function memoryAliases(value: unknown, snapshot: Record<string, unknown>, names: Record<string, string>): string {
   if (!Array.isArray(value) || !value.length) return "No saved names";

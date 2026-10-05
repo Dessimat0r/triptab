@@ -286,13 +286,13 @@ test('financial CSV preserves amounts and RFC4180 notes while neutralizing formu
   assert.equal(snapshot.data.trips[0].expenses[0].title, trip.expenses[0].title, 'JSON keeps the literal stored value');
 });
 
-test('real saved receipt units, memory and item conversation survive authorized JSON and item-detail CSV exports', async () => {
+test('real saved receipt purchased quantities, units, memory and item conversation survive authorized JSON and item-detail CSV exports', async () => {
   const database = await storage();
   const trip = holiday('mine', 'owner');
   const expense = trip.expenses[0];
   expense.currency = 'GBP';
   delete expense.bankAmount;
-  expense.items = [{ id: 'chocolate', name: 'Chocolate, "dark"\nThree blocks', amount: 1001, members: ['a', 'b'], units: { total: 3, label: 'blocks', allocations: { a: 2.5, b: 0.5 } } }];
+  expense.items = [{ id: 'chocolate', name: 'Chocolate, "dark"\nThree blocks', amount: 1001, members: ['a', 'b'], quantity: { total: 3, label: 'blocks', sourceText: '3 x Stck' }, units: { total: 3, label: 'blocks', allocations: { a: 2.5, b: 0.5 } } }];
   expense.memory = { notes: 'Treat "blocks" as chocolate.\nKeep this context for later questions.', aliases: [{ name: 'blocks', itemId: 'chocolate' }, { name: 'me', memberId: 'b', scopeMemberId: 'b' }] };
   expense.conversation = [{ id: 'item-question', role: 'user', text: 'Which blocks are mine?', createdAt: '2026-10-04T12:00:00Z', itemId: 'chocolate', authorMemberId: 'b', authorName: 'Bob' }];
   // Preserve a historical authored thread, then change the receipt through the

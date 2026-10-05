@@ -1084,7 +1084,7 @@ export default function Home({ children }: { children: ReactNode }) {
       if (!Array.isArray(rows) || !rows.length || rows.length > 200)
         throw Error();
       const items = rows.map(
-        (r: { name: string; amount: number; members?: string[]; percentages?: Record<string, number>; units?: Item["units"] }) => {
+        (r: { name: string; amount: number; members?: string[]; percentages?: Record<string, number>; units?: Item["units"]; quantity?: Item["quantity"] }) => {
           if (
             typeof r.name !== "string" ||
             !r.name.trim() ||
@@ -1101,6 +1101,7 @@ export default function Home({ children }: { children: ReactNode }) {
             members,
             percentages: r.percentages,
             units: r.units,
+            quantity: r.quantity,
           });
         },
       );
@@ -2282,7 +2283,7 @@ export default function Home({ children }: { children: ReactNode }) {
                     </span>
                   </div>
                   <p className="itemhint">
-                    {editing.percentages === undefined ? "Choose who shares each item, equally or by percentage." : "Enter the receipt items. The whole receipt percentages determine each person’s share."}
+                    {editing.percentages === undefined ? "Choose who shares each item, equally, by percentage or by quantity." : "Enter the receipt items. The whole receipt percentages determine each person’s share."}
                   </p>
                   <div className="items">
                     {editing.items.map((item, i) => (
@@ -2340,7 +2341,11 @@ export default function Home({ children }: { children: ReactNode }) {
                             <X size={17} />
                           </button>
                         </div>
-                        {editing.percentages === undefined && <ShareSplit members={trip.members} selected={item.members} percentages={item.percentages} units={item.units} scope={`item ${i + 1}`} onChange={(members, percentages, units) => setEditing(prev => prev && {
+                        {item.quantity && <p className="receipt-item-quantity">
+                          <span><strong>Receipt:</strong> {item.quantity.total} {item.quantity.label || "units"}</span>
+                          {item.quantity.sourceText && <small>Printed: {item.quantity.sourceText}</small>}
+                        </p>}
+                        {editing.percentages === undefined && <ShareSplit members={trip.members} selected={item.members} percentages={item.percentages} units={item.units} quantity={item.quantity} scope={`item ${i + 1}`} onChange={(members, percentages, units) => setEditing(prev => prev && {
                           ...prev,
                           items: prev.items.map(current => current.id === item.id ? { ...current, members, percentages, units } : current),
                         })} />}
@@ -2615,7 +2620,7 @@ export default function Home({ children }: { children: ReactNode }) {
               </section>}
               <div className="editor-footer">
                 <div>
-                  <small>Original receipt total</small>
+                  <small>Items and adjustments total</small>
                   <strong>{money(editorOriginalTotal, editing.currency)}</strong>
                   {editing.currency !== trip.currency &&
                     (editing.bankAmount !== undefined || editing.fx?.rate) && (

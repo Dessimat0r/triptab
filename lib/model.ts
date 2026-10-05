@@ -112,6 +112,13 @@ export function unitsScale(value: unknown): number | null {
 
 const quantitySchema = z.number().refine(value => unitsScale(value) !== null,
   'Use a quantity between 0 and 1,000,000 with at most six decimal places');
+// Purchased quantity is receipt evidence, independent of who owes its cost.
+export const receiptQuantitySchema = z.object({
+  total: quantitySchema.refine(value => value > 0, 'Receipt quantity must be greater than zero'),
+  label: z.string().trim().min(1).max(40).optional(),
+  sourceText: z.string().trim().min(1).max(200).optional(),
+}).strict();
+export type ItemQuantity = z.infer<typeof receiptQuantitySchema>;
 const rawUnitsSchema = z.object({
   total: quantitySchema.refine(value => value > 0, 'Total units must be greater than zero'),
   allocations: z.record(id, quantitySchema),
@@ -173,6 +180,7 @@ const conversationSchema = z.array(receiptMessageSchema).max(100).superRefine((m
 
 const rawItemSchema = z.object({
   id, name: z.string().min(1).max(200), amount: cents, members: z.array(id).min(1).max(50),
+  quantity: receiptQuantitySchema.optional(),
   percentages: z.record(id, z.number().finite().min(0).max(100)).optional(),
   units: unitsSchema.optional(),
 });

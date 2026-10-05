@@ -6,11 +6,17 @@ TripTab stores item quantities, receipt discussions and remembered context with 
 
 An item's amount is the full receipt line total. Equal shares, percentages or labelled quantities determine who owes that cost. Quantities can be fractional and need not be an integer total: 2.5 and 0.5 blocks can divide a total of 3; allocations can also divide a total of 7.5.
 
+Purchased quantity is stored separately in optional `item.quantity`, with a positive `total`, an optional `label` and optional original `sourceText`. For example, `2 x Stck` can establish two pieces; a pizza-slice description or established receipt context can give the clearer label “slices”. A generic pizza description alone does not establish that the purchase was slices. The reader interprets multilingual count terminology and decimals in context and leaves an unclear quantity absent rather than guessing.
+
+On a newly scanned line, the automatic API reader prepares editable equal quantity allocations when the purchased quantity divides exactly among the selected travellers at the supported six-decimal precision. Otherwise, it retains the ordinary equal cost split and shows the detected quantity ready to assign in Units. That is a starting allocation for review, not evidence that each person consumed those quantities. Existing percentages, quantity allocations and user-entered purchased quantities survive recognition-only corrections. Purchased quantity remains available independently when the user chooses another cost split.
+
 For a £10.01 line containing 3 blocks, Alice's 2.5 blocks cost £8.34 and Bob's 0.5 cost £1.67. The line stays £10.01; the quantity does not multiply its price. Allocations must add exactly to the entered total and match the selected travellers. Money shares use exact rounding, including when tax, tip, discount, foreign-currency conversion or an actual bank charge applies. A whole-receipt percentage split takes priority over individual-item shares while retaining the saved quantities for review.
 
 Incomplete quantity entries stay in the form. A receipt question can include their intended counts for clarification while preserving valid saved receipt details. The proposed correction still needs review before it becomes a posted expense.
 
 AI corrections that omit a split retain its saved participant order and allocation, including penny rounding. When a correction supplies new quantity counts but omits the label, an existing label such as “bars” is retained; an explicit new label replaces it.
+
+Connected-tool corrections that omit `quantity` retain its saved purchase evidence even when the selected travellers change. An explicit purchased-count correction retains an omitted label; original source text is retained only if the count still agrees with it. Purchased quantity never multiplies the line amount or authorizes a consumption assignment. JSON downloads, the CSV item-detail field and receipt history preserve it; history displays the purchased count separately from cost allocations.
 
 Connected-tool schemas accept ordinary decimal quantities such as `0.1` and `1.1` without floating-point divisibility checks. The server still enforces at most six decimal places, the quantity bounds and exact allocation totals before saving a proposal.
 
@@ -38,7 +44,7 @@ New aliases must point to an active item or traveller; a new speaker scope must 
 
 ## Connected AI workflow and human review
 
-Once the verified owner saves the shared API key in **Profile & app settings → Receipt AI**, scanning or uploading starts native image transcription for any signed-in participant after both image and draft are saved. Only the owner can manage the shared key; other users see the service's availability without key controls. The reader receives the actual stored image and shared receipt context, and returns typed item names, integer line totals, currency and legible purchase details. It preserves existing assignments, quantities, whole-receipt percentages, payer, conversations and memory. New unassigned lines initially split equally. Additional tax, tip and discount are recorded once; inclusive tax is not added again. Unreadable lines and mismatched printed totals are explained in the receipt conversation.
+Once the verified owner saves the shared API key in **Profile & app settings → Receipt AI**, scanning or uploading starts native image transcription for any signed-in participant after both image and draft are saved. Only the owner can manage the shared key; other users see the service's availability without key controls. The reader receives the actual stored image and shared receipt context, and returns typed item names, integer line totals, purchased quantities, currency and legible purchase details. It preserves existing assignments, quantities, whole-receipt percentages, payer, conversations and memory. New unassigned lines initially split equally for review. Additional tax, tip and discount are recorded once; inclusive tax is not added again. Unreadable lines and mismatched printed totals are explained in the receipt conversation.
 
 Reading succeeds only after a valid completed response. Errors, timeouts, changed images, revoked access and stale revisions do not post or overwrite an expense. A new untouched blank editor fills with the returned items; an edited or posted receipt requires **Review proposed changes**. Changes made while reading remain in the editor. Saving the reviewed expense records its action in the ordinary receipt history.
 
@@ -48,6 +54,8 @@ For questions and requested share changes, use the connected-tool workflow:
 2. Paste and run that prompt in the connected ChatGPT/Codex client. The client reads TripTab context/image tools and can save a reply or a proposed receipt draft through MCP.
 3. Replies and matching proposals refresh automatically while the receipt is open and when returning to TripTab. **Check for replies** is also available. Inspect the proposed details in TripTab's review interface.
 4. **Save** separately to post or update the expense. A reply, remembered context or proposed draft alone does not approve a financial change.
+
+Each write advances the ledger revision. After saving memory or a reply, the assistant must use that tool's returned revision for a subsequent draft update rather than reuse the revision from its earlier context read. Expense targets remain server-controlled: preserve the draft ID and do not send an `expenseId` in draft-update inputs.
 
 The connected-tool prompt requires a real request in ChatGPT/Codex; copying or opening it is not a completed model request. The API image reader does not silently replace this workflow with a transcription-only answer to a share-changing question. Email/password accounts and manual receipts remain independent of AI. The future SIWC plan provider is retained but disabled until its separately approved hosted plan permission is configured.
 
@@ -60,13 +68,14 @@ The connected-tool prompt requires a real request in ChatGPT/Codex; copying or o
 | Quantity total | Greater than zero, at most 1,000,000; at most six decimal places |
 | Each quantity allocation | Zero to 1,000,000; at most six decimal places |
 | Optional quantity label | 1–40 characters |
+| Optional original purchased-quantity text | 1–200 characters |
 | Receipt conversation | 100 messages across all item threads |
 | Each message | 4,000 characters, including unfinished-entry context |
 | New or restored message IDs in one update to an existing holiday | 100; save one receipt at a time |
 | Remembered notes | 6,000 characters |
 | Aliases | 50 per receipt; names 1–60 characters |
 
-Quantity labels, memory and message context/author fields are optional. Existing receipts without quantities retain their equal/percentage split; this feature does not silently recalculate old expenses or invent authors. Saved memory and threads survive closing/reopening and receipt review. Account/holiday JSON retains them; financial CSV appends `item_details_json` with full line amounts in stored hundredths and the item allocations, while history records readable context changes.
+Purchased quantities, quantity labels, memory and message context/author fields are optional. Existing receipts without quantities retain their equal/percentage split; this feature does not silently recalculate old expenses or invent authors. Saved memory and threads survive closing/reopening and receipt review. Account/holiday JSON retains them; financial CSV appends `item_details_json` with full line amounts in stored hundredths, purchased quantities and item allocations, while history records readable context changes.
 
 ## Feature validation
 

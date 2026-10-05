@@ -22,7 +22,7 @@ export function receiptEditableValue(entry: ReceiptEditor) {
 export function isBlankReceipt(entry: ReceiptEditor) {
   return !entry.expenseId && !entry.title.trim() && !entry.tax && !entry.tip && !entry.discount
     && entry.percentages === undefined && entry.fx === undefined && entry.bankAmount === undefined
-    && entry.items.every(item => !item.name.trim() && !item.amount && item.units === undefined && item.percentages === undefined);
+    && entry.items.every(item => !item.name.trim() && !item.amount && item.quantity === undefined && item.units === undefined && item.percentages === undefined);
 }
 
 export function matchingReceiptProposal(trip: Trip, editor: ReceiptEditor) {

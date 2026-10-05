@@ -139,6 +139,36 @@ test('opening a posted expense reopens all saved replacement-draft edits and kee
   assert.equal(editor.trip.drafts.find(d=>d.id==='replacement-draft')?.expenseId,posted.id); assert(editor.trip.drafts.some(d=>d.id==='unrelated'));
 });
 
+test('purchased quantity survives receipt review, manual corrections, draft storage and expense save in both split modes', async () => {
+  for (const receiptPercentages of [undefined, { a: 30, b: 70 }]) {
+    const draft = pending('review');
+    draft.percentages = receiptPercentages;
+    const quantity = { total: 2, label: 'slices', sourceText: '2 × Stck Pizza Margherita' };
+    const units = { total: 2, label: 'slices', allocations: { a: 1, b: 1 } };
+    draft.items = [{ id: 'pizza', name: 'Pizza slices', amount: 1200, members: ['a', 'b'], quantity, units }];
+    const initial = fixture(draft), editor = controller(initial);
+    editor.openExpense(initial.expenses[0]);
+    assert.deepEqual(editor.editing?.items[0].quantity, quantity);
+    assert.deepEqual(editor.editing?.items[0].units, units);
+    assert.equal(editor.trip.expenses[0].items[0].quantity, undefined, 'a proposal remains separate from the posted expense');
+    editor.edit({ items: editor.editing!.items.map(item => ({ ...item, name: 'Reviewed pizza slices', amount: 1100 })) });
+    const stored = await editor.storeEditorReceipt(editor.editing!, editor.editing!.receiptId);
+    assert.deepEqual(stored?.items[0].quantity, quantity);
+    assert.deepEqual(stored?.items[0].units, units);
+    assert.deepEqual(stored?.percentages, receiptPercentages);
+    await submit(editor);
+    assert.equal(editor.error, '');
+    const saved = editor.trip.expenses[0];
+    assert.equal(saved.items[0].amount, 1100, 'units must not multiply the full line price');
+    assert.deepEqual(saved.items[0].quantity, quantity);
+    assert.deepEqual(saved.items[0].units, units);
+    assert.deepEqual(saved.percentages, receiptPercentages);
+    editor.openExpense(saved);
+    assert.deepEqual(editor.editing?.items[0].quantity, quantity);
+    assert.deepEqual(editor.editing?.items[0].units, units);
+  }
+});
+
 test('review proposals retain the replacement image when another receipt question is persisted', async () => {
   const initial=fixture(pending('review')); const editor=controller(initial); editor.openExpense(initial.expenses[0]);
   assert.equal(editor.editing?.receiptId,'replacement-photo');

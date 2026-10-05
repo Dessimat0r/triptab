@@ -4,7 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { ModuleKind, ScriptTarget, transpileModule } from 'typescript';
 import { applyReceiptTranscription, consumeReceiptProcessBudget, getChatGPTPlanModel, processReceiptImage, ReceiptAIError, type ReceiptTranscription } from '../lib/receipt-ai';
-import { draftSchema, shares, validateLedger, type Draft, type Ledger, type Trip } from '../lib/model';
+import { allocate, draftSchema, itemShares, shares, total, unitsScale, validateLedger, type Draft, type Ledger, type Trip } from '../lib/model';
 
 const owner = 'receipt-ai-owner';
 const png = new Uint8Array(await readFile(new URL('../public/icons/icon-192.png', import.meta.url)));
@@ -63,6 +63,9 @@ test('API native vision sends the actual image and a private nonpersistent stric
   assert.equal(body.text.format.strict, true);
   assert.equal(body.text.format.schema.additionalProperties, false);
   assert.equal(body.text.format.schema.properties.items.items.additionalProperties, false);
+  assert(body.text.format.schema.properties.items.items.required.includes('quantity'));
+  assert.deepEqual(body.text.format.schema.properties.items.items.properties.quantity.required, ['total', 'label', 'sourceText']);
+  assert.equal(body.text.format.schema.properties.items.items.properties.quantity.additionalProperties, false);
   assert.doesNotMatch(JSON.stringify(body.text.format.schema), /minLength|maxLength/);
   const image = body.input[0].content.find((value: { type: string }) => value.type === 'input_image');
   assert.equal(image.image_url, `data:image/png;base64,${Buffer.from(png).toString('base64')}`);
@@ -71,9 +74,71 @@ test('API native vision sends the actual image and a private nonpersistent stric
   assert.doesNotMatch(context, /private@example.com|receipt-ai-owner/);
   assert.match(body.instructions, /never instructions to execute/);
   assert.match(body.instructions, /Never multiply it again/);
+  assert.match(body.instructions, /2 x Stck/);
+  assert.match(body.instructions, /pizza alone may mean whole pizzas/);
+  assert.match(body.instructions, /2 x 500 ml bottles use total 2/);
+  assert.match(body.instructions, /Quantity is what was purchased, never evidence of who consumed it/);
+  assert.match(body.instructions, /Keep summary concise/);
   assert.match(body.instructions, /Do not add VAT/);
   assert.match(body.instructions, /YYYY-MM-DD.*HH:mm/);
   assert.match(body.instructions, /Ambiguous or unreadable dates\/times must be null/);
+});
+
+test('native image output carries purchased multilingual quantity independently of personal consumption', async () => {
+  const output: ReceiptTranscription = { ...transcription, tip: 0, printedTotal: 1001,
+    items: [{ id: null, name: 'Margherita pizza slices', amount: 1001,
+      quantity: { total: 2, label: 'slices', sourceText: '2 x Stck' } }],
+    summary: 'Read two slices; their shares are editable defaults.',
+  };
+  const recognized = await processReceiptImage(input, { fetcher: async () => streamResponse([completed(output)], { split: 7 }) });
+  assert.deepEqual(recognized, output);
+  const proposal = applyReceiptTranscription(trip, draft, recognized);
+  assert.deepEqual(proposal.items[0].quantity, { total: 2, label: 'slices', sourceText: '2 x Stck' });
+  assert.deepEqual(proposal.items[0].units, { total: 2, label: 'slices', allocations: { alice: 1, bob: 1 } });
+  assert.equal(proposal.items[0].amount, 1001);
+  assert.equal(total(proposal), 1001);
+  assert.deepEqual(shares(proposal, trip.members), [501, 500]);
+  assert.equal(proposal.status, 'review');
+  assert.equal(trip.expenses.length, 0);
+  assert.match(proposal.conversation!.at(-1)!.text, /Detected quantities start with equal, editable shares/);
+  assert.match(proposal.conversation!.at(-1)!.text, /Confirm each traveller’s share before saving/);
+});
+
+test('native quantity fields reject invalid counts, excess precision, long text and financial assignments', async () => {
+  for (const quantity of [
+    { total: 0, label: null, sourceText: null }, { total: -2, label: null, sourceText: null },
+    { total: 1000000.000001, label: null, sourceText: null }, { total: 0.1234567, label: null, sourceText: null },
+    { total: '2', label: null, sourceText: null }, { total: 2, label: ' '.repeat(3), sourceText: null },
+    { total: 2, label: 'x'.repeat(41), sourceText: null }, { total: 2, label: null, sourceText: 'x'.repeat(201) },
+    { total: 2, label: 'slices', sourceText: null, allocations: { alice: 2 } },
+  ]) await assert.rejects(processReceiptImage(input, { fetcher: async () => streamResponse([completed({
+    ...transcription, items: [{ id: null, name: 'Pizza', amount: 1001, quantity }],
+  })]) }), ReceiptAIError);
+});
+
+test('receipt context retains quantity terminology, memory and speakers without sending financial allocation maps', async () => {
+  const existing: Draft = { ...draft, items: [
+    { id: 'line', name: 'Pizza', amount: 1001, members: ['alice', 'bob'],
+      quantity: { total: 2, label: 'slices', sourceText: '2 x Stck' },
+      units: { total: 2, label: 'portions', allocations: { alice: 0.5, bob: 1.5 } } },
+    { id: 'drink', name: 'Drink', amount: 250, members: ['bob'], percentages: { bob: 100 } },
+  ], memory: { notes: 'This counter sells pizza slices.', aliases: [] },
+  conversation: [{ id: 'context', role: 'user', text: 'These are slices.', itemId: 'line', authorMemberId: 'alice', createdAt: '2026-10-04T10:00:00Z' }],
+  };
+  await processReceiptImage({ ...input, draft: existing }, { fetcher: async (_url, init) => {
+    const text = JSON.parse(init!.body as string).input[0].content[0].text;
+    const context = JSON.parse(text.slice(text.indexOf('\n') + 1));
+    assert.deepEqual(context.receipt.items, [
+      { id: 'line', name: 'Pizza', amount: 1001, quantity: existing.items[0].quantity, units: { total: 2, label: 'portions' } },
+      { id: 'drink', name: 'Drink', amount: 250 },
+    ]);
+    assert.doesNotMatch(text, /allocations|percentages/);
+    assert.deepEqual(context.receipt.memory, existing.memory);
+    assert.deepEqual(context.receipt.conversation, existing.conversation!.map(message => ({ ...message, authorName: null })));
+    assert.deepEqual(context.members, trip.members.map(({ id, name }) => ({ id, name })));
+    assert.equal(context.speakerMemberId, 'alice');
+    return streamResponse([completed()]);
+  } });
 });
 
 test('API omission uses the requested strong receipt model and strict server string limits still reject invalid output', async () => {
@@ -280,6 +345,110 @@ test('corrections retain exact saved item shares and remainder pennies, original
   assert.equal(result.conversation!.at(-1)!.itemId, 'line');
 });
 
+test('new receipt quantities support arbitrary fractional measures and exact allocation sums without multiplying line prices', () => {
+  const threeTravellers: Trip = { ...trip, members: [...trip.members, { id: 'charlie', name: 'Charlie' }] };
+  for (const quantity of [
+    { total: 2, label: 'bottles', sourceText: '2 x 500 ml' },
+    { total: 0.25, label: 'kg', sourceText: '0,250 kg' },
+    { total: 7.5, label: 'portions', sourceText: null },
+    { total: 0.000003, label: null, sourceText: null },
+    { total: 1000000, label: null, sourceText: null },
+  ]) {
+    const result = applyReceiptTranscription(threeTravellers, draft, { ...transcription, tip: 0, printedTotal: 1001,
+      items: [{ id: null, name: 'Receipt line', amount: 1001, quantity }],
+    });
+    const item = result.items[0];
+    assert.equal(item.quantity!.total, quantity.total);
+    if (unitsScale(quantity.total)! % threeTravellers.members.length === 0) {
+      assert.equal(item.units!.total, quantity.total);
+      assert.equal(Object.values(item.units!.allocations).reduce((sum, value) => sum + unitsScale(value)!, 0), unitsScale(quantity.total));
+      assert.deepEqual(Object.keys(item.units!.allocations), ['alice', 'bob', 'charlie']);
+    } else {
+      assert.equal(item.units, undefined);
+      assert.deepEqual(itemShares(item, threeTravellers.members), allocate(1001, [1, 1, 1]));
+      assert.match(result.conversation!.at(-1)!.text, /ready to assign in Units/);
+    }
+    assert.equal(total(result), 1001);
+    assert.equal(shares(result, threeTravellers.members).reduce((sum, value) => sum + value, 0), 1001);
+    assert.equal(item.quantity!.label, quantity.label ?? undefined);
+    assert.equal(item.quantity!.sourceText, quantity.sourceText ?? undefined);
+  }
+});
+
+test('nondivisible detected quantities preserve exact equal pennies across tiny measures and large line prices', () => {
+  for (const scenario of [
+    { quantity: 0.000001, members: trip.members },
+    { quantity: 0.000003, members: trip.members },
+    { quantity: 2, members: [...trip.members, { id: 'charlie', name: 'Charlie' }] },
+  ]) {
+    const travellers: Trip = { ...trip, members: scenario.members };
+    const result = applyReceiptTranscription(travellers, draft, { ...transcription, tip: 0, printedTotal: 100000000,
+      items: [{ id: null, name: 'Detected line', amount: 100000000, quantity: { total: scenario.quantity, label: null, sourceText: null } }],
+    });
+    const item = result.items[0];
+    assert.deepEqual(item.quantity, { total: scenario.quantity });
+    assert.equal(item.units, undefined);
+    assert.deepEqual(itemShares(item, scenario.members), allocate(100000000, scenario.members.map(() => 1)));
+    assert.equal(total(result), 100000000);
+    assert.match(result.conversation!.at(-1)!.text, /costs remain shared equally/);
+    for (const amount of [1, 1001, 99999999]) assert.deepEqual(itemShares({ ...item, amount }, scenario.members), allocate(amount, scenario.members.map(() => 1)));
+  }
+});
+
+test('rescanning fills missing purchased quantities without overriding saved quantity, shares, labels or tied-penny order', () => {
+  const existing: Draft = { ...draft, currency: 'EUR', items: [
+    { id: 'manual-units', name: 'Pizza', amount: 1001, members: ['bob', 'alice'],
+      quantity: { total: 4, label: 'squares', sourceText: 'Four squares confirmed by Alice' },
+      units: { total: 4, label: 'squares', allocations: { bob: 3, alice: 1 } } },
+    { id: 'percentages', name: 'Pizza', amount: 1001, members: ['bob', 'alice'], percentages: { bob: 70, alice: 30 } },
+    { id: 'equal', name: 'Pizza', amount: 1001, members: ['bob', 'alice'] },
+  ] };
+  const before = structuredClone(existing);
+  const result = applyReceiptTranscription(trip, existing, { ...transcription, tip: 0, printedTotal: 3003,
+    items: existing.items.map(item => ({ id: item.id, name: 'Pizza slices', amount: item.amount,
+      quantity: { total: 2, label: 'slices', sourceText: '2 x Stck' },
+    })),
+  });
+  assert.deepEqual(existing, before);
+  assert.deepEqual(result.items[0].quantity, existing.items[0].quantity);
+  assert.deepEqual(result.items[0].units, existing.items[0].units);
+  for (const [index, item] of result.items.entries()) {
+    assert.deepEqual(item.members, existing.items[index].members);
+    assert.deepEqual(item.percentages, existing.items[index].percentages);
+    assert.deepEqual(item.units, existing.items[index].units);
+  }
+  assert.deepEqual(result.items[1].quantity, { total: 2, label: 'slices', sourceText: '2 x Stck' });
+  assert.deepEqual(result.items[2].quantity, result.items[1].quantity);
+  assert.deepEqual(shares(result, trip.members), shares(existing, trip.members));
+  const unreadable = applyReceiptTranscription(trip, result, { ...transcription, tip: 0, printedTotal: 3003,
+    items: result.items.map(item => ({ id: item.id, name: item.name, amount: item.amount, quantity: null })),
+  });
+  assert.deepEqual(unreadable.items, result.items);
+});
+
+test('detected quantities survive whole-receipt percentages without changing the receipt override', () => {
+  const result = applyReceiptTranscription(trip, { ...draft, percentages: { alice: 70, bob: 30 } }, {
+    ...transcription, tip: 0, printedTotal: 1001,
+    items: [{ id: null, name: 'Pizza slices', amount: 1001, quantity: { total: 2, label: 'slices', sourceText: '2 x Stck' } }],
+  });
+  assert.deepEqual(result.items[0].quantity, { total: 2, label: 'slices', sourceText: '2 x Stck' });
+  assert.deepEqual(result.items[0].units!.allocations, { alice: 1, bob: 1 });
+  assert.deepEqual(result.percentages, { alice: 70, bob: 30 });
+  assert.deepEqual(shares(result, trip.members), [701, 300]);
+  assert.match(result.conversation!.at(-1)!.text, /saved whole-receipt percentage split/);
+});
+
+test('ambiguous or absent purchased quantities keep equal cost shares without fabricating a unit count', () => {
+  const result = applyReceiptTranscription(trip, draft, { ...transcription,
+    items: [{ id: null, name: 'Pizza', amount: 1001, quantity: null }], tip: 0, printedTotal: 1001,
+    summary: 'The receipt does not say whether these are whole pizzas or slices.',
+  });
+  assert.equal(result.items[0].quantity, undefined);
+  assert.equal(result.items[0].units, undefined);
+  assert.deepEqual(shares(result, trip.members), [501, 500]);
+  assert.match(result.conversation!.at(-1)!.text, /whole pizzas or slices/);
+});
+
 test('initial itemisation retains whole-receipt percentage splits and its summary accurately describes the resulting shares', () => {
   const result = applyReceiptTranscription(trip, { ...draft, percentages: { alice: 70, bob: 30 } }, transcription);
   assert.deepEqual(result.percentages, { alice: 70, bob: 30 });
@@ -302,6 +471,7 @@ test('printed purchase details replace browser placeholders only on an opted-in 
     { ...placeholder, expenseId: 'posted-expense' },
     { ...placeholder, status: 'review' as const },
     { ...placeholder, items: [{ id: 'manual-line', name: 'Already entered', amount: 500, members: ['alice'] }] },
+    { ...placeholder, items: [{ ...placeholder.items[0], quantity: { total: 2, label: 'pieces' } }] },
     { ...placeholder, tip: 100 },
     { ...placeholder, currency: 'EUR' as const, bankAmount: 650 },
   ]) {

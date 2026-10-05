@@ -116,3 +116,25 @@ test('expanded history details retain every large receipt item and its complete 
   assert.match(html, /2026-10-04T13:00:00\.000Z \(UTC\)/);
   assert.deepEqual(change, original, 'deferred rendering cannot mutate immutable audit snapshots');
 });
+
+test('history distinguishes purchased quantities from cost allocations and escapes source text', () => {
+  const change = event([], []);
+  const item = { id: 'pizza', name: 'Pizza', amount: 800, members: ['alice', 'bob'],
+    quantity: { total: 2, label: 'slices', sourceText: '2 x Stck <script>' },
+    units: { total: 2, label: 'slices', allocations: { alice: 1.5, bob: 0.5 } } };
+  change.before = { id: 'expense', currency: 'GBP', items: [item] };
+  change.after = { ...change.before, items: [{ ...item, quantity: { total: 3, label: 'pieces' } }] };
+  const original = structuredClone(change);
+  const { fields, html } = render(change);
+  assert.deepEqual(fields.map(field => field.label), ['Item changed']);
+  assert.match(fields[0].before, /Purchased quantity: 2 slices\nReceipt text: 2 x Stck <script>/);
+  assert.match(fields[0].after, /Purchased quantity: 3 pieces/);
+  for (const detail of [fields[0].before, fields[0].after]) {
+    assert.match(detail, /Full line total: £8\.00/);
+    assert.match(detail, /Alice \(traveller alice\): 1\.5 slices/);
+    assert.match(detail, /Bob \(traveller bob\): 0\.5 slices/);
+  }
+  assert.match(html, /2 x Stck &lt;script&gt;/);
+  assert.doesNotMatch(html, /<script>/);
+  assert.deepEqual(change, original);
+});
