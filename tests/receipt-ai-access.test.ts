@@ -4,6 +4,7 @@ import { readFile, readdir } from 'node:fs/promises';
 import test from 'node:test';
 import { ModuleKind, ScriptTarget, transpileModule } from 'typescript';
 import { hashToken } from '../lib/auth';
+import { parseOwnerTransferArguments, runOwnerTransfer } from '../lib/receipt-ai-owner-transfer';
 import { getReceiptAIAccess, migrateReceiptAIOwner, receiptAIStatus, saveReceiptAISettings, removeReceiptAIKey, receiptAIKeyCheckDiagnostic, ReceiptAIAccessError, type ReceiptAIEnvironment } from '../lib/receipt-ai-access';
 
 class Statement {
@@ -459,4 +460,25 @@ test('operator owner migration requires a canonical target and version, clears o
   await assert.rejects(migrateReceiptAIOwner(db.database, environment, input), { code: 'settings_changed' });
   await saveReceiptAISettings(request('other'), other, db.database, environment, { apiKey: replacement }, keyCheck(replacement));
   assert.equal((await getReceiptAIAccess(request(), owner, db.database, environment)).accessToken, replacement);
+});
+
+test('the operator CLI core shows the pin without ciphertext, validates arguments and performs the guarded transfer', async () => {
+  assert.throws(() => parseOwnerTransferArguments([]), /Pass --expected-user-id/);
+  assert.throws(() => parseOwnerTransferArguments(['--expected-user-id', 'a', '--expected-version', '-1', '--new-user-id', 'b']), /Pass --expected-user-id/);
+  assert.throws(() => parseOwnerTransferArguments(['--expected-user-id', 'a', '--expected-user-id', 'b']), /Unexpected or incomplete/);
+  assert.throws(() => parseOwnerTransferArguments(['--new-user-id']), /Unexpected or incomplete/);
+  const db = await storage();
+  await saveReceiptAISettings(request('owner', true), owner, db.database, config, { apiKey: key }, keyCheck());
+  const before = row(db)!;
+  const environment = { ...config, RECEIPT_AI_OWNER_EMAIL: other.email };
+  const shown = await runOwnerTransfer(db.database, environment, ['--show']);
+  assert.deepEqual(shown, { shown: true, pin: { userId: owner.id, version: before.version, provider: 'api', keyConfigured: true } });
+  assert.doesNotMatch(JSON.stringify(shown), new RegExp(String(before.api_key_encrypted).slice(0, 12)));
+  await assert.rejects(runOwnerTransfer(db.database, { ...config, RECEIPT_AI_OWNER_EMAIL: undefined }, ['--show']), { code: 'not_configured' });
+  const transfer = ['--expected-user-id', owner.id, '--expected-version', String(before.version), '--new-user-id', other.id];
+  await assert.rejects(runOwnerTransfer(db.database, environment, transfer), { code: 'settings_changed' }); // target is not provider-linked yet
+  assert.deepEqual(row(db), before);
+  db.sqlite.prepare('INSERT INTO auth_links(oai_user_id,user_id,created_at) VALUES(?,?,?)').run('other-provider', other.id, new Date().toISOString());
+  assert.deepEqual(await runOwnerTransfer(db.database, environment, transfer), { shown: false, migrated: true, version: (before.version as number) + 1, keyConfigured: false });
+  assert.equal(row(db)?.user_id, other.id);
 });

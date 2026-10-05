@@ -45,3 +45,17 @@ No private key was read, no paid model call was made and no production financial
 | N9 — copied test import rewriting | Data-URL harnesses use a shared transpilation helper; central shared-module resolution preserves caller-specific mocks. |
 
 No production owner transfer, deployment or PR merge is performed by this review update.
+
+## Re-review of `6858249` (F1–F9)
+
+| Finding | Fix and regression evidence |
+| --- | --- |
+| F1 — scoped CAS rejected equivalent trips | The stored trip and the caller's `readLedger` snapshot are compared in one representation (schema-normalised, membership-overlaid, assistant stamps cleared) instead of raw against parsed. A legacy assistant message carrying a human stamp and a stored `userId` on an unlinked traveller now save; genuine data, owner, membership and email races still conflict (existing CAS tests unchanged). |
+| F2 — quadratic stream scan | The unfinished SSE line is held as pieces and only each new chunk is searched; its byte length is tracked incrementally. A 6 MB single line in 1 KB chunks takes well under two seconds (it took about 9.5 s before). |
+| F3 — stream cap not scaled | The transport cap is three escaped copies of the largest allowed event plus 4 MiB of per-delta envelope. A maximal valid result repeated through 16,000 deltas, the done event and the completed event succeeds; a larger stream still rejects. |
+| F4 — pre-check skipped without `draftHash` | `draftHash` is required and `revision` is accepted but ignored (older cached bundles). The browser no longer sends it. A request without the fingerprint is refused before access, budget or model work; an unrelated revision still cannot reject a scan. |
+| F5 — owner transfer not runnable; README setup | `npm run receipt-owner` (`--show`, or `--expected-user-id/--expected-version/--new-user-id`) wraps `migrateReceiptAIOwner` over the configured D1 binding, with core logic and argument parsing tested. It was also exercised end to end against a local D1: show, stale-version refusal, transfer, replay refusal and missing-variable refusal. README's quick start sets `RECEIPT_AI_OWNER_EMAIL` before the first build. Hosts that give operators no D1 access must use their own administrative context; this is stated in operations. |
+| F6 — MCP/native amount protection | One shared predicate (`mayRecognizeUnknownProvenance`) decides what recognition may fill when provenance is unknown. A legacy blank-named zero-price item with a quantity or scan source is protected on both paths. |
+| F7 — remaining base64url copies | The invitation token and the web-push signer use the shared encoder. |
+| F8 — second identity path | `resolveIdentity` keeps the session-confined fast read (exports rely on it) and otherwise uses the same single snapshot as `readAuthContext`; the duplicate provider SQL is gone. A live session whose profile row is missing no longer masks a valid provider identity. The link/credential/session races on profile creation remain pinned by `provider creation guards…`; the `delete-other-provider` result is the intended outcome of a coherent snapshot (the principal is chosen once). |
+| F9 — test hygiene | Shared transpile helper also resolves `./audit` and `react` specifiers; six copied rewrite lines removed. Stray blank lines removed. |

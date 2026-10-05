@@ -95,20 +95,6 @@ type ProfileStateRow = ProfileRow & { has_password: number; chatgpt_linked: numb
 type ProviderStateRow = { [Key in keyof ProfileStateRow]: ProfileStateRow[Key] | null } & { linked_user_id: string | null; legacy_disconnected: number };
 type AuthSnapshot = { identity: AuthIdentity; row: ProfileStateRow | null };
 
-async function providerRow(provider: AuthIdentity, database: D1Database): Promise<ProviderStateRow> {
-  // Resolve the canonical link, profile and flags in one indexed snapshot.
-  // Disconnection checks the raw provider ID even if that profile is missing.
-  const row = await database.prepare(`SELECT p.id,p.email,p.display_name,p.created_at,l.user_id AS linked_user_id,
-    EXISTS (SELECT 1 FROM auth_credentials c WHERE c.user_id = p.id) AS has_password,
-    EXISTS (SELECT 1 FROM auth_links linked WHERE linked.user_id = p.id) AS chatgpt_linked,
-    EXISTS (SELECT 1 FROM auth_credentials c WHERE c.user_id = identity.provider_id) AS legacy_disconnected
-    FROM (SELECT ? AS provider_id) identity
-    LEFT JOIN auth_links l ON l.oai_user_id = identity.provider_id
-    LEFT JOIN profiles p ON p.id = COALESCE(l.user_id, identity.provider_id)`)
-    .bind(provider.id).first<ProviderStateRow>();
-  if (!row) throw new Error('UNAUTHORIZED');
-  return row;
-}
 function providerIdentity(provider: AuthIdentity, row: ProviderStateRow): AuthIdentity | null {
   if (row.linked_user_id !== null) {
     if (!row.id || row.email === null || row.display_name === null) return null;
@@ -127,16 +113,17 @@ export async function sessionIdentity(request: Request, database: D1Database): P
   return row ? { id: row.id, email: row.email, displayName: row.display_name, kind: 'session' } : null;
 }
 export async function resolveIdentity(request: Request, options: { allowSession?: boolean } = {}, database: D1Database): Promise<AuthIdentity> {
+  // A live session needs only the session-confined read (exports rely on it never
+  // touching credential, provider or invite tables). Everything else, including a
+  // stale cookie falling back to the provider, is decided by the same single
+  // snapshot readAuthContext uses, so the two cannot disagree about precedence.
   if (options.allowSession !== false) {
     const session = await sessionIdentity(request, database);
     if (session) return session;
-    if ((request.headers.get('cookie') || '').split(';').some(value => value.trim() === `${SIGNED_OUT_COOKIE}=1`)) throw new Error('UNAUTHORIZED');
   }
-  const provider = trustedChatGPTIdentity(request);
-  if (!provider) throw new Error('UNAUTHORIZED');
-  const identity = providerIdentity(provider, await providerRow(provider, database));
-  if (!identity) throw new Error('UNAUTHORIZED');
-  return identity;
+  const snapshot = await authSnapshot(request, database, trustedChatGPTIdentity(request), options);
+  if (!snapshot) throw new Error('UNAUTHORIZED');
+  return snapshot.identity;
 }
 async function authSnapshot(request: Request, database: D1Database, provider: AuthIdentity | null, options: { allowSession?: boolean }): Promise<AuthSnapshot | null> {
   const token = options.allowSession !== false ? sessionToken(request) : null;
@@ -151,6 +138,7 @@ async function authSnapshot(request: Request, database: D1Database, provider: Au
     EXISTS (SELECT 1 FROM auth_credentials c WHERE c.user_id=identity.provider_id) AS legacy_disconnected
     FROM (SELECT ? AS token_hash, ? AS provider_id) identity
     LEFT JOIN auth_sessions s ON s.token_hash=identity.token_hash AND s.expires_at>?
+      AND EXISTS (SELECT 1 FROM profiles sp WHERE sp.id=s.user_id)
     LEFT JOIN auth_links l ON l.oai_user_id=identity.provider_id
     LEFT JOIN profiles p ON p.id=COALESCE(s.user_id,l.user_id,identity.provider_id)`)
     .bind(token ? await hashToken(token) : null, provider?.id ?? null, new Date().toISOString())

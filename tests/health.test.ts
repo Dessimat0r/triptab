@@ -76,7 +76,6 @@ test('readiness rejects each missing 0005 history object and metadata column eve
   });
 });
 
-
 test('receipt history cannot report ready without its current and historical link projections', async () => {
   sqlite = new DatabaseSync(':memory:'); receiptBinding = true;
   for (const name of (await readdir(new URL('../drizzle/', import.meta.url))).filter(name => name.endsWith('.sql') && Number(name.slice(0, 4)) <= 8).sort()) sqlite.exec(await readFile(new URL('../drizzle/' + name, import.meta.url), 'utf8'));

@@ -65,8 +65,7 @@ Object.defineProperty(globalThis, Symbol.for('triptab.store-test-notifications')
 const envUrl = 'data:text/javascript;base64,' + Buffer.from("export const env=globalThis[Symbol.for('triptab.store-test-env')]; export const waitUntil=()=>{};").toString('base64');
 const notificationStoreUrl = 'data:text/javascript;base64,' + Buffer.from("export const db=()=>{throw new Error('Notification transport must be mocked');}; export class RequestError extends Error {}").toString('base64');
 const notificationSource = transpileWithSharedImports(await readFile(new URL('../lib/notifications.ts', import.meta.url), 'utf8'), { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
-  .replace("'cloudflare:workers'", JSON.stringify(envUrl)).replace("'./store'", JSON.stringify(notificationStoreUrl))
-  .replaceAll("'./audit'", JSON.stringify(new URL('../lib/audit.ts', import.meta.url).href));
+  .replace("'cloudflare:workers'", JSON.stringify(envUrl)).replace("'./store'", JSON.stringify(notificationStoreUrl));
 const notificationFormatterUrl = 'data:text/javascript;base64,' + Buffer.from(notificationSource).toString('base64');
 const notificationUrl = 'data:text/javascript;base64,' + Buffer.from(`export {activityNotification} from ${JSON.stringify(notificationFormatterUrl)}; export const notifyMembers=async(...args)=>{globalThis[Symbol.for('triptab.store-test-notifications')].push(args);};`).toString('base64');
 const source = await readFile(new URL('../lib/store.ts', import.meta.url), 'utf8');
@@ -77,7 +76,6 @@ const compiled = transpileWithSharedImports(source, { compilerOptions: { module:
   .replace("'./auth'", JSON.stringify(new URL('../lib/auth.ts', import.meta.url).href))
   .replace("'./activity-scope'", JSON.stringify(new URL('../lib/activity-scope.ts', import.meta.url).href))
   .replace("'./receipt-lifecycle'", JSON.stringify(new URL('../lib/receipt-lifecycle.ts', import.meta.url).href))
-  .replaceAll("'./audit'", JSON.stringify(new URL('../lib/audit.ts', import.meta.url).href))
   .replace("'./receipt-context'", JSON.stringify(new URL('../lib/receipt-context.ts', import.meta.url).href))
   .replace("'./receipt-memory-ownership'", JSON.stringify(new URL('../lib/receipt-memory-ownership.ts', import.meta.url).href))
   .replace("'./notifications'", JSON.stringify(notificationUrl));
@@ -2003,6 +2001,22 @@ test('scoped receipt saves ignore unrelated global writes but retain exact targe
   const event = lastEntity(await history(), 'draft', 'receipt-proposal');
   assert.equal(event.revision, saved.revision);
   assert.equal(event.before?.title, 'Dinner'); assert.equal(event.after?.title, 'Recognised proposal');
+});
+
+test('scoped receipt saves accept unchanged legacy trips with assistant stamps and stored userIds on unlinked travellers', async () => {
+  const database = await storage();
+  const holiday = trip(); holiday.drafts = [{ ...dinner(), id: 'receipt-proposal', status: 'waiting' }];
+  await create(database, holiday);
+  // Historical JSON that the app deliberately tolerates: an assistant reply
+  // carrying a human stamp and a userId left on a traveller with no membership.
+  const legacy = JSON.parse(database.sqlite.prepare('SELECT data FROM trips WHERE id=?').get(holiday.id)!.data as string);
+  legacy.drafts[0].conversation = [{ id: 'legacy-ai', role: 'assistant', text: 'Check the receipt.', createdAt: '2026-10-04T20:32:00Z', authorMemberId: 'a', authorName: 'Wrong human' }];
+  legacy.members[1].userId = 'ghost-user';
+  database.sqlite.prepare('UPDATE trips SET data=? WHERE id=?').run(JSON.stringify(legacy), holiday.id);
+  const before = await store.readLedger(actor);
+  const proposal = structuredClone(before.data.trips[0]); proposal.drafts[0].title = 'Recognised proposal';
+  const saved = await store.writeLedger(actor, { trips: [proposal] }, before.revision, { source: 'web', tripSnapshot: structuredClone(before.data.trips[0]) });
+  assert.equal(saved.data.trips.find(value => value.id === holiday.id)?.drafts[0].title, 'Recognised proposal');
 });
 
 test('scoped receipt CAS rejects changed target data, owner and member context atomically without proposal history', async () => {

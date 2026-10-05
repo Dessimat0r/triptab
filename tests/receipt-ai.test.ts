@@ -311,8 +311,33 @@ test('stream, individual event and multi-line event buffers retain separate fini
     await assert.rejects(processReceiptImage(input, { fetcher: async () => new Response(text,
       { headers: { 'content-type': 'text/event-stream' } }) }), /event that is too large/);
   }
-  const repeated = Array.from({ length: 12_000 }, () => ({ type: 'response.output_text.delta', delta: 'x'.repeat(700) }));
+  const repeated = Array.from({ length: 36_000 }, () => ({ type: 'response.output_text.delta', delta: 'x'.repeat(700) }));
   await assert.rejects(processReceiptImage(input, { fetcher: async () => streamResponse([...repeated, completed()], { split: 8192 }) }), /stream that is too large/);
+});
+
+test('a maximal valid result repeated in deltas, done and completed events is not rejected for transport size', async () => {
+  // About 900 KB of JSON whitespace doubles when escaped inside each event, and
+  // 16,000 token-sized deltas each carry their own envelope.
+  const text = JSON.stringify(transcription) + '\n'.repeat(900_000);
+  assert.ok(new TextEncoder().encode(text).byteLength <= 1_000_000);
+  const deltas = Array.from({ length: 16_000 }, () => ({ type: 'response.output_text.delta', item_id: 'msg_0', output_index: 0, content_index: 0, delta: 'abcd' }));
+  const events = [...deltas, { type: 'response.output_text.done', text },
+    { type: 'response.completed', response: { status: 'completed', error: null,
+      output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] }] } }];
+  assert.deepEqual(await processReceiptImage(input, { fetcher: async () => streamResponse(events, { split: 8192 }) }), transcription);
+});
+
+test('one very long unfinished line costs linear work, not a re-encode of the whole buffer per chunk', async () => {
+  const hostile = 'data: ' + 'x'.repeat(6_100_000);
+  const started = performance.now();
+  await assert.rejects(processReceiptImage(input, { fetcher: async () => {
+    const bytes = new TextEncoder().encode(hostile);
+    return new Response(new ReadableStream({ start(controller) {
+      for (let offset = 0; offset < bytes.length; offset += 1024) controller.enqueue(bytes.slice(offset, offset + 1024));
+      controller.close();
+    } }), { headers: { 'content-type': 'text/event-stream' } });
+  } }), /event that is too large/);
+  assert.ok(performance.now() - started < 2000, `took ${Math.round(performance.now() - started)}ms`);
 });
 
 test('plan usage failures after streaming starts remain failures and never fall back to API billing', async () => {
@@ -1019,8 +1044,12 @@ const routeCode = transpileWithSharedImports(routeSource, { compilerOptions: { m
   .replace("'@/lib/receipt-ai'", JSON.stringify(new URL('../lib/receipt-ai.ts', import.meta.url).href))
   .replace("'zod'", JSON.stringify(import.meta.resolve('zod')));
 const route = await import(dataUrl(routeCode)) as { POST(request: Request): Promise<Response> };
-const requestBody = { tripId: trip.id, draftId: draft.id, receiptId: 'photo', revision: 7 };
-async function http(body: unknown = requestBody, headers: Record<string, string> = {}) {
+const requestBody = { tripId: trip.id, draftId: draft.id, receiptId: 'photo' };
+async function http(body: unknown = requestBody, headers: Record<string, string> = {}, options: { omitDraftHash?: boolean } = {}) {
+  // Requests carry the draft fingerprint the client saw; tests default to the current one.
+  if (!options.omitDraftHash && body && typeof body === 'object' && !('draftHash' in body)) {
+    body = { ...body, draftHash: await sha256Hex(canonicalJson(state.data.trips[0].drafts[0])) };
+  }
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () => {
     state.providerCalls++; state.duringModel?.();
@@ -1301,4 +1330,27 @@ test('draft fingerprint rejects a changed receipt before spending and ignores un
   reset(); state.data.trips[0].drafts[0].title = 'Manual correction';
   assert.equal((await http({ ...requestBody, draftHash })).status, 409);
   assert.equal(state.providerCalls, 0); assert.equal(state.accessCalls, 0); assert.equal(state.writes, 0);
+});
+
+test('a request without the draft fingerprint is refused before any access, budget or model work', async () => {
+  reset();
+  for (const body of [requestBody, { ...requestBody, revision: 7 }]) {
+    const response = await http(body, {}, { omitDraftHash: true });
+    assert.equal(response.status, 400);
+  }
+  assert.equal(state.providerCalls, 0); assert.equal(state.accessCalls, 0); assert.equal(state.writes, 0);
+});
+
+test('a legacy revision field is accepted but never decides staleness', async () => {
+  reset(); state.revision = 500;
+  assert.equal((await http({ ...requestBody, revision: 1 })).status, 200);
+  assert.equal(state.providerCalls, 1);
+});
+
+test('native recognition treats a blank-named zero-price item with a quantity or scan source as saved manual input', () => {
+  for (const extra of [{ quantity: { total: 2 } }, { scanSource: { lineIndex: 4 } }]) {
+    const old: Draft = { ...draft, status: 'review', items: [{ id: 'legacy', name: '', amount: 0, members: ['alice'], ...extra }] };
+    const proposal = applyReceiptTranscription(trip, old, { ...transcription, items: [{ id: 'legacy', name: 'Read dinner', amount: 1200 }] });
+    assert.equal(proposal.items[0].amount, 0, JSON.stringify(extra));
+  }
 });

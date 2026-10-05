@@ -2,7 +2,7 @@ import { sha256Hex } from './data-utils';
 import { DEFAULT_RECEIPT_MODEL } from './receipt-ai-config';
 import { z } from 'zod';
 import { CURRENCIES, MAX_AMOUNT, MAX_UNITS, draftSchema, receiptQuantitySchema, total, type Currency, type Draft, type Trip } from './model';
-import { mergeReceiptSourceLines, reconcileReceiptScan, type ReceiptScanWarning } from './receipt-scan';
+import { blankReceiptItem, mayRecognizeUnknownProvenance, mergeReceiptSourceLines, reconcileReceiptScan, type ReceiptScanWarning } from './receipt-scan';
 
 export class ReceiptAIError extends Error {
   constructor(message: string, public readonly status = 502, public readonly code = 'receipt_processing_failed') {
@@ -252,9 +252,15 @@ async function completedReceipt(response: Response, provider: 'api' | 'siwc'): P
   // Deltas, event envelopes and the completed result repeat output. Bound that
   // transport separately from a single event/final result so a valid receipt
   // does not fail merely because the provider streamed it in small increments.
-  const maxStreamBytes = 8 * 1024 * 1024, maxEventBytes = 6 * 1_000_000 + 16_384, maxResultBytes = 1_000_000;
+  // Output text is repeated across the delta, done and completed events, each
+  // wrapped in an envelope, and the completed copy is JSON inside JSON. Size the
+  // stream for three escaped copies plus per-delta envelopes; the event and
+  // result caps still bound what is ever buffered or parsed.
+  const maxResultBytes = 1_000_000, maxEventBytes = 6 * maxResultBytes + 16_384, maxStreamBytes = 3 * maxEventBytes + 4 * 1024 * 1024;
   const encoder = new TextEncoder();
-  let pending = '', eventData: string[] = [], eventBytes = 0, bytes = 0;
+  // The unfinished line is kept as pieces and only each new chunk is searched,
+  // so work stays O(chunk) however long a hostile provider makes one line.
+  let pendingParts: string[] = [], eventData: string[] = [], eventBytes = 0, bytes = 0, pendingBytes = 0;
   function event() {
     if (!eventData.length) return null;
     let value: { type?: string; code?: string; response?: { status?: string; error?: { code?: string }; output?: { type?: string; role?: string; content?: { type?: string; text?: string }[] }[] }; error?: { code?: string } };
@@ -294,15 +300,21 @@ async function completedReceipt(response: Response, provider: 'api' | 'siwc'): P
       if (done) break;
       bytes += value.byteLength;
       if (bytes > maxStreamBytes) throw new ReceiptAIError('OpenAI returned a receipt stream that is too large.');
-      pending += decoder.decode(value, { stream: true });
-      let index: number;
-      while ((index = pending.indexOf('\n')) >= 0) {
-        const result = line(pending.slice(0, index).replace(/\r$/, '')); pending = pending.slice(index + 1);
+      const text = decoder.decode(value, { stream: true });
+      const lastNewline = value.lastIndexOf(10);
+      pendingBytes = lastNewline < 0 ? pendingBytes + value.byteLength : value.byteLength - lastNewline - 1;
+      let start = 0, index: number;
+      while ((index = text.indexOf('\n', start)) >= 0) {
+        const complete = pendingParts.length ? pendingParts.join('') + text.slice(start, index) : text.slice(start, index);
+        pendingParts = []; start = index + 1;
+        const result = line(complete.replace(/\r$/, ''));
         if (result) return result;
       }
-      if (encoder.encode(pending).byteLength > maxEventBytes) throw new ReceiptAIError('OpenAI returned a receipt event that is too large.');
+      if (start < text.length) pendingParts.push(text.slice(start));
+      if (pendingBytes > maxEventBytes) throw new ReceiptAIError('OpenAI returned a receipt event that is too large.');
     }
-    pending += decoder.decode();
+    pendingParts.push(decoder.decode());
+    const pending = pendingParts.join('');
     if (pending) { const result = line(pending.replace(/\r$/, '')); if (result) return result; }
     const result = event();
     if (result) return result;
@@ -356,7 +368,7 @@ export function applyReceiptTranscription(_trip: Trip, draft: Draft, transcripti
   const result = receiptTranscriptionSchema.safeParse(transcription);
   if (!result.success) throw new ReceiptAIError('The AI returned invalid receipt fields. Your saved receipt is unchanged.');
   const value = result.data;
-  const blank = (item: Draft['items'][number]) => !item.name.trim() && item.amount === 0 && item.quantity === undefined && item.scanSource === undefined;
+  const blank = blankReceiptItem;
   const untouched = !draft.expenseId && draft.status === 'waiting' && draft.items.every(blank)
     && !draft.tax && !draft.tip && !draft.discount && !draft.fx && !draft.bankAmount;
   const previousItems = untouched ? draft.items.filter(item => !blank(item)) : draft.items;
@@ -389,7 +401,7 @@ export function applyReceiptTranscription(_trip: Trip, draft: Draft, transcripti
       // A legacy saved value may have been entered or corrected by a person.
       // Only the untouched, empty initial placeholder is safe to infer from
       // shape; current recognized/default fields carry explicit provenance.
-      return !previous || (source === undefined ? (field === 'name' ? !previous.name.trim() : previous.amount === null || blank(previous)) : source !== 'user');
+      return !previous || (source === undefined ? mayRecognizeUnknownProvenance(field, previous) : source !== 'user');
     };
     const readName = canObserve('name'), readAmount = canObserve('amount');
     const nextQuantity = previous ? (quantity && previous.fieldSources?.quantity !== 'user'

@@ -302,3 +302,27 @@ test('a provider link or session winning before the atomic snapshot cannot expos
     .run('linked-provider', 'disconnected@example.test', '0'.repeat(64), 'x'.repeat(43), 100_000, '2026-10-04T12:00:00Z');
   await assert.rejects(store.ensureProfile(request(providerHeaders('linked-provider', 'a@example.com'))), /UNAUTHORIZED/);
 });
+
+test('resolveIdentity shares the single coherent snapshot and falls back when a session has no profile', async () => {
+  const { resolveIdentity } = await import('../lib/auth');
+  const database = await storage();
+  const withSession = request({ cookie: 'tt_session=' + token, ...providerHeaders('linked-provider', 'a@example.com') });
+  database.calls.length = 0;
+  const session = await resolveIdentity(withSession, {}, database.asD1());
+  assert.equal(session.kind, 'session'); assert.equal(session.id, 'local-a');
+  assert.equal(database.calls.length, 1, 'session precedence, link and profile resolve in one read');
+  database.calls.length = 0;
+  const provider = await resolveIdentity(withSession, { allowSession: false }, database.asD1());
+  assert.equal(provider.kind, 'chatgpt'); assert.equal(provider.id, 'local-a'); assert.equal(database.calls.length, 1);
+  assert.equal((await resolveIdentity(request({ cookie: 'tt_session=' + token + '; tt_signed_out=1' }), {}, database.asD1())).kind, 'session', 'a live session outranks the signed-out marker');
+  await assert.rejects(resolveIdentity(request({ cookie: 'tt_signed_out=1', ...providerHeaders('linked-provider', 'a@example.com') }), {}, database.asD1()), /UNAUTHORIZED/);
+  // A live session whose profile row is missing (FK cascade normally prevents it)
+  // must not mask a valid provider identity or authenticate as nobody.
+  database.sqlite.exec('PRAGMA foreign_keys=OFF');
+  database.sqlite.prepare('DELETE FROM profiles WHERE id=?').run('local-b');
+  database.sqlite.exec('PRAGMA foreign_keys=ON');
+  const orphan = request({ cookie: 'tt_session=' + tokenB, ...providerHeaders('legacy', 'legacy@example.com') });
+  const fallback = await resolveIdentity(orphan, {}, database.asD1());
+  assert.equal(fallback.id, 'legacy'); assert.equal(fallback.kind, 'chatgpt');
+  await assert.rejects(resolveIdentity(request({ cookie: 'tt_session=' + tokenB }), {}, database.asD1()), /UNAUTHORIZED/);
+});

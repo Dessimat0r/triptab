@@ -151,6 +151,18 @@ function clearAssistantAuthors<Entry extends object>(entry: Entry): Entry {
   return entry;
 }
 
+/** Representation-independent form of a trip for scoped-CAS equality. */
+function scopedComparable(trip: Trip, links: Pick<MembershipRow, 'user_id' | 'member_id' | 'email'>[]): Trip {
+  const copy = { ...parseStoredTrip(structuredClone({ ...trip, ownerId: undefined })), ownerId: trip.ownerId };
+  for (const member of copy.members) {
+    const link = links.find(value => value.member_id === member.id);
+    if (link) { member.userId = link.user_id; member.email = link.email || member.email; }
+    else delete member.userId;
+  }
+  for (const entry of [...copy.expenses, ...copy.drafts]) clearAssistantAuthors(entry);
+  return copy;
+}
+
 export async function readActivity(user: string, tripId: string, options: { before?: number; limit?: number } & ReceiptActivityScope = {}): Promise<{ events: ActivityEvent[]; nextCursor: number | null }> {
   // Link changes during bounded discovery restart from the new transaction,
   // rather than returning a mixed family or a misleading empty page.
@@ -571,7 +583,10 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
         if (link) { member.userId = link.user_id; member.email = link.email || member.email; }
         else delete member.userId;
       }
-      if (scoped && canonical(prior) !== canonical(scoped)) throw new Error('CONFLICT');
+      // Compare like with like: the stored trip and the caller's readLedger()
+      // snapshot differ only by representation (assistant stamps, stray userIds
+      // on unlinked travellers, schema normalisation), never by content.
+      if (scoped && canonical(scopedComparable(prior, links)) !== canonical(scopedComparable(scoped, links))) throw new Error('CONFLICT');
       previousTrips.set(trip.id, prior);
     } else {
       if (scoped) throw new Error('CONFLICT');
