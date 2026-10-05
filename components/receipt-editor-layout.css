@@ -1,9 +1,10 @@
 /* The receipt dialog's own controls must fit the viewport at phone widths. */
 .editor-overlay,
-.editor,
 .editor form,
 .receipt-details-view,
 .editor-body,
+.editor .edit-fields,
+.editor .edit-fields label,
 .editor-footer,
 .editor-footer > div,
 .editor .modalheading > div {
@@ -11,13 +12,27 @@
   max-width: 100%;
 }
 .editor {
+  min-width: 0;
+  width: min(1060px, 100%);
+  max-width: 1060px;
   overflow-wrap: anywhere;
+}
+.editor-overlay,
+.editor,
+.editor-body {
+  overflow-x: hidden;
+  overscroll-behavior-x: none;
 }
 .editor input,
 .editor select,
 .editor textarea {
+  box-sizing: border-box;
   min-width: 0;
   max-width: 100%;
+}
+.editor input::-webkit-datetime-edit {
+  min-width: 0;
+  padding: 0;
 }
 .editor .modalheading > .iconbutton {
   flex-shrink: 0;
@@ -54,6 +69,15 @@
   }
   .editor-footer > div {
     flex: 1 1 160px;
+  }
+}
+@media (max-width: 700px) {
+  /* Prevent iOS focus zoom from making the form wider than the screen. */
+  .editor input,
+  .editor select,
+  .editor textarea,
+  .editor .item-top input {
+    font-size: 1rem;
   }
 }
 .receipt-scan-review {
