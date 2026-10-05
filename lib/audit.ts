@@ -10,6 +10,8 @@ export type ActivityChange = {
 export type ActivityEvent = ActivityChange & {
   id: string; sequence: number; actorId: string; actorName: string;
   createdAt: string; revision: number; source: ActivitySource;
+  /** Large immutable snapshots remain available through a bounded download. */
+  snapshotOmitted?: true; snapshotDownload?: string;
 };
 
 /** Append within the mutation's D1 batch; a failed gate produces no events. */

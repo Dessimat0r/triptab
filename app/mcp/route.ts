@@ -4,7 +4,7 @@ import { resolveIdentity } from '@/lib/auth';
 import { draftSchema, tripSchema, draftUnitsSchema, receiptQuantitySchema, CURRENCIES, type Currency, type Trip, type Ledger, type Draft, type Expense } from '@/lib/model';
 import { receiptMemorySchema, type ReceiptMemory } from '@/lib/receipt-context';
 import { validateReceiptMemoryOwnership } from '@/lib/receipt-memory-ownership';
-import { mergeReceiptSourceLines, reconcileReceiptScan, receiptScanFingerprint, scanSourceSchema, sourceLineSchema, receiptScanWarningSchema, RECEIPT_SCAN_WARNING_CODES } from '@/lib/receipt-scan';
+import { reconcileReceiptScan, receiptScanFingerprint, mergeReceiptSourceLines, scanSourceSchema, sourceLineSchema, receiptScanWarningSchema, RECEIPT_SCAN_WARNING_CODES } from '@/lib/receipt-scan';
 
 export const dynamic = 'force-dynamic';
 
@@ -201,9 +201,12 @@ const metadataProperties = { ...publishedMetadata };
 delete metadataProperties.id;
 delete metadataProperties.receiptId;
 delete metadataProperties.items;
-for (const key of ['percentages', 'fx', 'bankAmount']) metadataProperties[key] = { anyOf: [metadataProperties[key], { type: 'null' }] };
+for (const key of ['percentages', 'fx', 'bankAmount']) {
+  metadataProperties[key] = { anyOf: [metadataProperties[key], { type: 'null' }] };
+  publishedMetadata[key] = metadataProperties[key];
+}
 metadataProperties.currency = { anyOf: [metadataProperties.currency, { type: 'null' }] };
-for (const key of ['currency', 'percentages', 'fx', 'bankAmount']) publishedMetadata[key] = metadataProperties[key];
+publishedMetadata.currency = metadataProperties.currency;
 publishedDraft.properties = {
   ...publishedMetadata,
   upsertItems: { type: 'array', maxItems: 200, items: publishedItem, description: 'Create or correct only these stable item IDs. Omitted existing items are retained. New items may have null unreadable amounts and no selected travellers.' },
@@ -225,7 +228,7 @@ publishedDraft.properties = {
       warnings: { type: 'array', maxItems: 1000, items: { type: 'object', properties: {
         code: { type: 'string', enum: [...RECEIPT_SCAN_WARNING_CODES] }, itemId: identifier,
         itemIds: { type: 'array', maxItems: 200, items: identifier }, lineIndex: { type: 'integer', minimum: 0, maximum: 1000 },
-        observedText: { type: 'string', maxLength: 1000 }, difference: { type: 'integer', minimum: -100000000, maximum: 100000000 },
+        observedText: { type: 'string', maxLength: 1000 }, difference: { type: 'integer', minimum: -200000000, maximum: 20200000000 },
       }, required: ['code'], additionalProperties: false } },
     }, required: ['version'], additionalProperties: false,
     description: 'Independent totals read from the receipt, not sums of extracted items. Use null for unreadable totals. Reconciliation status, calculated amounts and review acknowledgement are derived by TripTab; never supply them.',
@@ -240,7 +243,8 @@ tools.push({
   description: 'Create or update an expense draft from the user’s natural-language payment details for review in TripTab. Use this for a card charge, cash purchase, dinner, taxi or other expense without an image. It never posts an expense or records a settlement transfer. ' + expenseDraftTool.description,
 });
 for (const tool of tools.filter(tool => ['update_receipt_draft', 'create_expense_draft'].includes(tool.name))) {
-  tool.description += ' Supplying receiptScan means receipt recognition: TripTab preserves all saved personal shares and user-confirmed item names, amounts and quantities; new recognition items remain unassigned. Assistant corrections remain proposals and never count as human confirmation. Save explicit user-requested financial/item corrections separately with upsertItems and metadataPatch, omitting receiptScan. Receipt-backed AI proposals without evidence remain incomplete until the independently printed total is confirmed. Cost shares describe who owes the cost; payer remains the one person who paid upfront. Whole-receipt percentages include tax, tip and discount and override item shares. Percentages total 100 with at most two decimal places; item units have at most six decimal places and allocations exactly matching selected member IDs. Their allocations must add to the purchased total before saving an expense. Tax included in line totals must not be added again. Receipt evidence, independent printed totals and sourceLines are separate from these financial choices. Default metadata explicitly marked by the app may be filled from receipt observations; saved user details require an explicit metadataPatch to change.';
+  tool.description += ' Supplying receiptScan means receipt recognition: TripTab preserves all saved personal shares and user-confirmed item names, amounts and quantities; new recognition items remain unassigned. Save explicit user-requested financial/item corrections separately with upsertItems and metadataPatch, omitting receiptScan. Receipt-backed AI proposals without evidence remain incomplete until the independently printed total is confirmed. Cost shares describe who owes the cost; payer remains the one person who paid upfront. Whole-receipt percentages include tax, tip and discount and override item shares. Percentages total 100 with at most two decimal places; item units have at most six decimal places and allocations exactly matching selected member IDs. Their allocations must add to the purchased total before saving an expense. Tax included in line totals must not be added again. Receipt evidence, independent printed totals and sourceLines are separate from these financial choices. Default metadata explicitly marked by the app may be filled from receipt observations; saved user details require an explicit metadataPatch to change.';
+  tool.description += ' Conversation corrections are AI proposals, even when dictated by a user: their field provenance is ai, never browser-confirmed user. A person must still review uncertain readings and warnings in TripTab. An existing draft accepts id-only or partial patches. A new draft needs payer as an existing trip member, and its initial metadata; missing purchase fields remain for review. Changed legacy metadata on an existing draft is rejected with instructions to use metadataPatch instead of silently ignored. A person may explicitly review an unavailable printed total in TripTab without inventing printed evidence; the AI cannot acknowledge this.';
 }
 
 const idSchema = z.string().min(1).max(100);
@@ -682,12 +686,12 @@ export async function POST(request: Request) {
               ...(item.amount !== undefined && previous?.fieldSources?.amount !== 'user' ? { amount: 'receipt' as const } : {}),
               ...(item.quantity !== undefined && previous?.fieldSources?.quantity !== 'user' ? { quantity: 'receipt' as const } : {}),
             };
-          } else if (previous) {
+          } else {
             next.fieldSources = {
-              ...previous.fieldSources,
-              ...(item.name !== undefined && item.name !== previous.name ? { name: 'assistant' as const } : {}),
-              ...(item.amount !== undefined && item.amount !== previous.amount ? { amount: 'assistant' as const } : {}),
-              ...(item.quantity !== undefined && JSON.stringify(next.quantity) !== JSON.stringify(previous.quantity) ? { quantity: 'assistant' as const } : {}),
+              ...previous?.fieldSources,
+              ...(item.name !== undefined && item.name !== previous?.name ? { name: 'ai' as const } : {}),
+              ...(item.amount !== undefined && item.amount !== previous?.amount ? { amount: 'ai' as const } : {}),
+              ...(item.quantity !== undefined && JSON.stringify(next.quantity) !== JSON.stringify(previous?.quantity) ? { quantity: 'ai' as const } : {}),
             };
             if (!Object.keys(next.fieldSources).length) next.fieldSources = undefined;
           }
@@ -700,18 +704,22 @@ export async function POST(request: Request) {
         const { id: draftId, receiptId: requestedReceiptId, items: ignoredItems, upsertItems: ignoredUpserts,
           removeItemIds: ignoredRemovals, metadataPatch, receiptScan: scanEvidence, ...legacyMetadata } = args.draft;
         void ignoredItems; void ignoredUpserts; void ignoredRemovals;
-        const defaultReceiptMetadata = existing?.receiptId ? Object.fromEntries(Object.entries(legacyMetadata).filter(([key, value]) => value !== undefined
+        const defaultReceiptMetadata = recognition && existing?.receiptId ? Object.fromEntries(Object.entries(legacyMetadata).filter(([key, value]) => value !== undefined
           && ['title', 'currency', 'date', 'time', 'tax', 'tip', 'discount'].includes(key)
           && existing.fieldSources?.[key as keyof NonNullable<Draft['fieldSources']>] === 'default')) : {};
+        if (existing) {
+          const ignoredChanges = Object.keys(legacyMetadata).filter(key => legacyMetadata[key as keyof typeof legacyMetadata] !== undefined
+            && !(key in (metadataPatch ?? {})) && !(key in defaultReceiptMetadata)
+            && JSON.stringify(legacyMetadata[key as keyof typeof legacyMetadata]) !== JSON.stringify(existing[key as keyof Draft]));
+          if (ignoredChanges.length) throw new Error('To change saved purchase details, use metadataPatch. Legacy draft metadata cannot update an existing draft.');
+        }
         const metadata = existing ? { ...defaultReceiptMetadata, ...metadataPatch } : { ...legacyMetadata, ...metadataPatch };
         const cleanMetadata = Object.fromEntries(Object.entries(metadata).map(([key, value]) => [key, value === null && key !== 'currency' ? undefined : value]));
-        const mergedSourceLines = scanEvidence ? mergeReceiptSourceLines(existing?.receiptScan?.sourceLines, scanEvidence.sourceLines) : undefined;
-        if (mergedSourceLines && mergedSourceLines.length > 1000) throw Error('This receipt has reached its scan evidence limit. Your saved evidence is unchanged; review it before rescanning.');
         const currencyChanged = existing && metadata.currency !== undefined && metadata.currency !== existing.currency;
         const fieldSources = {
           ...existing?.fieldSources,
           ...Object.fromEntries(Object.keys(defaultReceiptMetadata).map(key => [key, 'receipt'])),
-          ...Object.fromEntries(Object.keys(metadataPatch ?? {}).filter(key => ['title', 'currency', 'date', 'time', 'timezone', 'payer', 'tax', 'tip', 'discount'].includes(key)).map(key => [key, 'assistant'])),
+          ...Object.fromEntries(Object.keys(existing ? metadataPatch ?? {} : metadata).filter(key => ['title', 'currency', 'date', 'time', 'timezone', 'payer', 'tax', 'tip', 'discount'].includes(key)).map(key => [key, 'ai'])),
         };
         const candidate = {
           title: '', currency: null, tax: 0, tip: 0, discount: 0,
@@ -732,7 +740,7 @@ export async function POST(request: Request) {
           fieldSources: Object.keys(fieldSources).length ? fieldSources : undefined,
           receiptScan: scanEvidence ? {
             ...existing?.receiptScan, ...scanEvidence,
-            sourceLines: mergedSourceLines,
+            sourceLines: mergeReceiptSourceLines(existing?.receiptScan?.sourceLines, scanEvidence.sourceLines),
             status: 'incomplete', warnings: [...(existing?.receiptScan?.warnings ?? []), ...(scanEvidence.warnings ?? [])],
             fieldSources: {
               ...existing?.receiptScan?.fieldSources,
@@ -763,6 +771,9 @@ export async function POST(request: Request) {
         }
         if (draft.receiptScan?.acknowledgement && draft.receiptScan.acknowledgement.fingerprint !== receiptScanFingerprint(draft)) {
           delete draft.receiptScan.acknowledgement;
+        }
+        if (draft.receiptScan?.missingTotalAcknowledgement && draft.receiptScan.missingTotalAcknowledgement.fingerprint !== receiptScanFingerprint(draft)) {
+          delete draft.receiptScan.missingTotalAcknowledgement;
         }
         if (index < 0) trip.drafts.push(draft); else trip.drafts[index] = draft;
         const saved = await writeLedger(user, ledger.data, ledger.revision, { source: 'chatgpt' });

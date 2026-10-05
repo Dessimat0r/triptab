@@ -26,7 +26,7 @@ const source = await readFile(new URL('../components/receipt-scan-review.tsx', i
 const compiled = transpileModule(source, {compilerOptions: {module: ModuleKind.CommonJS, target: ScriptTarget.ES2022, jsx: JsxEmit.ReactJSX}}).outputText;
 const exported = {exports: {} as {default: (props: {entry: ReceiptEditor; onChange(entry: ReceiptEditor): void}) => React.ReactNode}};
 new Function('require', 'module', 'exports', compiled)((name: string) => {
-  if (name === 'react') return {useId: () => 'review-title', useEffect() {}, useState: (initial: unknown) => [initial, () => {}]};
+  if (name === 'react') return {useId: () => 'review-title', useMemo: (callback:()=>unknown) => callback(), useEffect() {}, useState: (initial: unknown) => [initial, () => {}]};
   if (name === 'react/jsx-runtime') return runtime;
   if (name === '@/lib/model') return model;
   if (name === '@/lib/receipt-processing') return processing;
@@ -129,4 +129,23 @@ test('checking one duplicate warning does not resolve a different pair of repeat
   const buttons = ui.elements.filter(element => element.type === 'button' && element.props.children === 'I checked this against the receipt');
   assert.equal(buttons.length, 2); (buttons[0].props.onClick as () => void)();
   assert.deepEqual(ui.changed?.receiptScan?.warnings.filter(warning => warning.code === 'possible-duplicate').map(warning => warning.resolved), [true, undefined]);
+});
+
+test('missing printed total permits explicit item review without inventing printed evidence', () => {
+  const value=entry({receiptScan:{version:1,printedTotal:null,printedCurrency:'EUR',status:'incomplete',warnings:[]}});
+  const ui=render(value); assert.match(ui.text,/The printed total is unavailable/);
+  const checkbox=ui.elements.find(element=>element.type==='input' && element.props.type==='checkbox'); assert(checkbox);
+  (checkbox.props.onChange as (event:unknown)=>void)({target:{checked:true}});
+  assert(ui.changed); assert.equal(ui.changed.receiptScan?.printedTotal,null);
+  assert.equal(scan.receiptScanSaveError(ui.changed),null);
+  assert.equal(scan.reconcileReceiptScan(ui.changed)?.status,'incomplete');
+  assert(scan.receiptScanSaveError({...ui.changed,items:[{...ui.changed.items[0],amount:1100}]}));
+});
+
+test('difference checkbox fingerprints reconciled warnings exactly as Save does', () => {
+  const value=entry({items:[{id:'pizza',name:'Human checked name',amount:1200,members:['alice'],fieldSources:{name:'user'}}],receiptScan:{version:1,printedTotal:1201,printedCurrency:'EUR',status:'needs-review',warnings:[{code:'uncertain-description',itemId:'pizza'}]}});
+  const ui=render(value);
+  const checkbox=ui.elements.find(element=>element.type==='input' && element.props.type==='checkbox'); assert(checkbox);
+  (checkbox.props.onChange as (event:unknown)=>void)({target:{checked:true}});
+  assert(ui.changed); assert.equal(scan.receiptScanSaveError(ui.changed),null);
 });

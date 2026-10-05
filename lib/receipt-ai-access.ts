@@ -1,6 +1,7 @@
 import { hashToken, resolveIdentity, trustedChatGPTIdentity, type AuthIdentity } from './auth';
 import { accountAuditStatement } from './audit';
 import { chatGPTPlanAccessToken, chatGPTPlanStatus, ChatGPTPlanError, type ChatGPTPlanEnvironment } from './chatgpt-plan';
+import { DEFAULT_RECEIPT_MODEL } from './receipt-ai-config';
 
 export type ReceiptAIEnvironment = ChatGPTPlanEnvironment & {
   RECEIPT_AI_TOKEN_KEY?: string;
@@ -19,7 +20,6 @@ export class ReceiptAIAccessError extends Error {
   constructor(message: string, public readonly status = 400, public readonly code = 'receipt_ai_error', public readonly keyCheck?: KeyCheckDiagnostic) { super(message); }
 }
 const OWNER_EMAIL = 'dessimat0r@gmail.com';
-const DEFAULT_MODEL = 'gpt-6.1-sol';
 const KEY_CHECK_CODES = new Set(['key_rejected', 'key_permission_denied', 'key_check_rate_limited', 'key_check_unavailable', 'key_check_timeout', 'key_check_server_error', 'key_check_request_rejected']);
 const PROVIDER_CODES = new Set(['invalid_api_key', 'insufficient_quota', 'rate_limit_exceeded', 'permission_denied', 'insufficient_permissions', 'unsupported_country_region_territory', 'server_error', 'service_unavailable', 'project_not_found']);
 const NETWORK_NAMES = new Set(['Error', 'TypeError', 'NetworkError', 'AbortError', 'TimeoutError', 'SecurityError', 'NotSupportedError']);
@@ -181,7 +181,7 @@ export async function receiptAIStatus(request: Request, profile: Account, databa
   const state = await accessState(request, profile, database, environment);
   const base = { configured: !!state.secret, connected: false, eligible: true, manageable: state.manageable,
     ...(state.managementReason ? { managementReason: state.managementReason } : {}),
-    apiConnected: false, provider: state.row?.provider || 'api', siwcAvailable: false, model: environment.OPENAI_RECEIPT_MODEL || DEFAULT_MODEL };
+    apiConnected: false, provider: state.row?.provider || 'api', siwcAvailable: false, model: environment.OPENAI_RECEIPT_MODEL || DEFAULT_RECEIPT_MODEL };
   if (!state.secret) return { ...base, reason: 'not_configured' };
   let apiConnected = false;
   if (state.row?.api_key_encrypted) {
@@ -209,7 +209,7 @@ export async function getReceiptAIAccess(request: Request, profile: Account, dat
     }
   }
   if (!state.row?.api_key_encrypted) throw new ReceiptAIAccessError('The site owner needs to add the shared OpenAI API key before receipts can be read automatically.', 503, 'not_connected');
-  return { accessToken: await decryptedKey(state.row.api_key_encrypted, state.row.user_id, state.secret), model: environment.OPENAI_RECEIPT_MODEL || DEFAULT_MODEL, provider: 'api' as const };
+  return { accessToken: await decryptedKey(state.row.api_key_encrypted, state.row.user_id, state.secret), model: environment.OPENAI_RECEIPT_MODEL || DEFAULT_RECEIPT_MODEL, provider: 'api' as const };
 }
 async function setupBudget(database: D1Database, userId: string) {
   const now = Date.now(), window = 60_000;

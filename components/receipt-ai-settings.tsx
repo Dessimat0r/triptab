@@ -67,9 +67,6 @@ async function settingsResponseError(response: Response, operation: SettingsOper
     if (body && typeof body === "object") code = (body as Record<string, unknown>).code;
   } catch { /* A proxy can return HTML or an empty response. Use status only. */ }
   if (typeof code === "string" && Object.prototype.hasOwnProperty.call(requestErrorText, code)) return new SettingsRequestError(requestErrorText[code]);
-  if (code === "key_check_failed") return new SettingsRequestError(response.status === 400
-    ? "OpenAI did not accept this key. Check the key and its project permissions, then try again."
-    : "OpenAI could not verify the key right now. Try again shortly.");
   if (code === "receipt_ai_error" && response.status === 400 && operation === "save-key") return new SettingsRequestError(requestErrorText.key_invalid_format);
   if (response.status === 401) return new SettingsRequestError("Your sign-in has expired. Sign in again and reopen Your account.");
   if (response.status === 403) return new SettingsRequestError("This change was not permitted. Reopen Your account and try again.");
@@ -177,8 +174,8 @@ export default function ReceiptAISettings({
       });
       if (!response.ok) throw await settingsResponseError(response, operation);
       if (controller.signal.aborted || request.current !== controller) return;
-      updated = true;
       if (operation === "save-key") setApiKey("");
+      updated = true;
       changed();
       setNotice(success);
       await load(controller);

@@ -120,12 +120,12 @@ function Amount({
           if (s && s !== "." && (!Number.isSafeInteger(n) || n > 100000000)) return;
           set(s);
           if (nullable && (!s || s === ".")) { if (value !== null) onChange(null); }
-          else if (s && s !== "." && Number.isSafeInteger(n) && n !== value) onChange(n);
+          else if (Number.isSafeInteger(n) && n !== value) onChange(n);
         }
       }}
       onBlur={() => {
         const n = Math.round(Number(v) * 100);
-        if ((nullable && (!v || v === ".")) || !Number.isSafeInteger(n) || n > 100000000) {
+        if ((nullable && !v) || !Number.isSafeInteger(n) || n > 100000000) {
           if (nullable) { if (value !== null) onChange(null); set(""); }
           else set(((value ?? 0) / 100).toFixed(2));
           return;
@@ -156,6 +156,7 @@ export default function Home({ children }: { children: ReactNode }) {
     [loading, setLoading] = useState(true),
     [saving, setSaving] = useState(false),
     [error, setError] = useState(""),
+    [refreshError, setRefreshError] = useState(""),
     [auth, setAuth] = useState(false),
     [authMode, setAuthMode] = useState<"register" | "login">("register"),
     [linkRequested, setLinkRequested] = useState(false),
@@ -203,6 +204,7 @@ export default function Home({ children }: { children: ReactNode }) {
   const receiptProcessInFlight = useRef(false);
   const receiptResumeRequest = useRef("");
   const receiptAIStatusRequest = useRef(0);
+  const receiptAIStatusInFlight = useRef<{ accountId: string; promise: Promise<ReceiptAIState | null> } | null>(null);
   const activeReceiptEditor = useRef<typeof editing>(null);
   useLayoutEffect(() => { activeReceiptEditor.current = editing; }, [editing]);
   const savedEtag = useRef("");
@@ -214,7 +216,7 @@ export default function Home({ children }: { children: ReactNode }) {
     latestSnapshot.current = snapshot;
     savedEtag.current = etag;
     setActivityRefreshKey(etag || snapshot.revision);
-    setLedger(snapshot.data); setRevision(snapshot.revision); setLastRefreshed(new Date());
+    setLedger(snapshot.data); setRevision(snapshot.revision); setLastRefreshed(new Date()); setRefreshError("");
     if (invalidateRefresh) { loadRequest.current++; setLoading(false); }
     return true;
   }, []);
@@ -227,8 +229,8 @@ export default function Home({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!profile?.id) return;
     let active = true;
-    const refresh = () => {
-      if (active) void refreshReceiptAIStatus(profile.id);
+    const refresh = (event?: Event) => {
+      if (active) void refreshReceiptAIStatus(profile.id, event?.type === "triptab:receipt-ai-settings");
     };
     const visibility = () => { if (document.visibilityState === "visible") refresh(); };
     refresh(); window.addEventListener("triptab:receipt-ai-settings", refresh); window.addEventListener("focus", refresh);
@@ -236,11 +238,11 @@ export default function Home({ children }: { children: ReactNode }) {
     return () => { active = false; window.removeEventListener("triptab:receipt-ai-settings", refresh); window.removeEventListener("focus", refresh); document.removeEventListener("visibilitychange", visibility); };
   }, [profile?.id]);
   const { confirm, dialog: confirmationDialog, confirming } = useConfirmation(`${trip?.id || ""}:${profile?.id || ""}`);
-  const load = useCallback(async (options?: { background?: boolean }) => {
+  const load = useCallback(async (options?: { background?: boolean; fresh?: boolean }) => {
     const pending = inFlightLoad.current;
     // Background refreshes share the active request. A foreground action starts
-    // a fresh read: any pending response may predate its own mutation.
-    if (pending?.requestId === loadRequest.current && options?.background) {
+    // a fresh read if the pending request began before it in the background.
+    if (!options?.fresh && pending?.requestId === loadRequest.current && (!pending.background || options?.background)) {
       if (!options?.background) setLoading(true);
       return pending.promise;
     }
@@ -262,6 +264,7 @@ export default function Home({ children }: { children: ReactNode }) {
             setRevision(unchangedRevision);
           }
           setLastRefreshed(new Date());
+          setRefreshError("");
           return latestSnapshot.current;
         }
         if (r.status === 401) {
@@ -272,6 +275,7 @@ export default function Home({ children }: { children: ReactNode }) {
           setRevision(0);
           setActivityRefreshKey(0);
           setProfile(null);
+          setRefreshError("");
           return;
         }
         const b = (await r.json()) as { data: Ledger; revision: number; error: string };
@@ -288,7 +292,10 @@ export default function Home({ children }: { children: ReactNode }) {
       } catch (e) {
         // Silent refreshes must preserve local validation and editor messages.
         // A foreground refresh still reports a failed user-requested operation.
-        if (requestId === loadRequest.current && !options?.background) setError(e instanceof Error ? e.message : "Unable to load your ledger");
+        if (requestId === loadRequest.current) {
+          if (options?.background) setRefreshError("Refresh failed. Showing the last loaded amounts.");
+          else setError(e instanceof Error ? e.message : "Unable to load your ledger");
+        }
       } finally {
         if (requestId === loadRequest.current) setLoading(false);
       }
@@ -390,7 +397,7 @@ export default function Home({ children }: { children: ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ledger, trip, editing, processedReceipt, profile?.id, saving, uploading]);
   useEffect(() => {
-    if (!trip || !editing?.draftId || !receiptPrompt || saving || uploading || auth || receiptItemized) return;
+    if (!trip || !editing?.draftId || !receiptPrompt || (!receiptCopied && !receiptHandoffOpened) || receiptProcessing || saving || uploading || auth || receiptItemized) return;
     const draft = trip.drafts.find(value => value.id === editing.draftId && value.receiptId === editing.receiptId);
     if (!draft || draft.status !== "waiting") return;
     // Waiting describes the saved draft, not a model job. Poll only the open
@@ -399,7 +406,7 @@ export default function Home({ children }: { children: ReactNode }) {
       if (document.visibilityState === "visible" && navigator.onLine) void load({ background: true });
     }, 5_000);
     return () => window.clearInterval(timer);
-  }, [trip, editing?.draftId, editing?.receiptId, receiptPrompt, receiptItemized, saving, uploading, auth, load]);
+  }, [trip, editing?.draftId, editing?.receiptId, receiptPrompt, receiptCopied, receiptHandoffOpened, receiptProcessing, receiptItemized, saving, uploading, auth, load]);
   function requestAccount() {
     setAuthMode("login");
     requestAnimationFrame(() => {
@@ -631,15 +638,15 @@ export default function Home({ children }: { children: ReactNode }) {
     reviewedReceipt.current = null;
     blankReceiptEditor.current = null;
     editorDraftBinding.current = null;
-    setUploading(false);
-    setReceiptAIConnecting(false);
-    setReceiptChecking(false);
     setReceiptPending(false);
     setReceiptCopied(false);
     setReceiptPrompt("");
     setReceiptHandoffOpened(false);
     setReceiptHandoffError("");
     setReceiptProcessing(false);
+    setUploading(false);
+    setReceiptAIConnecting(false);
+    setReceiptChecking(false);
     setReceiptItemized(false);
     setProcessedReceipt(null);
   }
@@ -697,6 +704,16 @@ export default function Home({ children }: { children: ReactNode }) {
     const source = keepProposal && previous?.status === "review" && processedReceipt?.id === previous.id
       && previous.receiptId === receiptId && processedReceipt.receiptId === receiptId ? previous : entry;
     const messages = mergeReceiptConversation(mergeReceiptConversation(target?.conversation, previous?.conversation), entry.conversation);
+    const items: Draft["items"] = [];
+    for (const item of source.items) {
+      const parsed = draftItemSchema.safeParse(item);
+      if (parsed.success) { items.push(parsed.data); continue; }
+      const old = previous?.items.find(value => value.id === item.id) || target?.items.find(value => value.id === item.id);
+      const fallback = draftItemSchema.safeParse({ ...item,
+        members: old?.members || [], percentages: old?.percentages, units: old?.units, quantity: old?.quantity });
+      if (!fallback.success) { setError("Finish this item's price or quantity before saving its draft. Your edits are still here."); return null; }
+      items.push(fallback.data);
+    }
     const draft: Draft = {
       id: previous?.id || entry.draftId || uid(),
       expenseId: target?.id,
@@ -707,18 +724,7 @@ export default function Home({ children }: { children: ReactNode }) {
       time: source.time || undefined,
       timezone: source.timezone,
       payer: source.payer,
-      items: source.items.map(item => {
-        const parsed = draftItemSchema.safeParse(item);
-        if (parsed.success) return parsed.data;
-        // Incomplete live text (NaN) cannot be written as JSON. Preserve the
-        // item and its last usable quantities; the question includes that text.
-        const old = previous?.items.find(value => value.id === item.id) || target?.items.find(value => value.id === item.id);
-        const fallback = draftItemSchema.safeParse({ ...item, members: old?.members || item.members, percentages: old?.percentages, units: old?.units });
-        return fallback.success ? fallback.data : old ?? draftItemSchema.parse({
-          id: item.id, name: item.name.slice(0, 200), amount: Number.isSafeInteger(item.amount) && item.amount !== null && item.amount >= 0 && item.amount <= 100000000 ? item.amount : null,
-          members: [],
-        });
-      }),
+      items,
       receiptScan: source.receiptScan,
       fieldSources: source.fieldSources,
       percentages: receiptSplitError(source) ? undefined : source.percentages,
@@ -753,8 +759,11 @@ export default function Home({ children }: { children: ReactNode }) {
     if (question) setReceiptItemized(false);
     return prompt;
   }
-  async function refreshReceiptAIStatus(accountId: string): Promise<ReceiptAIState | null> {
+  async function refreshReceiptAIStatus(accountId: string, fresh = false): Promise<ReceiptAIState | null> {
+    const pending = receiptAIStatusInFlight.current;
+    if (!fresh && pending?.accountId === accountId) return pending.promise;
     const requestId = ++receiptAIStatusRequest.current;
+    const promise = (async () => {
     try {
       const response = await fetch("/api/receipt/ai-status", { cache: "no-store" });
       const value = await response.json() as Partial<ReceiptAIState>;
@@ -770,6 +779,10 @@ export default function Home({ children }: { children: ReactNode }) {
       }
       return null;
     }
+    })();
+    receiptAIStatusInFlight.current = { accountId, promise };
+    void promise.then(() => { if (receiptAIStatusInFlight.current?.promise === promise) receiptAIStatusInFlight.current = null; });
+    return promise;
   }
   async function captureEditorReceipt(file: File) {
     if (!trip || !editing) return;
@@ -1208,7 +1221,7 @@ export default function Home({ children }: { children: ReactNode }) {
   async function reviewRestore(event: ActivityEvent) {
     setReceiptHistoryOpen(false);
     if (!trip || !event.before || event.tripId !== trip.id) return;
-    const fresh = await load();
+    const fresh = await load({ fresh: true });
     const current = fresh?.data.trips.find(value => value.id === trip.id);
     if (!current) return;
     if (event.entityType === "payment") {
@@ -1578,7 +1591,7 @@ export default function Home({ children }: { children: ReactNode }) {
                       </div>
                       <TripSharing key={`${trip.id}:${profile?.id || "anonymous"}`} trip={trip} profile={profile} onChanged={load} />
                       <TripDetails key={trip.id} trip={trip} busy={saving || loading} error={error} onSave={updateTrip} />
-                      <DataExport tripId={trip.id} compact />
+                      <DataExport key={`${profile?.id || "anonymous"}:${trip.id}`} tripId={trip.id} compact />
                     </>
                   );
     }
@@ -1705,7 +1718,7 @@ export default function Home({ children }: { children: ReactNode }) {
                 setInvite("");
                 replaceEntryUrl("/expenses");
                 closeReceiptEditor(); setSelected(id);
-                await load();
+                await load({ fresh: true });
                 fetch("/api/profile")
                   .then((r) => r.json())
                   .then((b: unknown) => {
@@ -1726,6 +1739,7 @@ export default function Home({ children }: { children: ReactNode }) {
                   : "Create a holiday, add your people, and keep the tabs fair."}
               </p>
               {trip && lastRefreshed && <small className="muted">Refreshed {lastRefreshed.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}</small>}
+              {trip && refreshError && <small className="error" role="status">{refreshError} <button className="quiet" disabled={loading} onClick={() => void load({ background: true, fresh: true })}>Retry refresh</button></small>}
             </div>
             {trip && (
               <button
@@ -2242,6 +2256,7 @@ export default function Home({ children }: { children: ReactNode }) {
                           </option>
                         ))}
                       </select>
+                      {editing.receiptScan && editing.currency && editing.fieldSources?.currency !== "user" && <button type="button" className="quiet" onClick={() => setEditing(userReceiptField(editing, "currency", editing.currency))}>I checked the currency: {editing.currency}</button>}
                     </label>
                     <label>
                       Transaction time
@@ -2344,7 +2359,7 @@ export default function Home({ children }: { children: ReactNode }) {
                                     prev && {
                                       ...prev,
                                       items: prev.items.map((x) =>
-                                        x.id === item.id ? { ...x, amount, fieldSources: { ...x.fieldSources, amount: "user" as const } } : x,
+                                        x.id === item.id && x.amount !== amount ? { ...x, amount, fieldSources: { ...x.fieldSources, amount: "user" as const } } : x,
                                       ),
                                     },
                                 )

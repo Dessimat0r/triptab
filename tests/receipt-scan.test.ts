@@ -4,7 +4,7 @@ import test from 'node:test';
 import { draftItemSchema, draftSchema, expenseSchema, expenseShares, itemShares, parseLedgerStructure, shares,
   total, validateLedger, type Draft, type Expense, type Trip } from '../lib/model';
 import { reconcileReceiptScan, receiptScanFingerprint, receiptScanHumanReviewChanged, receiptScanSaveError,
-  receiptScanSchema, type ReceiptScan } from '../lib/receipt-scan';
+  receiptScanSchema, mergeReceiptSourceLines, receiptWarningLabel, type ReceiptScan } from '../lib/receipt-scan';
 
 function draft(overrides: Partial<Draft> = {}): Draft {
   return { id: 'scan', title: 'Cafe', date: '2026-10-04', time: '12:30', timezone: 'Europe/Vienna',
@@ -290,9 +290,102 @@ test('legacy posted expenses remain unchanged with no invented printed values or
   assert.deepEqual(result.trips[0].expenses[0], legacy);
 });
 
- test('rescan source positions cannot replace or erase adjustment evidence', async () => {
-  const { mergeReceiptSourceLines } = await import('../lib/receipt-scan');
-  const old = {lineIndex: 4, kind: 'adjustment' as const, observedText: 'Coupon -2.00', amount: -200, mappedTo: 'unmapped' as const};
-  const next = {lineIndex: 4, kind: 'total' as const, observedText: 'TOTAL 10.00', amount: 1000};
-  assert.deepEqual(mergeReceiptSourceLines([old], [next, old]), [old, next]);
+test('raw and reconciled review fingerprints agree after stale warnings are removed', () => {
+  const entry = draft({ items: draft().items.map(item => ({ ...item, fieldSources: { name: 'user' as const } })),
+    receiptScan: scan({ printedTotal: 751, warnings: [{ code: 'uncertain-description', itemId: 'coffee' }] }) });
+  const reconciled = { ...entry, receiptScan: reconcileReceiptScan(entry)! };
+  assert.equal(receiptScanFingerprint(entry), receiptScanFingerprint(reconciled));
+  const reviewed = { ...reconciled, receiptScan: { ...reconciled.receiptScan,
+    acknowledgement: { fingerprint: receiptScanFingerprint(entry) } } };
+  assert.equal(receiptScanSaveError(reviewed), null);
+  assert.doesNotThrow(() => validateLedger({ trips: [holiday([posted(reviewed)])] }));
+});
+
+test('a human can review an unavailable printed total without fabricating printed evidence', () => {
+  const entry = draft({ receiptScan: scan({ printedTotal: null, printedSubtotal: null }) });
+  const reviewed = { ...entry, receiptScan: { ...entry.receiptScan!,
+    missingTotalAcknowledgement: { fingerprint: receiptScanFingerprint(entry) } } };
+  const result = reconcileReceiptScan(reviewed)!;
+  assert.equal(result.printedTotal, null);
+  assert.equal(result.status, 'incomplete');
+  assert.ok(result.warnings.some(warning => warning.code === 'missing-printed-total' && !warning.resolved));
+  assert.equal(receiptScanSaveError(reviewed), null);
+  const saved = validateLedger({ trips: [holiday([posted(reviewed)])] });
+  assert.equal(saved.trips[0].expenses[0].receiptScan?.printedTotal, null);
+  assert.equal(saved.trips[0].expenses[0].receiptScan?.status, 'incomplete');
+  assert.throws(() => validateLedger({ trips: [holiday([posted(reviewed)])] }, { source: 'mcp' }), /reviewed.*person/);
+  assert.match(receiptScanSaveError(reviewed, { allowAcknowledgement: false })!, /printed receipt total/);
+  assert.equal(receiptScanSaveError(reviewed, { allowAcknowledgement: false, previous: reviewed }), null);
+});
+
+test('unavailable-total review cannot bypass unknown prices, currency, descriptions or other warnings', () => {
+  const entry = draft({ receiptScan: scan({ printedTotal: null }) });
+  for (const changed of [
+    { ...entry, currency: null }, { ...entry, items: [] },
+    { ...entry, items: [{ ...entry.items[0], amount: null }] },
+    { ...entry, items: [{ ...entry.items[0], name: '' }] },
+    { ...entry, receiptScan: { ...entry.receiptScan!, warnings: [{ code: 'image-may-be-incomplete' as const }] } },
+  ]) {
+    const reviewed = { ...changed, receiptScan: { ...changed.receiptScan!,
+      missingTotalAcknowledgement: { fingerprint: receiptScanFingerprint(changed) } } };
+    assert.ok(receiptScanSaveError(reviewed));
+  }
+});
+
+test('unavailable-total review is invalidated by financial or source evidence edits', () => {
+  const entry = draft({ receiptScan: scan({ printedTotal: null, printedSubtotal: null }) });
+  const reviewed = { ...entry, receiptScan: { ...entry.receiptScan!,
+    missingTotalAcknowledgement: { fingerprint: receiptScanFingerprint(entry) } } };
+  for (const changed of [
+    { ...reviewed, tax: 1 }, { ...reviewed, items: [{ ...reviewed.items[0], amount: 351 }, reviewed.items[1]] },
+    { ...reviewed, currency: 'GBP' as const },
+    { ...reviewed, receiptScan: { ...reviewed.receiptScan!, sourceLines: [{ kind: 'other' as const, observedText: 'Earlier unreadable grand total' }] } },
+  ]) assert.ok(receiptScanSaveError(changed));
+  const renamed = { ...reviewed, title: 'My lunch', fieldSources: { title: 'ai' as const } };
+  assert.equal(receiptScanSaveError(renamed), null, 'a title proposal is not a change to financial evidence');
+});
+
+test('AI proposal provenance never confirms uncertain receipt names or prices', () => {
+  const entry = draft({ items: [{ ...draft().items[0], fieldSources: { name: 'ai', amount: 'ai' },
+    scanSource: { confidence: 'low' } }, draft().items[1]],
+    receiptScan: scan({ warnings: [{ code: 'uncertain-description', itemId: 'coffee' }] }) });
+  const result = reconcileReceiptScan(entry)!;
+  assert.ok(result.warnings.some(warning => warning.code === 'uncertain-description'));
+  assert.ok(result.warnings.some(warning => warning.code === 'low-confidence'));
+  assert.ok(receiptScanSaveError(entry));
+});
+
+test('source evidence merges by content instead of unstable rescan ordinals', () => {
+  const coupon = { lineIndex: 4, kind: 'adjustment' as const, amount: -150, observedText: 'COUPON -1,50', mappedTo: 'unmapped' as const };
+  const newItem = { lineIndex: 4, kind: 'item' as const, amount: 350, observedText: 'Coffee 3,50' };
+  const merged = mergeReceiptSourceLines([coupon], [newItem]);
+  assert.deepEqual(merged, [coupon, newItem]);
+  const repeated = mergeReceiptSourceLines(merged, [{ ...coupon, lineIndex: 7, confidence: 'high' }]);
+  assert.equal(repeated.length, 2, 'repeat scans do not duplicate the same source evidence');
+  assert.equal(repeated[0].lineIndex, 7);
+  const entry = draft({ receiptScan: scan({ sourceLines: repeated, warnings: [{ code: 'unmapped-adjustment', lineIndex: 4, observedText: coupon.observedText }] }) });
+  assert.ok(reconcileReceiptScan(entry)!.warnings.some(warning => warning.code === 'unmapped-adjustment'));
+  const mapped = { ...entry, receiptScan: { ...entry.receiptScan!, sourceLines: mergeReceiptSourceLines(repeated, [{ ...coupon, lineIndex: 8, mappedTo: 'discount' }]) } };
+  assert.equal(reconcileReceiptScan(mapped)!.status, 'matched');
+});
+
+test('stored warning codes have readable history labels without model-generated messages', () => {
+  assert.equal(receiptWarningLabel('total-mismatch'), 'Itemised total differs from the printed total');
+  assert.equal(receiptWarningLabel('unexpected-code'), 'Receipt detail needs checking');
+});
+
+test('source evidence merging preserves repeated identical physical occurrences without multiplying rescans', () => {
+  for (const source of [
+    { kind: 'adjustment' as const, amount: -100, observedText: 'COUPON -1,00', mappedTo: 'unmapped' as const },
+    { kind: 'tax-summary' as const, amount: 25, observedText: 'VAT 0,25', mappedTo: 'included' as const },
+    { kind: 'item' as const, amount: 350, observedText: 'Coffee 3,50' },
+  ]) {
+    const initial = [ { ...source, lineIndex: 1 }, { ...source, lineIndex: 4 } ];
+    const merged = mergeReceiptSourceLines([], initial);
+    assert.equal(merged.length, 2, source.kind);
+    const shifted = [ { ...source, lineIndex: 3 }, { ...source, lineIndex: 7 } ];
+    assert.deepEqual(mergeReceiptSourceLines(merged, shifted), shifted);
+    assert.equal(mergeReceiptSourceLines(merged, [shifted[0]]).length, 2, 'an omitted physical occurrence stays preserved');
+    assert.equal(mergeReceiptSourceLines(merged, [...shifted, { ...source, lineIndex: 9 }]).length, 3, 'a new third occurrence stays represented');
+  }
 });

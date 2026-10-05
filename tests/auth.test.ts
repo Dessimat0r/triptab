@@ -9,6 +9,7 @@ import {
   authFailure,
 } from '../lib/auth';
 import { readAccountActivity } from '../lib/audit';
+import * as authModule from '../lib/auth';
 
 class SQLiteStatement {
   private values: (string | number | null)[] = [];
@@ -65,6 +66,25 @@ function provider(id = 'legacy-owner', email = 'owner@example.com') {
 }
 async function register(database: SQLiteD1, email = 'traveller@example.com') {
   return performAuthAction(request(), { action: 'register', email, password, displayName: 'Traveller' }, database.asD1());
+}
+
+async function logoutRoute(database: SQLiteD1, revokePush = async () => {}) {
+  const compiled = transpileModule(await readFile(new URL('../app/api/auth/route.ts', import.meta.url), 'utf8'), {
+    compilerOptions: { target: ScriptTarget.ES2022, module: ModuleKind.CommonJS },
+  }).outputText;
+  const loaded = { exports: {} as { POST(request: Request): Promise<Response> } };
+  new Function('require', 'module', 'exports', compiled)((name: string) => {
+    if (name === '@/lib/auth') return authModule;
+    if (name === '@/lib/store') return { db: () => database.asD1(), RequestError: class extends Error {}, readBoundedBody: async (request: Request) => new Uint8Array(await request.arrayBuffer()) };
+    if (name === '@/lib/notifications') return { revokeBrowserPush: revokePush, browserPushCookie: async () => 'tt_push=; Path=/; Max-Age=0' };
+    throw new Error(`Unexpected route dependency ${name}`);
+  }, loaded, loaded.exports);
+  return loaded.exports;
+}
+function logoutPost(cookie?: string, origin = 'https://triptab.test') {
+  return new Request('https://triptab.test/api/auth', { method: 'POST', headers: {
+    origin, 'content-type': 'application/json', ...(cookie ? { cookie: cookie.split(';')[0] } : {}),
+  }, body: JSON.stringify({ action: 'logout' }) });
 }
 
 test('password hashing uses random 256-bit salts, PBKDF2 and every password character', async () => {
@@ -134,6 +154,120 @@ test('expired sessions and ambiguous cookies grant no access; logout also suppre
   const resumed = await performAuthAction(signedOut, { action: 'chatgpt_login' }, database.asD1());
   assert.equal(resumed.state.authenticated, true);
   assert.match(resumed.cookie!, /tt_signed_out=;.*Max-Age=0/);
+});
+
+test('logout revokes orphaned, expired and already signed-out cookie tokens without requiring a profile', async context => {
+  for (const reason of ['missing profile', 'expired session', 'signed-out browser'] as const) await context.test(reason, async () => {
+    const database = await storage();
+    const local = await register(database);
+    const token = local.cookie!.split(';')[0].split('=')[1];
+    const before = auditCount(database);
+    if (reason === 'missing profile') database.sqlite.prepare('DELETE FROM profiles WHERE id = ?').run(local.state.profile!.id);
+    if (reason === 'expired session') database.sqlite.prepare("UPDATE auth_sessions SET expires_at = '2000-01-01T00:00:00Z'").run();
+    const logoutRequest = reason === 'signed-out browser'
+      ? request({ cookie: `${local.cookie!.split(';')[0]}; tt_signed_out=1` }) : sessionRequest(local.cookie!);
+    const result = await performAuthAction(logoutRequest, { action: 'logout' }, database.asD1());
+    assert.equal(result.state.authenticated, false);
+    assert.match(result.cookie!, /Max-Age=0/);
+    assert.match(result.additionalCookies![0], /tt_signed_out=1/);
+    assert.equal(database.sqlite.prepare('SELECT token_hash FROM auth_sessions WHERE token_hash = ?').get(await hashToken(token)), undefined);
+    assert.equal(auditCount(database), before + (reason === 'signed-out browser' ? 1 : 0), 'unresolved actors never receive an invented logout audit');
+  });
+});
+
+test('logout does not create a provider profile or depend on expired-auth cleanup', async () => {
+  const database = await storage();
+  database.sqlite.exec("CREATE TRIGGER fail_expired_cleanup BEFORE DELETE ON auth_rate_limits BEGIN SELECT RAISE(ABORT, 'expired cleanup unavailable'); END");
+  database.sqlite.prepare('INSERT INTO auth_rate_limits (key_hash,window_start,attempts) VALUES (?,?,?)').run('old-rate', 0, 1);
+  const result = await performAuthAction(request(provider('never-registered')), { action: 'logout' }, database.asD1());
+  assert.equal(result.state.authenticated, false);
+  assert.equal(database.sqlite.prepare('SELECT id FROM profiles').get(), undefined);
+  assert.equal(auditCount(database), 0);
+  assert.equal(database.sqlite.prepare('SELECT key_hash FROM auth_rate_limits').get()?.key_hash, 'old-rate');
+});
+
+test('logout still revokes its cookie when the optional identity read fails and logs no private diagnostics', async () => {
+  const database = await storage();
+  const local = await register(database);
+  const originalPrepare = database.prepare.bind(database);
+  database.prepare = (sql: string) => {
+    if (sql.includes('FROM auth_sessions s JOIN profiles')) throw new Error('PRIVATE_DATABASE_ID and profile contents');
+    return originalPrepare(sql);
+  };
+  const warnings: unknown[][] = [], originalWarn = console.warn;
+  try {
+    console.warn = (...values) => { warnings.push(values); };
+    const before = auditCount(database);
+    const result = await performAuthAction(sessionRequest(local.cookie!), { action: 'logout' }, database.asD1());
+    assert.equal(result.state.authenticated, false);
+    assert.equal(database.sqlite.prepare('SELECT token_hash FROM auth_sessions').get(), undefined);
+    assert.equal(auditCount(database), before);
+    assert.deepEqual(warnings, [['TripTab could not load the logout audit actor.']]);
+    assert.doesNotMatch(JSON.stringify(warnings), /PRIVATE_DATABASE_ID|profile contents/);
+  } finally { console.warn = originalWarn; }
+});
+
+test('browser logout keeps revocation independent of optional notification failures', async () => {
+  const database = await storage();
+  const local = await register(database);
+  const route = await logoutRoute(database, async () => { throw new Error('PRIVATE_PUSH_ENDPOINT'); });
+  const warnings: unknown[][] = [], originalWarn = console.warn;
+  try {
+    console.warn = (...values) => { warnings.push(values); };
+    const response = await route.POST(logoutPost(local.cookie));
+    assert.equal(response.status, 200);
+    assert.equal((await response.json() as { authenticated: boolean }).authenticated, false);
+    assert.equal(database.sqlite.prepare('SELECT token_hash FROM auth_sessions').get(), undefined);
+    assert.ok(response.headers.getSetCookie().some(value => /^tt_session=;.*Max-Age=0/.test(value)));
+    assert.ok(response.headers.getSetCookie().some(value => /^tt_signed_out=1;/.test(value)));
+    assert.ok(response.headers.getSetCookie().some(value => /^tt_push=;/.test(value)));
+    assert.deepEqual(warnings, [['TripTab could not revoke this browser’s notifications during logout.']]);
+    assert.equal((await accountHistory(database, local.state.profile!.id))[0].entityType, 'session');
+  } finally { console.warn = originalWarn; }
+});
+
+test('a transient logout audit failure retries trusted history once after independently revoking its credential', async () => {
+  const database = await storage();
+  const local = await register(database);
+  const before = auditCount(database);
+  let attempts = 0;
+  database.beforeBatch = () => {
+    attempts++;
+    if (attempts === 1) database.sqlite.exec("CREATE TRIGGER temporary_logout_audit_failure BEFORE INSERT ON account_activity_events BEGIN SELECT RAISE(ABORT,'temporary audit failure'); END");
+    else database.sqlite.exec('DROP TRIGGER temporary_logout_audit_failure');
+  };
+  const result = await performAuthAction(sessionRequest(local.cookie!), { action: 'logout' }, database.asD1());
+  assert.equal(result.state.authenticated, false);
+  assert.equal(await sessionIdentity(sessionRequest(local.cookie!), database.asD1()), null);
+  assert.equal(auditCount(database), before + 1);
+  assert.equal(attempts, 2);
+  const [event] = await accountHistory(database, local.state.profile!.id);
+  assert.equal(event.entityType, 'session');
+  assert.equal(event.action, 'delete');
+  assert.equal(event.actorName, 'Traveller');
+});
+
+test('failed audited logout revokes copied tokens and clears browser credentials while reporting the history failure', async () => {
+  const database = await storage();
+  const local = await register(database);
+  const route = await logoutRoute(database);
+  database.sqlite.exec("CREATE TRIGGER deny_logout_audit BEFORE INSERT ON account_activity_events BEGIN SELECT RAISE(ABORT,'PRIVATE_AUDIT_STORAGE'); END");
+  const errors: unknown[][] = [], warnings: unknown[][] = [], originalError = console.error, originalWarn = console.warn;
+  try {
+    console.error = (...values) => { errors.push(values); };
+    console.warn = (...values) => { warnings.push(values); };
+    const response = await route.POST(logoutPost(local.cookie));
+    assert.equal(response.status, 503, 'a failed server revocation is not reported as success');
+    assert.doesNotMatch(await response.text(), /PRIVATE_AUDIT_STORAGE/);
+    assert.equal(await sessionIdentity(sessionRequest(local.cookie!), database.asD1()), null, 'a copied credential cannot survive failed audit storage');
+    assert.ok(response.headers.getSetCookie().some(value => /^tt_session=;.*Max-Age=0/.test(value)));
+    assert.ok(response.headers.getSetCookie().some(value => /^tt_signed_out=1;/.test(value)));
+    assert.doesNotMatch(JSON.stringify(errors), /PRIVATE_AUDIT_STORAGE/);
+    assert.deepEqual(warnings, [['TripTab logout audit did not complete.']]);
+    const crossOrigin = await route.POST(logoutPost(local.cookie, 'https://evil.test'));
+    assert.equal(crossOrigin.status, 403);
+    assert.equal(crossOrigin.headers.getSetCookie().length, 0, 'unvalidated requests cannot sign out another browser');
+  } finally { console.error = originalError; console.warn = originalWarn; }
 });
 
 test('rate limits are atomic, expire after fifteen minutes and store only hashed IP/email keys', async () => {
@@ -458,9 +592,8 @@ test('audit insertion failures roll back registration, password changes, links a
   assert.equal(Number(database.sqlite.prepare('SELECT COUNT(*) AS count FROM auth_links').get()?.count), 0);
   await assert.rejects(performAuthAction(sessionRequest(local.cookie!), { action: 'login', email: 'traveller@example.com', password }, database.asD1()), /audit unavailable/);
   assert.ok(await sessionIdentity(sessionRequest(local.cookie!), database.asD1()));
-  const logout = await performAuthAction(sessionRequest(local.cookie!), { action: 'logout' }, database.asD1());
-  assert.equal(logout.state.authenticated, false);
-  assert.equal(await sessionIdentity(sessionRequest(local.cookie!), database.asD1()), null);
+  await assert.rejects(performAuthAction(sessionRequest(local.cookie!), { action: 'logout' }, database.asD1()), /audit unavailable/);
+  assert.equal(await sessionIdentity(sessionRequest(local.cookie!), database.asD1()), null, 'logout fails safe by revoking the token even if its audit cannot be written');
   assert.equal(auditCount(database), before);
 });
 

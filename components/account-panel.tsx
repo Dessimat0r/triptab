@@ -315,7 +315,7 @@ export default function AccountPanel({
             holidays. ChatGPT and Codex are optional.
           </p>
         )}
-        {profile && <DataExport trips={trips} />}
+        {profile && <DataExport key={profile.id} trips={trips} />}
         {profile && <AccountActivityPanel key={profile.id} refreshKey={activityRefresh} />}
         <PwaControls accountId={profile?.id} onChanged={refreshActivity} />
         {profile && (
