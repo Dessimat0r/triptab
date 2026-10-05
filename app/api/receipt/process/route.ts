@@ -7,7 +7,11 @@ import { applyReceiptTranscription, consumeReceiptProcessBudget, processReceiptI
 
 export const dynamic = 'force-dynamic';
 const id = z.string().min(1).max(100);
-const requestSchema = z.object({ tripId: id, draftId: id, receiptId: id.regex(/^[-a-z0-9]+$/i), revision: z.number().int().min(0), draftHash: z.string().regex(/^[a-f0-9]{64}$/).optional(), questionId: id.optional(), readPurchaseDetails: z.boolean().optional() }).strict();
+const requestSchema = z.object({ tripId: id, draftId: id, receiptId: id.regex(/^[-a-z0-9]+$/i),
+  // Cached clients may still send this global counter. Only the required draft
+  // fingerprint fences inference; this compatibility value never decides it.
+  revision: z.number().int().min(0).optional(), draftHash: z.string().regex(/^[a-f0-9]{64}$/),
+  questionId: id.optional(), readPurchaseDetails: z.boolean().optional() }).strict();
 
 export async function POST(request: Request) {
   try {
@@ -20,14 +24,14 @@ export async function POST(request: Request) {
     try { body = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)); }
     catch { throw new RequestError('Invalid receipt-processing request.'); }
     const parsed = requestSchema.safeParse(body);
-    if (!parsed.success) throw new RequestError('Choose a saved receipt draft and its current revision.');
+    if (!parsed.success) throw new RequestError('Reload TripTab and open the saved receipt again before processing it. A current receipt fingerprint is required.');
     const values = parsed.data;
     if (values.questionId) throw new RequestError('Use your connected ChatGPT tools to answer receipt questions or change item shares. This action only transcribes the receipt image.');
     const ledger = await readLedger(profile.id);
     const trip = ledger.data.trips.find(value => value.id === values.tripId);
     const draft = trip?.drafts.find(value => value.id === values.draftId);
     if (!trip || !draft) throw new RequestError('Receipt draft not found in your holidays.', 404);
-    if (values.draftHash && await sha256Hex(canonicalJson(draft)) !== values.draftHash) throw new RequestError('This receipt changed. Refresh before processing it.', 409);
+    if (await sha256Hex(canonicalJson(draft)) !== values.draftHash) throw new RequestError('This receipt changed. Refresh before processing it.', 409);
     if (draft.receiptId !== values.receiptId) throw new RequestError('This receipt changed. Refresh before processing it.', 409);
     if ((draft.conversation?.length ?? 0) >= 100) throw new RequestError('This receipt conversation has reached its limit of 100 messages.');
     const access = await receiptAccess(profile.id, values.receiptId);

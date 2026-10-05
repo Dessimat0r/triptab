@@ -60,7 +60,6 @@ test('missing receipt binding also fails readiness without disclosing internal d
   const response = await GET(); assert.equal(response.status, 503); assert.deepEqual(await response.json(), { status: 'unavailable' });
 });
 
-
 test('receipt history cannot report ready without its current and historical link projections', async () => {
   sqlite = new DatabaseSync(':memory:'); receiptBinding = true;
   for (const name of (await readdir(new URL('../drizzle/', import.meta.url))).filter(name => name.endsWith('.sql') && Number(name.slice(0, 4)) <= 8).sort()) sqlite.exec(await readFile(new URL('../drizzle/' + name, import.meta.url), 'utf8'));

@@ -201,7 +201,6 @@ test('unrelated drafts are not attached and a concurrent posted financial change
   await submit(editor); assert.match(editor.error,/changed while you were editing/); assert.equal(editor.updates.length,0); assert.equal(editor.editing?.receiptId,'replacement-photo');
 });
 
-
 const financialFields = ['title','date','time','timezone','payer','receiptId','currency','fx','bankAmount','items','percentages','tax','tip','discount','source'] as const;
 function latestCorrection(expense: Expense): Expense {
   return {...expense,title:'Latest traveller correction',date:'2026-09-05',time:'20:15',timezone:'Europe/Rome',payer:'b',receiptId:'latest-saved-photo',
@@ -382,7 +381,9 @@ test('native reading starts only after image and canonical draft save, and fills
     if(url.startsWith('/api/receipt?'))return response({receiptId:'new-photo'});
     assert.equal(url,'/api/receipt/process');
     const args=JSON.parse(String(options?.body));assert.equal(args.receiptId,'new-photo');
-    assert.equal(args.draftId,editor.trip.drafts[0].id);assert.equal(args.revision,1);
+    assert.equal(args.draftId,editor.trip.drafts[0].id);
+    assert.equal(args.draftHash,await sha256Hex(canonicalJson(editor.trip.drafts[0])),'scan uses the canonical saved draft as its server fence');
+    assert.equal(Object.hasOwn(args,'revision'),false,'unrelated ledger revisions do not fence a receipt scan');
     assert.equal(args.readPurchaseDetails,true,'printed metadata can replace untouched browser defaults');
     assert.equal(editor.trip.drafts[0].status,'waiting');assert.equal(editor.trip.expenses.length,0);
     return response({data:{trips:[itemizedTrip(editor.trip)]},revision:2});

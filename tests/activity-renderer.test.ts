@@ -16,9 +16,7 @@ const compiled = transpileWithSharedImports(source + '\nexport { changes, Activi
   compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022, jsx: JsxEmit.ReactJSX },
 }).outputText
   .replace('import "./activity-details.css";', '')
-  .replace('from "@/lib/money-format"', `from ${JSON.stringify(import.meta.resolve('../lib/money-format.ts'))}`)
-  .replaceAll('from "react"', `from ${JSON.stringify(import.meta.resolve('react'))}`)
-  .replaceAll('from "react/jsx-runtime"', `from ${JSON.stringify(import.meta.resolve('react/jsx-runtime'))}`);
+  .replace('from "@/lib/money-format"', `from ${JSON.stringify(import.meta.resolve('../lib/money-format.ts'))}`);
 const renderer = await import('data:text/javascript;base64,' + Buffer.from(compiled).toString('base64')) as {
   changes(event: ActivityEvent, currency: 'GBP', names: Record<string, string>, accountNames: Record<string, string>): AuditChange[];
   ActivityChanges: ComponentType<{ fields: AuditChange[]; before: boolean; after: boolean }>;

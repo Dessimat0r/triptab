@@ -1,3 +1,4 @@
+import { blankReceiptItem } from './receipt-scan';
 import { z } from 'zod';
 import { DEFAULT_RECEIPT_MODEL } from './receipt-ai-config';
 import { CURRENCIES, MAX_AMOUNT, MAX_UNITS, UNIT_SCALE, allocate, draftSchema, receiptQuantitySchema, total, unitsScale, type Currency, type Draft, type Trip } from './model';
@@ -189,9 +190,13 @@ async function completedReceipt(response: Response, provider: 'api' | 'siwc'): P
   // Deltas, event envelopes and the completed result repeat output. Bound that
   // transport separately from a single event/final result so a valid receipt
   // does not fail merely because the provider streamed it in small increments.
-  const maxStreamBytes = 8 * 1024 * 1024, maxEventBytes = 1_000_000, maxResultBytes = 1_000_000;
+  const maxResultBytes = 1_000_000, maxEventBytes = 6 * maxResultBytes + 16_384;
+  // JSON may escape each result byte to six transport bytes. Responses repeats
+  // text in deltas, done, content-part, output-item and completed events; leave
+  // one further bounded event's room for their envelopes and progress events.
+  const maxStreamBytes = 6 * maxEventBytes;
   const encoder = new TextEncoder();
-  let pending = '', eventData: string[] = [], eventBytes = 0, bytes = 0;
+  let pending = new Uint8Array(8192), pendingBytes = 0, eventData: string[] = [], eventBytes = 0, bytes = 0;
   function event() {
     if (!eventData.length) return null;
     let value: { type?: string; code?: string; response?: { status?: string; error?: { code?: string }; output?: { type?: string; role?: string; content?: { type?: string; text?: string }[] }[] }; error?: { code?: string } };
@@ -216,7 +221,6 @@ async function completedReceipt(response: Response, provider: 'api' | 'siwc'): P
   }
   function line(value: string) {
     if (!value) return event();
-    if (encoder.encode(value).byteLength > maxEventBytes) throw new ReceiptAIError('OpenAI returned a receipt event that is too large.');
     if (value.startsWith('data:')) {
       const data = value.slice(5).replace(/^ /, '');
       eventBytes += encoder.encode(data).byteLength + 1;
@@ -225,22 +229,38 @@ async function completedReceipt(response: Response, provider: 'api' | 'siwc'): P
     }
     return null;
   }
+  function append(value: Uint8Array) {
+    const length = pendingBytes + value.byteLength;
+    if (length > maxEventBytes) throw new ReceiptAIError('OpenAI returned a receipt event that is too large.');
+    if (length > pending.byteLength) {
+      const expanded = new Uint8Array(Math.min(maxEventBytes, Math.max(length, pending.byteLength * 2)));
+      expanded.set(pending.subarray(0, pendingBytes)); pending = expanded;
+    }
+    pending.set(value, pendingBytes); pendingBytes = length;
+  }
+  function pendingLine() {
+    // Decode a complete byte line once. Split UTF-8 characters stay in this
+    // reusable bounded buffer rather than repeatedly encoding/scanning a
+    // growing string for every provider chunk.
+    const value = decoder.decode(pending.subarray(0, pendingBytes)).replace(/\r$/, '');
+    pendingBytes = 0;
+    return line(value);
+  }
   try {
     while (true) {
       const { value, done } = await reader.read();
       if (done) break;
       bytes += value.byteLength;
       if (bytes > maxStreamBytes) throw new ReceiptAIError('OpenAI returned a receipt stream that is too large.');
-      pending += decoder.decode(value, { stream: true });
-      let index: number;
-      while ((index = pending.indexOf('\n')) >= 0) {
-        const result = line(pending.slice(0, index).replace(/\r$/, '')); pending = pending.slice(index + 1);
+      let offset = 0, index: number;
+      while ((index = value.indexOf(10, offset)) >= 0) {
+        append(value.subarray(offset, index)); offset = index + 1;
+        const result = pendingLine();
         if (result) return result;
       }
-      if (encoder.encode(pending).byteLength > maxEventBytes) throw new ReceiptAIError('OpenAI returned a receipt event that is too large.');
+      append(value.subarray(offset));
     }
-    pending += decoder.decode();
-    if (pending) { const result = line(pending.replace(/\r$/, '')); if (result) return result; }
+    if (pendingBytes) { const result = pendingLine(); if (result) return result; }
     const result = event();
     if (result) return result;
     throw new ReceiptAIError('OpenAI stopped before completing this receipt. Your saved receipt is unchanged.');
@@ -327,7 +347,7 @@ export function applyReceiptTranscription(trip: Trip, draft: Draft, transcriptio
   // The UI opts in only for an untouched initial editor. Existing purchases and
   // nonblank drafts keep their entered date/time even if a caller supplies it.
   const readPurchaseDetails = options.readPurchaseDetails && !draft.expenseId && draft.status === 'waiting'
-    && draft.items.every(item => !item.name.trim() && !item.amount && item.quantity === undefined)
+    && draft.items.every(blankReceiptItem)
     && !draft.tax && !draft.tip && !draft.discount && !draft.fx && !draft.bankAmount;
   const proposal = draftSchema.parse({
     ...draft, title: result.data.title ?? draft.title, currency, items,

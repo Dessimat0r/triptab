@@ -1,3 +1,4 @@
+import { encodeBase64url as base64url } from './data-utils';
 import { env, waitUntil } from 'cloudflare:workers';
 import { db, RequestError } from './store';
 import { accountAuditStatement, type ActivityEntity } from './audit';
@@ -179,12 +180,6 @@ export function activityNotification(actorName: string, changes: readonly Notifi
     }
   }
   return { title: 'TripTab activity', body: `${actor} ${summary}. Open TripTab to review the activity.` };
-}
-
-function base64url(value: Uint8Array) {
-  let binary = '';
-  for (let i = 0; i < value.length; i += 8192) binary += String.fromCharCode(...value.slice(i, i + 8192));
-  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
 async function signingKey() {

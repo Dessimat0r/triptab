@@ -93,7 +93,6 @@ const storeCompiled = transpileWithSharedImports(storeSource, { compilerOptions:
   .replace("'./receipt-context'", JSON.stringify(new URL('../lib/receipt-context.ts', import.meta.url).href))
   .replace("'./auth'", JSON.stringify(new URL('../lib/auth.ts', import.meta.url).href))
   .replace("'./activity-scope'", JSON.stringify(new URL('../lib/activity-scope.ts', import.meta.url).href))
-  .replaceAll("'./audit'", JSON.stringify(new URL('../lib/audit.ts', import.meta.url).href))
   .replace("'./receipt-lifecycle'", JSON.stringify(lifecycleUrl))
   .replace("'./notifications'", JSON.stringify(dataUrl('export const activityNotification=()=>null; export const notifyMembers=async()=>{};')));
 const storeUrl = dataUrl(storeCompiled);

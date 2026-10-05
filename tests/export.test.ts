@@ -57,20 +57,17 @@ const storeCompiled = transpileWithSharedImports(storeSource, { compilerOptions:
   .replace("'./activity-scope'", JSON.stringify(new URL('../lib/activity-scope.ts', import.meta.url).href))
   .replace("'./receipt-lifecycle'", JSON.stringify(new URL('../lib/receipt-lifecycle.ts', import.meta.url).href))
   .replace("'./receipt-context'", JSON.stringify(new URL('../lib/receipt-context.ts', import.meta.url).href))
-  .replaceAll("'./audit'", JSON.stringify(new URL('../lib/audit.ts', import.meta.url).href))
   .replace("'./notifications'", JSON.stringify(notificationUrl));
 const storeUrl = 'data:text/javascript;base64,' + Buffer.from(storeCompiled).toString('base64');
 const store = await import(storeUrl) as typeof import('../lib/store');
 const routeSource = await readFile(new URL('../app/api/export/route.ts', import.meta.url), 'utf8');
 const routeCompiled = transpileWithSharedImports(routeSource, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
   .replace("'@/lib/store'", JSON.stringify(storeUrl))
-  .replace("'@/lib/audit'", JSON.stringify(new URL('../lib/audit.ts', import.meta.url).href))
   .replace("'@/lib/model'", JSON.stringify(new URL('../lib/model.ts', import.meta.url).href));
 const route = await import('data:text/javascript;base64,' + Buffer.from(routeCompiled).toString('base64')) as { GET(request: Request): Promise<Response> };
 const accountRouteSource = await readFile(new URL('../app/api/account-activity/route.ts', import.meta.url), 'utf8');
 const accountRouteCompiled = transpileWithSharedImports(accountRouteSource, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
-  .replace("'@/lib/store'", JSON.stringify(storeUrl))
-  .replace("'@/lib/audit'", JSON.stringify(new URL('../lib/audit.ts', import.meta.url).href));
+  .replace("'@/lib/store'", JSON.stringify(storeUrl));
 const accountRoute = await import('data:text/javascript;base64,' + Buffer.from(accountRouteCompiled).toString('base64')) as { GET(request: Request): Promise<Response> };
 const entrySource = await readFile(new URL('../app/api/activity-entry/route.ts', import.meta.url), 'utf8');
 const entryCompiled = transpileWithSharedImports(entrySource, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText.replace("'@/lib/store'", JSON.stringify(storeUrl));

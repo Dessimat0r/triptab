@@ -274,6 +274,17 @@ export async function ensureProfile(request: Request, options: { allowSession?: 
 }
 
 type LedgerSnapshot = { data: Ledger; revision: number; freshness: LedgerFreshness };
+/** The exact visible snapshot, without parsing or rewriting historical data. */
+function visibleStoredTrip(row: StoredTrip, links?: ReadonlyMap<string, MembershipRow>): Trip {
+  const trip = { ...JSON.parse(row.data), ownerId: row.owner } as Trip;
+  for (const member of trip.members) {
+    const link = links?.get(member.id);
+    if (link) { member.userId = link.user_id; member.email = link.email || member.email; }
+  }
+  for (const entry of [...trip.expenses, ...trip.drafts]) clearAssistantAuthors(entry);
+  return trip;
+}
+
 /** Body, revision and optional freshness metadata from the same D1 transaction. */
 export async function readLedgerSnapshot(id: string): Promise<LedgerSnapshot>;
 export async function readLedgerSnapshot(id: string, options: { includeFreshness: false }): Promise<{ data: Ledger; revision: number }>;
@@ -297,15 +308,7 @@ export async function readLedgerSnapshot(id: string, options: { includeFreshness
     members.set(link.member_id, link); linksByTrip.set(link.trip_id, members);
   }
   const rows = results[0].results as (StoredTrip & { latest: number; dataVersion: number })[];
-  const trips = rows.map(row => {
-    const trip = { ...JSON.parse(row.data), ownerId: row.owner } as Trip;
-    for (const member of trip.members) {
-      const link = linksByTrip.get(trip.id)?.get(member.id);
-      if (link) { member.userId = link.user_id; member.email = link.email || member.email; }
-    }
-    for (const entry of [...trip.expenses, ...trip.drafts]) clearAssistantAuthors(entry);
-    return trip;
-  });
+  const trips = rows.map(row => visibleStoredTrip(row, linksByTrip.get(row.id)));
   const revision = (results[1].results as { revision: number }[])[0]?.revision || 0;
   const result = { data: { trips }, revision };
   return options.includeFreshness === false ? result : { ...result,
@@ -548,6 +551,12 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
     const links = linkedRows.results.filter(row => row.trip_id === trip.id);
     if (stored) {
       if (stored.owner !== id && !links.some(link => link.user_id === id)) throw new RequestError('You do not have access to this trip.', 403);
+      // The receipt worker captured readLedger's visible raw representation.
+      // Its snapshot must be compared in that same representation, before Zod
+      // trims legacy text or audit validation repairs stale account metadata.
+      if (scoped && canonical(visibleStoredTrip(stored, new Map(links.map(link => [link.member_id, link])))) !== canonical(scoped)) {
+        throw new Error('CONFLICT');
+      }
       const previous = parseStoredTrip(JSON.parse(stored.data));
       if (trip.currency !== previous.currency) throw new RequestError('A saved trip’s settlement currency cannot be changed.');
       if (links.some(link => !trip.members.some(member => member.id === link.member_id))) throw new RequestError('An account-linked traveller cannot be removed.');
@@ -571,7 +580,6 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
         if (link) { member.userId = link.user_id; member.email = link.email || member.email; }
         else delete member.userId;
       }
-      if (scoped && canonical(prior) !== canonical(scoped)) throw new Error('CONFLICT');
       previousTrips.set(trip.id, prior);
     } else {
       if (scoped) throw new Error('CONFLICT');
