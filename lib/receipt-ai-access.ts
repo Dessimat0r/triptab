@@ -1,10 +1,12 @@
+import { encodeBase64url as encode, decodeBase64url, sha256Base64url } from './data-utils';
+import { DEFAULT_RECEIPT_MODEL } from './receipt-ai-config';
 import { hashToken, resolveIdentity, trustedChatGPTIdentity, type AuthIdentity } from './auth';
 import { accountAuditStatement } from './audit';
 import { chatGPTPlanAccessToken, chatGPTPlanStatus, ChatGPTPlanError, type ChatGPTPlanEnvironment } from './chatgpt-plan';
-import { DEFAULT_RECEIPT_MODEL } from './receipt-ai-config';
 
 export type ReceiptAIEnvironment = ChatGPTPlanEnvironment & {
   RECEIPT_AI_TOKEN_KEY?: string;
+  RECEIPT_AI_OWNER_EMAIL?: string;
   OPENAI_RECEIPT_MODEL?: string;
   CHATGPT_PLAN_ENABLED?: string;
 };
@@ -19,7 +21,11 @@ type KeyCheckDiagnostic = {
 export class ReceiptAIAccessError extends Error {
   constructor(message: string, public readonly status = 400, public readonly code = 'receipt_ai_error', public readonly keyCheck?: KeyCheckDiagnostic) { super(message); }
 }
-const OWNER_EMAIL = 'dessimat0r@gmail.com';
+export function receiptAIOwnerEmail(environment: ReceiptAIEnvironment): string {
+  const email = environment.RECEIPT_AI_OWNER_EMAIL?.trim().toLowerCase();
+  if (!email || email.length > 320 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new ReceiptAIAccessError('Configure the verified receipt AI owner email before enabling shared receipt processing.', 503, 'not_configured');
+  return email;
+}
 const KEY_CHECK_CODES = new Set(['key_rejected', 'key_permission_denied', 'key_check_rate_limited', 'key_check_unavailable', 'key_check_timeout', 'key_check_server_error', 'key_check_request_rejected']);
 const PROVIDER_CODES = new Set(['invalid_api_key', 'insufficient_quota', 'rate_limit_exceeded', 'permission_denied', 'insufficient_permissions', 'unsupported_country_region_territory', 'server_error', 'service_unavailable', 'project_not_found']);
 const NETWORK_NAMES = new Set(['Error', 'TypeError', 'NetworkError', 'AbortError', 'TimeoutError', 'SecurityError', 'NotSupportedError']);
@@ -92,15 +98,8 @@ async function verifyAPIKey(request: Request, key: string, fetcher: typeof fetch
   if (response.status >= 500) throw new ReceiptAIAccessError('OpenAI is temporarily unable to verify the key. Try again shortly.', 503, 'key_check_server_error', diagnostic);
   throw new ReceiptAIAccessError('OpenAI could not accept the key-check request. Check the key and project permissions.', 400, 'key_check_request_rejected', diagnostic);
 }
-function decode(value: string): Uint8Array<ArrayBuffer> {
-  if (!/^[A-Za-z0-9_-]+$/.test(value)) throw Error();
-  return Uint8Array.from(atob(value.replace(/-/g, '+').replace(/_/g, '/')), character => character.charCodeAt(0));
-}
-function encode(value: Uint8Array) {
-  let binary = '';
-  for (const byte of value) binary += String.fromCharCode(byte);
-  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-}
+const decode = decodeBase64url;
+
 function tokenKey(environment: ReceiptAIEnvironment): string | null {
   try { return environment.RECEIPT_AI_TOKEN_KEY && decode(environment.RECEIPT_AI_TOKEN_KEY).length === 32 ? environment.RECEIPT_AI_TOKEN_KEY : null; }
   catch { return null; }
@@ -123,7 +122,8 @@ async function decryptedKey(encrypted: string, userId: string, secret: string) {
 async function settings(database: D1Database) {
   return database.prepare("SELECT user_id,api_key_encrypted,provider,version FROM receipt_ai_settings WHERE id='shared'").first<SettingsRow>();
 }
-async function verifiedOwner(request: Request, profile: Account, database: D1Database): Promise<boolean> {
+async function verifiedOwner(request: Request, profile: Account, database: D1Database, environment: ReceiptAIEnvironment): Promise<boolean> {
+  const OWNER_EMAIL = receiptAIOwnerEmail(environment);
   if (profile.email.toLowerCase() !== OWNER_EMAIL) return false;
   const provider = trustedChatGPTIdentity(request);
   if (provider?.email !== OWNER_EMAIL) return false;
@@ -136,11 +136,12 @@ async function verifiedOwner(request: Request, profile: Account, database: D1Dat
 }
 async function accessState(request: Request, profile: Account, database: D1Database, environment: ReceiptAIEnvironment) {
   const secret = tokenKey(environment);
-  const ownerEmail = profile.email.toLowerCase() === OWNER_EMAIL;
   const row = secret ? await settings(database) : null;
+  let ownerEmail = false;
+  try { ownerEmail = profile.email.toLowerCase() === receiptAIOwnerEmail(environment); } catch { /* Bootstrap management fails closed; existing participant access stays available. */ }
   // First setup pins the verified canonical owner. Later password login can
   // manage that same binding; another account with the same email cannot claim it.
-  const manageable = ownerEmail && (row ? row.user_id === profile.id : await verifiedOwner(request, profile, database));
+  const manageable = row ? row.user_id === profile.id : ownerEmail && await verifiedOwner(request, profile, database, environment);
   const managementReason = manageable ? undefined : ownerEmail && !row ? 'verification_required' as const : 'account_restricted' as const;
   return { secret, row, manageable, managementReason };
 }
@@ -149,7 +150,8 @@ async function assertCurrentAccount(request: Request, profile: Account, database
   if (current.id !== profile.id || current.email !== profile.email.toLowerCase()) throw new ReceiptAIAccessError('Your account changed. Sign in again before changing receipt processing.', 401, 'account_changed');
   return current;
 }
-async function settingsAuthorization(request: Request, profile: Account, principal: AuthIdentity, bootstrap: boolean) {
+async function settingsAuthorization(request: Request, profile: Account, principal: AuthIdentity, bootstrap: boolean, environment: ReceiptAIEnvironment) {
+  const OWNER_EMAIL = bootstrap ? receiptAIOwnerEmail(environment) : undefined;
   const parts: string[] = [], bindings: (string | null)[] = [];
   const cookie = (request.headers.get('cookie') || '').split(';').map(value => value.trim()).filter(value => value.startsWith('tt_session='));
   const rawToken = cookie.length === 1 ? cookie[0].slice('tt_session='.length) : '';
@@ -176,6 +178,28 @@ async function settingsAuthorization(request: Request, profile: Account, princip
   }
   return { sql: parts.map(part => `(${part})`).join(' AND '), bindings };
 }
+/** Operator-only migration helper; deliberately has no HTTP or MCP route. */
+export async function migrateReceiptAIOwner(database: D1Database, environment: ReceiptAIEnvironment,
+  input: { expectedUserId: string; expectedVersion: number; newUserId: string }) {
+  const email = receiptAIOwnerEmail(environment);
+  const before = await settings(database);
+  if (!before || before.user_id !== input.expectedUserId || before.version !== input.expectedVersion || input.newUserId === input.expectedUserId) {
+    throw new ReceiptAIAccessError('The shared receipt owner changed. Read the current owner/version before migration.', 409, 'settings_changed');
+  }
+  // The target must already be canonically linked to its trusted provider.
+  // Ciphertext uses the old account as AAD: clear it, never rebind it blindly.
+  const results = await database.batch([
+    database.prepare(`UPDATE receipt_ai_settings SET user_id=?,api_key_encrypted=NULL,provider='api',version=version+1
+      WHERE id='shared' AND user_id=? AND version=? AND EXISTS (SELECT 1 FROM profiles p
+        JOIN auth_links l ON l.user_id=p.id WHERE p.id=? AND lower(p.email)=?)`)
+      .bind(input.newUserId, input.expectedUserId, input.expectedVersion, input.newUserId, email),
+    accountAuditStatement(database, { userId: input.newUserId, actorName: 'Site operator', entityType: 'chatgpt', entityId: 'receipt-processing', action: 'update',
+      before: { keyConfigured: !!before.api_key_encrypted, provider: before.provider }, after: { keyConfigured: false, provider: 'api', ownerChanged: true }, source: 'system' }),
+  ]);
+  if (!results[0].meta.changes) throw new ReceiptAIAccessError('The target owner is not canonically verified or the settings changed.', 409, 'settings_changed');
+  return { migrated: true, version: before.version + 1, keyConfigured: false };
+}
+
 export async function receiptAIStatus(request: Request, profile: Account, database: D1Database, environment: ReceiptAIEnvironment) {
   await assertCurrentAccount(request, profile, database);
   const state = await accessState(request, profile, database, environment);
@@ -213,8 +237,7 @@ export async function getReceiptAIAccess(request: Request, profile: Account, dat
 }
 async function setupBudget(database: D1Database, userId: string) {
   const now = Date.now(), window = 60_000;
-  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`receipt-api-setup:${userId}`)));
-  const key = encode(digest);
+  const key = await sha256Base64url(`receipt-api-setup:${userId}`);
   const row = await database.prepare(`INSERT INTO auth_rate_limits (key_hash,window_start,attempts) VALUES (?,?,1)
     ON CONFLICT(key_hash) DO UPDATE SET attempts=CASE WHEN auth_rate_limits.window_start<=? THEN 1 ELSE auth_rate_limits.attempts+1 END,
       window_start=CASE WHEN auth_rate_limits.window_start<=? THEN excluded.window_start ELSE auth_rate_limits.window_start END
@@ -224,6 +247,7 @@ async function setupBudget(database: D1Database, userId: string) {
 export async function saveReceiptAISettings(request: Request, profile: Account, database: D1Database, environment: ReceiptAIEnvironment, body: unknown, fetcher: typeof fetch = fetch) {
   const principal = await assertCurrentAccount(request, profile, database);
   const state = await accessState(request, profile, database, environment);
+  if (!state.row) receiptAIOwnerEmail(environment);
   if (!state.manageable) throw new ReceiptAIAccessError('Only the verified site owner can configure the shared receipt-processing key.', 403, state.managementReason);
   if (!state.secret) throw new ReceiptAIAccessError('The site owner must enable encrypted API-key storage first.', 503, 'not_configured');
   if (!body || typeof body !== 'object' || Array.isArray(body)) throw new ReceiptAIAccessError('Enter an API key or choose a processing mode.');
@@ -243,8 +267,8 @@ export async function saveReceiptAISettings(request: Request, profile: Account, 
   if (provider === 'siwc' && (environment.CHATGPT_PLAN_ENABLED !== 'true' || !(await chatGPTPlanStatus(database, profile.id, environment)).configured)) throw new ReceiptAIAccessError('SIWC is disabled until an approved hosted plan-usage client is configured.', 503, 'siwc_disabled');
   const before = state.row ? { keyConfigured: !!state.row.api_key_encrypted, provider: state.row.provider } : null;
   await assertCurrentAccount(request, profile, database);
-  if (!state.row && !await verifiedOwner(request, profile, database)) throw new ReceiptAIAccessError('The verified account link changed. Reconnect before saving a key.', 401, 'account_changed');
-  const authorization = await settingsAuthorization(request, profile, principal, !state.row);
+  if (!state.row && !await verifiedOwner(request, profile, database, environment)) throw new ReceiptAIAccessError('The verified account link changed. Reconnect before saving a key.', 401, 'account_changed');
+  const authorization = await settingsAuthorization(request, profile, principal, !state.row, environment);
   const previousVersion = state.row?.version || 0;
   const results = await database.batch([
     database.prepare(`INSERT INTO receipt_ai_settings (id,user_id,api_key_encrypted,provider,version)
@@ -261,10 +285,11 @@ export async function saveReceiptAISettings(request: Request, profile: Account, 
 export async function removeReceiptAIKey(request: Request, profile: Account, database: D1Database, environment: ReceiptAIEnvironment) {
   const principal = await assertCurrentAccount(request, profile, database);
   const state = await accessState(request, profile, database, environment);
+  if (!state.row) receiptAIOwnerEmail(environment);
   if (!state.manageable) throw new ReceiptAIAccessError('Only the verified site owner can configure the shared receipt-processing key.', 403, state.managementReason);
   if (!state.secret) throw new ReceiptAIAccessError('Encrypted receipt-key storage is not configured.', 503, 'not_configured');
   await assertCurrentAccount(request, profile, database);
-  const authorization = await settingsAuthorization(request, profile, principal, !state.row);
+  const authorization = await settingsAuthorization(request, profile, principal, !state.row, environment);
   // Even a no-key removal fences setup requests currently validating a key.
   const previousVersion = state.row?.version || 0, provider = state.row?.provider || 'api';
   const results = await database.batch([

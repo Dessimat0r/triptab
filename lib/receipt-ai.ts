@@ -1,7 +1,8 @@
+import { sha256Hex } from './data-utils';
+import { DEFAULT_RECEIPT_MODEL } from './receipt-ai-config';
 import { z } from 'zod';
 import { CURRENCIES, MAX_AMOUNT, MAX_UNITS, draftSchema, receiptQuantitySchema, total, type Currency, type Draft, type Trip } from './model';
 import { mergeReceiptSourceLines, reconcileReceiptScan, type ReceiptScanWarning } from './receipt-scan';
-import { DEFAULT_RECEIPT_MODEL } from './receipt-ai-config';
 
 export class ReceiptAIError extends Error {
   constructor(message: string, public readonly status = 502, public readonly code = 'receipt_processing_failed') {
@@ -251,7 +252,7 @@ async function completedReceipt(response: Response, provider: 'api' | 'siwc'): P
   // Deltas, event envelopes and the completed result repeat output. Bound that
   // transport separately from a single event/final result so a valid receipt
   // does not fail merely because the provider streamed it in small increments.
-  const maxStreamBytes = 8 * 1024 * 1024, maxEventBytes = 1_000_000, maxResultBytes = 1_000_000;
+  const maxStreamBytes = 8 * 1024 * 1024, maxEventBytes = 6 * 1_000_000 + 16_384, maxResultBytes = 1_000_000;
   const encoder = new TextEncoder();
   let pending = '', eventData: string[] = [], eventBytes = 0, bytes = 0;
   function event() {
@@ -388,7 +389,7 @@ export function applyReceiptTranscription(_trip: Trip, draft: Draft, transcripti
       // A legacy saved value may have been entered or corrected by a person.
       // Only the untouched, empty initial placeholder is safe to infer from
       // shape; current recognized/default fields carry explicit provenance.
-      return !previous || (source === undefined ? untouched && blank(previous) : source !== 'user');
+      return !previous || (source === undefined ? (field === 'name' ? !previous.name.trim() : previous.amount === null || blank(previous)) : source !== 'user');
     };
     const readName = canObserve('name'), readAmount = canObserve('amount');
     const nextQuantity = previous ? (quantity && previous.fieldSources?.quantity !== 'user'
@@ -523,8 +524,7 @@ export async function consumeReceiptProcessBudget(database: D1Database, userId: 
   const now = options.now ?? Date.now();
   const window = Math.floor(now / 60_000) * 60_000;
   async function consume(namespace: string, retentionStamp: number) {
-    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(namespace));
-    const key = Array.from(new Uint8Array(digest), value => value.toString(16).padStart(2, '0')).join('');
+    const key = await sha256Hex(namespace);
     return database.prepare(`INSERT INTO auth_rate_limits (key_hash, window_start, attempts) VALUES (?, ?, 1)
       ON CONFLICT(key_hash) DO UPDATE SET attempts = attempts + 1 RETURNING attempts`).bind(key, retentionStamp).first<{ attempts: number }>();
   }

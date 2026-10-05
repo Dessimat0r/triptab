@@ -1,3 +1,4 @@
+import { encodeBase64url as base64url, decodeBase64url, sha256Hex, encodeHex as hex } from './data-utils';
 // Authentication is independent of ChatGPT. Provider headers are supplied by the
 // Sites gateway; browser sessions are opaque tokens and are stored only hashed.
 import { accountAuditStatement } from './audit';
@@ -32,19 +33,8 @@ type ProfileRow = { id: string; email: string; display_name: string; created_at:
 type Credential = { user_id: string; email: string; password_hash: string; password_salt: string; iterations: number };
 type PasswordDigest = { hash: string; salt: string; iterations: number };
 
-function hex(bytes: Uint8Array) {
-  return Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
-}
-function base64url(bytes: Uint8Array) {
-  return btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-}
-function decodeBase64url(value: string) {
-  return Uint8Array.from(atob(value.replace(/-/g, '+').replace(/_/g, '/')), character => character.charCodeAt(0));
-}
 function randomToken() { return base64url(crypto.getRandomValues(new Uint8Array(32))); }
-export async function hashToken(token: string) {
-  return hex(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token))));
-}
+export const hashToken = sha256Hex;
 export function normalizeEmail(value: unknown) {
   if (typeof value !== 'string') throw new AuthError('Enter a valid email address.');
   const email = value.trim().toLowerCase();
@@ -105,15 +95,6 @@ type ProfileStateRow = ProfileRow & { has_password: number; chatgpt_linked: numb
 type ProviderStateRow = { [Key in keyof ProfileStateRow]: ProfileStateRow[Key] | null } & { linked_user_id: string | null; legacy_disconnected: number };
 type AuthSnapshot = { identity: AuthIdentity; row: ProfileStateRow | null };
 
-async function sessionRow(request: Request, database: D1Database): Promise<ProfileStateRow | null> {
-  const token = sessionToken(request);
-  if (!token) return null;
-  return database.prepare(`SELECT p.id,p.email,p.display_name,p.created_at,
-    EXISTS (SELECT 1 FROM auth_credentials c WHERE c.user_id = p.id) AS has_password,
-    EXISTS (SELECT 1 FROM auth_links l WHERE l.user_id = p.id) AS chatgpt_linked
-    FROM auth_sessions s JOIN profiles p ON p.id = s.user_id WHERE s.token_hash = ? AND s.expires_at > ?`)
-    .bind(await hashToken(token), new Date().toISOString()).first<ProfileStateRow>();
-}
 async function providerRow(provider: AuthIdentity, database: D1Database): Promise<ProviderStateRow> {
   // Resolve the canonical link, profile and flags in one indexed snapshot.
   // Disconnection checks the raw provider ID even if that profile is missing.
@@ -158,16 +139,29 @@ export async function resolveIdentity(request: Request, options: { allowSession?
   return identity;
 }
 async function authSnapshot(request: Request, database: D1Database, provider: AuthIdentity | null, options: { allowSession?: boolean }): Promise<AuthSnapshot | null> {
-  if (options.allowSession !== false) {
-    const row = await sessionRow(request, database);
-    if (row) return { identity: { id: row.id, email: row.email, displayName: row.display_name, kind: 'session' }, row };
-    if ((request.headers.get('cookie') || '').split(';').some(value => value.trim() === `${SIGNED_OUT_COOKIE}=1`)) return null;
+  const token = options.allowSession !== false ? sessionToken(request) : null;
+  const signedOut = options.allowSession !== false && (request.headers.get('cookie') || '').split(';').some(value => value.trim() === `${SIGNED_OUT_COOKIE}=1`);
+  if (!token && (!provider || signedOut)) return null;
+  // Session precedence, provider linking, profile and flags share one SQL
+  // snapshot, including stale-cookie fallback. No inter-query principal switch.
+  const row = await database.prepare(`SELECT p.id,p.email,p.display_name,p.created_at,
+    s.user_id AS session_user_id,l.user_id AS linked_user_id,
+    EXISTS (SELECT 1 FROM auth_credentials c WHERE c.user_id=p.id) AS has_password,
+    EXISTS (SELECT 1 FROM auth_links linked WHERE linked.user_id=p.id) AS chatgpt_linked,
+    EXISTS (SELECT 1 FROM auth_credentials c WHERE c.user_id=identity.provider_id) AS legacy_disconnected
+    FROM (SELECT ? AS token_hash, ? AS provider_id) identity
+    LEFT JOIN auth_sessions s ON s.token_hash=identity.token_hash AND s.expires_at>?
+    LEFT JOIN auth_links l ON l.oai_user_id=identity.provider_id
+    LEFT JOIN profiles p ON p.id=COALESCE(s.user_id,l.user_id,identity.provider_id)`)
+    .bind(token ? await hashToken(token) : null, provider?.id ?? null, new Date().toISOString())
+    .first<ProviderStateRow & { session_user_id: string | null }>();
+  if (!row) return null;
+  if (row.session_user_id && row.id && row.email !== null && row.display_name !== null) {
+    return { identity: { id: row.id, email: row.email, displayName: row.display_name, kind: 'session' }, row: row as ProfileStateRow };
   }
-  if (!provider) return null;
-  const row = await providerRow(provider, database);
+  if (!provider || signedOut) return null;
   const identity = providerIdentity(provider, row);
-  if (!identity) return null;
-  return { identity, row: row.id ? row as ProfileStateRow : null };
+  return identity ? { identity, row: row.id ? row as ProfileStateRow : null } : null;
 }
 async function createProviderProfile(identity: AuthIdentity, database: D1Database, request?: Request, options: { allowSession?: boolean; requireIdentityEmail?: boolean } = {}) {
   if (identity.kind !== 'chatgpt' || !identity.email) throw new Error('UNAUTHORIZED');
@@ -204,10 +198,10 @@ async function profileRow(identity: AuthIdentity, database: D1Database): Promise
   if (!row) throw new Error('UNAUTHORIZED');
   return row;
 }
-export async function readAuthState(request: Request, database: D1Database, options: { allowSession?: boolean; requireIdentityEmail?: boolean } = {}): Promise<AuthState> {
+export async function readAuthContext(request: Request, database: D1Database, options: { allowSession?: boolean; requireIdentityEmail?: boolean } = {}): Promise<{ state: AuthState; identity?: AuthIdentity }> {
   const provider = trustedChatGPTIdentity(request);
   let snapshot = await authSnapshot(request, database, provider, options);
-  if (!snapshot) return { authenticated: false, hasPassword: false, chatgptLinked: false, chatgptAvailable: !!provider, emailVerified: false };
+  if (!snapshot) return { state: { authenticated: false, hasPassword: false, chatgptLinked: false, chatgptAvailable: !!provider, emailVerified: false } };
   // ensureProfile historically requires an identity email even for an existing
   // unlinked provider profile. Auth status alone retains its existing behavior.
   if (options.requireIdentityEmail) {
@@ -226,14 +220,18 @@ export async function readAuthState(request: Request, database: D1Database, opti
   const hasPassword = !!row.has_password;
   const chatgptLinked = !!row.chatgpt_linked || identity.kind === 'chatgpt';
   const emailVerified = identity.kind === 'chatgpt' && !!identity.emailVerified && identity.email === row.email;
-  return {
+  return { identity, state: {
     authenticated: true, profile: {
       id: row.id, email: row.email, displayName: row.display_name, createdAt: row.created_at,
       authMethod: identity.kind === 'session' ? 'password' : 'chatgpt', hasPassword, chatgptConnected: chatgptLinked, emailVerified,
     },
     hasPassword, chatgptLinked, chatgptAvailable: !!provider, emailVerified,
-  };
+  } };
 }
+export async function readAuthState(request: Request, database: D1Database, options: { allowSession?: boolean; requireIdentityEmail?: boolean } = {}): Promise<AuthState> {
+  return (await readAuthContext(request, database, options)).state;
+}
+
 function cookie(request: Request, token: string, expired = false) {
   const url = new URL(request.url);
   const local = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) && url.protocol === 'http:';

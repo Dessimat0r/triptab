@@ -1,8 +1,10 @@
+import { canonicalJson, sha256Hex } from '../lib/data-utils';
+import { transpileWithSharedImports } from './helpers/transpile';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
-import { ModuleKind, ScriptTarget, transpileModule } from 'typescript';
+import { ModuleKind, ScriptTarget } from 'typescript';
 import { applyReceiptTranscription, consumeReceiptProcessBudget, getChatGPTPlanModel, processReceiptImage, ReceiptAIError, type ReceiptTranscription } from '../lib/receipt-ai';
 import { draftSchema, shares, total, validateLedger, type Draft, type Ledger, type Trip } from '../lib/model';
 
@@ -303,8 +305,8 @@ test('valid incremental stream overhead above one megabyte does not discard a co
 });
 
 test('stream, individual event and multi-line event buffers retain separate finite limits', async () => {
-  const tooLargeEvent = 'data: ' + JSON.stringify({ type: 'response.output_text.delta', delta: 'x'.repeat(1_000_000) }) + '\n\n';
-  const tooLargeMultiLine = Array.from({ length: 20 }, () => 'data: ' + 'x'.repeat(60_000)).join('\n') + '\n\n';
+  const tooLargeEvent = 'data: ' + JSON.stringify({ type: 'response.output_text.delta', delta: 'x'.repeat(6_020_000) }) + '\n\n';
+  const tooLargeMultiLine = Array.from({ length: 110 }, () => 'data: ' + 'x'.repeat(60_000)).join('\n') + '\n\n';
   for (const text of [tooLargeEvent, tooLargeMultiLine]) {
     await assert.rejects(processReceiptImage(input, { fetcher: async () => new Response(text,
       { headers: { 'content-type': 'text/event-stream' } }) }), /event that is too large/);
@@ -356,7 +358,7 @@ test('invalid image/context, oversized streams, network faults and cancellation 
     await assert.rejects(processReceiptImage({ ...input, image }, { fetcher: async () => { assert.fail('invalid image must not contact a model'); } }), /saved JPEG/);
   }
   await assert.rejects(processReceiptImage({ ...input, questionId: 'missing-question' }, { fetcher: async () => { assert.fail('invalid question must not contact a model'); } }), /saved user question/);
-  await assert.rejects(processReceiptImage(input, { fetcher: async () => new Response(`:${'x'.repeat(1_000_001)}`, { headers: { 'content-type': 'text/event-stream' } }) }), /too large/);
+  await assert.rejects(processReceiptImage(input, { fetcher: async () => new Response(`:${'x'.repeat(6_020_000)}`, { headers: { 'content-type': 'text/event-stream' } }) }), /too large/);
   await assert.rejects(processReceiptImage(input, { fetcher: async () => { throw new Error('PRIVATE NETWORK DETAILS'); } }),
     (error: unknown) => error instanceof ReceiptAIError && error.status === 503 && !error.message.includes('PRIVATE'));
   await assert.rejects(processReceiptImage(input, { signal: AbortSignal.abort(), fetcher: async () => { throw new Error('aborted'); } }),
@@ -989,9 +991,13 @@ const store = {
   db() { return { prepare(sql: string) { return { bind(...values: (string | number)[]) { return {
     async first() { return budgetDatabase.prepare(sql).get(...values) ?? null; }, async run() { return budgetDatabase.prepare(sql).run(...values); },
   }; } }; } }; },
-  async writeLedger(actor: string, data: Ledger, revision: number, options: { source: string }) {
+  async writeLedger(actor: string, data: Ledger, revision: number, options: { source: string; tripSnapshot?: Trip }) {
     assert.equal(actor, owner); state.writeAttempts++; state.beforeWrite?.();
-    if (revision !== state.revision) throw new Error('CONFLICT');
+    if (options.tripSnapshot) {
+      const current = state.data.trips.find(trip => trip.id === options.tripSnapshot!.id);
+      if (!state.metadataAllowed || state.actorChanged || !state.imagePresent || state.imageVersion !== 'original-image' || JSON.stringify(current) !== JSON.stringify(options.tripSnapshot)) throw new Error('CONFLICT');
+      data = { trips: state.data.trips.map(trip => data.trips.find(value => value.id === trip.id) ?? trip) };
+    } else if (revision !== state.revision) throw new Error('CONFLICT');
     state.data = validateLedger(data, { previous: state.data }); state.revision++; state.writes++; state.savedSources.push(options.source);
     return { data: structuredClone(state.data), revision: state.revision };
   },
@@ -1007,7 +1013,7 @@ Object.defineProperty(globalThis, Symbol.for('triptab.receipt-ai-route-access'),
 const storeUrl = dataUrl(`const store=globalThis[Symbol.for('triptab.receipt-ai-route-store')];\n${Object.keys(store).map(name => `export const ${name}=store.${name};`).join('\n')}`);
 const accessUrl = dataUrl(`const access=globalThis[Symbol.for('triptab.receipt-ai-route-access')];\n${Object.keys(credentialAccess).map(name => `export const ${name}=access.${name};`).join('\n')}`);
 const routeSource = await readFile(new URL('../app/api/receipt/process/route.ts', import.meta.url), 'utf8');
-const routeCode = transpileModule(routeSource, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
+const routeCode = transpileWithSharedImports(routeSource, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
   .replace("'cloudflare:workers'", JSON.stringify(dataUrl('export const env={};')))
   .replace("'@/lib/store'", JSON.stringify(storeUrl)).replace("'@/lib/receipt-ai-access'", JSON.stringify(accessUrl))
   .replace("'@/lib/receipt-ai'", JSON.stringify(new URL('../lib/receipt-ai.ts', import.meta.url).href))
@@ -1096,7 +1102,6 @@ test('HTTP refuses wrong account/trip/draft/image/revision and foreign or malfor
     { body: { ...requestBody, tripId: 'other' }, status: 404 },
     { body: { ...requestBody, draftId: 'other' }, status: 404 },
     { body: { ...requestBody, receiptId: 'other' }, status: 409 },
-    { body: { ...requestBody, revision: 6 }, status: 409 },
     { body: { ...requestBody, questionId: 'other' }, status: 400 },
     { body: { ...requestBody, payer: 'bob' }, status: 400 },
     { body: requestBody, headers: { origin: 'https://evil.test' }, status: 403 },
@@ -1154,7 +1159,7 @@ test('HTTP unrelated ledger edits retain paid native extraction and preserve the
   }
 });
 
-test('HTTP retries unrelated CAS conflicts without a second paid model call or dropping intervening edits', async () => {
+test('HTTP other-trip writes during proposal commit do not conflict or trigger another paid model call', async () => {
   reset();
   state.beforeWrite = () => {
     if (state.writeAttempts > 2) return;
@@ -1164,14 +1169,14 @@ test('HTTP retries unrelated CAS conflicts without a second paid model call or d
   const response = await http();
   assert.equal(response.status, 200);
   assert.equal(state.providerCalls, 1);
-  assert.equal(state.writeAttempts, 3);
+  assert.equal(state.writeAttempts, 1);
   assert.equal(state.writes, 1);
-  assert.equal(state.revision, 10);
-  assert.deepEqual(state.data.trips.slice(1).map(value => value.name), ['Concurrent holiday 1', 'Concurrent holiday 2']);
+  assert.equal(state.revision, 9);
+  assert.deepEqual(state.data.trips.slice(1).map(value => value.name), ['Concurrent holiday 1']);
   assert.equal(state.data.trips[0].drafts[0].items.length, 2);
 });
 
-test('HTTP CAS retries remain bounded during continual unrelated writes and retain the waiting draft', async () => {
+test('HTTP CAS retries remain bounded during continual same-trip writes and retain the waiting draft', async () => {
   reset();
   state.beforeWrite = () => { state.revision++; state.data.trips[0].name = `Concurrent holiday ${state.writeAttempts}`; };
   const response = await http();
@@ -1252,4 +1257,48 @@ test('HTTP does not reinterpret a saved natural-language share question as initi
   assert.equal(state.accessCalls, 0);
   assert.equal(state.providerCalls, 0);
   assert.equal(state.writes, 0);
+});
+
+test('opting out of purchase detail reading protects existing date/time even with receipt provenance', () => {
+  const existing = {...draft, date: '2026-10-04', time: '12:00', fieldSources: {date:'receipt' as const, time:'receipt' as const}};
+  const result = applyReceiptTranscription(trip, existing, transcription, undefined, {readPurchaseDetails:false});
+  assert.equal(result.date, existing.date); assert.equal(result.time, existing.time);
+});
+
+test('escaped completed event above one megabyte accepts a bounded valid receipt result', async () => {
+  const output: ReceiptTranscription = { ...transcription, sourceLines: Array.from({ length: 200 }, (_, lineIndex) => ({
+    lineIndex, observedText: '"'.repeat(500), confidence: 'high', kind: 'other', amount: null, mappedTo: null,
+  })), warnings: Array.from({ length: 200 }, (_, lineIndex) => ({ code: 'low-confidence', lineIndex, observedText: '"'.repeat(500) })),
+    items: Array.from({ length: 200 }, (_, lineIndex) => ({ id: null, name: '"'.repeat(200), amount: 1, scanSource: { lineIndex, observedText: '"'.repeat(500), confidence: 'high' } })) };
+  assert.ok(Buffer.byteLength(JSON.stringify(output)) < 1_000_000);
+  assert.ok(Buffer.byteLength(JSON.stringify(completed(output))) > 1_000_000);
+  assert.deepEqual(await processReceiptImage(input, { fetcher: async () => streamResponse([completed(output)], { split: 8192 }) }), output);
+});
+
+test('a stale deployment revision cannot reject an unchanged native receipt before inference', async () => {
+  reset(); state.revision = 99;
+  assert.equal((await http()).status, 200);
+  assert.equal(state.providerCalls, 1); assert.equal(state.writes, 1);
+});
+
+test('native recognition fills unknown-provenance null prices and blank names while preserving populated manual fields', () => {
+  const old: Draft = { ...draft, status: 'review', items: [
+    { id: 'missing', name: '', amount: null, members: ['alice'] },
+    { id: 'manual', name: 'Human price', amount: 123, members: ['bob'] },
+  ] };
+  const proposal = applyReceiptTranscription(trip, old, { ...transcription, items: [
+    { id: 'missing', name: 'Readable coffee', amount: 250 }, { id: 'manual', name: 'Different', amount: 999 },
+  ] });
+  assert.equal(proposal.items[0].name, 'Readable coffee'); assert.equal(proposal.items[0].amount, 250);
+  assert.equal(proposal.items[0].fieldSources?.amount, 'receipt');
+  assert.equal(proposal.items[1].amount, 123); assert.equal(proposal.items[1].name, 'Human price');
+});
+
+test('draft fingerprint rejects a changed receipt before spending and ignores unrelated revisions', async () => {
+  reset(); const draftHash = await sha256Hex(canonicalJson(state.data.trips[0].drafts[0]));
+  state.revision += 20;
+  assert.equal((await http({ ...requestBody, draftHash })).status, 200);
+  reset(); state.data.trips[0].drafts[0].title = 'Manual correction';
+  assert.equal((await http({ ...requestBody, draftHash })).status, 409);
+  assert.equal(state.providerCalls, 0); assert.equal(state.accessCalls, 0); assert.equal(state.writes, 0);
 });

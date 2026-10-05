@@ -1,8 +1,9 @@
+import { transpileWithSharedImports } from './helpers/transpile';
 import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
-import { ModuleKind, ScriptTarget, transpileModule } from 'typescript';
+import { ModuleKind, ScriptTarget } from 'typescript';
 import { hashToken } from '../lib/auth';
 import { receiptActivityScope } from '../lib/activity-scope';
 import type { ActivityEntity, ActivityEvent, ActivitySource } from '../lib/audit';
@@ -44,7 +45,7 @@ Object.defineProperty(globalThis, Symbol.for('triptab.activity-test-env'), { val
 const dataUrl = (source: string) => 'data:text/javascript;base64,' + Buffer.from(source).toString('base64');
 const envUrl = dataUrl("export const env=globalThis[Symbol.for('triptab.activity-test-env')];");
 const notificationUrl = dataUrl('export const activityNotification=()=>null; export const notifyMembers=async()=>{};');
-const compile = (source: string) => transpileModule(source, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText;
+const compile = (source: string) => transpileWithSharedImports(source, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText;
 const storeUrl = dataUrl(compile(await readFile(new URL('../lib/store.ts', import.meta.url), 'utf8'))
   .replace("'cloudflare:workers'", JSON.stringify(envUrl))
   .replace("'zod'", JSON.stringify(import.meta.resolve('zod')))

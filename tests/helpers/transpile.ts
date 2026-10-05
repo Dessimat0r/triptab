@@ -1,0 +1,9 @@
+import { transpileModule } from 'typescript';
+
+/** Default shared modules for data-URL test harnesses; caller mocks still win. */
+export function transpileWithSharedImports(...args: Parameters<typeof transpileModule>): ReturnType<typeof transpileModule> {
+  const result = transpileModule(...args);
+  result.outputText = result.outputText.replace(/(['"])(?:\.\/|@\/lib\/)(data-utils|receipt-ai-config)\1/g,
+    (_, _quote: string, name: string) => JSON.stringify(new URL(`../../lib/${name}.ts`, import.meta.url).href));
+  return result;
+}

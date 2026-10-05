@@ -52,7 +52,7 @@ export async function createReceiptFlowWorker(options: { seedTrip?: boolean } = 
   fetchMock.disableNetConnect();
   const worker = new Miniflare({ modules: true, script: bundled.outputFiles[0].text,
     compatibilityDate: '2026-05-15', compatibilityFlags: ['nodejs_compat'],
-    bindings: { RECEIPT_AI_TOKEN_KEY: randomBytes(32).toString('base64url'), RECEIPT_AI_CHATGPT_PLAN_ENABLED: 'false' },
+    bindings: { RECEIPT_AI_OWNER_EMAIL: 'dessimat0r@gmail.com', RECEIPT_AI_TOKEN_KEY: randomBytes(32).toString('base64url'), RECEIPT_AI_CHATGPT_PLAN_ENABLED: 'false' },
     d1Databases: { DB: 'receipt-flow-native' }, d1Persist: false,
     r2Buckets: ['RECEIPTS'], r2Persist: false, fetchMock, log: new Log(LogLevel.NONE),
   });

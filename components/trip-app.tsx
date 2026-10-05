@@ -1,4 +1,5 @@
 "use client";
+import { canonicalJson, sha256Hex } from "@/lib/data-utils";
 import { TripTabLink as Link } from "@/components/trip-routing";
 import { TripTabRouteProvider, TripTabNavigation, useTripTabNavigation, useTripTabEntryQuery } from "@/components/trip-routing";
 import type { TripSection } from "@/lib/trip-routes";
@@ -887,7 +888,7 @@ export default function Home({ children }: { children: ReactNode }) {
       { ...active, draftId: draft.id, receiptId: draft.receiptId }, draft);
     try {
       const response = await fetch("/api/receipt/process", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tripId, draftId: draft.id, receiptId: draft.receiptId, revision: latestSnapshot.current.revision, readPurchaseDetails }) });
+        body: JSON.stringify({ tripId, draftId: draft.id, receiptId: draft.receiptId, revision: latestSnapshot.current.revision, draftHash: await sha256Hex(canonicalJson(draft)), readPurchaseDetails }) });
       const snapshot = await response.json() as { data: Ledger; revision: number; error?: string };
       if (requestId !== receiptProcessRequest.current || !isReceiptSessionCurrent(session, tripId, accountId)) return false;
       const current = latestSnapshot.current.data.trips.find(value => value.id === tripId)?.drafts.find(value => value.id === draft.id);

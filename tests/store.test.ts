@@ -1,10 +1,11 @@
+import { transpileWithSharedImports } from './helpers/transpile';
 import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
 import { createRequire } from 'node:module';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
-import { ModuleKind, ScriptTarget, transpileModule } from 'typescript';
+import { ModuleKind, ScriptTarget } from 'typescript';
 import { parseLedgerStructure, type Trip } from '../lib/model';
 import type { ActivityEvent } from '../lib/store';
 import { receiptMemorySchema } from '../lib/receipt-context';
@@ -63,13 +64,13 @@ Object.defineProperty(globalThis, Symbol.for('triptab.store-test-env'), { value:
 Object.defineProperty(globalThis, Symbol.for('triptab.store-test-notifications'), { value: notifications, configurable: true });
 const envUrl = 'data:text/javascript;base64,' + Buffer.from("export const env=globalThis[Symbol.for('triptab.store-test-env')]; export const waitUntil=()=>{};").toString('base64');
 const notificationStoreUrl = 'data:text/javascript;base64,' + Buffer.from("export const db=()=>{throw new Error('Notification transport must be mocked');}; export class RequestError extends Error {}").toString('base64');
-const notificationSource = transpileModule(await readFile(new URL('../lib/notifications.ts', import.meta.url), 'utf8'), { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
+const notificationSource = transpileWithSharedImports(await readFile(new URL('../lib/notifications.ts', import.meta.url), 'utf8'), { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
   .replace("'cloudflare:workers'", JSON.stringify(envUrl)).replace("'./store'", JSON.stringify(notificationStoreUrl))
   .replaceAll("'./audit'", JSON.stringify(new URL('../lib/audit.ts', import.meta.url).href));
 const notificationFormatterUrl = 'data:text/javascript;base64,' + Buffer.from(notificationSource).toString('base64');
 const notificationUrl = 'data:text/javascript;base64,' + Buffer.from(`export {activityNotification} from ${JSON.stringify(notificationFormatterUrl)}; export const notifyMembers=async(...args)=>{globalThis[Symbol.for('triptab.store-test-notifications')].push(args);};`).toString('base64');
 const source = await readFile(new URL('../lib/store.ts', import.meta.url), 'utf8');
-const compiled = transpileModule(source, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
+const compiled = transpileWithSharedImports(source, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
   .replace("'zod'", JSON.stringify(pathToFileURL(createRequire(import.meta.url).resolve('zod').replace(/\.cjs$/, '.js')).href))
   .replace("'cloudflare:workers'", JSON.stringify(envUrl))
   .replace("'./model'", JSON.stringify(new URL('../lib/model.ts', import.meta.url).href))
@@ -132,7 +133,7 @@ async function history(user = actor, id = 'trip-1') { return (await store.readAc
 function lastEntity(events: ActivityEvent[], type: string, id: string) { return events.find(event => event.entityType === type && event.entityId === id)!; }
 async function ledgerRoute() {
   const routeSource = await readFile(new URL('../app/api/ledger/route.ts', import.meta.url), 'utf8');
-  const routeCompiled = transpileModule(routeSource, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
+  const routeCompiled = transpileWithSharedImports(routeSource, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
     .replace("'@/lib/store'", JSON.stringify(storeUrl))
     .replace("'@/lib/ledger-freshness'", JSON.stringify(new URL('../lib/ledger-freshness.ts', import.meta.url).href));
   return import('data:text/javascript;base64,' + Buffer.from(routeCompiled).toString('base64')) as Promise<{ GET(request: Request): Promise<Response>; HEAD(request: Request): Promise<Response>; POST(request: Request): Promise<Response> }>;
@@ -819,7 +820,7 @@ test('a provider link winning before profile creation leaves no orphan profile o
   assert.equal(database.sqlite.prepare('SELECT COUNT(*) AS count FROM account_activity_events').get()?.count, 0);
 });
 
-test('profile reads reject a raced provider link even when the previous provider profile already exists', async () => {
+test('profile reads use a single coherent provider snapshot and observe a link change on the next request', async () => {
   const database = await storage();
   database.sqlite.prepare('INSERT INTO profiles (id,email,display_name,created_at) VALUES (?,?,?,?)')
     .run('old-provider', 'old@example.com', 'Old Traveller', '2026-10-04T00:00:00Z');
@@ -834,13 +835,14 @@ test('profile reads reject a raced provider link even when the previous provider
     }
     return prepare(sql);
   };
-  await assert.rejects(store.ensureProfile(providerRequest), /UNAUTHORIZED/);
+  assert.equal((await store.ensureProfile(providerRequest)).id, 'old-provider');
+  assert.equal(reads, 1);
   assert.equal(database.sqlite.prepare('SELECT display_name FROM profiles WHERE id=?').get('old-provider')?.display_name, 'Old Traveller');
   assert.equal(database.sqlite.prepare('SELECT COUNT(*) AS count FROM account_activity_events').get()?.count, 0);
   assert.equal((await store.ensureProfile(providerRequest)).id, actor);
 });
 
-test('profile reads recheck the original provider when its existing canonical link changes', async () => {
+test('each profile read observes its current canonical link without mixing another snapshot', async () => {
   const database = await storage();
   database.sqlite.prepare('INSERT INTO auth_links (oai_user_id,user_id,created_at) VALUES (?,?,?)')
     .run('linked-provider', actor, '2026-10-04T00:00:00Z');
@@ -854,7 +856,8 @@ test('profile reads recheck the original provider when its existing canonical li
     }
     return prepare(sql);
   };
-  await assert.rejects(store.ensureProfile(providerRequest), /UNAUTHORIZED/);
+  assert.equal((await store.ensureProfile(providerRequest)).id, actor);
+  assert.equal(reads, 1);
   assert.equal(database.sqlite.prepare('SELECT COUNT(*) AS count FROM account_activity_events').get()?.count, 0);
   assert.equal((await store.ensureProfile(providerRequest)).id, member);
 });
@@ -864,7 +867,7 @@ test('activity endpoint requires auth/membership and validates bounded, unambigu
   const database = await storage();
   await create(database);
   const routeSource = await readFile(new URL('../app/api/activity/route.ts', import.meta.url), 'utf8');
-  const routeCompiled = transpileModule(routeSource, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText.replace("'@/lib/store'", JSON.stringify(storeUrl));
+  const routeCompiled = transpileWithSharedImports(routeSource, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText.replace("'@/lib/store'", JSON.stringify(storeUrl));
   const route = await import('data:text/javascript;base64,' + Buffer.from(routeCompiled).toString('base64')) as { GET(request: Request): Promise<Response> };
   const headers = { 'oai-authenticated-user-id': actor, 'oai-authenticated-user-email': 'owner@example.com', 'oai-authenticated-user-full-name': 'Original%20Owner' };
   const request = (query: string, authenticated = true) => new Request(`https://triptab.test/api/activity?${query}`, { headers: authenticated ? headers : {} });
@@ -882,7 +885,7 @@ test('ledger HTTP saves log trusted actors and reject unauthenticated, cross-ori
   context.mock.method(console, 'error', () => {});
   const database = await storage();
   const routeSource = await readFile(new URL('../app/api/ledger/route.ts', import.meta.url), 'utf8');
-  const routeCompiled = transpileModule(routeSource, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
+  const routeCompiled = transpileWithSharedImports(routeSource, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
     .replace("'@/lib/store'", JSON.stringify(storeUrl))
     .replace("'@/lib/ledger-freshness'", JSON.stringify(new URL('../lib/ledger-freshness.ts', import.meta.url).href));
   const route = await import('data:text/javascript;base64,' + Buffer.from(routeCompiled).toString('base64')) as { POST(request: Request): Promise<Response> };
@@ -1968,4 +1971,44 @@ test('native conditional GET follows silent trip normalization without fabricati
     assert.equal(noOp.status,304);assert.equal(noOp.headers.get('x-ledger-revision'),String(unchanged.revision));
     assert.equal((await database.prepare('SELECT COUNT(*) AS count FROM activity_events').first<{count:number}>())!.count,0);
   } finally { binding.DB=undefined;await worker.dispose(); }
+});
+test('scoped receipt saves ignore unrelated global writes but retain exact target snapshots and current audit revision', async () => {
+  const database = await storage();
+  const holiday = trip(); holiday.drafts = [{ ...dinner(), id: 'receipt-proposal', status: 'waiting' }];
+  await create(database, holiday); const before = await store.readLedger(actor);
+  await store.writeLedger(actor, { trips: [trip('other-trip')] }, before.revision);
+  const proposal = structuredClone(before.data.trips[0]); proposal.drafts[0].title = 'Recognised proposal';
+  database.beforeWriteBatch = () => {
+    const other = JSON.parse(database.sqlite.prepare('SELECT data FROM trips WHERE id=?').get('other-trip')!.data as string);
+    other.name = 'Latest concurrent trip';
+    database.sqlite.prepare('UPDATE trips SET data=? WHERE id=?').run(JSON.stringify(other), 'other-trip');
+    database.sqlite.prepare('UPDATE sync_state SET revision=revision+100,last_write=? WHERE id=1').run('unrelated-writer');
+  };
+  const saved = await store.writeLedger(actor, { trips: [proposal] }, before.revision, { source: 'web', tripSnapshot: before.data.trips[0] });
+  assert.equal(saved.data.trips.find(trip => trip.id === 'other-trip')?.name, 'Latest concurrent trip');
+  assert.equal(saved.data.trips.find(trip => trip.id === holiday.id)?.drafts[0].title, 'Recognised proposal');
+  const event = lastEntity(await history(), 'draft', 'receipt-proposal');
+  assert.equal(event.revision, saved.revision);
+  assert.equal(event.before?.title, 'Dinner'); assert.equal(event.after?.title, 'Recognised proposal');
+});
+
+test('scoped receipt CAS rejects changed target data, owner and member context atomically without proposal history', async () => {
+  for (const race of ['data', 'owner', 'membership', 'email'] as const) {
+    const database = await storage();
+    const holiday = trip(); holiday.drafts = [{ ...dinner(), id: 'receipt-proposal', status: 'waiting' }];
+    await create(database, holiday);
+    const before = await store.readLedger(actor); const eventCount = count(database);
+    const proposal = structuredClone(before.data.trips[0]); proposal.drafts[0].title = 'Recognised proposal';
+    database.beforeWriteBatch = () => {
+      if (race === 'data') {
+        const edited = structuredClone(before.data.trips[0]); edited.drafts[0].title = 'Human correction';
+        database.sqlite.prepare('UPDATE trips SET data=? WHERE id=?').run(JSON.stringify(edited), holiday.id);
+      } else if (race === 'owner') database.sqlite.prepare('UPDATE trips SET owner=? WHERE id=?').run(member, holiday.id);
+      else if (race === 'membership') database.sqlite.prepare('UPDATE memberships SET member_id=? WHERE trip_id=? AND user_id=?').run('b', holiday.id, actor);
+      else database.sqlite.prepare('UPDATE profiles SET email=? WHERE id=?').run('changed@example.test', actor);
+    };
+    await assert.rejects(store.writeLedger(actor, { trips: [proposal] }, before.revision, { tripSnapshot: before.data.trips[0] }), /CONFLICT/, race);
+    assert.equal(count(database), eventCount, race);
+    assert.notEqual((await store.readLedger(actor)).data.trips.find(trip => trip.id === holiday.id)?.drafts[0].title, 'Recognised proposal', race);
+  }
 });
