@@ -1,13 +1,9 @@
+import { canonicalJson } from './data-utils';
 import type { Ledger, Trip } from './model';
 
 export type LedgerConflict = { tripId: string; entityType: string; entityId: string };
-function stable(value: unknown): string {
-  if (value === undefined) return 'undefined';
-  if (value === null || typeof value !== 'object') return JSON.stringify(value);
-  if (Array.isArray(value)) return '[' + value.map(stable).join(',') + ']';
-  return '{' + Object.entries(value).filter(([, v]) => v !== undefined).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => JSON.stringify(k) + ':' + stable(v)).join(',') + '}';
-}
-export function equalSavedValue(a: unknown, b: unknown) { return stable(a) === stable(b); }
+
+export function equalSavedValue(a: unknown, b: unknown) { return canonicalJson(a, 'undefined') === canonicalJson(b, 'undefined'); }
 export function equalFinancialValue(a: unknown, b: unknown) {
   const omitConversation = (value: unknown) => {
     if (!value || typeof value !== 'object') return value;

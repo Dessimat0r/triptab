@@ -1,17 +1,17 @@
+import { transpileWithSharedImports } from './helpers/transpile';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
-import { JsxEmit, ModuleKind, ScriptTarget, transpileModule } from 'typescript';
+import { JsxEmit, ModuleKind, ScriptTarget } from 'typescript';
 import type { ActivityEvent } from '../lib/store';
 
 // Execute the exact activity field formatter used by PR2's History interface.
 const source = await readFile(new URL('../components/activity-panel.tsx', import.meta.url), 'utf8');
-const compiled = transpileModule(source + '\nexport { changes };', {
+const compiled = transpileWithSharedImports(source + '\nexport { changes };', {
   compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022, jsx: JsxEmit.ReactJSX },
 }).outputText
   .replace('import "./activity-details.css";', '')
-  .replaceAll('from "react"', `from ${JSON.stringify(import.meta.resolve('react'))}`)
-  .replaceAll('from "react/jsx-runtime"', `from ${JSON.stringify(import.meta.resolve('react/jsx-runtime'))}`);
+  .replace('from "@/lib/money-format"', `from ${JSON.stringify(import.meta.resolve('../lib/money-format.ts'))}`);
 const renderer = await import('data:text/javascript;base64,' + Buffer.from(compiled).toString('base64')) as {
   changes(event: ActivityEvent, currency: 'GBP', names: Record<string, string>, accountNames?: Record<string, string>): {label: string; before: string; after: string}[];
 };

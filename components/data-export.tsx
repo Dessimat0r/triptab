@@ -3,6 +3,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { Download } from "lucide-react";
 import type { Trip } from "@/lib/model";
+import "./data-export.css";
 
 export type DataExportProps = {
   trips?: Pick<Trip, "id" | "name">[];
@@ -19,11 +20,12 @@ export default function DataExport({ trips = [], tripId, compact = false }: Data
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
   const [history, setHistory] = useState<{ tripId: string; nextCursor: number | null } | null>(null);
+  const [accountHistoryCursors, setAccountHistoryCursors] = useState<{ json: number | null; csv: number | null }>({ json: null, csv: null });
   const request = useRef<AbortController | null>(null);
   useEffect(() => () => { request.current?.abort(); }, []);
 
-  async function download(scope: "account" | "trip" | "activity", format: "json" | "csv", older = false) {
-    if (busy || (scope !== "account" && !selectedTrip)) return;
+  async function download(scope: "account" | "trip" | "activity" | "account-activity", format: "json" | "csv", older = false) {
+    if (busy || ((scope === "trip" || scope === "activity") && !selectedTrip)) return;
     const controller = new AbortController();
     request.current?.abort();
     request.current = controller;
@@ -32,9 +34,10 @@ export default function DataExport({ trips = [], tripId, compact = false }: Data
     setStatus("");
     try {
       const params = new URLSearchParams({ scope, format });
-      if (scope !== "account") params.set("tripId", selectedTrip);
+      if (scope === "trip" || scope === "activity") params.set("tripId", selectedTrip);
       if (scope === "trip" && format === "json" && receipts) params.set("receipts", "1");
       if (scope === "activity" && older && history?.tripId === selectedTrip && history.nextCursor !== null) params.set("before", String(history.nextCursor));
+      if (scope === "account-activity" && older && accountHistoryCursors[format] !== null) params.set("before", String(accountHistoryCursors[format]));
       const response = await fetch(`/api/export?${params}`, { cache: "no-store", credentials: "same-origin", signal: controller.signal });
       if (!response.ok) {
         const body = await response.json() as { error?: string };
@@ -51,10 +54,11 @@ export default function DataExport({ trips = [], tripId, compact = false }: Data
       anchor.click();
       anchor.remove();
       setTimeout(() => URL.revokeObjectURL(objectUrl), 10_000);
-      if (scope === "activity") {
+      if (scope === "activity" || scope === "account-activity") {
         const cursor = response.headers.get("x-export-next-cursor");
         const nextCursor = cursor && /^[1-9]\d*$/.test(cursor) && Number.isSafeInteger(Number(cursor)) ? Number(cursor) : null;
-        setHistory({ tripId: selectedTrip, nextCursor });
+        if (scope === "activity") setHistory({ tripId: selectedTrip, nextCursor });
+        else setAccountHistoryCursors(previous => ({ ...previous, [format]: nextCursor }));
         setStatus(nextCursor === null ? "History downloaded. There are no older changes." : "History page downloaded. Download older changes to continue.");
       } else setStatus("Your download is ready.");
     } catch (cause) {
@@ -67,7 +71,15 @@ export default function DataExport({ trips = [], tripId, compact = false }: Data
   return <section className={`account-section data-export${compact ? " compact" : ""}`} aria-labelledby={`${id}-title`}>
     <h3 id={`${id}-title`}>Download your data</h3>
     <p className="footnote">Keep a copy of your profile and holidays you can currently access, including shared records. Photos and sign-in credentials are excluded.</p>
-    <button type="button" className="quiet" disabled={busy} onClick={() => download("account", "json")}><Download size={17} aria-hidden="true" />Account JSON</button>
+    <div className="data-export-actions">
+      <button type="button" className="quiet" disabled={busy} onClick={() => download("account", "json")}><Download size={17} aria-hidden="true" />Account JSON</button>
+      {!compact && <>
+        <button type="button" className="quiet" disabled={busy} onClick={() => download("account-activity", "json")}><Download size={17} aria-hidden="true" />Account history JSON</button>
+        <button type="button" className="quiet" disabled={busy} onClick={() => download("account-activity", "csv")}><Download size={17} aria-hidden="true" />Account history CSV</button>
+        {accountHistoryCursors.json !== null && <button type="button" className="quiet" disabled={busy} onClick={() => download("account-activity", "json", true)}><Download size={17} aria-hidden="true" />Older account history JSON</button>}
+        {accountHistoryCursors.csv !== null && <button type="button" className="quiet" disabled={busy} onClick={() => download("account-activity", "csv", true)}><Download size={17} aria-hidden="true" />Older account history CSV</button>}
+      </>}
+    </div>
     {(trips.length > 0 || tripId) && <>
       {trips.length > 1 ? <label htmlFor={`${id}-trip`}>Holiday
         <select id={`${id}-trip`} value={selectedTrip} disabled={busy} onChange={event => { setChoice(event.target.value); setHistory(null); setStatus(""); setError(""); }}>

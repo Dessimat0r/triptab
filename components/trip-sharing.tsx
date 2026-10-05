@@ -10,7 +10,7 @@ type Invitation = {
 };
 type InvitationList = { invitations: Invitation[]; hasMore: boolean; error?: string };
 
-export function TripSharing({ trip, profile }: { trip: Trip; profile: Profile | null }) {
+export function TripSharing({ trip, profile, onChanged }: { trip: Trip; profile: Profile | null; onChanged?: () => void | Promise<unknown> }) {
   const [memberId, setMemberId] = useState(""),
     [email, setEmail] = useState(""),
     [link, setLink] = useState(""),
@@ -20,7 +20,11 @@ export function TripSharing({ trip, profile }: { trip: Trip; profile: Profile | 
     [copied, setCopied] = useState(false),
     [invitations, setInvitations] = useState<InvitationList & { key: string }>({ key: "", invitations: [], hasMore: false });
   const available = trip.members.filter(member => !member.userId);
+  // Labels may change while a newly generated, one-use URL is still on screen.
+  // Only traveller availability or the account/trip identity resets that URL.
+  const availableKey = JSON.stringify(available.map(member => member.id));
   const owner = trip.ownerId === profile?.id;
+  const memberName = (invitation: { memberId: string; memberName: string }) => trip.members.find(member => member.id === invitation.memberId)?.name ?? invitation.memberName;
   const invitationKey = `${trip.id}:${profile?.id || ""}`;
   const { confirm, dialog: confirmationDialog, confirming } = useConfirmation(invitationKey);
   const listed = invitations.key === invitationKey ? invitations : { invitations: [], hasMore: false, error: undefined };
@@ -37,11 +41,12 @@ export function TripSharing({ trip, profile }: { trip: Trip; profile: Profile | 
   }, [invitationKey, owner, trip.id]);
   useEffect(() => {
     Promise.resolve().then(() => {
-      setMemberId(previous => trip.members.some(member => member.id === previous && !member.userId) ? previous : trip.members.find(member => !member.userId)?.id || "");
+      const ids = JSON.parse(availableKey) as string[];
+      setMemberId(previous => ids.includes(previous) ? previous : ids[0] || "");
       setLink(""); setLinkId(""); setError("");
       void refreshInvitations();
     });
-  }, [trip.id, trip.members, refreshInvitations]);
+  }, [trip.id, availableKey, refreshInvitations]);
 
   async function createLink(target: string, inviteeEmail: string) {
     if (busy) return;
@@ -55,6 +60,7 @@ export function TripSharing({ trip, profile }: { trip: Trip; profile: Profile | 
       if (!response.ok) throw Error(body.error || "Unable to create an invitation.");
       setMemberId(target); setEmail(inviteeEmail); setLink(body.url); setLinkId(body.invitationId);
       await refreshInvitations();
+      await onChanged?.();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Unable to create an invitation.");
     } finally { setBusy(false); }
@@ -90,20 +96,21 @@ export function TripSharing({ trip, profile }: { trip: Trip; profile: Profile | 
       {listed.error ? <p className="error" role="alert">{listed.error}</p> : listed.invitations.length ? <ul className="invite-management-list">
         {listed.invitations.map(invitation => <li className="invite-management-entry" key={invitation.id}>
           <div className="invite-management-details">
-            <strong>{invitation.memberName}</strong>
+            <strong>{memberName(invitation)}</strong>
             {invitation.email && <small>{invitation.email}</small>}
             <small>Expires <time dateTime={invitation.expiresAt}>{new Date(invitation.expiresAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}</time></small>
           </div>
           <div className="invite-management-actions">
             <button type="button" className="quiet" disabled={busy || confirming} onClick={() => void createLink(invitation.memberId, invitation.email || "")}>Replace link</button>
             <button type="button" className="danger quiet" disabled={busy || confirming} onClick={async () => {
-              if (busy || !await confirm({ title: "Revoke invitation?", message: `Revoke the invitation for ${invitation.memberName}? Its link will stop working.`, confirmLabel: "Revoke invitation", destructive: true })) return;
+              if (busy || !await confirm({ title: "Revoke invitation?", message: `Revoke the invitation for ${memberName(invitation)}? Its link will stop working.`, confirmLabel: "Revoke invitation", destructive: true })) return;
               setBusy(true); setError("");
               try {
                 const response = await fetch("/api/invite", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode: "revoke", tripId: trip.id, invitationId: invitation.id }) });
                 const body = await response.json() as { error?: string };
                 if (!response.ok) throw Error(body.error || "Unable to revoke this invitation.");
                 if (linkId === invitation.id) { setLink(""); setLinkId(""); }
+                await onChanged?.();
               } catch (cause) { setError(cause instanceof Error ? cause.message : "Unable to revoke this invitation."); }
               finally { await refreshInvitations(); setBusy(false); }
             }}>Revoke</button>

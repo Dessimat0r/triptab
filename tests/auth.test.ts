@@ -1,16 +1,20 @@
+import { transpileWithSharedImports } from './helpers/transpile';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
-import { ModuleKind, ScriptTarget, transpileModule } from 'typescript';
+import { ModuleKind, ScriptTarget } from 'typescript';
 import {
   AuthError, hashPassword, hashToken, performAuthAction, readAuthState,
   resolveIdentity, sessionIdentity, verifyPassword, consumeAuthRateLimit, cleanupExpiredAuthData,
+  authFailure,
 } from '../lib/auth';
+import { readAccountActivity } from '../lib/audit';
+import * as authModule from '../lib/auth';
 
 class SQLiteStatement {
   private values: (string | number | null)[] = [];
-  constructor(private readonly sqlite: DatabaseSync, private readonly sql: string) {}
+  constructor(private readonly sqlite: DatabaseSync, readonly sql: string) {}
   bind(...values: (string | number | null)[]) { this.values = values; return this; }
   async first<T>() { return (this.sqlite.prepare(this.sql).get(...this.values) || null) as T | null; }
   async all<T>() { return { results: this.sqlite.prepare(this.sql).all(...this.values) as T[] }; }
@@ -25,22 +29,30 @@ class SQLiteStatement {
 }
 class SQLiteD1 {
   readonly sqlite = new DatabaseSync(':memory:');
+  beforeBatch?: (statements: SQLiteStatement[]) => void;
+  private pending: Promise<unknown> = Promise.resolve();
   prepare(sql: string) { return new SQLiteStatement(this.sqlite, sql); }
-  async batch(statements: SQLiteStatement[]) {
-    this.sqlite.exec('BEGIN');
-    try {
-      const results = [];
-      for (const statement of statements) results.push(await statement.run());
-      this.sqlite.exec('COMMIT');
-      return results;
-    } catch (error) { this.sqlite.exec('ROLLBACK'); throw error; }
+  batch(statements: SQLiteStatement[]) {
+    const operation = this.pending.then(async () => {
+      this.beforeBatch?.(statements);
+      this.sqlite.exec('BEGIN');
+      try {
+        const results = [];
+        for (const statement of statements) results.push(await statement.run());
+        this.sqlite.exec('COMMIT');
+        return results;
+      } catch (error) { this.sqlite.exec('ROLLBACK'); throw error; }
+    });
+    this.pending = operation.catch(() => {});
+    return operation;
   }
   asD1() { return this as unknown as D1Database; }
 }
 async function storage() {
   const database = new SQLiteD1();
-  database.sqlite.exec(await readFile(new URL('../drizzle/0001_regular_maginty.sql', import.meta.url), 'utf8'));
-  database.sqlite.exec(await readFile(new URL('../drizzle/0002_windy_cammi.sql', import.meta.url), 'utf8'));
+  for (const file of (await readdir(new URL('../drizzle/', import.meta.url))).filter(file => file.endsWith('.sql')).sort()) {
+    database.sqlite.exec(await readFile(new URL(`../drizzle/${file}`, import.meta.url), 'utf8'));
+  }
   return database;
 }
 const password = 'suitcase coffee 2026';
@@ -55,6 +67,25 @@ function provider(id = 'legacy-owner', email = 'owner@example.com') {
 }
 async function register(database: SQLiteD1, email = 'traveller@example.com') {
   return performAuthAction(request(), { action: 'register', email, password, displayName: 'Traveller' }, database.asD1());
+}
+
+async function logoutRoute(database: SQLiteD1, revokePush = async () => {}) {
+  const compiled = transpileWithSharedImports(await readFile(new URL('../app/api/auth/route.ts', import.meta.url), 'utf8'), {
+    compilerOptions: { target: ScriptTarget.ES2022, module: ModuleKind.CommonJS },
+  }).outputText;
+  const loaded = { exports: {} as { POST(request: Request): Promise<Response> } };
+  new Function('require', 'module', 'exports', compiled)((name: string) => {
+    if (name === '@/lib/auth') return authModule;
+    if (name === '@/lib/store') return { db: () => database.asD1(), RequestError: class extends Error {}, readBoundedBody: async (request: Request) => new Uint8Array(await request.arrayBuffer()) };
+    if (name === '@/lib/notifications') return { revokeBrowserPush: revokePush, browserPushCookie: async () => 'tt_push=; Path=/; Max-Age=0' };
+    throw new Error(`Unexpected route dependency ${name}`);
+  }, loaded, loaded.exports);
+  return loaded.exports;
+}
+function logoutPost(cookie?: string, origin = 'https://triptab.test') {
+  return new Request('https://triptab.test/api/auth', { method: 'POST', headers: {
+    origin, 'content-type': 'application/json', ...(cookie ? { cookie: cookie.split(';')[0] } : {}),
+  }, body: JSON.stringify({ action: 'logout' }) });
 }
 
 test('password hashing uses random 256-bit salts, PBKDF2 and every password character', async () => {
@@ -124,6 +155,120 @@ test('expired sessions and ambiguous cookies grant no access; logout also suppre
   const resumed = await performAuthAction(signedOut, { action: 'chatgpt_login' }, database.asD1());
   assert.equal(resumed.state.authenticated, true);
   assert.match(resumed.cookie!, /tt_signed_out=;.*Max-Age=0/);
+});
+
+test('logout revokes orphaned, expired and already signed-out cookie tokens without requiring a profile', async context => {
+  for (const reason of ['missing profile', 'expired session', 'signed-out browser'] as const) await context.test(reason, async () => {
+    const database = await storage();
+    const local = await register(database);
+    const token = local.cookie!.split(';')[0].split('=')[1];
+    const before = auditCount(database);
+    if (reason === 'missing profile') database.sqlite.prepare('DELETE FROM profiles WHERE id = ?').run(local.state.profile!.id);
+    if (reason === 'expired session') database.sqlite.prepare("UPDATE auth_sessions SET expires_at = '2000-01-01T00:00:00Z'").run();
+    const logoutRequest = reason === 'signed-out browser'
+      ? request({ cookie: `${local.cookie!.split(';')[0]}; tt_signed_out=1` }) : sessionRequest(local.cookie!);
+    const result = await performAuthAction(logoutRequest, { action: 'logout' }, database.asD1());
+    assert.equal(result.state.authenticated, false);
+    assert.match(result.cookie!, /Max-Age=0/);
+    assert.match(result.additionalCookies![0], /tt_signed_out=1/);
+    assert.equal(database.sqlite.prepare('SELECT token_hash FROM auth_sessions WHERE token_hash = ?').get(await hashToken(token)), undefined);
+    assert.equal(auditCount(database), before + (reason === 'signed-out browser' ? 1 : 0), 'unresolved actors never receive an invented logout audit');
+  });
+});
+
+test('logout does not create a provider profile or depend on expired-auth cleanup', async () => {
+  const database = await storage();
+  database.sqlite.exec("CREATE TRIGGER fail_expired_cleanup BEFORE DELETE ON auth_rate_limits BEGIN SELECT RAISE(ABORT, 'expired cleanup unavailable'); END");
+  database.sqlite.prepare('INSERT INTO auth_rate_limits (key_hash,window_start,attempts) VALUES (?,?,?)').run('old-rate', 0, 1);
+  const result = await performAuthAction(request(provider('never-registered')), { action: 'logout' }, database.asD1());
+  assert.equal(result.state.authenticated, false);
+  assert.equal(database.sqlite.prepare('SELECT id FROM profiles').get(), undefined);
+  assert.equal(auditCount(database), 0);
+  assert.equal(database.sqlite.prepare('SELECT key_hash FROM auth_rate_limits').get()?.key_hash, 'old-rate');
+});
+
+test('logout still revokes its cookie when the optional identity read fails and logs no private diagnostics', async () => {
+  const database = await storage();
+  const local = await register(database);
+  const originalPrepare = database.prepare.bind(database);
+  database.prepare = (sql: string) => {
+    if (sql.includes('LEFT JOIN auth_sessions s')) throw new Error('PRIVATE_DATABASE_ID and profile contents');
+    return originalPrepare(sql);
+  };
+  const warnings: unknown[][] = [], originalWarn = console.warn;
+  try {
+    console.warn = (...values) => { warnings.push(values); };
+    const before = auditCount(database);
+    const result = await performAuthAction(sessionRequest(local.cookie!), { action: 'logout' }, database.asD1());
+    assert.equal(result.state.authenticated, false);
+    assert.equal(database.sqlite.prepare('SELECT token_hash FROM auth_sessions').get(), undefined);
+    assert.equal(auditCount(database), before);
+    assert.deepEqual(warnings, [['TripTab could not load the logout audit actor.']]);
+    assert.doesNotMatch(JSON.stringify(warnings), /PRIVATE_DATABASE_ID|profile contents/);
+  } finally { console.warn = originalWarn; }
+});
+
+test('browser logout keeps revocation independent of optional notification failures', async () => {
+  const database = await storage();
+  const local = await register(database);
+  const route = await logoutRoute(database, async () => { throw new Error('PRIVATE_PUSH_ENDPOINT'); });
+  const warnings: unknown[][] = [], originalWarn = console.warn;
+  try {
+    console.warn = (...values) => { warnings.push(values); };
+    const response = await route.POST(logoutPost(local.cookie));
+    assert.equal(response.status, 200);
+    assert.equal((await response.json() as { authenticated: boolean }).authenticated, false);
+    assert.equal(database.sqlite.prepare('SELECT token_hash FROM auth_sessions').get(), undefined);
+    assert.ok(response.headers.getSetCookie().some(value => /^tt_session=;.*Max-Age=0/.test(value)));
+    assert.ok(response.headers.getSetCookie().some(value => /^tt_signed_out=1;/.test(value)));
+    assert.ok(response.headers.getSetCookie().some(value => /^tt_push=;/.test(value)));
+    assert.deepEqual(warnings, [['TripTab could not revoke this browser’s notifications during logout.']]);
+    assert.equal((await accountHistory(database, local.state.profile!.id))[0].entityType, 'session');
+  } finally { console.warn = originalWarn; }
+});
+
+test('a transient logout audit failure retries trusted history once after independently revoking its credential', async () => {
+  const database = await storage();
+  const local = await register(database);
+  const before = auditCount(database);
+  let attempts = 0;
+  database.beforeBatch = () => {
+    attempts++;
+    if (attempts === 1) database.sqlite.exec("CREATE TRIGGER temporary_logout_audit_failure BEFORE INSERT ON account_activity_events BEGIN SELECT RAISE(ABORT,'temporary audit failure'); END");
+    else database.sqlite.exec('DROP TRIGGER temporary_logout_audit_failure');
+  };
+  const result = await performAuthAction(sessionRequest(local.cookie!), { action: 'logout' }, database.asD1());
+  assert.equal(result.state.authenticated, false);
+  assert.equal(await sessionIdentity(sessionRequest(local.cookie!), database.asD1()), null);
+  assert.equal(auditCount(database), before + 1);
+  assert.equal(attempts, 2);
+  const [event] = await accountHistory(database, local.state.profile!.id);
+  assert.equal(event.entityType, 'session');
+  assert.equal(event.action, 'delete');
+  assert.equal(event.actorName, 'Traveller');
+});
+
+test('failed audited logout revokes copied tokens and clears browser credentials while reporting the history failure', async () => {
+  const database = await storage();
+  const local = await register(database);
+  const route = await logoutRoute(database);
+  database.sqlite.exec("CREATE TRIGGER deny_logout_audit BEFORE INSERT ON account_activity_events BEGIN SELECT RAISE(ABORT,'PRIVATE_AUDIT_STORAGE'); END");
+  const errors: unknown[][] = [], warnings: unknown[][] = [], originalError = console.error, originalWarn = console.warn;
+  try {
+    console.error = (...values) => { errors.push(values); };
+    console.warn = (...values) => { warnings.push(values); };
+    const response = await route.POST(logoutPost(local.cookie));
+    assert.equal(response.status, 503, 'a failed server revocation is not reported as success');
+    assert.doesNotMatch(await response.text(), /PRIVATE_AUDIT_STORAGE/);
+    assert.equal(await sessionIdentity(sessionRequest(local.cookie!), database.asD1()), null, 'a copied credential cannot survive failed audit storage');
+    assert.ok(response.headers.getSetCookie().some(value => /^tt_session=;.*Max-Age=0/.test(value)));
+    assert.ok(response.headers.getSetCookie().some(value => /^tt_signed_out=1;/.test(value)));
+    assert.doesNotMatch(JSON.stringify(errors), /PRIVATE_AUDIT_STORAGE/);
+    assert.deepEqual(warnings, [['TripTab logout audit did not complete.']]);
+    const crossOrigin = await route.POST(logoutPost(local.cookie, 'https://evil.test'));
+    assert.equal(crossOrigin.status, 403);
+    assert.equal(crossOrigin.headers.getSetCookie().length, 0, 'unvalidated requests cannot sign out another browser');
+  } finally { console.error = originalError; console.warn = originalWarn; }
 });
 
 test('rate limits are atomic, expire after fifteen minutes and store only hashed IP/email keys', async () => {
@@ -279,13 +424,12 @@ test('a concurrent provider link prevents stale password setup without touching 
   const database = await storage();
   const local = await register(database);
   await readAuthState(request(provider()), database.asD1());
-  const batch = database.batch.bind(database);
-  database.batch = async statements => {
-    if (statements.length === 3) {
+  database.beforeBatch = statements => {
+    if (statements.some(statement => statement.sql.includes('INSERT INTO auth_credentials') && statement.sql.includes('ON CONFLICT(user_id)'))) {
+      database.beforeBatch = undefined;
       database.sqlite.prepare('INSERT INTO auth_links (oai_user_id, user_id, created_at) VALUES (?, ?, ?)')
         .run('legacy-owner', local.state.profile!.id, new Date().toISOString());
     }
-    return batch(statements);
   };
   await assert.rejects(performAuthAction(request(provider()), { action: 'set_password', password }, database.asD1()), (error: unknown) => error instanceof AuthError && error.status === 409);
   assert.equal(database.sqlite.prepare('SELECT 1 FROM auth_credentials WHERE user_id = ?').get('legacy-owner'), undefined);
@@ -331,7 +475,7 @@ test('HTTP auth endpoint enforces same origin, JSON, body bounds and private res
   const storeURL = 'data:text/javascript;base64,' + Buffer.from(`const store=globalThis[Symbol.for('triptab.auth-test-store')];${Object.keys(store).map(key => `export const ${key}=store.${key};`).join('\n')}`).toString('base64');
   const source = await readFile(new URL('../app/api/auth/route.ts', import.meta.url), 'utf8');
   const notificationsURL = 'data:text/javascript;base64,' + Buffer.from("export const browserPushCookie=async()=> 'tt_push=; Path=/; HttpOnly; Max-Age=0'; export const revokeBrowserPush=async()=>{};").toString('base64');
-  const compiled = transpileModule(source, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
+  const compiled = transpileWithSharedImports(source, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
     .replace("'@/lib/auth'", JSON.stringify(new URL('../lib/auth.ts', import.meta.url).href))
     .replace("'@/lib/notifications'", JSON.stringify(notificationsURL))
     .replace("'@/lib/store'", JSON.stringify(storeURL));
@@ -350,4 +494,186 @@ test('HTTP auth endpoint enforces same origin, JSON, body bounds and private res
   assert.equal((await response.json() as { chatgptLinked: boolean }).chatgptLinked, false);
   const anonymous = await route.GET(request());
   assert.equal((await anonymous.json() as { authenticated: boolean }).authenticated, false);
+});
+
+const auditCount = (database: SQLiteD1) => Number(database.sqlite.prepare('SELECT COUNT(*) AS count FROM account_activity_events').get()?.count);
+async function accountHistory(database: SQLiteD1, user: string) { return (await readAccountActivity(database.asD1(), user, { limit: 50 })).events; }
+
+test('registration and provider profile creation append private events once without copying credentials', async () => {
+  const database = await storage();
+  const local = await register(database);
+  const events = await accountHistory(database, local.state.profile!.id);
+  assert.deepEqual(events.map(event => [event.entityType, event.action]).reverse(), [['profile', 'create'], ['password', 'create'], ['session', 'create']]);
+  assert.ok(events.every(event => event.userId === local.state.profile!.id && event.actorName === 'Traveller'));
+  const credential = database.sqlite.prepare('SELECT password_hash,password_salt FROM auth_credentials').get()!;
+  const session = database.sqlite.prepare('SELECT token_hash FROM auth_sessions').get()!;
+  const serialized = JSON.stringify(events);
+  for (const secret of [password, 'traveller@example.com', credential.password_hash, credential.password_salt, session.token_hash, local.cookie!.split(';')[0].split('=')[1]]) assert.ok(!serialized.includes(String(secret)));
+  assert.equal(Number(database.sqlite.prepare('SELECT COUNT(*) AS count FROM activity_events').get()?.count), 0);
+  await readAuthState(request(provider()), database.asD1());
+  await readAuthState(request(provider()), database.asD1());
+  const providerEvents = await accountHistory(database, 'legacy-owner');
+  assert.equal(providerEvents.length, 1);
+  assert.equal(providerEvents[0].source, 'chatgpt');
+  assert.equal(providerEvents[0].entityType, 'profile');
+  assert.ok(!serialized.includes('owner@example.com'));
+  const before = auditCount(database);
+  await assert.rejects(register(database), (error: unknown) => error instanceof AuthError && error.status === 409);
+  assert.equal(auditCount(database), before);
+});
+
+test('accepted session rotation and logout preserve account isolation and failed attempts add no events', async () => {
+  const database = await storage();
+  const alice = await register(database, 'alice@example.com');
+  const bob = await register(database, 'bob@example.com');
+  const before = auditCount(database);
+  await assert.rejects(performAuthAction(request(), { action: 'login', email: 'bob@example.com', password: 'incorrect password' }, database.asD1()), /email or password/);
+  assert.equal(auditCount(database), before);
+  const loggedIn = await performAuthAction(sessionRequest(alice.cookie!), { action: 'login', email: 'bob@example.com', password }, database.asD1());
+  const aliceEvents = await accountHistory(database, alice.state.profile!.id);
+  const bobEvents = await accountHistory(database, bob.state.profile!.id);
+  assert.equal(aliceEvents[0].action, 'delete');
+  assert.equal(aliceEvents[0].entityType, 'session');
+  assert.equal(bobEvents[0].action, 'create');
+  assert.equal(bobEvents[0].entityType, 'session');
+  assert.ok(aliceEvents.every(event => event.userId === alice.state.profile!.id));
+  assert.ok(bobEvents.every(event => event.userId === bob.state.profile!.id));
+  const logout = await performAuthAction(sessionRequest(loggedIn.cookie!), { action: 'logout' }, database.asD1());
+  assert.equal(logout.state.authenticated, false);
+  assert.equal((await accountHistory(database, bob.state.profile!.id))[0].action, 'delete');
+  const afterLogout = auditCount(database);
+  await performAuthAction(request(), { action: 'logout' }, database.asD1());
+  assert.equal(auditCount(database), afterLogout);
+  database.sqlite.prepare("UPDATE auth_sessions SET expires_at='2000-01-01T00:00:00Z'").run();
+  await cleanupExpiredAuthData(database.asD1());
+  assert.equal(auditCount(database), afterLogout);
+});
+
+test('password and connection events are gated by actual changes and omit provider identity', async () => {
+  const database = await storage();
+  const local = await register(database);
+  const mixed = sessionRequest(local.cookie!, provider('private-provider-identity', 'provider-private@example.com'));
+  await performAuthAction(mixed, { action: 'link_chatgpt' }, database.asD1());
+  const linkedCount = auditCount(database);
+  await performAuthAction(mixed, { action: 'link_chatgpt' }, database.asD1());
+  assert.equal(auditCount(database), linkedCount);
+  await performAuthAction(mixed, { action: 'unlink_chatgpt' }, database.asD1());
+  const unlinkedCount = auditCount(database);
+  await performAuthAction(mixed, { action: 'unlink_chatgpt' }, database.asD1());
+  assert.equal(auditCount(database), unlinkedCount);
+  const beforePassword = auditCount(database);
+  await assert.rejects(performAuthAction(sessionRequest(local.cookie!), { action: 'set_password', currentPassword: 'incorrect password', password: 'replacement suitcase password' }, database.asD1()), /current password/);
+  assert.equal(auditCount(database), beforePassword);
+  await performAuthAction(sessionRequest(local.cookie!), { action: 'set_password', currentPassword: password, password: 'replacement suitcase password' }, database.asD1());
+  const events = await accountHistory(database, local.state.profile!.id);
+  assert.deepEqual(events.filter(event => event.entityType === 'chatgpt').map(event => event.action).reverse(), ['create', 'delete']);
+  assert.equal(events.filter(event => event.entityType === 'password' && event.action === 'update').length, 1);
+  const serialized = JSON.stringify(events);
+  for (const secret of [password, 'replacement suitcase password', 'private-provider-identity', 'provider-private@example.com']) assert.ok(!serialized.includes(secret));
+  assert.ok(events.every(event => [local.state.profile!.id, 'browser', 'account'].includes(event.entityId)));
+});
+
+test('audit insertion failures roll back registration, password changes, links and session rotation', async () => {
+  const database = await storage();
+  database.sqlite.exec("CREATE TRIGGER deny_audit BEFORE INSERT ON account_activity_events BEGIN SELECT RAISE(ABORT,'audit unavailable'); END");
+  await assert.rejects(register(database), /audit unavailable/);
+  assert.equal(Number(database.sqlite.prepare('SELECT COUNT(*) AS count FROM profiles').get()?.count), 0);
+  assert.equal(Number(database.sqlite.prepare('SELECT COUNT(*) AS count FROM auth_credentials').get()?.count), 0);
+  assert.equal(Number(database.sqlite.prepare('SELECT COUNT(*) AS count FROM auth_sessions').get()?.count), 0);
+  assert.equal(auditCount(database), 0);
+  database.sqlite.exec('DROP TRIGGER deny_audit');
+  const local = await register(database);
+  const digest = database.sqlite.prepare('SELECT password_hash FROM auth_credentials').get()?.password_hash;
+  const before = auditCount(database);
+  database.sqlite.exec("CREATE TRIGGER deny_audit BEFORE INSERT ON account_activity_events BEGIN SELECT RAISE(ABORT,'audit unavailable'); END");
+  await assert.rejects(performAuthAction(sessionRequest(local.cookie!), { action: 'set_password', currentPassword: password, password: 'replacement suitcase password' }, database.asD1()), /audit unavailable/);
+  assert.equal(database.sqlite.prepare('SELECT password_hash FROM auth_credentials').get()?.password_hash, digest);
+  assert.ok(await sessionIdentity(sessionRequest(local.cookie!), database.asD1()));
+  await assert.rejects(performAuthAction(sessionRequest(local.cookie!, provider('private-provider')), { action: 'link_chatgpt' }, database.asD1()), /audit unavailable/);
+  assert.equal(Number(database.sqlite.prepare('SELECT COUNT(*) AS count FROM auth_links').get()?.count), 0);
+  await assert.rejects(performAuthAction(sessionRequest(local.cookie!), { action: 'login', email: 'traveller@example.com', password }, database.asD1()), /audit unavailable/);
+  assert.ok(await sessionIdentity(sessionRequest(local.cookie!), database.asD1()));
+  await assert.rejects(performAuthAction(sessionRequest(local.cookie!), { action: 'logout' }, database.asD1()), /audit unavailable/);
+  assert.equal(await sessionIdentity(sessionRequest(local.cookie!), database.asD1()), null, 'logout fails safe by revoking the token even if its audit cannot be written');
+  assert.equal(auditCount(database), before);
+});
+
+test('credential changes between verification and the session batch reject stale login without false audit', async () => {
+  const database = await storage();
+  const local = await register(database);
+  const before = auditCount(database);
+  database.beforeBatch = statements => {
+    if (statements.some(statement => statement.sql.includes('INSERT INTO auth_sessions'))) {
+      database.beforeBatch = undefined;
+      database.sqlite.prepare('UPDATE auth_credentials SET password_hash = ?,password_salt = ? WHERE user_id = ?').run('f'.repeat(64), 'a'.repeat(43), local.state.profile!.id);
+    }
+  };
+  await assert.rejects(performAuthAction(sessionRequest(local.cookie!), { action: 'login', email: 'traveller@example.com', password }, database.asD1()), (error: unknown) => error instanceof AuthError && error.status === 409);
+  assert.ok(await sessionIdentity(sessionRequest(local.cookie!), database.asD1()));
+  assert.equal(auditCount(database), before);
+});
+
+test('concurrent password changes produce one accepted mutation and one private password event', async () => {
+  const database = await storage();
+  const local = await register(database);
+  const changes = await Promise.allSettled([
+    performAuthAction(sessionRequest(local.cookie!), { action: 'set_password', currentPassword: password, password: 'replacement suitcase first' }, database.asD1()),
+    performAuthAction(sessionRequest(local.cookie!), { action: 'set_password', currentPassword: password, password: 'replacement suitcase second' }, database.asD1()),
+  ]);
+  assert.equal(changes.filter(result => result.status === 'fulfilled').length, 1);
+  assert.equal(changes.filter(result => result.status === 'rejected').length, 1);
+  assert.equal((await accountHistory(database, local.state.profile!.id)).filter(event => event.entityType === 'password' && event.action === 'update').length, 1);
+  assert.equal(Number(database.sqlite.prepare('SELECT COUNT(*) AS count FROM auth_sessions').get()?.count), 1);
+});
+
+test('provider profile creation is atomically audited and rejects a raced canonical identity change', async () => {
+  const database = await storage();
+  const local = await register(database);
+  const before = auditCount(database);
+  database.beforeBatch = statements => {
+    if (statements.some(statement => statement.sql.includes('INSERT INTO profiles'))) {
+      database.beforeBatch = undefined;
+      database.sqlite.prepare('INSERT INTO auth_links (oai_user_id,user_id,created_at) VALUES (?,?,?)').run('new-provider', local.state.profile!.id, new Date().toISOString());
+    }
+  };
+  await assert.rejects(readAuthState(request(provider('new-provider', 'new-private@example.com')), database.asD1()), /UNAUTHORIZED/);
+  assert.equal(database.sqlite.prepare('SELECT 1 FROM profiles WHERE id=?').get('new-provider'), undefined);
+  assert.equal(auditCount(database), before);
+  database.sqlite.exec("CREATE TRIGGER deny_audit BEFORE INSERT ON account_activity_events BEGIN SELECT RAISE(ABORT,'audit unavailable'); END");
+  await assert.rejects(readAuthState(request(provider('other-provider', 'other-private@example.com')), database.asD1()), /audit unavailable/);
+  assert.equal(database.sqlite.prepare('SELECT 1 FROM profiles WHERE id=?').get('other-provider'), undefined);
+  assert.equal(auditCount(database), before);
+});
+
+test('provider password setup audits its implicit link and trusted browser signout and resume stay private', async () => {
+  const database = await storage();
+  await readAuthState(request(provider()), database.asD1());
+  const logout = await performAuthAction(request(provider()), { action: 'logout' }, database.asD1());
+  let events = await accountHistory(database, 'legacy-owner');
+  assert.equal(events[0].entityType, 'session'); assert.equal(events[0].action, 'delete'); assert.equal(events[0].source, 'chatgpt');
+  const signedOut = request({ ...provider(), cookie: logout.additionalCookies![0].split(';')[0] });
+  await performAuthAction(signedOut, { action: 'chatgpt_login' }, database.asD1());
+  events = await accountHistory(database, 'legacy-owner');
+  assert.equal(events[0].entityType, 'session'); assert.equal(events[0].action, 'create'); assert.equal(events[0].source, 'chatgpt');
+  const before = auditCount(database);
+  await performAuthAction(request(provider()), { action: 'chatgpt_login' }, database.asD1());
+  assert.equal(auditCount(database), before);
+  await performAuthAction(request(provider()), { action: 'set_password', password }, database.asD1());
+  events = await accountHistory(database, 'legacy-owner');
+  assert.equal(events.filter(event => event.entityType === 'password' && event.action === 'create').length, 1);
+  assert.equal(events.filter(event => event.entityType === 'chatgpt' && event.action === 'create').length, 1);
+  assert.equal(Number(database.sqlite.prepare('SELECT COUNT(*) AS count FROM activity_events').get()?.count), 0);
+});
+
+test('unexpected auth diagnostics and responses never copy exception messages or submitted secrets', async () => {
+  const captured: unknown[][] = [];
+  const original = console.error;
+  console.error = (...values: unknown[]) => { captured.push(values); };
+  try {
+    const response = authFailure(new Error('private@example.com password=super private cookie=private-session-token'));
+    assert.equal(response.status, 503);
+    assert.deepEqual(captured, [['TripTab authentication failed', { kind: 'Error' }]]);
+    const value = JSON.stringify(await response.json());
+    for (const secret of ['private@example.com', 'super private', 'private-session-token']) assert.ok(!value.includes(secret));
+  } finally { console.error = original; }
 });

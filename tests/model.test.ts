@@ -6,7 +6,7 @@ import {
   MAX_AMOUNT, paymentSchema, validExchangeRate,
   parseLedgerStructure, parseStoredTrip,
   travellerFinancialPreview,
-  unitsScale, UNIT_SCALE, MAX_UNITS, unitsSchema, itemUnitsError,
+  unitsScale, UNIT_SCALE, MAX_UNITS, unitsSchema, itemUnitsError, receiptQuantitySchema,
 } from '../lib/model';
 import type { Expense, Item, ReceiptMessage, Trip } from '../lib/model';
 
@@ -362,6 +362,27 @@ test('scales fractional unit quantities exactly without accepting hidden floatin
   assert.equal(unitsSchema.safeParse({ total: 0.3, allocations: { a: 0.1, b: 0.2 } }).success, true);
   assert.equal(unitsSchema.safeParse({ total: 0.1 + 0.2, allocations: { a: 0.1, b: 0.2 } }).success, false);
   assert.equal(unitsSchema.safeParse({ total: '3', allocations: { a: 2.5, b: 0.5 } }).success, false);
+});
+
+test('purchased receipt quantity validates bounded decimal evidence independently of financial allocations', () => {
+  const quantity = receiptQuantitySchema.parse({ total: 2, label: ' slices ', sourceText: ' 2 x Stck ' });
+  assert.deepEqual(quantity, { total: 2, label: 'slices', sourceText: '2 x Stck' });
+  for (const value of [0.000001, 0.25, 2, 7.5, MAX_UNITS]) {
+    assert.equal(receiptQuantitySchema.safeParse({ total: value }).success, true);
+  }
+  for (const value of [0, -1, NaN, Infinity, 1e-7, 0.1234567, MAX_UNITS + 1, '2']) {
+    assert.equal(receiptQuantitySchema.safeParse({ total: value }).success, false);
+  }
+  for (const extra of [
+    { label: '' }, { label: ' ' }, { label: 'x'.repeat(41) },
+    { sourceText: '' }, { sourceText: 'x'.repeat(201) }, { allocations: { a: 2 } },
+  ]) assert.equal(receiptQuantitySchema.safeParse({ total: 2, ...extra }).success, false);
+  const item: Item = { id: 'pizza', name: 'Pizza', amount: 1001, members: ['b', 'a'], percentages: { b: 70, a: 30 }, quantity };
+  assert.deepEqual(itemSchema.parse(item).quantity, quantity);
+  assert.deepEqual(itemShares(item, members), [300, 701, 0]);
+  const saved = parseStoredTrip(JSON.parse(JSON.stringify(trip([expense({ items: [item] })]))));
+  assert.deepEqual(saved.expenses[0].items[0].quantity, quantity);
+  assert.equal(total(saved.expenses[0]), 1001);
 });
 
 test('fractional units allocate a full line price without multiplying its cost', () => {
@@ -850,4 +871,23 @@ test('rejects malformed receipt messages, invalid reply parents and duplicate ID
     assert.throws(() => validateLedger({ trips: [trip([input as Expense])] }));
   }
   assert.equal(expenseSchema.safeParse(expense({ conversation: [question, answer] })).success, true);
+});
+
+test('receipt source-draft provenance survives consumption, stored parsing and restoration without an active draft', () => {
+  const original = expense({ sourceDraftId: 'consumed-processing-draft' });
+  const persisted = validateLedger(ledger([original]));
+  assert.equal(persisted.trips[0].drafts.length, 0);
+  assert.equal(persisted.trips[0].expenses[0].sourceDraftId, 'consumed-processing-draft');
+  assert.equal(parseStoredTrip(JSON.parse(JSON.stringify(persisted.trips[0]))).expenses[0].sourceDraftId, 'consumed-processing-draft');
+  assert.equal(parseLedgerStructure(JSON.parse(JSON.stringify(persisted))).trips[0].expenses[0].sourceDraftId, 'consumed-processing-draft');
+  assert.deepEqual(balances(persisted.trips[0]), balances(trip([expense()])));
+  assert.equal(validateLedger(ledger([original]), { previous: ledger([]) }).trips[0].expenses[0].sourceDraftId, 'consumed-processing-draft');
+});
+
+test('receipt source-draft IDs are bounded references and remain optional for older expenses', () => {
+  assert.equal(expenseSchema.parse(expense()).sourceDraftId, undefined);
+  assert.equal(expenseSchema.parse(expense({ sourceDraftId: 'd'.repeat(100) })).sourceDraftId, 'd'.repeat(100));
+  for (const sourceDraftId of ['', 'd'.repeat(101), 7, null]) {
+    assert.equal(expenseSchema.safeParse({ ...expense(), sourceDraftId }).success, false);
+  }
 });

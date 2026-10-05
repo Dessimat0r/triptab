@@ -110,7 +110,7 @@ export function PwaUpdatePrompt({ canUpdate = true }: { canUpdate?: boolean }) {
   </div>;
 }
 
-export default function PwaControls({ accountId }: { accountId?: string | null } = {}) {
+export default function PwaControls({ accountId, onChanged }: { accountId?: string | null; onChanged?: () => void } = {}) {
   const [install, setInstall] = useState<InstallEvent | null>(null),
     [installed, setInstalled] = useState(false),
     [supported, setSupported] = useState(false),
@@ -176,6 +176,7 @@ export default function PwaControls({ accountId }: { accountId?: string | null }
             }),
           });
           if (!r.ok) throw Error("Unable to change notifications. Try again.");
+          onChanged?.();
           await clearBrowserNotifications(reg, sub);
         }
         setEnabled(false);
@@ -204,6 +205,7 @@ export default function PwaControls({ accountId }: { accountId?: string | null }
           await sub.unsubscribe();
           throw Error(b.error || "Unable to register this device.");
         }
+        onChanged?.();
         setEnabled(true);
         setStatus(
           "You’ll receive updates when another traveller changes a shared trip.",

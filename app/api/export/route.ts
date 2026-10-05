@@ -1,5 +1,6 @@
-import { db, failure, owner, RequestError, tripAccess } from '@/lib/store';
+import { db, failure, owner, readActivity, RequestError } from '@/lib/store';
 import { expenseShares, expenseTotal, parseStoredTrip, total, type Trip } from '@/lib/model';
+import { readAccountActivity } from '@/lib/audit';
 
 export const dynamic = 'force-dynamic';
 
@@ -9,7 +10,6 @@ const PRIVATE_HEADERS = { 'Cache-Control': 'private, no-store', Pragma: 'no-cach
 const ACCESS = '(t.owner = ? OR EXISTS (SELECT 1 FROM memberships m WHERE m.trip_id = t.id AND m.user_id = ?))';
 type ProfileRow = { id: string; email: string; display_name: string; created_at: string };
 type TripRow = { id: string; owner: string; data: string };
-type EventRow = { id: string; sequence: number; trip_id: string; actor_id: string; actor_name: string; created_at: string; entity_type: string; entity_id: string; action: string; before_data: string | null; after_data: string | null; revision: number; source: string };
 
 function csvCell(value: unknown): string {
   let text = value === null || value === undefined ? '' : String(value);
@@ -22,6 +22,20 @@ function csv(rows: unknown[][]): string { return rows.map(row => row.map(csvCell
 function decimal(amount: number | undefined): string | undefined { return amount === undefined ? undefined : (amount / 100).toFixed(2); }
 function utc(value: string): string { return new Date(value).toISOString(); }
 
+// Downloads may be forwarded outside a holiday. Copy structured contact
+// fields only for the account explicitly linked in that particular snapshot,
+// plus unlinked traveller contacts entered on the organiser's own holiday;
+// historical names, current membership and matching email text cannot prove
+// ownership. Ordinary strings (including notes and receipt chat) stay intact.
+function exportContacts<T>(value: T, actor: string, organiser = false): T {
+  if (Array.isArray(value)) return value.map(entry => exportContacts(entry, actor, organiser)) as T;
+  if (!value || typeof value !== 'object') return value;
+  const record = value as Record<string, unknown>;
+  return Object.fromEntries(Object.entries(record)
+    .filter(([key]) => key !== 'email' || record.userId === actor || (organiser && !record.userId && typeof record.id === 'string' && typeof record.name === 'string'))
+    .map(([key, entry]) => [key, exportContacts(entry, actor, organiser)])) as T;
+}
+
 function financialCsv(trip: Trip): string {
   const name = (id: string) => trip.members.find(member => member.id === id)?.name || id;
   const rows: unknown[][] = [[
@@ -30,7 +44,7 @@ function financialCsv(trip: Trip): string {
     'paid_by', 'from', 'to', 'payment_method', 'note', 'tax_hundredths', 'tip_hundredths', 'discount_hundredths',
     'bank_charge_hundredths', 'fx_rate', 'fx_as_of', 'fx_source', 'receipt_id', 'entry_source', 'calculation_error',
     ...trip.members.map(member => `${member.name}_cost_share_hundredths`),
-    'item_details_json',
+    'item_details_json', 'receipt_scan_json', 'field_sources_json',
   ]];
   for (const expense of trip.expenses) {
     let original: number | undefined;
@@ -47,14 +61,15 @@ function financialCsv(trip: Trip): string {
       name(expense.payer), '', '', '', '', expense.tax, expense.tip, expense.discount,
       expense.bankAmount, expense.fx?.rate, expense.fx?.asOf, expense.fx?.source, expense.receiptId, expense.source || 'manual', calculationError,
       ...trip.members.map((_, index) => shares[index]),
-      JSON.stringify(expense.items.map(({ id, name, amount, members, percentages, units }) => ({ id, name, amount, members, percentages, units }))),
+      JSON.stringify(expense.items.map(({ id, name, amount, members, percentages, units, quantity, scanSource, fieldSources }) => ({ id, name, amount, members, percentages, units, quantity, scanSource, fieldSources }))),
+      expense.receiptScan ? JSON.stringify(expense.receiptScan) : '', expense.fieldSources ? JSON.stringify(expense.fieldSources) : '',
     ]);
   }
   for (const payment of trip.payments) {
     rows.push([
       'payment', payment.id, '', payment.date, payment.time, payment.timezone,
       '', '', '', trip.currency, payment.amount, decimal(payment.amount), '', name(payment.from), name(payment.to), payment.method, payment.note,
-      '', '', '', '', '', '', '', '', '', '', ...trip.members.map(() => ''), '',
+      '', '', '', '', '', '', '', '', '', '', ...trip.members.map(() => ''), '', '', '',
     ]);
   }
   return csv(rows);
@@ -74,31 +89,19 @@ async function snapshots(actor: string, tripId?: string): Promise<Trip[]> {
   const size = sizes.results[0] as { count: number; bytes: number } | undefined;
   if (!size || size.bytes > MAX_SNAPSHOT_BYTES) throw new RequestError('This account export is too large. Download one holiday at a time.', 413);
   if (tripId !== undefined && !size.count) throw new RequestError('You do not have access to this holiday.', 403);
-  return (rows.results as TripRow[]).map(row => ({ ...parseStoredTrip(JSON.parse(row.data)), ownerId: row.owner }));
+  return (rows.results as TripRow[]).map(row => exportContacts({ ...parseStoredTrip(JSON.parse(row.data)), ownerId: row.owner }, actor, row.owner === actor));
 }
 
 async function activity(actor: string, tripId: string, before = Number.MAX_SAFE_INTEGER) {
-  if (!await tripAccess(actor, tripId)) throw new RequestError('You do not have access to this holiday.', 403);
-  // Bound both the row count and cumulative snapshot bytes before materializing
-  // JSON. A page may contain fewer than 50 particularly large changes.
-  const result = await db().prepare(`
-    WITH candidates AS (
-      SELECT e.* FROM activity_events e JOIN trips t ON t.id = e.trip_id
-      WHERE e.trip_id = ? AND e.sequence < ? AND ${ACCESS}
-      ORDER BY e.sequence DESC LIMIT 50
-    ), sized AS (
-      SELECT *, SUM(length(CAST(COALESCE(before_data, '') AS BLOB)) + length(CAST(COALESCE(after_data, '') AS BLOB)) + 2048)
-        OVER (ORDER BY sequence DESC ROWS UNBOUNDED PRECEDING) AS export_bytes FROM candidates
-    )
-    SELECT * FROM sized WHERE export_bytes <= ? ORDER BY sequence DESC
-  `).bind(tripId, before, actor, actor, MAX_SNAPSHOT_BYTES).all<EventRow>();
-  const rows = result.results;
-  const last = rows.at(-1)?.sequence ?? before;
-  const remaining = await db().prepare(`SELECT e.sequence FROM activity_events e JOIN trips t ON t.id = e.trip_id WHERE e.trip_id = ? AND e.sequence < ? AND ${ACCESS} LIMIT 1`).bind(tripId, last, actor, actor).first<{ sequence: number }>();
-  if (!rows.length && remaining) throw new RequestError('This history entry is too large to download as a page.', 413);
+  const page = await readActivity(actor, tripId, { before, limit: 50 });
+  const trip = await db().prepare(`SELECT t.owner FROM trips t WHERE t.id = ? AND ${ACCESS}`).bind(tripId, actor, actor).first<{ owner: string }>();
+  if (!trip) throw new RequestError('You do not have access to this holiday.', 403);
   return {
-    events: rows.map(row => ({ id: row.id, sequence: row.sequence, tripId: row.trip_id, actorId: row.actor_id, actorName: row.actor_name, createdAt: utc(row.created_at), entityType: row.entity_type, entityId: row.entity_id, action: row.action, before: row.before_data ? JSON.parse(row.before_data) : null, after: row.after_data ? JSON.parse(row.after_data) : null, revision: row.revision, source: row.source })),
-    nextCursor: remaining ? last : null,
+    events: page.events.map(event => ({ ...event, createdAt: utc(event.createdAt),
+      before: event.before ? exportContacts(event.before, actor, trip.owner === actor) : null,
+      after: event.after ? exportContacts(event.after, actor, trip.owner === actor) : null,
+    })),
+    nextCursor: page.nextCursor,
   };
 }
 
@@ -121,21 +124,30 @@ export async function GET(request: Request) {
     const tripId = params.get('tripId') || undefined;
     const cursor = params.get('before');
     const includeReceipts = params.get('receipts');
-    if (!['account', 'trip', 'activity'].includes(scope) || !['json', 'csv'].includes(format)) throw new RequestError('Choose an account, holiday or history export in JSON or CSV.');
+    if (!['account', 'trip', 'activity', 'account-activity'].includes(scope) || !['json', 'csv'].includes(format)) throw new RequestError('Choose an account, holiday or history export in JSON or CSV.');
     if (scope === 'account' && (tripId !== undefined || format !== 'json')) throw new RequestError('Account exports use JSON. Choose a holiday for CSV.');
-    if (scope !== 'account' && (!tripId || tripId.length > 100)) throw new RequestError('Choose a holiday to export.');
-    if (cursor !== null && (scope !== 'activity' || !/^[1-9]\d*$/.test(cursor) || !Number.isSafeInteger(Number(cursor)))) throw new RequestError('Choose a valid history cursor.');
+    if (scope === 'account-activity' && tripId !== undefined) throw new RequestError('Account history is private to your account.');
+    if (['trip', 'activity'].includes(scope) && (!tripId || tripId.length > 100)) throw new RequestError('Choose a holiday to export.');
+    if (cursor !== null && (!['activity', 'account-activity'].includes(scope) || !/^[1-9]\d*$/.test(cursor) || !Number.isSafeInteger(Number(cursor)))) throw new RequestError('Choose a valid history cursor.');
     if (includeReceipts !== null && (!['0', '1'].includes(includeReceipts) || scope !== 'trip' || format !== 'json')) throw new RequestError('Receipt metadata is an option for holiday JSON exports.');
     const exportedAt = new Date().toISOString();
     const ownProfile = { id: profile.id, email: profile.email, displayName: profile.display_name, createdAt: utc(profile.created_at) };
     let body: string;
     let nextCursor: number | null = null;
-    if (scope === 'activity') {
+    if (scope === 'account-activity') {
+      const page = await readAccountActivity(db(), actor, { before: cursor === null ? undefined : Number(cursor), limit: 50 });
+      page.events = page.events.map(event => ({ ...event, createdAt: utc(event.createdAt) }));
+      nextCursor = page.nextCursor;
+      body = format === 'json' ? JSON.stringify({ schemaVersion: 1, exportedAt, ...page }) : csv([
+        ['event_id', 'sequence', 'account_id', 'actor_name', 'created_at_utc', 'entity_type', 'entity_id', 'action', 'source', 'before_json', 'after_json'],
+        ...page.events.map(event => [event.id, event.sequence, event.userId, event.actorName, utc(event.createdAt), event.entityType, event.entityId, event.action, event.source, event.before ? JSON.stringify(event.before) : '', event.after ? JSON.stringify(event.after) : '']),
+      ]);
+    } else if (scope === 'activity') {
       const page = await activity(actor, tripId!, cursor === null ? undefined : Number(cursor));
       nextCursor = page.nextCursor;
       body = format === 'json' ? JSON.stringify({ schemaVersion: 1, exportedAt, tripId, ...page }) : csv([
-        ['event_id', 'sequence', 'trip_id', 'actor_id', 'actor_name', 'created_at_utc', 'entity_type', 'entity_id', 'action', 'revision', 'source', 'before_json', 'after_json'],
-        ...page.events.map(event => [event.id, event.sequence, event.tripId, event.actorId, event.actorName, event.createdAt, event.entityType, event.entityId, event.action, event.revision, event.source, event.before ? JSON.stringify(event.before) : '', event.after ? JSON.stringify(event.after) : '']),
+        ['event_id', 'sequence', 'trip_id', 'actor_id', 'actor_name', 'created_at_utc', 'entity_type', 'entity_id', 'action', 'revision', 'source', 'before_json', 'after_json', 'snapshots_omitted', 'shared_entry_download'],
+        ...page.events.map(event => [event.id, event.sequence, event.tripId, event.actorId, event.actorName, event.createdAt, event.entityType, event.entityId, event.action, event.revision, event.source, event.before ? JSON.stringify(event.before) : '', event.after ? JSON.stringify(event.after) : '', event.snapshotOmitted ? 'true' : '', event.snapshotDownload || '']),
       ]);
     } else {
       const trips = await snapshots(actor, tripId);

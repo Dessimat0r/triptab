@@ -14,9 +14,18 @@ const { d1, r2 } = hostingConfig;
 const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === "seatbelt";
 const managedLinux = readExecutionProfile() === "managed-linux";
 
+const receiptAIOwnerEmail = (process.env.RECEIPT_AI_OWNER_EMAIL || "").trim().toLowerCase();
+if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(receiptAIOwnerEmail) || receiptAIOwnerEmail.length > 320) {
+  throw new Error("Set RECEIPT_AI_OWNER_EMAIL to the verified owner's email before building TripTab.");
+}
+
 const localBindingConfig = {
   main: "./build/sites-worker.ts",
+  vars: { RECEIPT_AI_OWNER_EMAIL: receiptAIOwnerEmail },
   compatibility_flags: ["nodejs_compat"],
+  // Cloudflare-compatible output declares UTC maintenance every 15 minutes.
+  // Sites' production deployment must separately confirm trigger activation.
+  triggers: { crons: ["*/15 * * * *"] },
   d1_databases: d1
     ? [
         {

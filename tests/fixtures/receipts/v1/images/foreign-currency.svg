@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="210" viewBox="0 0 640 210">
+<title>Hungarian forint displayed without decimal places but stored in hundredths</title>
+<defs><filter id="obscured"><feGaussianBlur stdDeviation="2.5"/></filter></defs>
+<rect width="640" height="210" fill="#fff"/>
+<g fill="#111" font-family="monospace" font-size="22">
+<text x="25" y="35" font-size="16">SYNTHETIC TEST RECEIPT — NOT A SALE</text>
+<text x="25" y="65" font-size="16">Corpus v1: foreign-currency</text>
+<text x="25" y="115">Coffee               1200 HUF</text>
+<text x="25" y="145">TOTAL                1200 HUF</text>
+</g>
+
+</svg>

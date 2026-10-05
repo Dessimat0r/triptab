@@ -4,6 +4,8 @@ import { X, UserRound, LogOut, Sparkles } from "lucide-react";
 import ModalA11y from "./modal-accessibility";
 import PwaControls, { clearBrowserNotifications } from "./pwa-controls";
 import DataExport from "./data-export";
+import AccountActivityPanel from "./account-activity-panel";
+import ReceiptAISettings from "./receipt-ai-settings";
 import type { Trip } from "@/lib/model";
 export type Profile = {
   id: string;
@@ -49,6 +51,9 @@ export default function AccountPanel({
   trips?: Pick<Trip, "id" | "name">[];
 }) {
   const id = useId();
+  const chatgptLinkHref = "/signin-with-chatgpt?return_to=" + encodeURIComponent("/?connect=chatgpt");
+  const [activityRefresh, setActivityRefresh] = useState(0);
+  const refreshActivity = () => setActivityRefresh(value => value + 1);
   const [name, setName] = useState(profile?.displayName || ""),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
@@ -108,6 +113,7 @@ export default function AccountPanel({
                     error?: string;
                   };
                   if (!r.ok) throw Error(b.error || "Unable to save profile");
+                  refreshActivity();
                   onSaved({ ...profile, ...(b.profile || b) });
                 } catch (e) {
                   setError(e instanceof Error ? e.message : "Unable to save");
@@ -172,6 +178,7 @@ export default function AccountPanel({
                       throw Error(body.error || "Unable to save your password.");
                     setPassword("");
                     setCurrentPassword("");
+                    refreshActivity();
                     onSaved(updatedProfile);
                   } catch (cause) {
                     setPasswordError(
@@ -244,9 +251,9 @@ export default function AccountPanel({
               </p>
               {profile.chatgptConnected ? (
                 <>
-                  <p className="account-connection-status">ChatGPT is linked.</p>
+                  <p className="account-connection-status">ChatGPT identity is linked.</p>
                   <p className="footnote">
-                    Use the TripTab plugin in ChatGPT or Codex for AI assistance.
+                    External TripTab tool availability is unknown. Enable TripTab in the conversation you use for assistance. ChatGPT and Codex connections must each be checked in that client.
                   </p>
                   <button
                     className="quiet"
@@ -264,6 +271,7 @@ export default function AccountPanel({
                         const updatedProfile = profileFromAuth(body);
                         if (!response.ok || !updatedProfile)
                           throw Error(body.error || "Unable to unlink ChatGPT.");
+                        refreshActivity();
                         onSaved(updatedProfile);
                       } catch (cause) {
                         setAccountError(
@@ -288,10 +296,7 @@ export default function AccountPanel({
               ) : (
                 <a
                   className="quiet account-link"
-                  href={
-                    "/signin-with-chatgpt?return_to=" +
-                    encodeURIComponent("/?connect=chatgpt")
-                  }
+                  href={chatgptLinkHref}
                 >
                   Link ChatGPT · optional
                 </a>
@@ -302,6 +307,7 @@ export default function AccountPanel({
                 </p>
               )}
             </section>
+            <ReceiptAISettings key={profile.id} accountId={profile.id} verificationHref={chatgptLinkHref} onChanged={refreshActivity} />
           </>
         ) : (
           <p className="footnote">
@@ -309,8 +315,9 @@ export default function AccountPanel({
             holidays. ChatGPT and Codex are optional.
           </p>
         )}
-        {profile && <DataExport trips={trips} />}
-        <PwaControls accountId={profile?.id} />
+        {profile && <DataExport key={profile.id} trips={trips} />}
+        {profile && <AccountActivityPanel key={profile.id} refreshKey={activityRefresh} />}
+        <PwaControls accountId={profile?.id} onChanged={refreshActivity} />
         {profile && (
           <div className="account-signout">
             <button

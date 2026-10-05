@@ -1,11 +1,13 @@
+import { transpileWithSharedImports } from './helpers/transpile';
 import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
-import { ModuleKind, ScriptTarget, transpileModule } from 'typescript';
+import { ModuleKind, ScriptTarget } from 'typescript';
 import { hashToken } from '../lib/auth';
 import type { Trip } from '../lib/model';
 import type { ActivityEvent } from '../lib/store';
+import type { AccountAuditEvent } from '../lib/audit';
 
 type Snapshot = { profile: Record<string, unknown>; data: { trips: Trip[] }; amountScale: number; exportedAt: string; receiptMetadata?: { id: string; tripId: string }[] };
 type HistoryPage = { events: ActivityEvent[]; nextCursor: number | null };
@@ -46,22 +48,30 @@ Object.defineProperty(globalThis, Symbol.for('triptab.export-test-env'), { value
 const envUrl = 'data:text/javascript;base64,' + Buffer.from("export const env=globalThis[Symbol.for('triptab.export-test-env')];").toString('base64');
 const notificationUrl = 'data:text/javascript;base64,' + Buffer.from('export const activityNotification=()=>null; export const notifyMembers=async()=>{};').toString('base64');
 const storeSource = await readFile(new URL('../lib/store.ts', import.meta.url), 'utf8');
-const storeCompiled = transpileModule(storeSource, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
+const storeCompiled = transpileWithSharedImports(storeSource, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
   .replace("'cloudflare:workers'", JSON.stringify(envUrl))
   .replace("'zod'", JSON.stringify(import.meta.resolve('zod')))
   .replace("'./model'", JSON.stringify(new URL('../lib/model.ts', import.meta.url).href))
   .replace("'./receipt-memory-ownership'", JSON.stringify(new URL('../lib/receipt-memory-ownership.ts', import.meta.url).href))
   .replace("'./auth'", JSON.stringify(new URL('../lib/auth.ts', import.meta.url).href))
+  .replace("'./activity-scope'", JSON.stringify(new URL('../lib/activity-scope.ts', import.meta.url).href))
   .replace("'./receipt-lifecycle'", JSON.stringify(new URL('../lib/receipt-lifecycle.ts', import.meta.url).href))
   .replace("'./receipt-context'", JSON.stringify(new URL('../lib/receipt-context.ts', import.meta.url).href))
   .replace("'./notifications'", JSON.stringify(notificationUrl));
 const storeUrl = 'data:text/javascript;base64,' + Buffer.from(storeCompiled).toString('base64');
 const store = await import(storeUrl) as typeof import('../lib/store');
 const routeSource = await readFile(new URL('../app/api/export/route.ts', import.meta.url), 'utf8');
-const routeCompiled = transpileModule(routeSource, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
+const routeCompiled = transpileWithSharedImports(routeSource, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
   .replace("'@/lib/store'", JSON.stringify(storeUrl))
   .replace("'@/lib/model'", JSON.stringify(new URL('../lib/model.ts', import.meta.url).href));
 const route = await import('data:text/javascript;base64,' + Buffer.from(routeCompiled).toString('base64')) as { GET(request: Request): Promise<Response> };
+const accountRouteSource = await readFile(new URL('../app/api/account-activity/route.ts', import.meta.url), 'utf8');
+const accountRouteCompiled = transpileWithSharedImports(accountRouteSource, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
+  .replace("'@/lib/store'", JSON.stringify(storeUrl));
+const accountRoute = await import('data:text/javascript;base64,' + Buffer.from(accountRouteCompiled).toString('base64')) as { GET(request: Request): Promise<Response> };
+const entrySource = await readFile(new URL('../app/api/activity-entry/route.ts', import.meta.url), 'utf8');
+const entryCompiled = transpileWithSharedImports(entrySource, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText.replace("'@/lib/store'", JSON.stringify(storeUrl));
+const entryRoute = await import('data:text/javascript;base64,' + Buffer.from(entryCompiled).toString('base64')) as { GET(request: Request): Promise<Response> };
 const tokens = { owner: 'a'.repeat(43), joined: 'b'.repeat(43), outsider: 'c'.repeat(43) };
 
 function holiday(id: string, owner: string): Trip {
@@ -138,6 +148,99 @@ test('account JSON requires a real session and includes only own profile and cur
   assert.equal(shared.profile.id, 'joined');
 });
 
+test('JSON downloads preserve organiser typed unlinked contacts and redact other linked accounts', async () => {
+  const database = await storage();
+  const trip = holiday('shared', 'outsider');
+  trip.members = [
+    { id: 'a', name: 'host-contact@example.com', userId: 'outsider', email: 'host-contact@example.com' },
+    { id: 'b', name: 'Joined traveller', userId: 'joined', email: 'joined@example.com' },
+    // Matching the caller's email is not evidence that this unlinked traveller
+    // is the caller. Its contact field must still be omitted from a download.
+    { id: 'c', name: 'Guest', email: 'joined@example.com' },
+  ];
+  trip.expenses[0].items[0].name = 'host-contact@example.com';
+  trip.expenses[0].memory = { notes: 'Ask host-contact@example.com about dinner.', aliases: [{ name: 'host-contact@example.com', memberId: 'a' }] };
+  trip.expenses[0].conversation = [{ id: 'question', role: 'user', text: 'Ask host-contact@example.com about this item.', createdAt: '2026-10-04T12:00:00Z', authorMemberId: 'b', authorName: 'Joined traveller' }];
+  trip.payments[0].note = 'Sent to host-contact@example.com';
+  database.sqlite.prepare('UPDATE profiles SET email=? WHERE id=?').run('host-contact@example.com', 'outsider');
+  database.sqlite.prepare('INSERT INTO memberships (trip_id,user_id,member_id) VALUES (?,?,?)').run('shared', 'outsider', 'a');
+  database.sqlite.prepare('UPDATE trips SET data=? WHERE id=?').run(JSON.stringify(trip), 'shared');
+  const edited = structuredClone(trip);
+  edited.expenses[0].title = 'Dinner receipt, ask host-contact@example.com';
+  edited.drafts = [{ ...structuredClone(edited.expenses[0]), id: 'contact-review', expenseId: 'expense', status: 'review' }];
+  const saved = await store.writeLedger('outsider', { trips: [edited] }, 0);
+  const stored = database.sqlite.prepare('SELECT data FROM trips WHERE id=?').get('shared')!.data;
+  const savedTrip = saved.data.trips.find(value => value.id === 'shared')!;
+
+  for (const actor of ['joined', 'outsider'] as const) {
+    for (const query of ['', 'scope=trip&tripId=shared']) {
+      const response = await route.GET(request(query, actor));
+      assert.equal(response.status, 200);
+      const body = await json<Snapshot>(response);
+      assert.equal(body.profile.email, actor === 'joined' ? 'joined@example.com' : 'host-contact@example.com');
+      const exported = body.data.trips.find(value => value.id === 'shared')!;
+      assert.equal(exported.members.find(member => member.userId === actor)!.email, actor === 'joined' ? 'joined@example.com' : 'host-contact@example.com');
+      assert.ok(exported.members.filter(member => member.userId && member.userId !== actor).every(member => !Object.hasOwn(member, 'email')));
+      const unlinked = exported.members.find(member => member.id === 'c')!;
+      if (actor === 'outsider') assert.equal(unlinked.email, 'joined@example.com', 'the organiser retains typed contacts for unlinked travellers');
+      else assert.equal(Object.hasOwn(unlinked, 'email'), false, 'email equality never grants a participant unlinked contact export permission');
+      assert.deepEqual(exported.members.map(member => member.name), savedTrip.members.map(member => member.name));
+      assert.deepEqual(exported.expenses, savedTrip.expenses, 'expense split IDs, memory and authored receipt text stay unchanged');
+      assert.deepEqual(exported.drafts, savedTrip.drafts, 'draft context has no traveller contact objects to redact');
+      assert.deepEqual(exported.payments, savedTrip.payments);
+    }
+  }
+  const rows = parseCsv(await (await route.GET(request('scope=trip&tripId=shared&format=csv', 'joined'))).text());
+  assert.equal(rows[1][rows[0].indexOf('paid_by')], 'host-contact@example.com', 'a user-entered name remains a name even when it resembles an email');
+  assert.equal(rows[2][rows[0].indexOf('note')], 'Sent to host-contact@example.com');
+  assert.deepEqual(JSON.parse(rows[1][rows[0].indexOf('item_details_json')]), savedTrip.expenses[0].items, 'CSV split members remain IDs without contact fields');
+  assert.equal(database.sqlite.prepare('SELECT data FROM trips WHERE id=?').get('shared')!.data, stored, 'export must not mutate stored contacts or receipt text');
+  const live = (await store.readLedger('joined')).data.trips.find(value => value.id === 'shared')!;
+  assert.deepEqual(live.members, savedTrip.members, 'live shared ledger keeps its intentionally shared contacts');
+});
+
+test('history JSON and CSV redact structured contacts using each historical association without changing saved events', async () => {
+  const database = await storage();
+  const insert = database.sqlite.prepare('INSERT INTO activity_events (id,trip_id,actor_id,actor_name,created_at,entity_type,entity_id,action,before_data,after_data,revision,source) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)');
+  const own = { id: 'b', name: 'Old own name', userId: 'joined', email: 'own-historical@example.com' };
+  const foreign = { id: 'a', name: 'foreign-contact@example.com', userId: 'outsider', email: 'foreign-contact@example.com' };
+  const unlinked = { id: 'c', name: 'Unlinked guest', email: 'joined@example.com' };
+  const reassigned = { ...own, name: 'Later different account', userId: 'outsider', email: 'later-contact@example.com' };
+  const before = { name: 'Trip before', members: [own, foreign, unlinked], expenses: [{ title: 'Legacy expense snapshot', members: [own, foreign], note: 'foreign-contact@example.com' }], drafts: [{ title: 'Legacy draft snapshot', members: [unlinked, foreign], conversation: [{ text: 'foreign-contact@example.com' }], memory: { notes: 'foreign-contact@example.com', aliases: [{ name: 'foreign-contact@example.com', memberId: 'a' }] } }] };
+  const after = { ...structuredClone(before), members: [reassigned, foreign, unlinked] };
+  insert.run('contact-trip-history', 'shared', 'outsider', 'foreign-contact@example.com', '2026-10-04T12:00:00Z', 'trip', 'shared', 'update', JSON.stringify(before), JSON.stringify(after), 2, 'web');
+  insert.run('contact-member-history', 'shared', 'outsider', 'Host', '2026-10-04T12:01:00Z', 'member', 'b', 'update', JSON.stringify(own), JSON.stringify(reassigned), 3, 'web');
+  insert.run('unlinked-member-history', 'shared', 'outsider', 'Host', '2026-10-04T12:02:00Z', 'member', 'c', 'create', null, JSON.stringify(unlinked), 4, 'web');
+  const stored = database.sqlite.prepare('SELECT id,before_data,after_data FROM activity_events WHERE trip_id=? ORDER BY id').all('shared');
+  const expectedOwn = { ...own };
+  const expectedForeign = { id: foreign.id, name: foreign.name, userId: foreign.userId };
+  const expectedUnlinked = { id: unlinked.id, name: unlinked.name };
+  const expectedReassigned = { id: reassigned.id, name: reassigned.name, userId: reassigned.userId };
+
+  for (const format of ['json', 'csv']) {
+    const response = await route.GET(request('scope=activity&tripId=shared&format=' + format, 'joined'));
+    assert.equal(response.status, 200);
+    let events: Pick<ActivityEvent, 'id' | 'before' | 'after' | 'actorName'>[];
+    if (format === 'json') events = (await json<HistoryPage>(response)).events;
+    else {
+      const rows = parseCsv(await response.text()), headers = rows[0];
+      const field = (row: string[], name: string) => row[headers.indexOf(name)];
+      events = rows.slice(1).map(row => ({ id: field(row, 'event_id'), actorName: field(row, 'actor_name'), before: field(row, 'before_json') ? JSON.parse(field(row, 'before_json')) : null, after: field(row, 'after_json') ? JSON.parse(field(row, 'after_json')) : null }));
+    }
+    const tripEvent = events.find(event => event.id === 'contact-trip-history')!;
+    assert.deepEqual(tripEvent.before, { ...before, members: [expectedOwn, expectedForeign, expectedUnlinked], expenses: [{ ...before.expenses[0], members: [expectedOwn, expectedForeign] }], drafts: [{ ...before.drafts[0], members: [expectedUnlinked, expectedForeign] }] });
+    assert.deepEqual(tripEvent.after, { ...after, members: [expectedReassigned, expectedForeign, expectedUnlinked], expenses: [{ ...after.expenses[0], members: [expectedOwn, expectedForeign] }], drafts: [{ ...after.drafts[0], members: [expectedUnlinked, expectedForeign] }] });
+    assert.equal(tripEvent.actorName, 'foreign-contact@example.com', 'authored display names are not arbitrarily scrubbed');
+    const memberEvent = events.find(event => event.id === 'contact-member-history')!;
+    assert.deepEqual(memberEvent.before, expectedOwn, 'historically own member keeps its own contact');
+    assert.deepEqual(memberEvent.after, expectedReassigned, 'later foreign association never inherits current-caller contact permission');
+    assert.deepEqual(events.find(event => event.id === 'unlinked-member-history')!.after, expectedUnlinked, 'email equality does not establish ownership');
+  }
+  assert.deepEqual(database.sqlite.prepare('SELECT id,before_data,after_data FROM activity_events WHERE trip_id=? ORDER BY id').all('shared'), stored, 'export copies must not rewrite append-only source history');
+  const live = await store.readActivity('joined', 'shared', { limit: 50 });
+  assert.deepEqual(live.events.find(event => event.id === 'contact-trip-history')!.before, before, 'live shared history retains its original contact snapshots');
+});
+
 test('scoped trip exports reject foreign trips, SQL-like IDs and cross-origin browser requests', async () => {
   await storage();
   for (const query of ['scope=trip&tripId=secret', 'scope=activity&tripId=secret', 'scope=trip&tripId=mine%27%20OR%201%3D1--']) assert.equal((await route.GET(request(query))).status, 403, query);
@@ -187,13 +290,13 @@ test('financial CSV preserves amounts and RFC4180 notes while neutralizing formu
   assert.equal(snapshot.data.trips[0].expenses[0].title, trip.expenses[0].title, 'JSON keeps the literal stored value');
 });
 
-test('real saved receipt units, memory and item conversation survive authorized JSON and item-detail CSV exports', async () => {
+test('real saved receipt purchased quantities, units, memory and item conversation survive authorized JSON and item-detail CSV exports', async () => {
   const database = await storage();
   const trip = holiday('mine', 'owner');
   const expense = trip.expenses[0];
   expense.currency = 'GBP';
   delete expense.bankAmount;
-  expense.items = [{ id: 'chocolate', name: 'Chocolate, "dark"\nThree blocks', amount: 1001, members: ['a', 'b'], units: { total: 3, label: 'blocks', allocations: { a: 2.5, b: 0.5 } } }];
+  expense.items = [{ id: 'chocolate', name: 'Chocolate, "dark"\nThree blocks', amount: 1001, members: ['a', 'b'], quantity: { total: 3, label: 'blocks', sourceText: '3 x Stck' }, units: { total: 3, label: 'blocks', allocations: { a: 2.5, b: 0.5 } } }];
   expense.memory = { notes: 'Treat "blocks" as chocolate.\nKeep this context for later questions.', aliases: [{ name: 'blocks', itemId: 'chocolate' }, { name: 'me', memberId: 'b', scopeMemberId: 'b' }] };
   expense.conversation = [{ id: 'item-question', role: 'user', text: 'Which blocks are mine?', createdAt: '2026-10-04T12:00:00Z', itemId: 'chocolate', authorMemberId: 'b', authorName: 'Bob' }];
   // Preserve a historical authored thread, then change the receipt through the
@@ -218,15 +321,15 @@ test('real saved receipt units, memory and item conversation survive authorized 
 
   const financialRows = parseCsv(await (await route.GET(request('scope=trip&tripId=mine&format=csv'))).text());
   const header = financialRows[0];
-  assert.equal(header.at(-1), 'item_details_json', 'new details append after all existing columns');
+  assert.deepEqual(header.slice(-3), ['item_details_json', 'receipt_scan_json', 'field_sources_json'], 'scan evidence appends without moving existing financial columns');
   assert.equal(header[8], 'receipt_amount');
   assert.equal(header[27], 'Alice_cost_share_hundredths');
   assert.ok(financialRows.every(row => row.length === header.length));
   assert.equal(financialRows[1][header.indexOf('receipt_amount_hundredths')], '1001', 'line amount is the full price, not a per-unit price');
   assert.equal(financialRows[1][header.indexOf('Alice_cost_share_hundredths')], '834');
   assert.equal(financialRows[1][header.indexOf('Bob_cost_share_hundredths')], '167');
-  assert.deepEqual(JSON.parse(financialRows[1].at(-1)!), expense.items);
-  assert.equal(financialRows[2].at(-1), '', 'payment rows have no item detail');
+  assert.deepEqual(JSON.parse(financialRows[1][header.indexOf('item_details_json')]), expense.items);
+  assert.equal(financialRows[2][header.indexOf('item_details_json')], '', 'payment rows have no item detail');
   const history = await json<HistoryPage>(await route.GET(request('scope=activity&tripId=mine')));
   const changed = history.events.find(event => event.entityType === 'expense' && event.entityId === expense.id && event.action === 'update');
   assert.deepEqual(changed?.after?.memory, edited.expenses[0].memory);
@@ -240,7 +343,27 @@ test('real saved receipt units, memory and item conversation survive authorized 
   const overriddenRows = parseCsv(await (await route.GET(request('scope=trip&tripId=mine&format=csv'))).text());
   assert.equal(overriddenRows[1][header.indexOf('Alice_cost_share_hundredths')], '250');
   assert.equal(overriddenRows[1][header.indexOf('Bob_cost_share_hundredths')], '751');
-  assert.deepEqual(JSON.parse(overriddenRows[1].at(-1)!), expense.items);
+  assert.deepEqual(JSON.parse(overriddenRows[1][header.indexOf('item_details_json')]), expense.items);
+});
+
+test('authorized downloads preserve independent printed evidence, field origins and source line identity', async () => {
+  const database = await storage();
+  const trip = holiday('mine', 'owner');
+  const expense = trip.expenses[0];
+  expense.items[0].scanSource = { lineIndex: 2, observedText: 'Food 100.00', confidence: 'high' };
+  expense.items[0].fieldSources = { name: 'receipt', amount: 'user' };
+  expense.fieldSources = { currency: 'receipt', payer: 'user' };
+  expense.receiptScan = { version: 1, printedSubtotal: null, printedTotal: 10000, printedCurrency: 'EUR', calculatedSubtotal: 10000, calculatedTotal: 10000, status: 'matched', warnings: [], processor: 'openai-api', imageIds: ['photo-mine'], sourceLines: [{ lineIndex: 3, kind: 'total', observedText: 'TOTAL 100.00', amount: 10000 }] };
+  database.sqlite.prepare('UPDATE trips SET data=? WHERE id=?').run(JSON.stringify(trip), 'mine');
+  const body = await json<Snapshot>(await route.GET(request('scope=trip&tripId=mine')));
+  assert.deepEqual(body.data.trips[0].expenses[0].receiptScan, expense.receiptScan);
+  const rows = parseCsv(await (await route.GET(request('scope=trip&tripId=mine&format=csv'))).text());
+  const header = rows[0];
+  assert.deepEqual(JSON.parse(rows[1][header.indexOf('receipt_scan_json')]), expense.receiptScan);
+  assert.deepEqual(JSON.parse(rows[1][header.indexOf('field_sources_json')]), expense.fieldSources);
+  assert.deepEqual(JSON.parse(rows[1][header.indexOf('item_details_json')]), expense.items);
+  assert.ok(rows.every(row => row.length === header.length));
+  assert.equal(rows[2][header.indexOf('receipt_scan_json')], '', 'payments cannot inherit receipt evidence');
 });
 
 test('history pages are bounded, cursor-complete, UTC, scoped and safe as CSV', async () => {
@@ -263,10 +386,53 @@ test('history pages are bounded, cursor-complete, UTC, scoped and safe as CSV', 
   assert.doesNotMatch(JSON.stringify(first), /NEVER_EXPORT_PRIVATE_EVENT/);
 });
 
+test('private account history API and exports stay owner-scoped with complete safe pages', async () => {
+  const database = await storage();
+  const insert = database.sqlite.prepare('INSERT INTO account_activity_events (id,user_id,actor_name,created_at,entity_type,entity_id,action,before_data,after_data,source) VALUES (?,?,?,?,?,?,?,?,?,?)');
+  for (let index = 0; index < 64; index++) {
+    insert.run(`own-${index}`, 'owner', '=Alice', '2026-10-04T03:00:00+02:00', 'profile', 'owner', 'update', JSON.stringify({ displayName: `Old ${index}` }), JSON.stringify({ displayName: `New ${index}` }), index % 2 ? 'chatgpt' : 'web');
+    insert.run(`other-${index}`, 'joined', 'NEVER_EXPORT_OTHER_ACCOUNT', '2026-10-04T01:00:00Z', 'profile', 'joined', 'update', null, JSON.stringify({ displayName: 'NEVER_EXPORT_OTHER_CHANGE' }), 'web');
+  }
+  type PrivatePage = { events: AccountAuditEvent[]; nextCursor: number | null };
+  const own = await json<PrivatePage>(await accountRoute.GET(request('limit=7')));
+  assert.equal(own.events.length, 7);
+  assert.ok(own.events.every(event => event.userId === 'owner'));
+  assert.equal((await accountRoute.GET(request('', null))).status, 401);
+  for (const query of ['userId=joined', 'tripId=shared', 'limit=51', 'limit=0', 'limit=1&limit=2', 'before=0', 'before=9007199254740992']) assert.equal((await accountRoute.GET(request(query))).status, 400, query);
+  const joined = await json<PrivatePage>(await accountRoute.GET(request('limit=2', 'joined')));
+  assert.ok(joined.events.every(event => event.userId === 'joined'));
+  assert.equal((await accountRoute.GET(request())).headers.get('cache-control'), 'private, no-store');
+
+  const firstResponse = await route.GET(request('scope=account-activity'));
+  assert.equal(firstResponse.status, 200);
+  assert.equal(firstResponse.headers.get('cache-control'), 'private, no-store');
+  const first = await json<PrivatePage>(firstResponse);
+  assert.equal(first.events.length, 50);
+  assert.equal(firstResponse.headers.get('x-export-next-cursor'), String(first.nextCursor));
+  assert.ok(first.events.every(event => event.userId === 'owner' && event.createdAt === '2026-10-04T01:00:00.000Z'));
+  assert.deepEqual(first.events[0].before, { displayName: 'Old 63' });
+  assert.deepEqual(first.events[0].after, { displayName: 'New 63' });
+  assert.equal(first.events[0].source, 'chatgpt');
+  assert.doesNotMatch(JSON.stringify(first), /NEVER_EXPORT|password_hash|token_hash|oai_user_id/);
+  const older = await json<PrivatePage>(await route.GET(request(`scope=account-activity&before=${first.nextCursor}`)));
+  assert.equal(older.events.length, 14);
+  assert.equal(older.nextCursor, null);
+  assert.equal(new Set([...first.events, ...older.events].map(event => event.id)).size, 64);
+  const rows = parseCsv(await (await route.GET(request('scope=account-activity&format=csv'))).text());
+  assert.equal(rows[0][4], 'created_at_utc');
+  assert.equal(rows[1][3], "'=Alice");
+  assert.equal(rows[1][4], '2026-10-04T01:00:00.000Z');
+  assert.equal(rows[1][8], 'chatgpt');
+  assert.deepEqual(JSON.parse(rows[1][10]), { displayName: 'New 63' });
+  for (const query of ['scope=account-activity&tripId=shared', 'scope=account-activity&before=0', 'scope=account-activity&before=1&before=2', 'scope=account-activity&receipts=1']) assert.equal((await route.GET(request(query))).status, 400, query);
+  assert.equal((await route.GET(request('scope=account-activity', null))).status, 401);
+  assert.equal((await route.GET(request('scope=account-activity', 'owner', { origin: 'https://evil.test' }))).status, 403);
+});
+
 test('membership changes are rechecked in data queries and remove access to later exports', async () => {
   const database = await storage();
   database.beforeRead = sql => {
-    if (/WITH candidates/.test(sql)) { database.beforeRead = undefined; database.sqlite.prepare('DELETE FROM memberships WHERE trip_id=? AND user_id=?').run('shared', 'joined'); }
+    if (/AS metadataBytes/.test(sql)) { database.beforeRead = undefined; database.sqlite.prepare('DELETE FROM memberships WHERE trip_id=? AND user_id=?').run('shared', 'joined'); }
   };
   const response = await route.GET(request('scope=activity&tripId=shared', 'joined'));
   if (response.status === 200) assert.deepEqual((await json<HistoryPage>(response)).events, []);
@@ -290,6 +456,70 @@ test('history byte budgets return smaller complete pages and oversized account e
   database.sqlite.prepare('INSERT INTO trips (id,owner,data) VALUES (?,?,?)').run('oversized', 'owner', JSON.stringify({ ...oversized, name: 'x'.repeat(4_200_000) }));
   assert.equal((await route.GET(request())).status, 413);
   assert.equal((await route.GET(request('scope=trip&tripId=mine'))).status, 200);
+});
+
+test('oversized shared history exports keep every event and explicitly link to a complete bounded snapshot download', async () => {
+  const database = await storage();
+  const title = '🥐'.repeat(1_100_000);
+  seedEvent(database, 'mine', title);
+  const stored = database.sqlite.prepare('SELECT id,after_data FROM activity_events WHERE trip_id=? ORDER BY sequence DESC LIMIT 1').get('mine')!;
+  const response = await route.GET(request('scope=activity&tripId=mine'));
+  assert.equal(response.status, 200);
+  const page = await json<HistoryPage>(response);
+  assert.equal(page.events[0].id, stored.id);
+  assert.equal(page.events[0].snapshotOmitted, true);
+  assert.equal(page.events[0].after, null);
+  assert.equal(page.events.length, 2, 'the large newest entry does not hide older changes');
+  assert.equal(page.nextCursor, null);
+  const rows = parseCsv(await (await route.GET(request('scope=activity&tripId=mine&format=csv'))).text());
+  assert.equal(rows[1][rows[0].indexOf('snapshots_omitted')], 'true');
+  assert.match(rows[1][rows[0].indexOf('shared_entry_download')], /api\/activity-entry\?/);
+
+  const firstQuery = database.queries.length;
+  const download = await entryRoute.GET(request(`tripId=mine&eventId=${stored.id}`));
+  assert.equal(download.status, 200);
+  assert.equal(download.headers.get('cache-control'), 'private, no-store');
+  assert.match(download.headers.get('content-disposition')!, /attachment; filename="triptab-shared-history-/);
+  const full = await json<ActivityEvent>(download);
+  assert.equal(full.after?.title, title, 'UTF-8 characters remain intact across SQL chunk boundaries');
+  assert.equal(full.before, null);
+  assert.ok(database.queries.slice(firstQuery).filter(sql => /SELECT substr/.test(sql)).length > 1, 'the original snapshot is read in bounded chunks');
+  assert.ok(database.queries.slice(firstQuery).every(sql => !/SELECT e\.\*/.test(sql)), 'the full route never fetches an unbounded snapshot row');
+  assert.equal(database.sqlite.prepare('SELECT after_data FROM activity_events WHERE id=?').get(stored.id)!.after_data, stored.after_data);
+});
+
+test('full shared history downloads use current trip access without exposing other trips or private account events', async () => {
+  const database = await storage();
+  const foreign = database.sqlite.prepare('SELECT id FROM activity_events WHERE trip_id=?').get('secret')!.id;
+  const shared = database.sqlite.prepare('SELECT id FROM activity_events WHERE trip_id=?').get('shared')!.id;
+  assert.equal((await entryRoute.GET(request(`tripId=shared&eventId=${shared}`, 'joined'))).status, 200);
+  assert.equal((await entryRoute.GET(request(`tripId=secret&eventId=${foreign}`, 'owner'))).status, 404);
+  assert.equal((await entryRoute.GET(request(`tripId=mine&eventId=${foreign}`, 'owner'))).status, 404);
+  assert.equal((await entryRoute.GET(request(`tripId=shared&eventId=${shared}`, null))).status, 401);
+  for (const query of [`tripId=shared&eventId=${shared}&eventId=x`, `tripId=shared&eventId=${shared}&accountId=joined`, 'tripId=&eventId=x', 'tripId=shared']) assert.equal((await entryRoute.GET(request(query, 'joined'))).status, 400, query);
+  assert.equal((await entryRoute.GET(request(`tripId=shared&eventId=${shared}`, 'joined', { origin: 'https://evil.test' }))).status, 403);
+  database.sqlite.prepare('INSERT INTO account_activity_events(id,user_id,actor_name,created_at,entity_type,entity_id,action,before_data,after_data,source) VALUES(?,?,?,?,?,?,?,?,?,?)')
+    .run('private-account-event', 'joined', 'Joined', '2026-10-05T12:00:00Z', 'profile', 'joined', 'update', null, JSON.stringify({ displayName: 'Private profile change' }), 'web');
+  assert.equal((await entryRoute.GET(request('tripId=shared&eventId=private-account-event', 'joined'))).status, 404);
+});
+
+test('revoking shared membership or a browser session stops a full history stream before its remaining snapshot chunks', async () => {
+  for (const revoke of ['membership', 'session']) {
+    const database = await storage();
+    seedEvent(database, 'shared', 'Private trailing evidence. '.repeat(20_000));
+    const eventId = database.sqlite.prepare('SELECT id FROM activity_events WHERE trip_id=? ORDER BY sequence DESC LIMIT 1').get('shared')!.id;
+    let chunks = 0;
+    database.beforeRead = sql => {
+      if (/SELECT substr/.test(sql) && ++chunks === 1) {
+        if (revoke === 'membership') database.sqlite.prepare('DELETE FROM memberships WHERE trip_id=? AND user_id=?').run('shared', 'joined');
+        else database.sqlite.prepare('DELETE FROM auth_sessions WHERE user_id=?').run('joined');
+      }
+    };
+    const response = await entryRoute.GET(request(`tripId=shared&eventId=${eventId}`, 'joined'));
+    assert.equal(response.status, 200);
+    await assert.rejects(response.text(), /could not complete/);
+    assert.ok(chunks <= 2, 'revocation prevents further snapshot queries from succeeding');
+  }
 });
 
 test('malformed options and legacy calculation failures never discard saved records', async () => {
