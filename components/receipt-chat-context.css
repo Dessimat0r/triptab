@@ -1,0 +1,55 @@
+.receipt-chat-context {
+  display: inline-block;
+  max-width: 100%;
+  margin: 2px 0 8px;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.receipt-chat-scope {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.receipt-chat-memory {
+  min-width: 0;
+  margin-top: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+.receipt-chat-memory > summary {
+  display: list-item;
+  min-height: 44px;
+  padding: 12px 0;
+  font-size: 0.85rem;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.receipt-chat-memory-notes {
+  margin-top: 12px;
+  font-size: 0.85rem;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.receipt-chat-aliases {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+}
+.receipt-chat-aliases li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 4px;
+  margin-top: 12px;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.receipt-chat-aliases span { color: var(--muted); }

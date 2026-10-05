@@ -70,13 +70,16 @@ export async function GET(request: Request) {
       const response = await fetch(providerUrl, {
         signal: controller.signal,
         cache: 'no-store',
-        redirect: 'error',
+        redirect: 'manual',
         headers: { Accept: 'application/json' },
       });
       if (response.status === 404 || response.status === 422) {
+        await response.body?.cancel().catch(() => {});
         throw new FxError(`No daily reference rate is available for this currency and date. ${BANK_FALLBACK}`, 422);
       }
       if (!response.ok) {
+        // Includes redirects: do not follow an unexpected provider location.
+        await response.body?.cancel().catch(() => {});
         throw new FxError(`The exchange-rate provider is unavailable. ${BANK_FALLBACK}`, 502);
       }
       result = await response.json() as typeof result;

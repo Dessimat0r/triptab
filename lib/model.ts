@@ -1,5 +1,8 @@
 import { z } from 'zod';
 import { validCalendarDate } from './dates';
+import { receiptMemorySchema } from './receipt-context';
+import { fieldSourcesSchema, itemFieldSourcesSchema, scanSourceSchema, receiptScanSchema,
+  reconcileReceiptScan, receiptScanSaveError, receiptScanHumanReviewChanged } from './receipt-scan';
 
 /** Deliberate, safe-to-show business-rule failures. Unexpected errors stay private. */
 export class LedgerValidationError extends Error {
@@ -84,12 +87,86 @@ const percentagesSchema = z.record(id, z.number().finite().min(0).max(100)).supe
   if (message) context.addIssue({ code: z.ZodIssueCode.custom, message });
 });
 
+export const UNIT_SCALE = 1_000_000;
+export const MAX_UNITS = 1_000_000;
+
+/** Parse decimal quantities as integer millionths without floating tolerances. */
+export function unitsScale(value: unknown): number | null {
+  let whole: string;
+  let fraction: string;
+  let exponent = 0;
+  if (typeof value === 'string') {
+    const decimal = value.trim();
+    if (decimal.length > 64 || !/^(?:\d+(?:\.\d{0,6})?|\.\d{1,6})$/.test(decimal)) return null;
+    [whole, fraction = ''] = decimal.split('.');
+    whole ||= '0';
+  } else if (typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= MAX_UNITS) {
+    const [mantissa, exponentText = '0'] = value.toString().toLowerCase().split('e');
+    [whole, fraction = ''] = mantissa.split('.');
+    exponent = Number(exponentText);
+  } else return null;
+  const precision = fraction.length - exponent;
+  if (precision > 6) return null;
+  const scaled = BigInt(whole + fraction) * (BigInt(10) ** BigInt(6 - precision));
+  if (scaled > BigInt(MAX_UNITS) * BigInt(UNIT_SCALE)) return null;
+  return Number(scaled);
+}
+
+const quantitySchema = z.number().refine(value => unitsScale(value) !== null,
+  'Use a quantity between 0 and 1,000,000 with at most six decimal places');
+// Purchased quantity is receipt evidence, independent of who owes its cost.
+export const receiptQuantitySchema = z.object({
+  total: quantitySchema.refine(value => value > 0, 'Receipt quantity must be greater than zero'),
+  label: z.string().trim().min(1).max(40).optional(),
+  sourceText: z.string().trim().min(1).max(200).optional(),
+}).strict();
+export type ItemQuantity = z.infer<typeof receiptQuantitySchema>;
+const rawUnitsSchema = z.object({
+  total: quantitySchema.refine(value => value > 0, 'Total units must be greater than zero'),
+  allocations: z.record(id, quantitySchema),
+  label: z.string().trim().min(1).max(40).optional(),
+}).strict();
+export type ItemUnits = z.infer<typeof rawUnitsSchema>;
+// A scan can know the purchased quantity before any traveller has claimed it.
+// Draft allocations may therefore be pending; the posted item schema stays strict.
+export const draftUnitsSchema = rawUnitsSchema;
+
+function unitAllocationError(units: ItemUnits): string | null {
+  if (!units || typeof units !== 'object' || Array.isArray(units)
+    || !units.allocations || typeof units.allocations !== 'object' || Array.isArray(units.allocations)) {
+    return 'Set the total units and each person’s allocated units';
+  }
+  const total = typeof units.total === 'number' ? unitsScale(units.total) : null;
+  if (total === null || total <= 0) return 'Total units must be greater than zero, no more than 1,000,000, and use at most six decimal places';
+  if (units.label !== undefined && (typeof units.label !== 'string' || !units.label.trim() || units.label.trim().length > 40)) {
+    return 'Use a unit name between 1 and 40 characters';
+  }
+  const quantities = Object.values(units.allocations);
+  if (!quantities.length || quantities.length > 50) return 'Choose between 1 and 50 people for the unit split';
+  let assigned = BigInt(0);
+  for (const quantity of quantities) {
+    const scaled = typeof quantity === 'number' ? unitsScale(quantity) : null;
+    if (scaled === null) return 'Allocated units must be between 0 and 1,000,000 with at most six decimal places';
+    assigned += BigInt(scaled);
+  }
+  if (!assigned) return 'Assign some units to at least one selected person';
+  return assigned === BigInt(total) ? null : `Assigned units must add up to the item’s total (${units.total})`;
+}
+
+export const unitsSchema = rawUnitsSchema.superRefine((units, context) => {
+  const message = unitAllocationError(units);
+  if (message) context.addIssue({ code: z.ZodIssueCode.custom, path: ['allocations'], message });
+});
+
 const receiptMessageSchema = z.object({
   id,
   role: z.enum(['user', 'assistant']),
   text: z.string().trim().min(1).max(4000),
   createdAt: z.string().datetime({ offset: true }),
   replyTo: id.optional(),
+  itemId: id.optional(),
+  authorMemberId: id.optional(),
+  authorName: z.string().trim().max(80).optional(),
 });
 export type ReceiptMessage = z.infer<typeof receiptMessageSchema>;
 const conversationSchema = z.array(receiptMessageSchema).max(100).superRefine((messages, context) => {
@@ -108,16 +185,43 @@ const conversationSchema = z.array(receiptMessageSchema).max(100).superRefine((m
 
 const rawItemSchema = z.object({
   id, name: z.string().min(1).max(200), amount: cents, members: z.array(id).min(1).max(50),
+  quantity: receiptQuantitySchema.optional(),
   percentages: z.record(id, z.number().finite().min(0).max(100)).optional(),
+  units: unitsSchema.optional(),
+  scanSource: scanSourceSchema.optional(),
+  fieldSources: itemFieldSourcesSchema.optional(),
 });
 export type Item = z.infer<typeof rawItemSchema>;
+export const draftItemSchema = rawItemSchema.extend({
+  name: z.string().max(200), amount: cents.nullable(), members: z.array(id).max(50),
+  units: draftUnitsSchema.optional(),
+}).superRefine((item, context) => {
+  const message = item.members.length ? itemSplitError(item)
+    : item.units && Object.keys(item.units.allocations).length ? 'Choose people before assigning units'
+      : item.percentages && Object.keys(item.percentages).length ? 'Choose people before assigning percentages' : null;
+  if (message) context.addIssue({ code: z.ZodIssueCode.custom, path: ['members'], message });
+});
+export type DraftItem = z.infer<typeof draftItemSchema>;
+
+export function itemUnitsError(item: Pick<Item, 'members' | 'units' | 'percentages'>): string | null {
+  if (item.units === undefined) return null;
+  if (item.percentages !== undefined) return 'Choose either percentages or units for this item';
+  const message = unitAllocationError(item.units);
+  if (message) return message;
+  const keys = Object.keys(item.units.allocations);
+  if (keys.length !== item.members.length || keys.some(key => !item.members.includes(key))) {
+    return 'Set a unit allocation for each selected person only';
+  }
+  return null;
+}
 
 /** A receipt item's split describes who owes its cost, independently of the payer. */
-export function itemSplitError(item: Item): string | null {
+export function itemSplitError<T extends Pick<Item, 'members' | 'units' | 'percentages'>>(item: T): string | null {
   if (!item.members.length) return 'Choose at least one person for each item';
   if (new Set(item.members).size !== item.members.length || item.members.some(member => !member)) {
     return 'Check item assignments';
   }
+  if (item.units !== undefined) return itemUnitsError(item);
   if (item.percentages === undefined) return null;
   const keys = Object.keys(item.percentages);
   if (keys.length !== item.members.length || keys.some(key => !item.members.includes(key))) {
@@ -128,29 +232,51 @@ export function itemSplitError(item: Item): string | null {
 
 export const itemSchema = rawItemSchema.superRefine((item, context) => {
   const message = itemSplitError(item);
-  if (message) context.addIssue({ code: z.ZodIssueCode.custom, path: ['percentages'], message });
+  if (message) context.addIssue({ code: z.ZodIssueCode.custom, path: [item.units === undefined ? 'percentages' : 'units'], message });
 });
-export const expenseSchema = z.object({
+const expenseItemSchema = rawItemSchema.extend({
+  members: z.array(id).max(50), units: draftUnitsSchema.optional(),
+});
+const expenseBaseSchema = z.object({
   id, title: z.string().min(1).max(200), date: dateSchema,
+  // Provenance may reference a consumed or deleted draft retained in history.
+  sourceDraftId: id.optional(),
   time: timeSchema.default('12:00'), timezone: timezoneSchema.default('Europe/London'),
   currency: currencySchema.default('EUR'), fx: fxSchema.optional(), bankAmount: bankAmountSchema.optional(),
-  payer: id, items: z.array(itemSchema).min(1).max(200),
+  payer: id, items: z.array(expenseItemSchema).min(1).max(200),
   percentages: percentagesSchema.optional(),
   adjustmentAllocation: z.literal('selected-participants').optional(),
   source: z.enum(['manual', 'ai']).optional(),
+  receiptScan: receiptScanSchema.optional(), fieldSources: fieldSourcesSchema.optional(),
   conversation: conversationSchema.optional(),
+  memory: receiptMemorySchema.optional(),
   tax: cents, tip: cents, discount: cents, receiptId: id.optional(),
 });
+function expenseItemAllocationValidation(expense: { items: Item[]; percentages?: Record<string, number> }, context: z.RefinementCtx) {
+  // A valid receipt-wide percentage split is itself the cost allocation. Keep
+  // any unclaimed item quantities as evidence instead of inventing eaters.
+  expense.items.forEach((item, index) => {
+    if (expense.percentages !== undefined && !item.members.length
+      && !Object.keys(item.percentages || {}).length && !Object.keys(item.units?.allocations || {}).length) return;
+    const parsed = itemSchema.safeParse(item);
+    if (!parsed.success) for (const issue of parsed.error.issues) {
+      context.addIssue({ ...issue, path: ['items', index, ...issue.path] });
+    }
+  });
+}
+export const expenseSchema = expenseBaseSchema.superRefine(expenseItemAllocationValidation);
 export const draftSchema = z.object({
   id, title: z.string().max(200), receiptId: id.optional(), expenseId: id.optional(),
-  currency: currencySchema.default('EUR'),
+  currency: currencySchema.nullable().default('EUR'),
   date: dateSchema.optional(), time: timeSchema.optional(), timezone: timezoneSchema.optional(),
   fx: fxSchema.optional(), bankAmount: bankAmountSchema.optional(),
   percentages: percentagesSchema.optional(),
   adjustmentAllocation: z.literal('selected-participants').optional(),
   source: z.enum(['manual', 'ai']).optional(),
+  receiptScan: receiptScanSchema.optional(), fieldSources: fieldSourcesSchema.optional(),
   conversation: conversationSchema.optional(),
-  items: z.array(itemSchema).max(200), tax: cents, tip: cents, discount: cents,
+  memory: receiptMemorySchema.optional(),
+  items: z.array(draftItemSchema).max(200), tax: cents, tip: cents, discount: cents,
   payer: id, status: z.enum(['waiting', 'review']),
 });
 export const paymentSchema = z.object({
@@ -180,7 +306,7 @@ export type Ledger = z.infer<typeof ledgerSchema>;
 // during a write. This schema must never be used as final mutation validation.
 const storedTripSchema = tripSchema.extend({
   members: z.array(memberSchema.extend({ name: z.string().min(1).max(50) })).min(1).max(50),
-  expenses: z.array(expenseSchema.extend({ bankAmount: cents.optional() })).max(1000),
+  expenses: z.array(expenseBaseSchema.extend({ bankAmount: cents.optional() }).superRefine(expenseItemAllocationValidation)).max(1000),
   drafts: z.array(draftSchema.extend({ bankAmount: cents.optional() })).max(100),
 });
 const storedLedgerSchema = z.object({ trips: z.array(storedTripSchema).max(50) });
@@ -211,7 +337,7 @@ export function receiptSplitError(expense: Pick<Expense, 'percentages'>): string
   return expense.percentages === undefined ? null : percentageError(expense.percentages, 'Receipt');
 }
 
-export function validateLedger(data: unknown, options: { previous?: Ledger } = {}): Ledger {
+export function validateLedger(data: unknown, options: { previous?: Ledger; source?: 'web' | 'mcp' } = {}): Ledger {
   // `previous` is a server-side compatibility boundary, never request input.
   // New records and every changed record still use the strict schemas/rules.
   const previous = options.previous && parseLedgerStructure(options.previous);
@@ -255,6 +381,15 @@ export function validateLedger(data: unknown, options: { previous?: Ledger } = {
         // Keep the old absence on untouched historical records. An explicitly
         // saved new/modified record adopts the corrected adjustment rule.
         expense.adjustmentAllocation = 'selected-participants';
+        const old = [...(prior?.expenses || []), ...(prior?.drafts || [])].find(value => value.id === expense.id);
+        if (options.source === 'mcp' && receiptScanHumanReviewChanged(expense, old)) {
+          throw new LedgerValidationError('Receipt scan warnings and differences must be reviewed in TripTab by a person.');
+        }
+        if (expense.receiptScan) expense.receiptScan = reconcileReceiptScan(expense);
+        if (!('status' in expense)) {
+          const scanError = receiptScanSaveError(expense, { allowAcknowledgement: options.source !== 'mcp', previous: old });
+          if (scanError) throw new LedgerValidationError(scanError);
+        }
       }
       if (!unchanged.has(expense) && expense.currency === trip.currency && expense.bankAmount !== undefined) {
         throw new LedgerValidationError('Remove the bank charge when the receipt and settlement currencies are the same');
@@ -323,7 +458,10 @@ export function allocate(amount: number, weights: number[]): number[] {
   return output;
 }
 
-type OriginalAmounts = Pick<Expense, 'items' | 'tax' | 'tip' | 'discount' | 'percentages' | 'adjustmentAllocation'>;
+type OriginalAmounts = Pick<Expense, 'tax' | 'tip' | 'discount' | 'percentages' | 'adjustmentAllocation'> & {
+  items: { amount: number | null; members: string[] }[];
+};
+type AllocatedAmounts = Pick<Expense, 'tax' | 'tip' | 'discount' | 'percentages' | 'adjustmentAllocation'> & { items: DraftItem[] };
 function addAmount(left: number, right: number): number {
   const result = left + right;
   if (!Number.isSafeInteger(left) || !Number.isSafeInteger(right) || !Number.isSafeInteger(result)) {
@@ -333,12 +471,13 @@ function addAmount(left: number, right: number): number {
 }
 
 export function total(expense: OriginalAmounts): number {
-  const subtotal = expense.items.reduce((sum, item) => addAmount(sum, item.amount), 0);
+  const subtotal = expense.items.reduce((sum, item) => item.amount === null ? sum : addAmount(sum, item.amount), 0);
   return addAmount(addAmount(addAmount(subtotal, expense.tax), expense.tip), -expense.discount);
 }
 
 /** Allocate an item's whole cents, with remainder ties following its selected-person order. */
-export function itemShares(item: Item, members: { id: string }[]): number[] {
+export function itemShares(item: DraftItem, members: { id: string }[]): number[] {
+  if (item.amount === null) throw new LedgerValidationError('Enter a readable item amount before calculating shares');
   const error = itemSplitError(item);
   if (error) throw new Error(error);
   const memberIndexes = item.members.map(id => {
@@ -346,7 +485,8 @@ export function itemShares(item: Item, members: { id: string }[]): number[] {
     if (index < 0) throw new Error('Unknown member');
     return index;
   });
-  const weights = item.members.map(id => item.percentages === undefined ? 1 : Math.round(item.percentages[id] * 100));
+  const weights = item.members.map(id => item.units !== undefined ? unitsScale(item.units.allocations[id])!
+    : item.percentages === undefined ? 1 : Math.round(item.percentages[id] * 100));
   const amounts = allocate(item.amount, weights);
   const output = members.map(() => 0);
   memberIndexes.forEach((memberIndex, index) => { output[memberIndex] = amounts[index]; });
@@ -369,7 +509,8 @@ function percentageShares(amount: number, percentages: Record<string, number>, m
 }
 
 /** Item assignments and proportional adjustments are always calculated in receipt currency first. */
-export function shares(expense: OriginalAmounts, members: { id: string }[]): number[] {
+export function shares(expense: AllocatedAmounts, members: { id: string }[]): number[] {
+  if (expense.items.some(item => item.amount === null)) throw new LedgerValidationError('Enter every item amount before calculating shares');
   if (expense.percentages !== undefined) return percentageShares(total(expense), expense.percentages, members);
   const sums = members.map(() => 0);
   for (const item of expense.items) {
@@ -405,7 +546,10 @@ export function convertAmount(original: number, rate: number): number {
   return converted;
 }
 
-export function expenseTotal(expense: Expense, baseCurrency: Currency): number {
+export function expenseTotal(expense: Expense | Draft, baseCurrency: Currency): number {
+  if (!expense.currency || expense.items.some(item => item.amount === null)) {
+    throw new LedgerValidationError('Confirm the receipt currency and every item amount before calculating its cost');
+  }
   const original = total(expense);
   if (original <= 0) throw new LedgerValidationError('Receipt total must be greater than zero');
   if (expense.bankAmount !== undefined) {
@@ -425,7 +569,7 @@ export function expenseTotal(expense: Expense, baseCurrency: Currency): number {
   return converted;
 }
 
-export function expenseShares(expense: Expense, members: { id: string }[], baseCurrency: Currency): number[] {
+export function expenseShares(expense: Expense | Draft, members: { id: string }[], baseCurrency: Currency): number[] {
   if (expense.percentages !== undefined) return percentageShares(expenseTotal(expense, baseCurrency), expense.percentages, members);
   const originalShares = shares(expense, members);
   const convertedTotal = expenseTotal(expense, baseCurrency);

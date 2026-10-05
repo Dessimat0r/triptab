@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="240" viewBox="0 0 640 240">
+<title>Missing footer means no independently observed total</title>
+<defs><filter id="obscured"><feGaussianBlur stdDeviation="2.5"/></filter></defs>
+<rect width="640" height="240" fill="#fff"/>
+<g fill="#111" font-family="monospace" font-size="22">
+<text x="25" y="35" font-size="16">SYNTHETIC TEST RECEIPT — NOT A SALE</text>
+<text x="25" y="65" font-size="16">Corpus v1: cropped-receipt</text>
+<text x="25" y="115">Bread                    5.00</text>
+<text x="25" y="145">Milk                     2.00</text>
+<text x="25" y="175">--- photo cuts off here ---</text>
+</g>
+<path d="M0 228 H640" stroke="#666" stroke-width="12" stroke-dasharray="16 8"/>
+</svg>

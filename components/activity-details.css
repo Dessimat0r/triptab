@@ -1,0 +1,52 @@
+.activity-identifiers {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  margin: 12px 0;
+  font-size: 0.8rem;
+  line-height: 1.6;
+}
+.activity-identifiers > div,
+.activity-identifiers dd {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.activity-identifiers dt {
+  font-weight: 650;
+}
+.activity-identifiers dd {
+  margin: 2px 0 0;
+}
+.account-activity {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.account-activity .activity-changes {
+  padding: 12px;
+}
+.activity-panel .activity-event details,
+.account-activity .activity-event details {
+  min-width: 0;
+  max-width: 100%;
+}
+.activity-panel > .quiet,
+.account-activity > .quiet {
+  min-height: 44px;
+  max-width: 100%;
+  white-space: normal;
+}
+.receipt-activity {
+  max-width: 100%;
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+.receipt-activity .quiet {
+  min-height: 44px;
+  max-width: 100%;
+  white-space: normal;
+}
+.receipt-activity .activity-changes {
+  padding: 12px;
+}

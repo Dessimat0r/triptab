@@ -397,7 +397,10 @@ main {
   border-bottom: 1px solid var(--line);
   margin: 32px 0 26px;
 }
-.tabs button {
+.tabs a {
+  text-decoration: none;
+}
+.tabs :is(button, a) {
   min-height: 44px;
   display: flex;
   align-items: center;
@@ -407,7 +410,7 @@ main {
   font-size: 0.9rem;
   border-bottom: 2px solid transparent;
 }
-.tabs button.selected {
+.tabs :is(button, a).selected {
   color: var(--primary);
   border-color: var(--primary);
   font-weight: 650;
@@ -1323,7 +1326,7 @@ input[type="datetime-local"]::-webkit-date-and-time-value {
     justify-content: space-between;
     margin: 25px 0 22px;
   }
-  .tabs button {
+  .tabs :is(button, a) {
     font-size: 0.8rem;
     gap: 5px;
     padding-bottom: 14px;
@@ -1972,7 +1975,7 @@ input[type="datetime-local"]::-webkit-date-and-time-value {
   font-size: 0.75rem;
 }
 .muted,
-.tabs button,
+.tabs :is(button, a),
 .newtrip,
 .draft small,
 .personchips button,
@@ -2141,7 +2144,7 @@ footer {
     gap: 2px;
     box-shadow: 0 -3px 15px #18203b06;
   }
-  .tabs button {
+  .tabs :is(button, a) {
     padding: 7px 0;
     border: 0;
     display: flex;
@@ -2152,10 +2155,10 @@ footer {
     font-size: 0.75rem;
     min-height: 54px;
   }
-  .tabs button.selected {
+  .tabs :is(button, a).selected {
     background: #edf0ff;
   }
-  .tabs button svg {
+  .tabs :is(button, a) svg {
     width: 20px;
     height: 20px;
   }
@@ -2217,7 +2220,7 @@ footer {
   .sidebar.visible {
     padding-top: calc(28px + env(safe-area-inset-top));
   }
-  .tabs button {
+  .tabs :is(button, a) {
     white-space: nowrap;
   }
   .fieldpair label .muted {
@@ -2295,7 +2298,7 @@ footer {
     background: #25334e;
   }
   .tripnav button.active,
-  .tabs button.selected {
+  .tabs :is(button, a).selected {
     background: var(--accent-surface);
     color: var(--primary);
   }
@@ -2546,7 +2549,8 @@ footer {
   gap: 8px;
   margin-top: 14px;
 }
-.receipt-capture-processing button {
+.receipt-capture-processing button,
+.receipt-capture-processing > a {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2558,6 +2562,7 @@ footer {
   font-size: 0.8rem;
   line-height: 1.4;
   white-space: normal;
+  text-decoration: none;
 }
 .receipt-capture-prompt {
   margin-top: 14px;
@@ -2579,6 +2584,9 @@ footer {
 .receipt-capture-status p {
   margin-top: 10px;
   overflow-wrap: anywhere;
+}
+.receipt-capture-status:not(:empty) {
+  margin-bottom: 14px;
 }
 @media (max-width: 900px) {
   .editor-body.with-receipt .receipt-capture {
@@ -3167,3 +3175,25 @@ footer {
     transition: none !important;
   }
 }
+
+.item-conversation {
+  min-width: 0;
+  margin-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.item-conversation > summary {
+  min-height: 44px;
+  padding: 12px 0;
+  cursor: pointer;
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+.item-conversation .receipt-chat { min-width: 0; }
+.receipt-proposal {
+  min-width: 0;
+  padding: 16px;
+  margin-top: 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.receipt-proposal h3 { overflow-wrap: anywhere; }

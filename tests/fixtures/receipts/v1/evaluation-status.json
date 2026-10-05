@@ -1,0 +1,8 @@
+{
+  "corpusVersion": 1,
+  "evaluationKind": "live-vision",
+  "status": "not-run",
+  "evaluatedFixtures": 0,
+  "metrics": null,
+  "reason": "No paid model calls were made. Synthetic expected-output CI tests validate contracts and reconciliation, not model vision. Use independently captured scan results for an opt-in operator evaluation."
+}

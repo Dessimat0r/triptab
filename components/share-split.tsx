@@ -2,11 +2,66 @@
 
 import { useEffect, useId, useState } from "react";
 import { Check } from "lucide-react";
-import { allocate, itemSplitError, receiptSplitError, type Trip } from "@/lib/model";
+import { allocate, itemSplitError, receiptSplitError, unitsScale, UNIT_SCALE, MAX_UNITS, type Item, type Trip } from "@/lib/model";
+import "./share-split-units.css";
 
 export function equalPercentages(ids: string[]): Record<string, number> {
   const values = allocate(10000, ids.map(() => 1));
   return Object.fromEntries(ids.map((id, i) => [id, values[i] / 100]));
+}
+
+function unitsText(value: number): string {
+  const absolute = Math.abs(value);
+  const fraction = String(absolute % UNIT_SCALE).padStart(6, "0").replace(/0+$/, "");
+  return `${value < 0 ? "−" : ""}${Math.floor(absolute / UNIT_SCALE)}${fraction ? "." + fraction : ""}`;
+}
+
+function textScale(text: string): number | null {
+  return unitsScale(text.trim().replace(",", "."));
+}
+
+function equalUnits(ids: string[], total: number, label?: string): NonNullable<Item["units"]> {
+  const scaled = unitsScale(total);
+  if (scaled === null || scaled <= 0 || !ids.length) throw Error("Enter a positive unit total and select at least one traveller.");
+  const values = allocate(scaled, ids.map(() => 1));
+  return { total, allocations: Object.fromEntries(ids.map((id, index) => [id, values[index] / UNIT_SCALE])), ...(label ? { label } : {}) };
+}
+
+function UnitsLabel({ value, label, onChange }: { value?: string; label: string; onChange: (label?: string) => void }) {
+  const [text, setText] = useState(value || "");
+  useEffect(() => {
+    let active = true;
+    Promise.resolve().then(() => {
+      if (active) setText(previous => previous.trim() === (value || "") ? previous : value || "");
+    });
+    return () => { active = false; };
+  }, [value]);
+  return <input aria-label={label} value={text} maxLength={40} placeholder="Bars, pieces, slices…" autoComplete="off" onChange={event => {
+    setText(event.target.value);
+    onChange(event.target.value.trim() || undefined);
+  }} />;
+}
+
+function UnitsInput({ value, onChange, label, describedBy, invalid }: {
+  value: number; onChange: (value: number) => void; label: string; describedBy: string; invalid: boolean;
+}) {
+  const [text, setText] = useState(Number.isFinite(value) ? String(value) : "");
+  useEffect(() => {
+    let active = true;
+    Promise.resolve().then(() => {
+      if (active) setText(previous => textScale(previous) === unitsScale(value)
+        ? previous : Number.isFinite(value) ? String(value) : "");
+    });
+    return () => { active = false; };
+  }, [value]);
+  return <input className="units-count-input" inputMode="decimal" autoComplete="off"
+    aria-label={label} aria-describedby={describedBy} aria-invalid={invalid} value={text}
+    onChange={event => {
+      const next = event.target.value;
+      setText(next);
+      const scaled = textScale(next);
+      onChange(scaled === null ? NaN : scaled / UNIT_SCALE);
+    }} />;
 }
 
 function PercentageInput({ value, onChange, label, describedBy, invalid }: {
@@ -46,56 +101,74 @@ function PercentageInput({ value, onChange, label, describedBy, invalid }: {
   </span>;
 }
 
-export default function ShareSplit({ members, selected, percentages, scope, alwaysPercent = false, onChange }: {
+export default function ShareSplit({ members, selected, percentages, units, quantity, scope, alwaysPercent = false, onChange }: {
   members: Trip["members"];
   selected: string[];
   percentages?: Record<string, number>;
+  units?: Item["units"];
+  quantity?: Item["quantity"];
   scope: string;
   alwaysPercent?: boolean;
-  onChange: (selected: string[], percentages?: Record<string, number>) => void;
+  onChange: (selected: string[], percentages?: Record<string, number>, units?: Item["units"]) => void;
 }) {
-  const [mode, setMode] = useState<"equal" | "one" | "custom">(() => {
+  const [mode, setMode] = useState<"equal" | "one" | "custom" | "units">(() => {
+    if (units && !alwaysPercent) return "units";
     if (selected.length === 1) return "one";
     if (!percentages) return "equal";
     const equal = equalPercentages(selected);
     return selected.every(id => percentages[id] === equal[id]) ? "equal" : "custom";
   });
+  // Incoming AI/manual review updates can introduce or remove a saved unit map.
+  // Explicit mode buttons clear that map through onChange below.
+  const activeMode = units && !alwaysPercent ? "units" : mode === "units"
+    ? selected.length === 1 ? "one" : percentages ? "custom" : "equal" : mode;
   const statusId = useId();
-  const error = alwaysPercent ? receiptSplitError({ percentages: percentages || equalPercentages(selected) }) : itemSplitError({ id: "split", name: "split", amount: 0, members: selected, percentages });
+  const error = alwaysPercent ? receiptSplitError({ percentages: percentages || equalPercentages(selected) }) : itemSplitError({ members: selected, percentages, units });
   const percentageTotal = percentages ? Object.values(percentages).reduce((sum, value) => sum + value, 0) : selected.length ? 100 : 0;
+  const unitTotal = units?.total ?? 1;
+  const quantityLabel = units?.label?.trim() || "units";
+  const scaledTotal = unitsScale(unitTotal);
+  const scaledAllocations = selected.map(id => unitsScale(units?.allocations[id] ?? 0));
+  const allocatedUnits = scaledAllocations.every(value => value !== null)
+    ? scaledAllocations.reduce<number>((sum, value) => sum + value!, 0) : null;
   function chooseMode(next: typeof mode) {
     setMode(next);
-    const ids = selected.length ? selected : members.map(member => member.id);
+    const ids = selected.length ? selected : next === "units" ? [] : members.map(member => member.id);
     if (next === "one") {
       const person = ids[0];
-      onChange([person], alwaysPercent ? { [person]: 100 } : undefined);
+      onChange([person], alwaysPercent ? { [person]: 100 } : undefined, undefined);
     } else if (next === "equal") {
-      onChange(ids, alwaysPercent ? equalPercentages(ids) : undefined);
+      onChange(ids, alwaysPercent ? equalPercentages(ids) : undefined, undefined);
+    } else if (next === "units") {
+      onChange(ids, undefined, units || (ids.length ? equalUnits(ids, quantity?.total ?? 1, quantity?.label) : { total: quantity?.total ?? 1, allocations: {}, ...(quantity?.label ? { label: quantity.label } : {}) }));
     } else {
-      onChange(ids, percentages || equalPercentages(ids));
+      onChange(ids, percentages || equalPercentages(ids), undefined);
     }
   }
   function toggle(id: string) {
     const ids = selected.includes(id) ? selected.filter(value => value !== id) : [...selected, id];
-    if (mode === "custom") {
+    if (activeMode === "units") {
+      onChange(ids, undefined, { ...units, total: unitTotal, allocations: Object.fromEntries(ids.map(member => [member, units?.allocations[member] ?? 0])) });
+    } else if (activeMode === "custom") {
       const next = Object.fromEntries(ids.map(member => [member, percentages?.[member] ?? 0]));
-      onChange(ids, next);
+      onChange(ids, next, undefined);
     } else {
-      onChange(ids, alwaysPercent ? equalPercentages(ids) : undefined);
+      onChange(ids, alwaysPercent ? equalPercentages(ids) : undefined, undefined);
     }
   }
   return <fieldset className="share-split">
     <legend>Share of {scope}</legend>
     <div className="split-modes" role="group" aria-label={`Split options for ${scope}`}>
-      {([['equal', 'Equal'], ['one', 'One person'], ['custom', 'Custom percentages']] as const).map(([value, label]) =>
-        <button type="button" key={value} aria-pressed={mode === value} className={mode === value ? "chosen" : ""} onClick={() => chooseMode(value)}>{label}</button>,
+      {([['equal', 'Equal'], ['one', 'One person'], ['custom', 'Custom percentages'], ...(!alwaysPercent ? [['units', 'Units']] : [])] as [typeof mode, string][]).map(([value, label]) =>
+        <button type="button" key={value} aria-pressed={activeMode === value} className={activeMode === value ? "chosen" : ""} onClick={() => chooseMode(value)}>{label}</button>,
       )}
     </div>
-    {mode === "one" ? <label className="single-share">
+    {!selected.length && <p className="units-split-hint" role="status">Unassigned: choose who owes this item. Printed quantities do not tell us who had it.</p>}
+    {activeMode === "one" ? <label className="single-share">
       Responsible for this {scope.startsWith("item") ? "item" : "receipt"}
       <select aria-label={`Person for ${scope}`} value={selected[0] || ""} onChange={event => {
         const id = event.target.value;
-        onChange([id], alwaysPercent ? { [id]: 100 } : undefined);
+        onChange([id], alwaysPercent ? { [id]: 100 } : undefined, undefined);
       }}>
         {members.map(member => <option key={member.id} value={member.id}>{member.name} · 100%</option>)}
       </select>
@@ -106,16 +179,43 @@ export default function ShareSplit({ members, selected, percentages, scope, alwa
         {selected.includes(member.id) && <Check size={13} />}
       </button>)}
     </div>}
-    {mode === "custom" && <div className="percentage-rows">
+    {activeMode === "custom" && <div className="percentage-rows">
       {selected.map(id => {
         const member = members.find(person => person.id === id);
         return <label className="percentage-row" key={id}>
           <span>{member?.name || "Unknown traveller"}</span>
-          <PercentageInput label={`${member?.name || id} percentage for ${scope}`} describedBy={statusId} invalid={!!error} value={percentages?.[id] ?? 0} onChange={value => onChange(selected, { ...percentages, [id]: value })} />
+          <PercentageInput label={`${member?.name || id} percentage for ${scope}`} describedBy={statusId} invalid={!!error} value={percentages?.[id] ?? 0} onChange={value => onChange(selected, { ...percentages, [id]: value }, undefined)} />
         </label>;
       })}
     </div>}
-    {(mode === "custom" || alwaysPercent || error) && <div id={statusId} className={`split-total ${error ? "negative" : "positive"}`} role="status" aria-live="polite">
+    {activeMode === "units" && <section className="units-split" aria-label={`Unit allocation for ${scope}`}>
+      <p className="units-split-hint">Units divide the full item line total; they do not multiply its price. Use up to six decimal places, with a total up to {MAX_UNITS.toLocaleString("en-GB")}.</p>
+      <label className="units-label-field">What do you call these? (optional)
+        <UnitsLabel value={units?.label} label={`What do you call these for ${scope}?`} onChange={label => onChange(selected, undefined, { ...units, total: unitTotal, allocations: units?.allocations || {}, label })} />
+      </label>
+      <div className="units-split-controls">
+        <label>Total {quantityLabel}
+          <UnitsInput value={unitTotal} label={`Total ${quantityLabel} for ${scope}`} describedBy={statusId} invalid={scaledTotal === null || scaledTotal <= 0} onChange={total => onChange(selected, undefined, { ...units, total, allocations: units?.allocations || {} })} />
+        </label>
+        <button type="button" className="quiet" disabled={scaledTotal === null || scaledTotal <= 0 || !selected.length} onClick={() => onChange(selected, undefined, equalUnits(selected, unitTotal, units?.label))}>Equal units</button>
+      </div>
+      <div className="units-split-rows">
+        {selected.map(id => {
+          const member = members.find(person => person.id === id);
+          const value = units?.allocations[id] ?? 0;
+          return <label className="units-split-row" key={id}>
+            <span>{member?.name || "Unknown traveller"}</span>
+            <UnitsInput value={value} label={`${member?.name || id} ${quantityLabel} for ${scope}`} describedBy={statusId} invalid={unitsScale(value) === null || !!error} onChange={value => onChange(selected, undefined, { ...units, total: unitTotal, allocations: { ...units?.allocations, [id]: value } })} />
+          </label>;
+        })}
+      </div>
+      <div id={statusId} className={`split-total ${error ? "negative" : "positive"}`} role="status" aria-live="polite">
+        <strong>Allocated {allocatedUnits === null ? "—" : unitsText(allocatedUnits)} / {scaledTotal === null ? "—" : unitsText(scaledTotal)} {quantityLabel}</strong>
+        {scaledTotal !== null && allocatedUnits !== null && <span>{allocatedUnits === scaledTotal ? "Fully allocated" : allocatedUnits < scaledTotal ? `${unitsText(scaledTotal - allocatedUnits)} ${quantityLabel} remaining` : `${unitsText(allocatedUnits - scaledTotal)} ${quantityLabel} overallocated`}</span>}
+        {error && <span>{error}</span>}
+      </div>
+    </section>}
+    {activeMode !== "units" && (activeMode === "custom" || alwaysPercent || error) && <div id={statusId} className={`split-total ${error ? "negative" : "positive"}`} role="status" aria-live="polite">
       <strong>Total {Number.isFinite(percentageTotal) ? Number(percentageTotal.toFixed(2)) : "—"}% / 100%</strong>
       {error && <span>{error}</span>}
     </div>}

@@ -6,6 +6,7 @@ import {
   MAX_AMOUNT, paymentSchema, validExchangeRate,
   parseLedgerStructure, parseStoredTrip,
   travellerFinancialPreview,
+  unitsScale, UNIT_SCALE, MAX_UNITS, unitsSchema, itemUnitsError, receiptQuantitySchema,
 } from '../lib/model';
 import type { Expense, Item, ReceiptMessage, Trip } from '../lib/model';
 
@@ -345,6 +346,187 @@ test('supports one person owing 100%, including an explicitly selected zero shar
   assert.deepEqual(itemShares(withZero, members), [0, 499, 0]);
   assert.equal(itemSchema.safeParse(withZero).success, true);
   assert.deepEqual(itemShares({ ...withZero, amount: 0 }, members), [0, 0, 0]);
+});
+
+test('scales fractional unit quantities exactly without accepting hidden floating-point precision', () => {
+  const valid: [unknown, number][] = [
+    [2.5, 2500000], ['2.5', 2500000], [0.1, 100000], [0.2, 200000],
+    [1.000001, 1000001], ['0.000001', 1], ['.5', 500000], ['1.', UNIT_SCALE],
+    [' 0.25 ', 250000], [MAX_UNITS, MAX_UNITS * UNIT_SCALE], [999999.999999, 999999999999], [0, 0],
+  ];
+  for (const [value, scaled] of valid) assert.equal(unitsScale(value), scaled);
+  for (const value of [-1, -0.001, NaN, Infinity, -Infinity, Number.MIN_VALUE, 1e-7, 0.1234567,
+    MAX_UNITS + 0.000001, 0.1 + 0.2, '', '.', '1e3', '1,5', '0.1234567', '1000000.0000001', null, {}, []]) {
+    assert.equal(unitsScale(value), null);
+  }
+  assert.equal(unitsSchema.safeParse({ total: 0.3, allocations: { a: 0.1, b: 0.2 } }).success, true);
+  assert.equal(unitsSchema.safeParse({ total: 0.1 + 0.2, allocations: { a: 0.1, b: 0.2 } }).success, false);
+  assert.equal(unitsSchema.safeParse({ total: '3', allocations: { a: 2.5, b: 0.5 } }).success, false);
+});
+
+test('purchased receipt quantity validates bounded decimal evidence independently of financial allocations', () => {
+  const quantity = receiptQuantitySchema.parse({ total: 2, label: ' slices ', sourceText: ' 2 x Stck ' });
+  assert.deepEqual(quantity, { total: 2, label: 'slices', sourceText: '2 x Stck' });
+  for (const value of [0.000001, 0.25, 2, 7.5, MAX_UNITS]) {
+    assert.equal(receiptQuantitySchema.safeParse({ total: value }).success, true);
+  }
+  for (const value of [0, -1, NaN, Infinity, 1e-7, 0.1234567, MAX_UNITS + 1, '2']) {
+    assert.equal(receiptQuantitySchema.safeParse({ total: value }).success, false);
+  }
+  for (const extra of [
+    { label: '' }, { label: ' ' }, { label: 'x'.repeat(41) },
+    { sourceText: '' }, { sourceText: 'x'.repeat(201) }, { allocations: { a: 2 } },
+  ]) assert.equal(receiptQuantitySchema.safeParse({ total: 2, ...extra }).success, false);
+  const item: Item = { id: 'pizza', name: 'Pizza', amount: 1001, members: ['b', 'a'], percentages: { b: 70, a: 30 }, quantity };
+  assert.deepEqual(itemSchema.parse(item).quantity, quantity);
+  assert.deepEqual(itemShares(item, members), [300, 701, 0]);
+  const saved = parseStoredTrip(JSON.parse(JSON.stringify(trip([expense({ items: [item] })]))));
+  assert.deepEqual(saved.expenses[0].items[0].quantity, quantity);
+  assert.equal(total(saved.expenses[0]), 1001);
+});
+
+test('fractional units allocate a full line price without multiplying its cost', () => {
+  const chocolate: Item = {
+    id: 'chocolate', name: 'Chocolate', amount: 1001, members: ['a', 'b'],
+    units: { total: 3, allocations: { a: 2.5, b: 0.5 } },
+  };
+  assert.equal(itemSplitError(chocolate), null);
+  assert.equal(itemUnitsError(chocolate), null);
+  assert.deepEqual(itemShares(chocolate, members), [834, 167, 0]);
+  assert.equal(chocolate.amount, 1001);
+  const arbitrary: Item = { ...chocolate, members: ['a', 'b', 'c'], units: { total: 7.5, allocations: { a: 3.25, b: 3.75, c: 0.5 } } };
+  assert.deepEqual(itemShares(arbitrary, members), [434, 500, 67]);
+  const microscopic: Item = { ...arbitrary, units: { total: 0.000003, allocations: { a: 0.000002, b: 0.000001, c: 0 } } };
+  assert.deepEqual(itemShares(microscopic, members), [667, 334, 0]);
+  const maximum: Item = { ...chocolate, amount: MAX_AMOUNT, units: { total: MAX_UNITS, allocations: { a: 999999.999999, b: 0.000001 } } };
+  assert.equal(sum(itemShares(maximum, members)), MAX_AMOUNT);
+  for (let amount = 0; amount < 1000; amount++) {
+    assert.equal(sum(itemShares({ ...arbitrary, amount }, members)), amount);
+    assert.equal(sum(itemShares({ ...microscopic, amount }, members)), amount);
+  }
+});
+
+test('rejects invalid item unit totals, quantities, participant keys and conflicting split modes', () => {
+  const item: Item = { id: 'chocolate', name: 'Chocolate', amount: 1001, members: ['a', 'b'], units: { total: 3, allocations: { a: 2.5, b: 0.5 } } };
+  const invalid: unknown[] = [
+    { total: 0, allocations: { a: 0, b: 0 } },
+    { total: -3, allocations: { a: 2.5, b: 0.5 } },
+    { total: 3, allocations: { a: 0, b: 0 } },
+    { total: 3, allocations: { a: 3.5, b: -0.5 } },
+    { total: 3, allocations: { a: 2.5, b: 0.500001 } },
+    { total: 3.0000001, allocations: { a: 2.5, b: 0.5 } },
+    { total: 3, allocations: { a: 2.5, b: 0.5000001 } },
+    { total: MAX_UNITS + 1, allocations: { a: MAX_UNITS, b: 1 } },
+    { total: 3, allocations: { a: NaN, b: 0.5 } },
+    { total: 3, allocations: { a: Infinity, b: 0.5 } },
+    { total: 3, allocations: { a: MAX_UNITS + 1, b: 0 } },
+    { total: Infinity, allocations: { a: 2.5, b: 0.5 } },
+    { total: 3, allocations: { a: 3 } },
+    { total: 3, allocations: { a: 2.5, c: 0.5 } },
+    { total: 3, allocations: { a: 2.5, b: 0.5, unknown: 0 } },
+    { total: '3', allocations: { a: 2.5, b: 0.5 } },
+    { total: 3, allocations: { a: '2.5', b: 0.5 } },
+    { total: 3, allocations: null },
+    null,
+  ];
+  for (const units of invalid) {
+    const malformed = { ...item, units: units as Item['units'] };
+    assert.ok(itemSplitError(malformed));
+    assert.equal(itemSchema.safeParse(malformed).success, false);
+    assert.throws(() => itemShares(malformed, members));
+    assert.equal(expenseSchema.safeParse(expense({ items: [malformed] })).success, false);
+    assert.equal(draftSchema.safeParse({ ...expense({ items: [malformed] }), status: 'review' }).success, false);
+    assert.throws(() => validateLedger(ledger([expense({ items: [malformed] })])));
+  }
+  const conflicting = { ...item, percentages: { a: 80, b: 20 } };
+  assert.match(itemSplitError(conflicting)!, /either percentages or units/);
+  assert.equal(itemSchema.safeParse(conflicting).success, false);
+  const unknown = { ...item, members: ['a', 'unknown'], units: { total: 3, allocations: { a: 2.5, unknown: 0.5 } } };
+  assert.throws(() => itemShares(unknown, members), /Unknown member/);
+  assert.throws(() => validateLedger(ledger([expense({ items: [unknown] })])), /assignments/);
+});
+
+test('fractional units preserve exact tax, tip, discount, FX and actual-bank allocations through JSON persistence', () => {
+  const dinner = expense({ payer: 'c', items: [
+    { id: 'chocolate', name: 'Chocolate', amount: 1001, members: ['a', 'b'], units: { total: 3, allocations: { a: 2.5, b: 0.5 } } },
+    { id: 'coffee', name: 'Coffee', amount: 500, members: ['a', 'b'], units: { total: 7.5, allocations: { a: 1, b: 6.5 } } },
+  ], tax: 200, tip: 100, discount: 50 });
+  assert.equal(total(dinner), 1751);
+  assert.deepEqual(shares(dinner, members), [1051, 700, 0]);
+  assert.deepEqual(expenseShares(dinner, members, 'GBP'), [893, 595, 0]);
+  assert.deepEqual(expenseShares({ ...dinner, bankAmount: 1501 }, members, 'GBP'), [901, 600, 0]);
+  const holiday = trip([{ ...dinner, bankAmount: 1501 }]);
+  holiday.drafts = [{ ...dinner, id: 'units-review', status: 'review' }];
+  const persisted = validateLedger(JSON.parse(JSON.stringify({ trips: [holiday] }))).trips[0];
+  assert.deepEqual(persisted.expenses[0].items.map(item => item.units), dinner.items.map(item => item.units));
+  assert.deepEqual(persisted.drafts[0].items.map(item => item.units), dinner.items.map(item => item.units));
+  assert.deepEqual(balances(persisted), [-901, -600, 1501]);
+  const transfers = settlements(persisted);
+  persisted.payments = transfers.map((transfer, index) => ({ ...transfer, id: `settled-${index}`, date: '2026-08-16' }));
+  assert.deepEqual(balances(persisted), [0, 0, 0]);
+});
+
+test('receipt-wide percentages override fractional unit costs while retaining validated unit metadata', () => {
+  const item: Item = { id: 'chocolate', name: 'Chocolate', amount: 1001, members: ['a', 'b'], units: { total: 3, allocations: { a: 2.5, b: 0.5 } } };
+  const dinner = expense({ currency: 'GBP', fx: undefined, items: [item], percentages: { b: 50, c: 50 } });
+  assert.deepEqual(shares(dinner, members), [0, 501, 500]);
+  assert.deepEqual(expenseShares(dinner, members, 'GBP'), [0, 501, 500]);
+  const saved = validateLedger(ledger([dinner])).trips[0].expenses[0];
+  assert.deepEqual(saved.items[0].units, item.units);
+  const invalidHidden = { ...dinner, items: [{ ...item, units: { total: 3, allocations: { a: 1, b: 1 } } }] };
+  assert.equal(expenseSchema.safeParse(invalidHidden).success, false);
+  assert.throws(() => validateLedger(ledger([invalidHidden])));
+  assert.equal(expenseSchema.parse(expense()).items[0].units, undefined);
+});
+
+test('unit labels persist as receipt metadata and never change allocated line costs', () => {
+  const item: Item = { id: 'chocolate', name: 'Chocolate', amount: 1001, members: ['a', 'b'], units: { total: 3, allocations: { a: 2.5, b: 0.5 }, label: '  bars  ' } };
+  const parsed = itemSchema.parse(item);
+  assert.equal(parsed.units?.label, 'bars');
+  assert.deepEqual(itemShares(parsed, members), [834, 167, 0]);
+  const holiday = trip([expense({ items: [item] })]);
+  holiday.drafts = [{ ...expense({ id: 'review', items: [item] }), status: 'review' }];
+  const persisted = validateLedger(JSON.parse(JSON.stringify({ trips: [holiday] }))).trips[0];
+  assert.equal(persisted.expenses[0].items[0].units?.label, 'bars');
+  assert.equal(persisted.drafts[0].items[0].units?.label, 'bars');
+  for (const label of ['', '   ', 'x'.repeat(41)]) {
+    const malformed = { ...item, units: { ...item.units!, label } };
+    assert.ok(itemSplitError(malformed));
+    assert.equal(itemSchema.safeParse(malformed).success, false);
+  }
+  assert.equal(unitsSchema.safeParse({ total: 3, allocations: { a: 2.5, b: 0.5 }, extra: 'ignored' }).success, false);
+});
+
+test('item-targeted receipt conversations and memory retain historical references without affecting money', () => {
+  const question: ReceiptMessage = {
+    id: 'question', role: 'user', text: 'Share these bars 2.5 to me and 0.5 to Bob.', createdAt: '2026-10-04T12:00:00Z',
+    itemId: 'chocolate', authorMemberId: 'a', authorName: ' Alice ',
+  };
+  const answer: ReceiptMessage = {
+    id: 'answer', role: 'assistant', text: 'The three bars are assigned 2.5 to Alice and 0.5 to Bob.', createdAt: '2026-10-04T12:01:00Z',
+    replyTo: question.id, itemId: 'chocolate', authorName: 'ChatGPT',
+  };
+  const item: Item = { id: 'chocolate', name: 'Chocolate', amount: 1001, members: ['a', 'b'], units: { total: 3, allocations: { a: 2.5, b: 0.5 }, label: 'bars' } };
+  const plain = expense({ items: [item] });
+  const memory = { notes: 'The bars means the chocolate line. “Me” refers to the speaker.', aliases: [
+    { name: ' bars ', itemId: item.id }, { name: 'me', memberId: 'a', scopeMemberId: 'a' },
+  ] };
+  const detailed = expense({ items: [item], conversation: [question, answer], memory });
+  const holiday = trip([detailed]);
+  holiday.drafts = [{ ...detailed, id: 'review', expenseId: detailed.id, status: 'review' }];
+  const saved = validateLedger(JSON.parse(JSON.stringify({ trips: [holiday] }))).trips[0];
+  assert.equal(saved.expenses[0].conversation![0].authorName, 'Alice');
+  assert.equal(saved.expenses[0].conversation![0].authorMemberId, 'a');
+  assert.equal(saved.expenses[0].conversation![1].itemId, 'chocolate');
+  assert.equal(saved.expenses[0].memory!.aliases[0].name, 'bars');
+  assert.deepEqual(saved.drafts[0].memory, saved.expenses[0].memory);
+  assert.deepEqual(balances(saved), balances(trip([plain])));
+  const historical = { ...saved.expenses[0], items: expense().items };
+  assert.equal(expenseSchema.safeParse(historical).success, true, 'removed item targets stay in saved message and alias history');
+  assert.equal(expenseSchema.parse(expense()).memory, undefined);
+  for (const bad of [{ itemId: '' }, { authorMemberId: '' }, { authorName: 'x'.repeat(81) }]) {
+    assert.equal(expenseSchema.safeParse({ ...detailed, conversation: [{ ...question, ...bad }] }).success, false);
+  }
 });
 
 test('fractional percentages conserve cents and preserve selected-person remainder ordering', () => {
@@ -689,4 +871,23 @@ test('rejects malformed receipt messages, invalid reply parents and duplicate ID
     assert.throws(() => validateLedger({ trips: [trip([input as Expense])] }));
   }
   assert.equal(expenseSchema.safeParse(expense({ conversation: [question, answer] })).success, true);
+});
+
+test('receipt source-draft provenance survives consumption, stored parsing and restoration without an active draft', () => {
+  const original = expense({ sourceDraftId: 'consumed-processing-draft' });
+  const persisted = validateLedger(ledger([original]));
+  assert.equal(persisted.trips[0].drafts.length, 0);
+  assert.equal(persisted.trips[0].expenses[0].sourceDraftId, 'consumed-processing-draft');
+  assert.equal(parseStoredTrip(JSON.parse(JSON.stringify(persisted.trips[0]))).expenses[0].sourceDraftId, 'consumed-processing-draft');
+  assert.equal(parseLedgerStructure(JSON.parse(JSON.stringify(persisted))).trips[0].expenses[0].sourceDraftId, 'consumed-processing-draft');
+  assert.deepEqual(balances(persisted.trips[0]), balances(trip([expense()])));
+  assert.equal(validateLedger(ledger([original]), { previous: ledger([]) }).trips[0].expenses[0].sourceDraftId, 'consumed-processing-draft');
+});
+
+test('receipt source-draft IDs are bounded references and remain optional for older expenses', () => {
+  assert.equal(expenseSchema.parse(expense()).sourceDraftId, undefined);
+  assert.equal(expenseSchema.parse(expense({ sourceDraftId: 'd'.repeat(100) })).sourceDraftId, 'd'.repeat(100));
+  for (const sourceDraftId of ['', 'd'.repeat(101), 7, null]) {
+    assert.equal(expenseSchema.safeParse({ ...expense(), sourceDraftId }).success, false);
+  }
 });

@@ -1,0 +1,720 @@
+{
+  "review": "All open pull request follow-up recheck",
+  "checkedAtUTC": "2026-10-05T11:17:12.333332+00:00",
+  "sourceBase": "ca8c338c4bdc4f83342d1750c02df874a6352f68",
+  "pullRequests": [
+    {
+      "number": 2,
+      "url": "https://github.com/Dessimat0r/triptab/pull/2",
+      "reviewedRemoteHead": "676ed97aa739a19626ae9704d91c2b6990145e66",
+      "inlineCommentCount": 9,
+      "inlineThreads": "all resolved; current fixes verified against source",
+      "followUpReviewUrls": [],
+      "disposition": "Existing feedback remains addressed; no new findings."
+    },
+    {
+      "number": 3,
+      "url": "https://github.com/Dessimat0r/triptab/pull/3",
+      "reviewedRemoteHead": "1e885248176363eef74b5d6728a9ab069a9065f0",
+      "inlineCommentCount": 7,
+      "inlineThreads": "all resolved; current fixes verified against source",
+      "followUpReviewUrls": [
+        "https://github.com/Dessimat0r/triptab/pull/3#issuecomment-5991557788"
+      ],
+      "findings": [
+        {
+          "concern": "readActivity returns 413 for an oversized newest event, preventing older history pagination",
+          "verified": true,
+          "resolution": "Oversized snapshots produce an explicit immutable event metadata summary with snapshotOmitted and a full shared-entry download link; the original sequence advances the cursor and original before/after evidence remains unchanged. Missing snapshots cannot be restored from a summary. The authenticated full-entry route streams bounded SQL text chunks, checks session and trip membership during the download and rejects entries larger than 64 MiB.",
+          "files": [
+            "lib/store.ts",
+            "lib/audit.ts",
+            "components/activity-panel.tsx",
+            "app/api/activity-entry/route.ts",
+            "app/api/export/route.ts"
+          ],
+          "validation": [
+            "oversized and numeric-expansion history tests",
+            "scoped receipt pagination",
+            "complete UTF-8 snapshot reconstruction",
+            "trip/account-event boundary and cross-origin rejection",
+            "membership/session revocation during streaming",
+            "native Miniflare D1/HTTP route journey",
+            "explicit History download UI rendering"
+          ],
+          "privacy": "Normal exports preserve redaction. The separately labelled full shared-history entry download exposes only raw snapshots already accessible in the current trip History view, including shared contacts; it never reads private account history or credential tables."
+        },
+        {
+          "concern": "healthz does not detect a missing or partially applied migration 0005",
+          "verified": true,
+          "resolution": "Readiness compiles a read-only query against every account history column, invites.audit_id, push_subscriptions.generation and receipt content_type/size_bytes/sha256. It requires account history indexes and append-only 0005 triggers. Missing 0005 objects return generic no-store 503 even with later migrations present.",
+          "files": [
+            "app/healthz/route.ts",
+            "tests/health.test.ts",
+            "docs/operations.md"
+          ],
+          "validation": [
+            "each missing 0005 column, table, index and trigger tested against fully migrated SQLite"
+          ]
+        },
+        {
+          "concern": "scheduled cleanup rejection may not reach the scheduler because only waitUntil is used",
+          "verified": "Direct returned-promise hardening verified; prior Cloudflare waitUntil rejection already marks Cron failure.",
+          "resolution": "The scheduled handler now returns the same cleanup promise registered with waitUntil. Generic rejection propagates directly and retains resumable deletion intent without exposing bucket keys or resource IDs.",
+          "files": [
+            "build/sites-worker.ts",
+            "tests/worker-scheduler.test.ts"
+          ],
+          "validation": [
+            "actual scheduled handler returned-promise identity",
+            "partial R2 deletion retry",
+            "database failure and missing bindings",
+            "safe diagnostic tests"
+          ]
+        },
+        {
+          "concern": "exportContacts drops typed emails for unlinked travellers, making organiser downloads lossy",
+          "verified": true,
+          "resolution": "The current organiser can retain typed contact fields for unlinked traveller records on their own holiday, including its historical snapshots. Other linked account contacts remain redacted. A participant's matching email string alone never grants unlinked contact export access. Source records remain unchanged.",
+          "files": [
+            "app/api/export/route.ts",
+            "tests/export.test.ts",
+            "docs/operations.md"
+          ],
+          "validation": [
+            "owner and participant snapshots",
+            "linked foreign contact redaction",
+            "historical associations",
+            "literal receipt/chat/email-like names preserved",
+            "append-only source unchanged"
+          ]
+        },
+        {
+          "concern": "Older account history is CSV-only, uses one cursor for JSON/CSV and survives account changes",
+          "verified": true,
+          "resolution": "JSON and CSV have independent older-page controls and cursors. AccountPanel and the compact TripApp export are keyed to profile ID, resetting export state and aborting pending downloads when account identity changes.",
+          "files": [
+            "components/data-export.tsx",
+            "components/account-panel.tsx",
+            "components/trip-app.tsx",
+            "tests/data-export.test.ts",
+            "docs/operations.md"
+          ],
+          "validation": [
+            "actual download handler alternating format pagination",
+            "terminal JSON cursor does not clear CSV cursor",
+            "actual account component profile keys",
+            "actual bundled React component Playwright journey alternating downloads and switching accounts during a pending request"
+          ]
+        },
+        {
+          "concern": "Conditional logout",
+          "disposition": "fixed",
+          "resolution": "Exact session token revoked despite missing profile/identity reads; normal trusted audit is atomic, with narrow fail-safe revocation/retry during audit outage. Browser cookies clear on validated logout failures.",
+          "tests": [
+            "tests/auth.test.ts missing profile, cleanup/read/push failures, transient and persistent audit failures, cross-origin requests"
+          ]
+        },
+        {
+          "concern": "One-time invitation lost after traveller rename",
+          "disposition": "fixed",
+          "resolution": "Reset key uses stable traveller IDs, not names; account/holiday/availability changes still clear stale link state.",
+          "tests": [
+            "tests/trip-sharing.test.ts traveller renames, join, trip and account switch"
+          ]
+        },
+        {
+          "concern": "Notification recency and 40-device delivery starvation",
+          "disposition": "fixed",
+          "resolution": "No-op re-enable updates registration recency without duplicate audit; bounded best-effort traveller/device rotation, generation guards and deadline retain every intended inbox entry.",
+          "tests": [
+            "tests/notifications.test.ts recency, >40 participants, 250 devices, deadline and generation races"
+          ]
+        },
+        {
+          "concern": "ensureProfile writes on every authenticated request",
+          "disposition": "fixed in PR3 backport; already fixed in latest source",
+          "resolution": "Canonical readAuthState fast path performs read-only authorization for existing accounts; profile creation remains audited only when necessary.",
+          "tests": [
+            "tests/auth-read.test.ts SQLite/native D1 read budget and identity/profile races"
+          ]
+        },
+        {
+          "concern": "changes()>0 gates across audit statement chunks",
+          "disposition": "No reproduced defect in current callers",
+          "resolution": "Account audit gates generate one immediate statement; consecutive nonempty activity chunks preserve true/false changes gating, with atomic rollback. No interleaved mutation resets the gate."
+        }
+      ]
+    },
+    {
+      "number": 4,
+      "url": "https://github.com/Dessimat0r/triptab/pull/4",
+      "reviewedRemoteHead": "5a3e571506cd7ed7aaee95974545453f1906bc79",
+      "inlineCommentCount": 4,
+      "inlineThreads": "all resolved; current fixes verified against source",
+      "followUpReviewUrls": [],
+      "disposition": "Existing feedback remains addressed; no new findings."
+    },
+    {
+      "number": 5,
+      "url": "https://github.com/Dessimat0r/triptab/pull/5",
+      "reviewedRemoteHead": "bae1038a755dd5ce86aafb04580bfa253eabcbe4",
+      "inlineCommentCount": 2,
+      "inlineThreads": "all resolved; current fixes verified against source",
+      "followUpReviewUrls": [
+        "https://github.com/Dessimat0r/triptab/pull/5#issuecomment-5991559165"
+      ],
+      "findings": [
+        {
+          "concern": "Foreground load reuses pre-join/pre-restore foreground snapshot",
+          "severity": "P2",
+          "link": "https://github.com/Dessimat0r/triptab/pull/5#issuecomment-5991559165",
+          "disposition": "implemented and verified",
+          "evidence": "Root added load({fresh:true}) onJoined and reviewRestore, retaining dedup for concurrent safe refreshes.",
+          "tests": "Root client ledger freshness tests and tests/receipt-editor.test.ts"
+        },
+        {
+          "concern": "Ledger save clears conditional-refresh ETag",
+          "severity": "P3",
+          "link": "https://github.com/Dessimat0r/triptab/pull/5#issuecomment-5991559165",
+          "disposition": "implemented and verified",
+          "evidence": "writeLedger(...,{includeFreshness:true}) returns same one coherent final response snapshot. POST computes ETag from it and returns private Cache-Control/X-Ledger-Revision. Freshness stays out of API body. No second metadata/body read.",
+          "tests": "tests/ledger-freshness.test.ts save conditional regression; tests/store.test.ts real SQLite POST/tag/304 regression"
+        },
+        {
+          "concern": "Failed background Balances refresh has no notice",
+          "severity": "P3",
+          "link": "https://github.com/Dessimat0r/triptab/pull/5#issuecomment-5991559165",
+          "disposition": "implemented and verified",
+          "evidence": "Root separates refreshError from financial/editor errors, adds visible retained-amount notice and retry, clears on successful refresh.",
+          "tests": "Root client refresh regression tests"
+        },
+        {
+          "concern": "Unknown API URLs return HTML missing-page response",
+          "severity": "P3",
+          "link": "https://github.com/Dessimat0r/triptab/pull/5#issuecomment-5991559165",
+          "disposition": "implemented and verified",
+          "evidence": "Root app/api/[...missing]/route.ts returns generic JSON 404 while unknown page URLs retain real page 404.",
+          "tests": "tests/route-boundary.test.ts"
+        },
+        {
+          "concern": "MCP readLedger computes discarded freshness",
+          "severity": "P3",
+          "link": "https://github.com/Dessimat0r/triptab/pull/5#issuecomment-5991559165",
+          "disposition": "implemented and verified",
+          "evidence": "readLedger uses coherent readLedgerSnapshot(...,{includeFreshness:false}), omits per-trip latest activity and receipt_link_version fields. Authorization, indexed visible-trip reads, membership email overlay, assistant-author cleanup and atomic revision snapshot are retained. GET and opted-in POST still capture full freshness.",
+          "tests": "tests/store.test.ts indexed snapshot/read budget regression; tests/auth-read.test.ts unchanged auth races"
+        },
+        {
+          "concern": "Previous eight findings and original inline failures",
+          "link": "https://github.com/Dessimat0r/triptab/pull/5#issuecomment-5985061831",
+          "disposition": "already_fixed_or_correct_intent_in_remote_head",
+          "evidence": "Reviewer expressly confirms timezone, ETag, native history, 404 and formatter fixed at bae1038. Native aria-current links are correct for URLs. Final auth principal recheck and second changed-GET atomic snapshot deliberately retained. Unused signal removed; HEAD remains supported tested metadata endpoint. Both original inline threads are resolved.",
+          "tests": "49 earlier targeted routing/auth/freshness/render regressions pass. Earlier money-path browser smoke used synthetic local database, not production/private real data."
+        }
+      ]
+    },
+    {
+      "number": 6,
+      "url": "https://github.com/Dessimat0r/triptab/pull/6",
+      "reviewedRemoteHead": "a84f9f04fafcaf7cef8f6c56324a5d0f209465eb",
+      "inlineCommentCount": 0,
+      "inlineThreads": "all resolved; current fixes verified against source",
+      "followUpReviewUrls": [
+        "https://github.com/Dessimat0r/triptab/pull/6#issuecomment-5991560843"
+      ],
+      "findings": [
+        {
+          "concern": "Receipt close invalidates session without clearing upload/connect flags",
+          "severity": "P2",
+          "link": "https://github.com/Dessimat0r/triptab/pull/6#issuecomment-5991560843",
+          "disposition": "implemented and verified",
+          "evidence": "Root resetReceiptReview clears uploading/receiptAIConnecting while retaining conditional old-request finally protection.",
+          "tests": "tests/receipt-editor.test.ts root controller races"
+        },
+        {
+          "concern": "Failed shared-key save clears pasted key before success",
+          "severity": "P2",
+          "link": "https://github.com/Dessimat0r/triptab/pull/6#issuecomment-5991560843",
+          "disposition": "implemented and verified",
+          "evidence": "Masked local key survives failure for retry, input disabled during request, clears only after successful POST even if subsequent status refresh fails. No provider error text echoes. Account-bound state/unmount still isolate local key.",
+          "tests": "tests/receipt-ai-settings.test.ts pending/failure/429 retry-success/status-refresh regressions"
+        },
+        {
+          "concern": "Hard-coded key owner email",
+          "link": "https://github.com/Dessimat0r/triptab/pull/6#issuecomment-5991560843",
+          "disposition": "intentional_user_requirement",
+          "evidence": "User explicitly selected dessimat0r@gmail.com as sole owner of shared API key. Encrypted credential is bound to canonical owner ID, authorized linking and verified email. An environment owner transfer needs explicit account/key rotation; no unrequested ownership transfer was added."
+        },
+        {
+          "concern": "One-megabyte whole SSE cap rejects legitimate streamed long receipts",
+          "severity": "P2",
+          "link": "https://github.com/Dessimat0r/triptab/pull/6#issuecomment-5991560843",
+          "disposition": "implemented and verified",
+          "evidence": "Separate 8 MiB total transport limit and 1 MB data-event/final-result/pending-line limits. Strict completed structured output stays authoritative. The 16k output ceiling, high image detail and medium reasoning remain unchanged.",
+          "tests": "tests/receipt-ai.test.ts valid delta overhead above 1 MB; oversized single/multiline event and transport above 8 MiB failures"
+        },
+        {
+          "concern": "Unrelated global ledger edits discard paid scan result",
+          "severity": "P2",
+          "link": "https://github.com/Dessimat0r/triptab/pull/6#issuecomment-5991560843",
+          "disposition": "implemented and verified",
+          "evidence": "native_evidence agent final/retry guard compares source draft/member/owner/image/account/access evidence and retains latest other entries. Three bounded CAS attempts reuse one inference. Actual draft/member/account/photo changes reject. Initial stale request still fails before paid call.",
+          "tests": "tests/receipt-ai.test.ts unrelated-trip/expense success; CAS retries one model call; bounded continual conflict; manual/member/photo/account races"
+        },
+        {
+          "concern": "API uploads stage prompt and trigger unnecessary five-second polling",
+          "severity": "P3",
+          "link": "https://github.com/Dessimat0r/triptab/pull/6#issuecomment-5991560843",
+          "disposition": "implemented and verified",
+          "evidence": "Root gates short poll to externally copied/opened request and excludes actual receiptProcessing, retaining saved-waiting/visible/open-receipt predicates.",
+          "tests": "Root receipt editor and poll regressions"
+        },
+        {
+          "concern": "Focus and visibility duplicate receipt AI status fetch/decrypt",
+          "severity": "P3",
+          "link": "https://github.com/Dessimat0r/triptab/pull/6#issuecomment-5991560843",
+          "disposition": "implemented and verified",
+          "evidence": "Root coalesces same-account in-flight status fetch; settings-changed event forces fresh status, stale account request cannot apply. Server still decrypts to verify credential health, avoiding false connected status and sensitive backend credential caching.",
+          "tests": "Root status coalescing/account-isolation regressions; tests/receipt-ai-access.test.ts truthful crypto status"
+        },
+        {
+          "concern": "Long ChatGPT q handoff URL may truncate prompt",
+          "severity": "P2",
+          "link": "https://github.com/Dessimat0r/triptab/pull/6#issuecomment-5991560843",
+          "disposition": "implemented and verified",
+          "evidence": "chatgptReceiptUrl returns complete q only within 2000 encoded URL characters; otherwise opens ChatGPT root. UI explains copying exact full prompt retained in textarea; no truncation or lost context.",
+          "tests": "tests/receipt-capture-handoff.test.ts long ASCII/emoji/full retention/short exact q"
+        },
+        {
+          "concern": "Gated SIWC model catalog response shape",
+          "severity": "P2_when_enabled",
+          "link": "https://github.com/Dessimat0r/triptab/pull/6#issuecomment-5991560843",
+          "disposition": "implemented and verified",
+          "evidence": "Accept validated authorized {models:[{slug,visibility}]} and {data:[{id}]} catalogs. Preserve list visibility and preferred-model presence checks/errors. Same plan token only, no API billing fallback, default-off gate unchanged.",
+          "tests": "tests/receipt-ai.test.ts both formats/malformed/hidden/unavailable/plan billing tests"
+        },
+        {
+          "concern": "Deleting key owner profile cascades shared key",
+          "link": "https://github.com/Dessimat0r/triptab/pull/6#issuecomment-5991560843",
+          "disposition": "not_current_app_bug_future_design",
+          "evidence": "No DELETE profiles/account deletion flow exists. FK cascading secret erasure is intentional when its profile is actually removed. Current logout/link-disconnect do not delete canonical profile or key. Future account deletion needs an explicit shared-service credential transfer, not retention of a deleted account secret. No SQL/history rewrite added."
+        },
+        {
+          "concern": "Repeated default model and unused key_check_failed UI branch",
+          "severity": "P3",
+          "link": "https://github.com/Dessimat0r/triptab/pull/6#issuecomment-5991560843",
+          "disposition": "implemented and verified",
+          "evidence": "Centralized DEFAULT_RECEIPT_MODEL in receipt-ai-config.ts, receipt AI/access status use it. Removed obsolete key_check_failed branch/tests. Unknown codes retain fixed safe operation/status messages.",
+          "tests": "tests/receipt-ai.test.ts native Sol/medium/high/16k; receipt AI access/native tests; settings safe unknown codes"
+        },
+        {
+          "concern": "Rescan overwrites manual metadata and drops omitted lines",
+          "link": "https://github.com/Dessimat0r/triptab/pull/6#issuecomment-5991560843",
+          "disposition": "fixed_by_PR7_integrity_source_plus_worktree_regressions",
+          "evidence": "ca8c338 already has upsert/omission preservation and user-field provenance protection, receipt-derived corrections only, stable allocations/IDs/history. Added source-line content-identity merge for shifted ordinals and readPurchaseDetails opt-in for populated default date/time. A native regression additionally preserves two identical physical coupons across shifted rescan ordinals without collapsing their count.",
+          "tests": "tests/receipt-ai.test.ts native upserts/manual fields/quantities/provenance/source coupon collisions/default date opt-in"
+        }
+      ]
+    },
+    {
+      "number": 7,
+      "url": "https://github.com/Dessimat0r/triptab/pull/7",
+      "reviewedRemoteHead": "ca8c338c4bdc4f83342d1750c02df874a6352f68",
+      "inlineCommentCount": 0,
+      "inlineThreads": "all resolved; current fixes verified against source",
+      "followUpReviewUrls": [
+        "https://github.com/Dessimat0r/triptab/pull/7#issuecomment-5991562565"
+      ],
+      "findings": [
+        {
+          "id": "amount-blur-provenance",
+          "review_evidence": "confirmed by reviewer; reproduced in handlers",
+          "severity": "P1",
+          "assessment": "confirmed defect",
+          "status": "fixed",
+          "files": [
+            "components/trip-app.tsx"
+          ],
+          "fix": "Amount emits changes only when integer/null value changes; focusing, blurring or entering the same numeric value preserves receipt provenance. Item handler also checks value changes.",
+          "tests": [
+            "tests/receipt-amount-input.test.ts",
+            "tests/receipt-scan.test.ts: AI proposal provenance never confirms uncertain receipt names or prices"
+          ],
+          "comment_url": "https://github.com/Dessimat0r/triptab/pull/7#issuecomment-5991562565"
+        },
+        {
+          "id": "ai-edits-human-provenance",
+          "review_evidence": "confirmed by reviewer and code",
+          "severity": "P1",
+          "assessment": "confirmed defect",
+          "status": "fixed",
+          "files": [
+            "app/mcp/route.ts",
+            "lib/receipt-scan.ts"
+          ],
+          "fix": "AI item/metadata proposals use ai provenance, including explicitly dictated corrections. Only authenticated browser actions can confirm user provenance or warning/total review. AI provenance retains uncertainty/low-confidence warnings.",
+          "tests": [
+            "tests/mcp.test.ts: connected assistant corrections remain AI proposals and cannot confirm uncertain receipt readings",
+            "tests/receipt-scan.test.ts: AI proposal provenance never confirms uncertain receipt names or prices"
+          ],
+          "comment_url": "https://github.com/Dessimat0r/triptab/pull/7#issuecomment-5991562565"
+        },
+        {
+          "id": "acknowledgement-reconciliation-fingerprint",
+          "review_evidence": "reported; reproduced by helper with stale uncertain-description warning dropped during reconcile",
+          "severity": "P1",
+          "assessment": "confirmed defect",
+          "status": "fixed",
+          "files": [
+            "lib/receipt-scan.ts",
+            "components/receipt-scan-review.tsx"
+          ],
+          "fix": "receiptScanFingerprint hashes reconciled evidence, matching UI and server despite removed stale warnings. Human checkbox uses that same API.",
+          "tests": [
+            "tests/receipt-scan.test.ts: raw and reconciled review fingerprints agree after stale warnings are removed",
+            "tests/receipt-scan-ui.test.ts: difference checkbox fingerprints reconciled warnings exactly as Save does"
+          ],
+          "comment_url": "https://github.com/Dessimat0r/triptab/pull/7#issuecomment-5991562565",
+          "finalUiEvidence": "Unchecked review typing does not hash; checking the explicit review checkbox computes a reconciled fingerprint; existing markers are memoized and invalidate after relevant changes."
+        },
+        {
+          "id": "missing-printed-total-save-recovery",
+          "review_evidence": "reported; code confirmed strict total requirement but no actual fabricated value was inserted automatically",
+          "severity": "P2",
+          "assessment": "confirmed usability gap; original strict gate was intentional, fabricated evidence claim is not supported",
+          "status": "fixed with explicit product recovery",
+          "files": [
+            "lib/receipt-scan.ts",
+            "components/receipt-scan-review.tsx",
+            "components/activity-panel.tsx"
+          ],
+          "fix": "Human-only missingTotalAcknowledgement allows fully reviewed itemised amount when printed total is unavailable. Printed total stays null, status stays incomplete and missing-total warning persists. Unknown prices/names/currency, unresolved other warnings and invalid posted splits still block. Financial/evidence changes invalidate acknowledgement; MCP cannot create one.",
+          "tests": [
+            "tests/receipt-scan.test.ts: a human can review an unavailable printed total without fabricating printed evidence",
+            "tests/receipt-scan.test.ts: unavailable-total review cannot bypass unknown prices, currency, descriptions or other warnings",
+            "tests/receipt-scan.test.ts: unavailable-total review is invalidated by financial or source evidence edits",
+            "tests/mcp.test.ts: MCP cannot create missing-total human review and financial corrections invalidate a trusted one",
+            "tests/receipt-scan-ui.test.ts: missing printed total permits explicit item review without inventing printed evidence"
+          ],
+          "comment_url": "https://github.com/Dessimat0r/triptab/pull/7#issuecomment-5991562565"
+        },
+        {
+          "id": "same-currency-confirmation",
+          "review_evidence": "reported; confirmed control cannot fire select change for same selected value",
+          "severity": "P2",
+          "assessment": "confirmed usability/data-loss risk",
+          "status": "fixed UI; final browser check by root",
+          "files": [
+            "components/trip-app.tsx"
+          ],
+          "fix": "Explicit original-currency confirmation stamps user provenance without changing currency or clearing FX/bank data. A real currency change still clears incompatible conversion data.",
+          "tests": [
+            "tests/receipt-editor.test.ts explicit confirmation preserves card charge and FX",
+            "compiled mobile browser same-currency confirmation and Save"
+          ],
+          "comment_url": "https://github.com/Dessimat0r/triptab/pull/7#issuecomment-5991562565"
+        },
+        {
+          "id": "intermediate-draft-parse-throw",
+          "review_evidence": "reported; fallback parse reproducibly throws for invalid quantity left outside fallback",
+          "severity": "P2",
+          "assessment": "confirmed unsafe fallback, exact live half-input combinations vary",
+          "status": "fixed",
+          "files": [
+            "components/trip-app.tsx"
+          ],
+          "fix": "Both primary and fallback parsing use safeParse, retain saved quantity/allocations where available and show an actionable error if no valid safe draft exists. No unhandled parsing exception or malformed JSON save.",
+          "tests": [
+            "tests/receipt-editor.test.ts: a half-typed item name and quantity can be saved for chat without a parsing crash",
+            "tests/receipt-editor.test.ts: a question about unfinished pending quantities preserves the last complete draft allocation context"
+          ],
+          "comment_url": "https://github.com/Dessimat0r/triptab/pull/7#issuecomment-5991562565"
+        },
+        {
+          "id": "mcp-native-source-evidence-erasure",
+          "review_evidence": "reported; verified wholesale MCP replacement and native ordinal collision",
+          "severity": "P1",
+          "assessment": "confirmed defect",
+          "status": "fixed",
+          "files": [
+            "app/mcp/route.ts",
+            "lib/receipt-scan.ts",
+            "lib/receipt-ai.ts"
+          ],
+          "fix": "Shared content-identity merge preserves earlier distinct financial evidence despite omitted lines or ordinal collisions. One-to-one matching against prior occurrences retains legitimate repeated identical coupons/tax/product lines while repeated rescans do not multiply observations. Warnings match observed text when ordinal shifts.",
+          "tests": [
+            "tests/mcp.test.ts: MCP rescans preserve unmapped source evidence despite omitted or shifted source ordinals",
+            "tests/mcp.test.ts: MCP evidence preserves two identical printed coupons across shifted rescan ordinals",
+            "tests/receipt-scan.test.ts: source evidence merges by content instead of unstable rescan ordinals",
+            "tests/receipt-scan.test.ts: source evidence merging preserves repeated identical physical occurrences without multiplying rescans",
+            "tests/receipt-ai.test.ts: a rescan changing source ordinals preserves prior coupon and refund evidence",
+            "native repeated-identical-source regression owned by review_prs_5_6"
+          ],
+          "comment_url": "https://github.com/Dessimat0r/triptab/pull/7#issuecomment-5991562565"
+        },
+        {
+          "id": "ignored-legacy-metadata-success",
+          "review_evidence": "reported; verified runtime ignores changed legacy fields",
+          "severity": "P2",
+          "assessment": "confirmed misleading success",
+          "status": "fixed",
+          "files": [
+            "app/mcp/route.ts"
+          ],
+          "fix": "Changed legacy metadata on an existing draft now fails with metadataPatch guidance. Unchanged legacy values stay compatible; recognition may fill only fields explicitly marked default on receipt-backed drafts. Explicit metadataPatch remains supported.",
+          "tests": [
+            "tests/mcp.test.ts: changed legacy purchase metadata is rejected rather than silently succeeding on an existing draft",
+            "tests/mcp.test.ts: MCP fills explicitly default receipt metadata while preserving user-confirmed totals and metadata"
+          ],
+          "comment_url": "https://github.com/Dessimat0r/triptab/pull/7#issuecomment-5991562565"
+        },
+        {
+          "id": "published-schema-nullables-and-required",
+          "review_evidence": "reported; top-level percentages/fx/bankAmount nullability mismatch confirmed; id-only requirement intentional",
+          "severity": "P2",
+          "assessment": "nullable contract mismatch confirmed; id-only existing-patch requirement is not a defect",
+          "status": "fixed nullable mismatch and clarified new-draft requirements",
+          "files": [
+            "app/mcp/route.ts"
+          ],
+          "fix": "Published schema accepts nullable top-level and metadataPatch currency/percentages/fx/bankAmount consistent with server. Difference bounds align with persisted schema. Draft requires id to support contextual partial updates; new draft still needs a valid payer, stated explicitly in tool description and docs. A schema cannot inspect whether an ID already exists, so no unconditional new-draft required fields are added.",
+          "tests": [
+            "tests/mcp.test.ts: published schema and runtime agree on nullable metadata and partial existing draft patches",
+            "tests/mcp.test.ts: published MCP schema and runtime retain pending unit quantities without inventing personal allocations"
+          ],
+          "comment_url": "https://github.com/Dessimat0r/triptab/pull/7#issuecomment-5991562565"
+        },
+        {
+          "id": "read-purchase-details-default-provenance",
+          "review_evidence": "reported; verified source-present branch bypassed opt-in",
+          "severity": "P2",
+          "assessment": "confirmed semantic inconsistency",
+          "status": "fixed by native owner",
+          "files": [
+            "lib/receipt-ai.ts"
+          ],
+          "fix": "Populated default-provenance date/time fields require readPurchaseDetails opt-in. Receipt-derived rescan corrections remain permitted; user-confirmed or unknown legacy manual values stay protected.",
+          "tests": [
+            "tests/receipt-ai.test.ts: dated default placeholders require purchase-date opt-in while receipt corrections and manual confirmations keep their provenance"
+          ],
+          "comment_url": "https://github.com/Dessimat0r/triptab/pull/7#issuecomment-5991562565"
+        },
+        {
+          "id": "history-warning-code-readability",
+          "review_evidence": "reported; confirmed stored warning schema has no message field",
+          "severity": "P3",
+          "assessment": "confirmed readability issue",
+          "status": "fixed",
+          "files": [
+            "lib/receipt-scan.ts",
+            "components/activity-panel.tsx"
+          ],
+          "fix": "History maps persisted warning codes through receiptWarningLabel and displays unavailable-total human review explicitly; no AI-generated message required.",
+          "tests": [
+            "tests/receipt-scan.test.ts: stored warning codes have readable history labels without model-generated messages",
+            "tests/activity-renderer.test.ts"
+          ],
+          "comment_url": "https://github.com/Dessimat0r/triptab/pull/7#issuecomment-5991562565"
+        },
+        {
+          "id": "receipt-keystroke-hash-parse-cost",
+          "review_evidence": "reported; no profiled latency evidence or runtime measurements supplied",
+          "severity": "P2",
+          "assessment": "repeated hash/parse work confirmed; claim SHA implementation itself is wrong is unsupported",
+          "status": "fixed and verified",
+          "files": [
+            "lib/receipt-scan.ts",
+            "components/receipt-scan-review.tsx",
+            "components/trip-app.tsx"
+          ],
+          "fix": "SaveError hashes lazily only for actual human acknowledgements; matched/no-acknowledgement path skips SHA. UI memoizes scan/fingerprint and root is limiting unchecked review hashing to the actual checkbox action. Standard SHA-256 output and property-order stability remain covered. Saved holiday balances and receipt previews remain memoized.",
+          "tests": [
+            "tests/receipt-scan.test.ts: review fingerprint is stable across property order and uses standard SHA-256",
+            "tests/receipt-render-performance.test.ts",
+            "tests/receipt-scan-ui.test.ts"
+          ],
+          "comment_url": "https://github.com/Dessimat0r/triptab/pull/7#issuecomment-5991562565",
+          "finalUiEvidence": "Unchecked review typing does not hash; checking the explicit review checkbox computes a reconciled fingerprint; existing markers are memoized and invalidate after relevant changes."
+        }
+      ]
+    },
+    {
+      "number": 8,
+      "url": "https://github.com/Dessimat0r/triptab/pull/8",
+      "reviewedRemoteHead": "48a9c3a8da358307f12351afecddab987bd35ccf",
+      "followUpReviewUrls": [
+        "https://github.com/Dessimat0r/triptab/pull/8#pullrequestreview-5413440119"
+      ],
+      "findings": [
+        {
+          "concern": "Invitation display and revoke names stale after rename",
+          "disposition": "fixed",
+          "evidence": "Derive names from current trip members by stable member ID while preserving the one-time generated invite URL.",
+          "comments": [
+            "https://github.com/Dessimat0r/triptab/pull/8#discussion_r4182991087"
+          ]
+        },
+        {
+          "concern": "Native accumulated evidence overflow returned a generic failure",
+          "disposition": "already fixed in reviewed base; regression strengthened",
+          "evidence": "Shared merge returns full evidence to callers; native caller enforces 1000 lines with ReceiptAIError422. MCP returns an actionable tool error without a write.",
+          "comments": [
+            "https://github.com/Dessimat0r/triptab/pull/8#discussion_r4182991179"
+          ]
+        },
+        {
+          "concern": "Normalized SIWC return path can leave the application origin",
+          "disposition": "fixed",
+          "evidence": "Reject backslashes and normalized // paths; revalidate old encrypted transaction return paths in the callback.",
+          "comments": [
+            "https://github.com/Dessimat0r/triptab/pull/8#pullrequestreview-5413440119"
+          ]
+        },
+        {
+          "concern": "OAuth responses may omit unchanged scope or replacement refresh token",
+          "disposition": "fixed",
+          "evidence": "Preserve requested or previous scopes when omitted, preserve previous refresh token when no replacement is returned, and persist fresh access credentials under existing lease/version guards. Explicit reduced scope remains denied.",
+          "comments": [
+            "https://github.com/Dessimat0r/triptab/pull/8#pullrequestreview-5413440119"
+          ]
+        },
+        {
+          "concern": "Legacy manual item names and prices overwritten by recognition",
+          "disposition": "fixed",
+          "evidence": "Existing unknown item provenance is protected like user provenance, including null values; untouched native placeholders remain eligible for initial reading. Explicit conversational corrections without receiptScan remain AI proposals.",
+          "comments": [
+            "https://github.com/Dessimat0r/triptab/pull/8#discussion_r4183241534"
+          ]
+        },
+        {
+          "concern": "SSE transport envelope counted against a 1MB output cap",
+          "disposition": "already fixed in reviewed base",
+          "evidence": "Bound total transport to8MiB and retain separate 1MB event/result boundaries; synthetic long-stream regression covers envelope overhead.",
+          "comments": [
+            "https://github.com/Dessimat0r/triptab/pull/8#discussion_r4183241534"
+          ]
+        },
+        {
+          "concern": "Paid model result lost after unrelated global ledger edits",
+          "disposition": "already fixed in reviewed base",
+          "evidence": "Rebase a completed result onto latest ledger with <=3CAS attempts, one inference, and account/draft/member/image checks before each save. Initial stale requests remain rejected before spending.",
+          "comments": [
+            "https://github.com/Dessimat0r/triptab/pull/8#pullrequestreview-5413440119"
+          ]
+        },
+        {
+          "concern": "Default model duplicated",
+          "disposition": "already fixed in reviewed base",
+          "evidence": "DEFAULT_RECEIPT_MODEL has a single configuration source.",
+          "comments": [
+            "https://github.com/Dessimat0r/triptab/pull/8#pullrequestreview-5413440119"
+          ]
+        },
+        {
+          "concern": "Foreground join branch in load was dead code",
+          "disposition": "not present in reviewed base",
+          "evidence": "Pending request sharing considers pending.background and fresh:true; foreground UI has a reachable loading path and own-action fresh reads.",
+          "comments": [
+            "https://github.com/Dessimat0r/triptab/pull/8#discussion_r4183239595",
+            "https://github.com/Dessimat0r/triptab/pull/8#discussion_r4183242579"
+          ]
+        },
+        {
+          "concern": "Shared-key owner is hard-coded",
+          "disposition": "intentional user requirement",
+          "evidence": "User explicitly requested dessimat0r@gmail.com as shared-key administrator for all app users; retain verified canonical owner binding and no new ownership policy.",
+          "comments": [
+            "https://github.com/Dessimat0r/triptab/pull/8#pullrequestreview-5413440119"
+          ]
+        },
+        {
+          "concern": "ensureProfile revalidates canonical identity",
+          "disposition": "intentional security check",
+          "evidence": "Final original-request identity resolution rejects concurrent link/revoke changes. Existing tests cover these races; canonical profile fast path avoids writes.",
+          "comments": [
+            "https://github.com/Dessimat0r/triptab/pull/8#discussion_r4183242046"
+          ]
+        },
+        {
+          "concern": "Consolidate hash, base64 and canonical helpers",
+          "disposition": "partially consolidated; broader maintenance suggestion deferred",
+          "evidence": "MCP provider/request SHA-256 hex copies now use existing auth.hashToken with identical namespaces and output. No behavior defect was reproduced in remaining codecs. Canonical key ordering and synchronous browser fingerprints preserve existing financial comparison and acknowledgement compatibility; credential codecs validate different domains. A broader crypto/serialization refactor is outside these bug fixes.",
+          "comments": [
+            "https://github.com/Dessimat0r/triptab/pull/8#discussion_r4183242386"
+          ]
+        },
+        {
+          "concern": "Explicit purchase-detail opt-out ignored for already receipt-derived date/time",
+          "disposition": "fixed",
+          "evidence": "An explicit readPurchaseDetails:false retains populated purchase date/time regardless of provenance, while an omitted option preserves the existing receipt-correction contract. Regression retained from PR8 uncovered this gap.",
+          "comments": [
+            "https://github.com/Dessimat0r/triptab/pull/8"
+          ]
+        }
+      ]
+    }
+  ],
+  "verification": {
+    "fullRegressionSuite": {
+      "tests": 966,
+      "passed": 966,
+      "failed": 0,
+      "skipped": 0
+    },
+    "typescript": "passed",
+    "productionBuild": "passed",
+    "lint": {
+      "errors": 0,
+      "existingWarnings": 4
+    },
+    "compiledMobileViewportChecks": 62,
+    "compiledReviewJourneys": 4,
+    "compiledActualNativeRouteJourneys": 5,
+    "bundledAccountExportJourneys": 2,
+    "externalPollingBudgetCases": {
+      "tests": 3,
+      "passed": 3,
+      "includedInFullSuite": true
+    },
+    "stackedBranchTypecheckBuildLint": "Initial changed branches passed typecheck, build and lint. PR8 follow-up source passed 966 tests, typecheck, targeted lint and production build; current-head CI is recorded in PR descriptions.",
+    "initialStackedBranchValidation": {
+      "PR3": {
+        "tests": 508,
+        "passed": 508
+      },
+      "PR4": {
+        "tests": 583,
+        "passed": 583
+      },
+      "PR5": {
+        "tests": 633,
+        "passed": 633
+      },
+      "PR6": {
+        "tests": 822,
+        "passed": 822
+      },
+      "PR7": {
+        "tests": 951,
+        "passed": 951
+      },
+      "stage": "Before the newly discovered PR8 follow-up; current-head CI recorded separately in PR descriptions."
+    },
+    "followUpFocusedScopes": {
+      "nativeReceipt": 59,
+      "MCP": 96,
+      "SIWC": 23,
+      "invitationComponent": 7
+    }
+  },
+  "paidModelCalls": 0,
+  "productionDeployment": "Recorded separately in the final PR7 description after successful publication. Source verification does not by itself claim deployment.",
+  "limits": [
+    "All browser data and provider identities are synthetic local fixtures.",
+    "Native integration uses actual production route code and isolated Miniflare D1/R2/CAS/audit.",
+    "No live visual-model benchmark or hosted ChatGPT/Codex tool-exposure acceptance was performed.",
+    "SIWC remains gated off; shared owner-managed OpenAI API key configuration and environment secrets are unchanged."
+  ],
+  "merging": "No open pull request merged; fixes are committed to individual branches and carried through the stack."
+}

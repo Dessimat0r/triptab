@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="300" viewBox="0 0 640 300">
+<title>Multiple included VAT rates do not add extra tax</title>
+<defs><filter id="obscured"><feGaussianBlur stdDeviation="2.5"/></filter></defs>
+<rect width="640" height="300" fill="#fff"/>
+<g fill="#111" font-family="monospace" font-size="22">
+<text x="25" y="35" font-size="16">SYNTHETIC TEST RECEIPT — NOT A SALE</text>
+<text x="25" y="65" font-size="16">Corpus v1: inclusive-tax-summary</text>
+<text x="25" y="115">Food                    10.00</text>
+<text x="25" y="145">Drink                    5.00</text>
+<text x="25" y="175">INCLUDED VAT 10%          0.91</text>
+<text x="25" y="205">INCLUDED VAT 20%          0.83</text>
+<text x="25" y="235">TOTAL EUR               15.00</text>
+</g>
+
+</svg>
