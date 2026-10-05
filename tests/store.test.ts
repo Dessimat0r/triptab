@@ -640,7 +640,7 @@ test('notifications describe committed actors/events and skip draft-only saves a
   state.data.trips[0].expenses.push(dinner());
   state = await store.writeLedger(actor, state.data, state.revision);
   assert.equal(notifications.length, 1);
-  assert.equal(notifications[0][2], 'TripTab activity');
+  assert.equal(notifications[0][2], 'Expense added');
   assert.match(String(notifications[0][3]), /Original Owner added an expense/);
   assert.doesNotMatch(String(notifications[0][2]), /Lisbon/);
   state.data.trips[0].expenses.push({ ...dinner(), id: 'second' }, { ...dinner(), id: 'third' });
@@ -1149,7 +1149,8 @@ test('a genuine financial edit keeps the raw legacy assistant before image and o
   assert.deepEqual(event.after, saved.data.trips[0].expenses[0]);
   assert.equal(event.before?.tip, 0); assert.equal(event.after?.tip, 100);
   assert.equal(notifications.length, 1);
-  assert.match(String(notifications[0][3]), /updated an expense/);
+  assert.equal(notifications[0][2], 'Receipt tip updated');
+  assert.equal(String(notifications[0][3]), 'Original Owner changed the tip on an expense.');
 });
 
 test('history preserves raw pre-existing assistant-attribution corrections instead of hiding their before/after difference', async () => {
