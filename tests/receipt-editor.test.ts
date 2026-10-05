@@ -26,7 +26,7 @@ const controllerSource = `return function createController(initial, boundary) {
   let trip = structuredClone(initial), editing = null, processedReceipt = null, error = '', editorConflict = null;
   let receiptPending = false, receiptCopied = false, receiptPrompt = '', receiptHistoryOpen = false, restoration = null;
   let paste = '', fxError = '', referenceRate = null;
-  let receiptChecking = false, uploading = false, receiptProcessing = false, receiptItemized = false, receiptHandoffError = '', receiptHandoffOpened = false;
+  let receiptChecking = false, uploading = false, receiptProcessing = false, receiptItemized = false, receiptHandoffError = '', receiptHandoffOpened = false, receiptAIConnecting = false;
   const saving = false, profile = {id:'owner'};
   let receiptAI = null, clipboardFailure = false, failSave = false, network, statusNetwork;
   let commitAIState = true;
@@ -37,7 +37,7 @@ const controllerSource = `return function createController(initial, boundary) {
   const editorDraftBinding={current:null};
   const activeReceiptEditor={current:null};
   const receiptProcessRequest={current:0},receiptProcessInFlight={current:false};
-  const receiptAIStatusRequest={current:0};
+  const receiptAIStatusRequest={current:0},receiptAIStatusInFlight={current:null};
   const updates = [], editorBaseline = {current:null};
   const latestSnapshot = {current:{data:{trips:[trip]},revision:0}};
   const {itemSchema,itemSplitError,receiptSplitError,total,equalFinancialValue,equalSavedValue,buildReceiptPrompt,isBlankReceipt,isUnchangedInitialReceipt,matchingReceiptProposal,mayFillInitialReceipt,receiptEditableValue,receiptProposalEditor} = boundary;
@@ -66,6 +66,7 @@ const controllerSource = `return function createController(initial, boundary) {
   const setReceiptProcessing = next => {receiptProcessing=next};
   const setReceiptItemized = next => {receiptItemized=next};
   const setUploading = next => {uploading=next};
+  const setReceiptAIConnecting = next => {receiptAIConnecting=next};
   const setView = next => {view=next}, setHelp = next => {help=next}, prepareReceiptImage = async file => file;
   const setReceiptHistoryOpen = next => {receiptHistoryOpen=next};
   const setRestoration = next => {restoration=next};
@@ -83,7 +84,7 @@ const controllerSource = `return function createController(initial, boundary) {
   ${handlers}
   return {${names.join(',')},get editing(){return editing},get trip(){return trip},get error(){return error},get updates(){return updates},get baseline(){return editorBaseline.current},get processed(){return processedReceipt},
     edit(next){editing={...editing,...next};activeReceiptEditor.current=editing},remote(next,revision=updates.length){trip=structuredClone(next);latestSnapshot.current={data:{trips:[trip]},revision}},
-    get prompt(){return receiptPrompt},get handoffError(){return receiptHandoffError},get clipboard(){return clipboard},get requests(){return requests},get processing(){return receiptProcessing},get itemized(){return receiptItemized},get pending(){return receiptPending},
+    get prompt(){return receiptPrompt},get handoffError(){return receiptHandoffError},get clipboard(){return clipboard},get requests(){return requests},get processing(){return receiptProcessing},get itemized(){return receiptItemized},get pending(){return receiptPending},get uploading(){return uploading},get connecting(){return receiptAIConnecting},
     network(next){network=next},clipboardUnavailable(){clipboardFailure=true},persistenceFailure(){failSave=true},
     aiConnected(){receiptAI={accountId:profile.id,configured:true,connected:true,provider:'api',eligible:true,manageable:true,siwcAvailable:false}},
     participantAccount(connected=true){profile.id='participant';receiptSessionScope.current.accountId='participant';receiptAI={accountId:'participant',configured:connected,connected,provider:'api',eligible:true,manageable:false,siwcAvailable:false}},
@@ -107,7 +108,7 @@ type Controller = {
   reviewRestore(event: {tripId:string;entityType:string;entityId:string;actorName:string;createdAt:string;before:Expense}):Promise<void>;
   editing: Editing | null; trip: Trip; error: string; updates: Trip[]; baseline: { tripId: string; expense?: Expense } | null;
   processed: Draft | null; edit(next: Partial<Editing>): void; remote(next: Trip,revision?:number): void; conflict(next: Expense | null): void;
-  prompt:string;handoffError:string;clipboard:string[];requests:{url:string;options?:RequestInit}[];processing:boolean;itemized:boolean;pending:boolean;
+  uploading:boolean;connecting:boolean;refreshReceiptAIStatus(accountId:string,fresh?:boolean):Promise<unknown>;prompt:string;handoffError:string;clipboard:string[];requests:{url:string;options?:RequestInit}[];processing:boolean;itemized:boolean;pending:boolean;
   network(next:(url:string,options?:RequestInit)=>Promise<unknown>):void;clipboardUnavailable():void;persistenceFailure():void;aiConnected():void;accountSwitch():void;
   participantAccount(connected?:boolean):void;statusNetwork(next:()=>Promise<unknown>):void;deferAIState():void;ai:{connected:boolean;accountId:string}|null;
   restoring(): void; restoration: unknown;
@@ -531,4 +532,32 @@ test('a pending shared AI status refresh cannot start reading for a different ac
     assert.equal(editor.trip.drafts[0].status,'waiting');assert.equal(editor.trip.expenses.length,0);
     if(change==='account')assert.equal(editor.ai?.connected,false,'old-account status cannot update current service state');
   });
+});
+
+test('closing an editor during upload clears busy controls without letting the old upload mutate a new receipt', async () => {
+  const editor = controller(fixture()); editor.newExpense();
+  let finish!: (response: unknown) => void;
+  editor.network(() => new Promise(resolve => {finish=resolve}));
+  const upload = editor.captureEditorReceipt({type:'image/png',size:100} as File);
+  assert.equal(editor.uploading,true);
+  editor.closeReceiptEditor(); assert.equal(editor.uploading,false); assert.equal(editor.connecting,false);
+  editor.newExpense(); const freshId=editor.editing!.id;
+  finish({ok:true,json:async()=>({receiptId:'old-upload-photo'})}); await upload;
+  assert.equal(editor.editing?.id,freshId); assert.equal(editor.editing?.receiptId,undefined);
+  assert.equal(editor.uploading,false);
+});
+
+
+test('concurrent AI status requests share one read, but a settings change requests a fresh status', async () => {
+  const editor=controller(fixture()); editor.newExpense();
+  const replies:((response:unknown)=>void)[]=[];
+  editor.statusNetwork(()=>new Promise(resolve=>replies.push(resolve)));
+  const first=editor.refreshReceiptAIStatus('owner');
+  const focus=editor.refreshReceiptAIStatus('owner');
+  assert.equal(replies.length,1);
+  const changed=editor.refreshReceiptAIStatus('owner',true); assert.equal(replies.length,2);
+  const state=(connected:boolean)=>({ok:true,json:async()=>({configured:connected,connected,provider:'api',eligible:true,manageable:true,siwcAvailable:false})});
+  replies[0](state(false)); await Promise.all([first,focus]);
+  replies[1](state(true)); await changed;
+  assert.equal(editor.ai?.connected,true);
 });

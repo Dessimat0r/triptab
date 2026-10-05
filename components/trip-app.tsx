@@ -185,6 +185,7 @@ export default function Home({ children }: { children: ReactNode }) {
   const receiptProcessInFlight = useRef(false);
   const receiptResumeRequest = useRef("");
   const receiptAIStatusRequest = useRef(0);
+  const receiptAIStatusInFlight = useRef<{ accountId: string; promise: Promise<ReceiptAIState | null> } | null>(null);
   const activeReceiptEditor = useRef<typeof editing>(null);
   useLayoutEffect(() => { activeReceiptEditor.current = editing; }, [editing]);
   const savedEtag = useRef("");
@@ -209,8 +210,8 @@ export default function Home({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!profile?.id) return;
     let active = true;
-    const refresh = () => {
-      if (active) void refreshReceiptAIStatus(profile.id);
+    const refresh = (event?: Event) => {
+      if (active) void refreshReceiptAIStatus(profile.id, event?.type === "triptab:receipt-ai-settings");
     };
     const visibility = () => { if (document.visibilityState === "visible") refresh(); };
     refresh(); window.addEventListener("triptab:receipt-ai-settings", refresh); window.addEventListener("focus", refresh);
@@ -372,7 +373,7 @@ export default function Home({ children }: { children: ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ledger, trip, editing, processedReceipt, profile?.id, saving, uploading]);
   useEffect(() => {
-    if (!trip || !editing?.draftId || !receiptPrompt || saving || uploading || auth || receiptItemized) return;
+    if (!trip || !editing?.draftId || !receiptPrompt || (!receiptCopied && !receiptHandoffOpened) || receiptProcessing || saving || uploading || auth || receiptItemized) return;
     const draft = trip.drafts.find(value => value.id === editing.draftId && value.receiptId === editing.receiptId);
     if (!draft || draft.status !== "waiting") return;
     // Waiting describes the saved draft, not a model job. Poll only the open
@@ -381,7 +382,7 @@ export default function Home({ children }: { children: ReactNode }) {
       if (document.visibilityState === "visible" && navigator.onLine) void load({ background: true });
     }, 5_000);
     return () => window.clearInterval(timer);
-  }, [trip, editing?.draftId, editing?.receiptId, receiptPrompt, receiptItemized, saving, uploading, auth, load]);
+  }, [trip, editing?.draftId, editing?.receiptId, receiptPrompt, receiptCopied, receiptHandoffOpened, receiptProcessing, receiptItemized, saving, uploading, auth, load]);
   function requestAccount() {
     setAuthMode("login");
     requestAnimationFrame(() => {
@@ -621,6 +622,9 @@ export default function Home({ children }: { children: ReactNode }) {
     setReceiptHandoffOpened(false);
     setReceiptHandoffError("");
     setReceiptProcessing(false);
+    setUploading(false);
+    setReceiptAIConnecting(false);
+    setReceiptChecking(false);
     setReceiptItemized(false);
     setProcessedReceipt(null);
   }
@@ -733,8 +737,11 @@ export default function Home({ children }: { children: ReactNode }) {
     if (question) setReceiptItemized(false);
     return prompt;
   }
-  async function refreshReceiptAIStatus(accountId: string): Promise<ReceiptAIState | null> {
+  async function refreshReceiptAIStatus(accountId: string, fresh = false): Promise<ReceiptAIState | null> {
+    const pending = receiptAIStatusInFlight.current;
+    if (!fresh && pending?.accountId === accountId) return pending.promise;
     const requestId = ++receiptAIStatusRequest.current;
+    const promise = (async () => {
     try {
       const response = await fetch("/api/receipt/ai-status", { cache: "no-store" });
       const value = await response.json() as Partial<ReceiptAIState>;
@@ -750,6 +757,10 @@ export default function Home({ children }: { children: ReactNode }) {
       }
       return null;
     }
+    })();
+    receiptAIStatusInFlight.current = { accountId, promise };
+    void promise.then(() => { if (receiptAIStatusInFlight.current?.promise === promise) receiptAIStatusInFlight.current = null; });
+    return promise;
   }
   async function captureEditorReceipt(file: File) {
     if (!trip || !editing) return;
