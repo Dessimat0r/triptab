@@ -24,6 +24,7 @@ export function TripSharing({ trip, profile, onChanged }: { trip: Trip; profile:
   // Only traveller availability or the account/trip identity resets that URL.
   const availableKey = JSON.stringify(available.map(member => member.id));
   const owner = trip.ownerId === profile?.id;
+  const memberName = (invitation: { memberId: string; memberName: string }) => trip.members.find(member => member.id === invitation.memberId)?.name ?? invitation.memberName;
   const invitationKey = `${trip.id}:${profile?.id || ""}`;
   const { confirm, dialog: confirmationDialog, confirming } = useConfirmation(invitationKey);
   const listed = invitations.key === invitationKey ? invitations : { invitations: [], hasMore: false, error: undefined };
@@ -95,14 +96,14 @@ export function TripSharing({ trip, profile, onChanged }: { trip: Trip; profile:
       {listed.error ? <p className="error" role="alert">{listed.error}</p> : listed.invitations.length ? <ul className="invite-management-list">
         {listed.invitations.map(invitation => <li className="invite-management-entry" key={invitation.id}>
           <div className="invite-management-details">
-            <strong>{invitation.memberName}</strong>
+            <strong>{memberName(invitation)}</strong>
             {invitation.email && <small>{invitation.email}</small>}
             <small>Expires <time dateTime={invitation.expiresAt}>{new Date(invitation.expiresAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}</time></small>
           </div>
           <div className="invite-management-actions">
             <button type="button" className="quiet" disabled={busy || confirming} onClick={() => void createLink(invitation.memberId, invitation.email || "")}>Replace link</button>
             <button type="button" className="danger quiet" disabled={busy || confirming} onClick={async () => {
-              if (busy || !await confirm({ title: "Revoke invitation?", message: `Revoke the invitation for ${invitation.memberName}? Its link will stop working.`, confirmLabel: "Revoke invitation", destructive: true })) return;
+              if (busy || !await confirm({ title: "Revoke invitation?", message: `Revoke the invitation for ${memberName(invitation)}? Its link will stop working.`, confirmLabel: "Revoke invitation", destructive: true })) return;
               setBusy(true); setError("");
               try {
                 const response = await fetch("/api/invite", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode: "revoke", tripId: trip.id, invitationId: invitation.id }) });

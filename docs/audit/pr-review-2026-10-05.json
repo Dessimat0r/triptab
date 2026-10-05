@@ -1,6 +1,6 @@
 {
   "review": "All open pull request follow-up recheck",
-  "checkedAtUTC": "2026-10-05T10:51:17.906452+00:00",
+  "checkedAtUTC": "2026-10-05T11:17:12.333332+00:00",
   "sourceBase": "ca8c338c4bdc4f83342d1750c02df874a6352f68",
   "pullRequests": [
     {
@@ -538,12 +538,127 @@
           "finalUiEvidence": "Unchecked review typing does not hash; checking the explicit review checkbox computes a reconciled fingerprint; existing markers are memoized and invalidate after relevant changes."
         }
       ]
+    },
+    {
+      "number": 8,
+      "url": "https://github.com/Dessimat0r/triptab/pull/8",
+      "reviewedRemoteHead": "48a9c3a8da358307f12351afecddab987bd35ccf",
+      "followUpReviewUrls": [
+        "https://github.com/Dessimat0r/triptab/pull/8#pullrequestreview-5413440119"
+      ],
+      "findings": [
+        {
+          "concern": "Invitation display and revoke names stale after rename",
+          "disposition": "fixed",
+          "evidence": "Derive names from current trip members by stable member ID while preserving the one-time generated invite URL.",
+          "comments": [
+            "https://github.com/Dessimat0r/triptab/pull/8#discussion_r4182991087"
+          ]
+        },
+        {
+          "concern": "Native accumulated evidence overflow returned a generic failure",
+          "disposition": "already fixed in reviewed base; regression strengthened",
+          "evidence": "Shared merge returns full evidence to callers; native caller enforces 1000 lines with ReceiptAIError422. MCP returns an actionable tool error without a write.",
+          "comments": [
+            "https://github.com/Dessimat0r/triptab/pull/8#discussion_r4182991179"
+          ]
+        },
+        {
+          "concern": "Normalized SIWC return path can leave the application origin",
+          "disposition": "fixed",
+          "evidence": "Reject backslashes and normalized // paths; revalidate old encrypted transaction return paths in the callback.",
+          "comments": [
+            "https://github.com/Dessimat0r/triptab/pull/8#pullrequestreview-5413440119"
+          ]
+        },
+        {
+          "concern": "OAuth responses may omit unchanged scope or replacement refresh token",
+          "disposition": "fixed",
+          "evidence": "Preserve requested or previous scopes when omitted, preserve previous refresh token when no replacement is returned, and persist fresh access credentials under existing lease/version guards. Explicit reduced scope remains denied.",
+          "comments": [
+            "https://github.com/Dessimat0r/triptab/pull/8#pullrequestreview-5413440119"
+          ]
+        },
+        {
+          "concern": "Legacy manual item names and prices overwritten by recognition",
+          "disposition": "fixed",
+          "evidence": "Existing unknown item provenance is protected like user provenance, including null values; untouched native placeholders remain eligible for initial reading. Explicit conversational corrections without receiptScan remain AI proposals.",
+          "comments": [
+            "https://github.com/Dessimat0r/triptab/pull/8#discussion_r4183241534"
+          ]
+        },
+        {
+          "concern": "SSE transport envelope counted against a 1MB output cap",
+          "disposition": "already fixed in reviewed base",
+          "evidence": "Bound total transport to8MiB and retain separate 1MB event/result boundaries; synthetic long-stream regression covers envelope overhead.",
+          "comments": [
+            "https://github.com/Dessimat0r/triptab/pull/8#discussion_r4183241534"
+          ]
+        },
+        {
+          "concern": "Paid model result lost after unrelated global ledger edits",
+          "disposition": "already fixed in reviewed base",
+          "evidence": "Rebase a completed result onto latest ledger with <=3CAS attempts, one inference, and account/draft/member/image checks before each save. Initial stale requests remain rejected before spending.",
+          "comments": [
+            "https://github.com/Dessimat0r/triptab/pull/8#pullrequestreview-5413440119"
+          ]
+        },
+        {
+          "concern": "Default model duplicated",
+          "disposition": "already fixed in reviewed base",
+          "evidence": "DEFAULT_RECEIPT_MODEL has a single configuration source.",
+          "comments": [
+            "https://github.com/Dessimat0r/triptab/pull/8#pullrequestreview-5413440119"
+          ]
+        },
+        {
+          "concern": "Foreground join branch in load was dead code",
+          "disposition": "not present in reviewed base",
+          "evidence": "Pending request sharing considers pending.background and fresh:true; foreground UI has a reachable loading path and own-action fresh reads.",
+          "comments": [
+            "https://github.com/Dessimat0r/triptab/pull/8#discussion_r4183239595",
+            "https://github.com/Dessimat0r/triptab/pull/8#discussion_r4183242579"
+          ]
+        },
+        {
+          "concern": "Shared-key owner is hard-coded",
+          "disposition": "intentional user requirement",
+          "evidence": "User explicitly requested dessimat0r@gmail.com as shared-key administrator for all app users; retain verified canonical owner binding and no new ownership policy.",
+          "comments": [
+            "https://github.com/Dessimat0r/triptab/pull/8#pullrequestreview-5413440119"
+          ]
+        },
+        {
+          "concern": "ensureProfile revalidates canonical identity",
+          "disposition": "intentional security check",
+          "evidence": "Final original-request identity resolution rejects concurrent link/revoke changes. Existing tests cover these races; canonical profile fast path avoids writes.",
+          "comments": [
+            "https://github.com/Dessimat0r/triptab/pull/8#discussion_r4183242046"
+          ]
+        },
+        {
+          "concern": "Consolidate hash, base64 and canonical helpers",
+          "disposition": "partially consolidated; broader maintenance suggestion deferred",
+          "evidence": "MCP provider/request SHA-256 hex copies now use existing auth.hashToken with identical namespaces and output. No behavior defect was reproduced in remaining codecs. Canonical key ordering and synchronous browser fingerprints preserve existing financial comparison and acknowledgement compatibility; credential codecs validate different domains. A broader crypto/serialization refactor is outside these bug fixes.",
+          "comments": [
+            "https://github.com/Dessimat0r/triptab/pull/8#discussion_r4183242386"
+          ]
+        },
+        {
+          "concern": "Explicit purchase-detail opt-out ignored for already receipt-derived date/time",
+          "disposition": "fixed",
+          "evidence": "An explicit readPurchaseDetails:false retains populated purchase date/time regardless of provenance, while an omitted option preserves the existing receipt-correction contract. Regression retained from PR8 uncovered this gap.",
+          "comments": [
+            "https://github.com/Dessimat0r/triptab/pull/8"
+          ]
+        }
+      ]
     }
   ],
   "verification": {
     "fullRegressionSuite": {
-      "tests": 951,
-      "passed": 951,
+      "tests": 966,
+      "passed": 966,
       "failed": 0,
       "skipped": 0
     },
@@ -562,7 +677,8 @@
       "passed": 3,
       "includedInFullSuite": true
     },
-    "stackedBranches": {
+    "stackedBranchTypecheckBuildLint": "Initial changed branches passed typecheck, build and lint. PR8 follow-up source passed 966 tests, typecheck, targeted lint and production build; current-head CI is recorded in PR descriptions.",
+    "initialStackedBranchValidation": {
       "PR3": {
         "tests": 508,
         "passed": 508
@@ -582,9 +698,15 @@
       "PR7": {
         "tests": 951,
         "passed": 951
-      }
+      },
+      "stage": "Before the newly discovered PR8 follow-up; current-head CI recorded separately in PR descriptions."
     },
-    "stackedBranchTypecheckBuildLint": "All changed branches passed typecheck, production build and lint; zero errors and four existing warnings per branch."
+    "followUpFocusedScopes": {
+      "nativeReceipt": 59,
+      "MCP": 96,
+      "SIWC": 23,
+      "invitationComponent": 7
+    }
   },
   "paidModelCalls": 0,
   "productionDeployment": "Recorded separately in the final PR7 description after successful publication. Source verification does not by itself claim deployment.",

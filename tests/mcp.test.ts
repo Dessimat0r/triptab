@@ -147,6 +147,7 @@ ${Object.keys(mockStore).map(name => `export const ${name} = store.${name};`).jo
 `).toString('base64');
 const authUrl = 'data:text/javascript;base64,' + Buffer.from(`
 export const resolveIdentity = globalThis[Symbol.for('triptab.mcp-test-auth')].resolveIdentity;
+export { hashToken } from ${JSON.stringify(new URL('../lib/auth.ts', import.meta.url).href)};
 `).toString('base64');
 const compiled = transpileModule(source, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
   .replace("'@/lib/store'", JSON.stringify(storeUrl))
@@ -1977,6 +1978,7 @@ test('MCP retains unreadable prices and unassigned purchases as incomplete draft
 
 test('MCP independently printed totals expose discrepancies and unmapped negative source evidence', async () => {
   reset();
+  state.data.trips[0].drafts[0].items[0].fieldSources = { amount: 'receipt' };
   const saved = await invoke('update_receipt_draft', { trip_id: 'trip-1', revision: 3, draft: {
     id: 'draft-1', upsertItems: [{ id: 'item-1', amount: 1800 }],
     receiptScan: { version: 1, printedSubtotal: 1900, printedTotal: 1700, sourceLines: [
@@ -2286,4 +2288,67 @@ test('MCP evidence preserves two identical printed coupons across shifted rescan
   } });
   assert.equal(repeated.result.isError, undefined);
   assert.deepEqual(content(repeated).data.trips[0].drafts[0].receiptScan?.sourceLines, shifted);
+});
+
+test('receipt recognition protects saved legacy manual fields with unknown provenance, including null proposal prices', async () => {
+  for (const provenance of [undefined, {}, { quantity: 'receipt' as const }]) {
+    reset();
+    const original = state.data.trips[0].drafts[0];
+    original.items[0] = { ...original.items[0], name: 'My manual dinner', amount: 1234,
+      quantity: { total: 2, label: 'slices' }, fieldSources: provenance };
+    const before = structuredClone(original.items[0]);
+    const saved = await invoke('update_receipt_draft', { trip_id: 'trip-1', revision: 3, draft: { id: original.id,
+      upsertItems: [{ id: 'item-1', name: 'AI unreadable replacement', amount: null, quantity: { total: 4, label: 'pieces' } }],
+      receiptScan: { version: 1, printedTotal: 1234, printedCurrency: 'EUR' },
+    } });
+    assert.equal(saved.result.isError, undefined);
+    const item = content(saved).data.trips[0].drafts[0].items[0];
+    assert.equal(item.name, before.name);
+    assert.equal(item.amount, before.amount);
+    assert.equal(item.fieldSources?.name, undefined);
+    assert.equal(item.fieldSources?.amount, undefined);
+    if (provenance?.quantity !== 'receipt') assert.deepEqual(item.quantity, before.quantity);
+    const correction = await invoke('update_receipt_draft', { trip_id: 'trip-1', revision: 4, draft: { id: original.id,
+      upsertItems: [{ id: 'item-1', name: 'Explicit dinner correction', amount: 1300 }],
+    } });
+    assert.equal(correction.result.isError, undefined);
+    const edited = content(correction).data.trips[0].drafts[0].items[0];
+    assert.equal(edited.name, 'Explicit dinner correction');
+    assert.equal(edited.amount, 1300);
+    assert.equal(edited.fieldSources?.amount, 'ai');
+  }
+});
+
+test('recognition can correct explicitly observed or default fields and read newly added items', async () => {
+  for (const source of ['default', 'receipt', 'ai'] as const) {
+    reset();
+    state.data.trips[0].drafts[0].items[0].fieldSources = { name: source, amount: source };
+    const saved = await invoke('update_receipt_draft', { trip_id: 'trip-1', revision: 3, draft: { id: 'draft-1',
+      upsertItems: [{ id: 'item-1', name: 'Recognised dinner', amount: 1300 }, { id: 'new-coffee', name: 'Coffee', amount: 250 }],
+      receiptScan: { version: 1, printedTotal: 1550, printedCurrency: 'EUR' },
+    } });
+    assert.equal(saved.result.isError, undefined);
+    const items = content(saved).data.trips[0].drafts[0].items;
+    assert.equal(items[0].name, 'Recognised dinner');
+    assert.equal(items[0].amount, 1300);
+    assert.deepEqual(items[0].fieldSources, { name: 'receipt', amount: 'receipt' });
+    assert.equal(items[1].amount, 250);
+    assert.deepEqual(items[1].members, []);
+    assert.equal(items[1].fieldSources?.amount, 'receipt');
+  }
+});
+
+test('MCP evidence-limit failures retain saved receipts and report a specific recovery message', async () => {
+  reset();
+  const original = state.data.trips[0].drafts[0];
+  original.receiptScan = { version: 1, printedTotal: 10000, status: 'matched', warnings: [],
+    sourceLines: Array.from({ length: 1000 }, (_, index) => ({ lineIndex: index, kind: 'other' as const, observedText: `Earlier observation ${index}` })) };
+  const before = structuredClone(state.data);
+  const failed = await invoke('update_receipt_draft', { trip_id: 'trip-1', revision: 3, draft: { id: 'draft-1',
+    receiptScan: { version: 1, printedTotal: 10000, sourceLines: [{ kind: 'other', observedText: 'A distinct observation exceeding the evidence budget' }] },
+  } });
+  assert.equal(failed.result.isError, true);
+  assert.match(failed.result.content![0].text, /scan evidence limit.*saved evidence is unchanged/);
+  assert.deepEqual(state.data, before);
+  assert.equal(state.writes, 0);
 });

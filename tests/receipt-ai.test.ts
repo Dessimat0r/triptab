@@ -634,7 +634,8 @@ test('native corrections upsert stable physical lines and retain omitted rows, a
     fieldSources: { title: 'user', currency: 'user', date: 'user', time: 'user', tax: 'user', tip: 'user', discount: 'user' },
     items: [
       { id: 'correct', name: 'Chocolate', amount: 399, members: ['bob', 'alice'],
-        percentages: { bob: 70, alice: 30 }, scanSource: { lineIndex: 1, observedText: 'Chocolate 3,49' } },
+        percentages: { bob: 70, alice: 30 }, scanSource: { lineIndex: 1, observedText: 'Chocolate 3,49' },
+        fieldSources: { name: 'receipt', amount: 'receipt' } },
       { id: 'omitted', name: 'Milk', amount: 200, members: ['alice'], units: { total: 2, allocations: { alice: 2 }, label: 'glasses' } },
     ], memory: { notes: 'Chocolate is called blocks.', aliases: [{ name: 'blocks', itemId: 'correct' }] },
     conversation: [{ id: 'question', role: 'user', itemId: 'correct', text: 'Is the price 3.49?', createdAt: '2026-10-05T08:00:00Z' }],
@@ -677,6 +678,81 @@ test('native rescanning cannot replace user-confirmed item fields or manufacture
     { ...transcription, acknowledgement: { fingerprint: 'scan-v1:' + 'a'.repeat(64) } },
     { ...transcription, warnings: [{ code: 'unmapped-adjustment', lineIndex: null, observedText: null, resolved: true }] },
   ]) assert.throws(() => applyReceiptTranscription(trip, draft, injection as ReceiptTranscription), ReceiptAIError);
+});
+
+test('native rescanning protects legacy manual prices and names with unknown per-field provenance, including unreadable scans', () => {
+  for (const amount of [399, null]) {
+    const original: Draft = { ...draft, status: 'review', currency: 'EUR', source: 'ai',
+      items: [{ id: 'manual', name: 'My corrected coffee', amount: 250, members: ['bob', 'alice'],
+        percentages: { bob: 75, alice: 25 }, scanSource: { lineIndex: 1, observedText: 'Earlier image' } }],
+    };
+    const before = structuredClone(original);
+    const proposal = applyReceiptTranscription(trip, original, { ...transcription, tip: 0, printedTotal: 250,
+      items: [{ id: 'manual', name: 'New model guess', amount }],
+    });
+    assert.equal(proposal.items[0].name, original.items[0].name);
+    assert.equal(proposal.items[0].amount, 250);
+    assert.equal(proposal.items[0].fieldSources, undefined, 'unknown ownership never becomes invented receipt provenance');
+    assert.deepEqual(proposal.items[0].members, original.items[0].members);
+    assert.deepEqual(proposal.items[0].percentages, original.items[0].percentages);
+    assert.deepEqual(original, before, 'recognition does not mutate saved manual input');
+  }
+  const mixed: Draft = { ...draft, status: 'review', currency: 'EUR', items: [{ id: 'mixed', name: 'Old recognized coffee', amount: 250,
+    members: ['alice'], fieldSources: { name: 'receipt' } }] };
+  const corrected = applyReceiptTranscription(trip, mixed, { ...transcription, tip: 0, printedTotal: 250,
+    items: [{ id: 'mixed', name: 'Espresso', amount: null }],
+  });
+  assert.equal(corrected.items[0].name, 'Espresso');
+  assert.equal(corrected.items[0].amount, 250, 'unknown amount provenance is protected independently of a recognized name');
+  assert.deepEqual(corrected.items[0].fieldSources, { name: 'receipt' });
+});
+
+test('initial empty legacy placeholders and explicitly recognized/default prices remain eligible for transcription', () => {
+  const placeholder: Draft = { ...draft, items: [{ id: 'blank', name: '', amount: 0, members: ['alice'] }] };
+  const populated = applyReceiptTranscription(trip, placeholder, { ...transcription, tip: 0, printedTotal: 250,
+    items: [{ id: 'blank', name: 'Coffee', amount: 250 }],
+  });
+  assert.equal(populated.items.length, 1); assert.equal(populated.items[0].id, 'blank');
+  assert.equal(populated.items[0].name, 'Coffee'); assert.equal(populated.items[0].amount, 250);
+  assert.deepEqual(populated.items[0].fieldSources, { name: 'receipt', amount: 'receipt' });
+  for (const source of ['default', 'receipt', 'ai'] as const) {
+    const existing: Draft = { ...draft, status: 'review', items: [{ id: 'line', name: 'Earlier reading', amount: 100,
+      members: ['alice'], fieldSources: { name: source, amount: source } }] };
+    const corrected = applyReceiptTranscription(trip, existing, { ...transcription, tip: 0, printedTotal: 250,
+      items: [{ id: 'line', name: 'Coffee', amount: 250 }],
+    });
+    assert.equal(corrected.items[0].name, 'Coffee'); assert.equal(corrected.items[0].amount, 250);
+  }
+});
+
+test('an explicit purchase-detail opt-out preserves existing date/time regardless of receipt provenance', () => {
+  for (const source of ['default', 'receipt', 'ai', 'user', undefined] as const) {
+    const existing: Draft = { ...draft, date: '2026-10-04', time: '12:00',
+      ...(source ? { fieldSources: { date: source, time: source } } : {}),
+    };
+    const result = applyReceiptTranscription(trip, existing, transcription, undefined, { readPurchaseDetails: false });
+    assert.equal(result.date, existing.date); assert.equal(result.time, existing.time);
+  }
+  const receiptDerived: Draft = { ...draft, date: '2026-10-04', time: '12:00', fieldSources: { date: 'receipt', time: 'receipt' } };
+  for (const options of [{}, { readPurchaseDetails: true }]) {
+    const corrected = applyReceiptTranscription(trip, receiptDerived, transcription, undefined, options);
+    assert.equal(corrected.date, transcription.date); assert.equal(corrected.time, transcription.time);
+  }
+});
+
+test('native accumulated evidence limits produce an actionable 422 and retain all saved evidence', () => {
+  const original: Draft = { ...draft, status: 'review', currency: 'EUR',
+    items: [{ id: 'line', name: 'Coffee', amount: 250, members: ['alice'] }],
+    receiptScan: { version: 1, printedTotal: 250, printedCurrency: 'EUR', status: 'matched', warnings: [],
+      sourceLines: Array.from({ length: 1000 }, (_, index) => ({ observedText: `Earlier evidence ${index}`, kind: 'other', amount: index })),
+    },
+  };
+  const before = structuredClone(original);
+  assert.throws(() => applyReceiptTranscription(trip, original, { ...transcription, tip: 0, printedTotal: 250,
+    items: [{ id: 'line', name: 'Coffee', amount: 250 }],
+    sourceLines: [{ observedText: 'New printed total', kind: 'total', amount: 250, lineIndex: 1, confidence: 'high', mappedTo: null }],
+  }), (error: unknown) => error instanceof ReceiptAIError && error.status === 422 && /evidence limit.*saved evidence is unchanged/.test(error.message));
+  assert.deepEqual(original, before);
 });
 
 test('native source evidence keeps included VAT and unsupported signed/item-specific adjustments visible without financial invention', () => {
@@ -884,14 +960,14 @@ const state = { data: { trips: [{ ...structuredClone(trip), drafts: [structuredC
   revision: 7, profileId: owner, accessAllowed: true, metadataAllowed: true, imagePresent: true, imageType: 'image/png', imageSize: png.length,
   imageVersion: 'original-image', writes: 0, writeAttempts: 0, accessCalls: 0, providerCalls: 0, profileChecks: 0, savedSources: [] as string[],
   beforeWrite: undefined as (() => void) | undefined,
-  duringModel: undefined as (() => void) | undefined, invalidOutput: false, actorChanged: false };
+  duringModel: undefined as (() => void) | undefined, output: undefined as ReceiptTranscription | undefined, invalidOutput: false, actorChanged: false };
 function reset() {
   state.data = { trips: [{ ...structuredClone(trip), drafts: [structuredClone(draft)] }] };
   state.revision = 7; state.profileId = owner; state.accessAllowed = true; state.metadataAllowed = true;
   state.imagePresent = true; state.imageType = 'image/png'; state.imageSize = png.length; state.imageVersion = 'original-image';
   state.writes = 0; state.writeAttempts = 0; state.accessCalls = 0; state.providerCalls = 0; state.profileChecks = 0; state.savedSources = [];
   state.beforeWrite = undefined;
-  state.duringModel = undefined; state.invalidOutput = false; state.actorChanged = false;
+  state.duringModel = undefined; state.output = undefined; state.invalidOutput = false; state.actorChanged = false;
   budgetDatabase.exec('DELETE FROM auth_rate_limits');
 }
 const budgetDatabase = new DatabaseSync(':memory:');
@@ -942,7 +1018,7 @@ async function http(body: unknown = requestBody, headers: Record<string, string>
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () => {
     state.providerCalls++; state.duringModel?.();
-    return streamResponse([completed(state.invalidOutput ? { ...transcription, payer: 'forged' } : transcription)]);
+    return streamResponse([completed(state.invalidOutput ? { ...transcription, payer: 'forged' } : state.output ?? transcription)]);
   };
   try { return await route.POST(new Request('https://triptab.test/api/receipt/process', {
     method: 'POST', headers: { origin: 'https://triptab.test', 'content-type': 'application/json', ...headers }, body: JSON.stringify(body),
@@ -977,6 +1053,24 @@ test('HTTP receipt processing saves native extraction to the exact draft for rev
   assert.deepEqual(state.savedSources, ['web']);
   assert.equal(state.providerCalls, 1);
   assert.equal(state.profileChecks, 2);
+});
+
+test('HTTP accumulated scan evidence overflow returns an actionable 422 without discarding saved evidence or writing a proposal', async () => {
+  reset();
+  state.data.trips[0].drafts[0].receiptScan = { version: 1, printedTotal: 650, printedCurrency: 'EUR', status: 'matched', warnings: [],
+    sourceLines: Array.from({ length: 1000 }, (_, index) => ({ observedText: `Earlier evidence ${index}`, kind: 'other', amount: index })),
+  };
+  state.output = { ...transcription,
+    sourceLines: [{ observedText: 'New printed total', kind: 'total', amount: 650, lineIndex: 1, confidence: 'high', mappedTo: null }],
+  };
+  const before = structuredClone(state.data), response = await http();
+  assert.equal(response.status, 422);
+  const result = await response.json() as { error: string; code: string };
+  assert.match(result.error, /evidence limit.*saved evidence is unchanged/);
+  assert.equal(result.code, 'receipt_processing_failed');
+  assert.equal(state.providerCalls, 1, 'one simulated inference and no paid API call');
+  assert.equal(state.writeAttempts, 0); assert.equal(state.writes, 0);
+  assert.deepEqual(state.data, before);
 });
 
 test('native operational logs retain safe attempt categories without imported account text, receipt content or API secrets', async () => {

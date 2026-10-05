@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { readLedger, writeLedger, bucket, receiptKey, receiptAccess, ensureProfile, db } from '@/lib/store';
-import { resolveIdentity } from '@/lib/auth';
+import { hashToken, resolveIdentity } from '@/lib/auth';
 import { draftSchema, tripSchema, draftUnitsSchema, receiptQuantitySchema, CURRENCIES, type Currency, type Trip, type Ledger, type Draft, type Expense } from '@/lib/model';
 import { receiptMemorySchema, type ReceiptMemory } from '@/lib/receipt-context';
 import { validateReceiptMemoryOwnership } from '@/lib/receipt-memory-ownership';
@@ -243,7 +243,7 @@ tools.push({
   description: 'Create or update an expense draft from the user’s natural-language payment details for review in TripTab. Use this for a card charge, cash purchase, dinner, taxi or other expense without an image. It never posts an expense or records a settlement transfer. ' + expenseDraftTool.description,
 });
 for (const tool of tools.filter(tool => ['update_receipt_draft', 'create_expense_draft'].includes(tool.name))) {
-  tool.description += ' Supplying receiptScan means receipt recognition: TripTab preserves all saved personal shares and user-confirmed item names, amounts and quantities; new recognition items remain unassigned. Save explicit user-requested financial/item corrections separately with upsertItems and metadataPatch, omitting receiptScan. Receipt-backed AI proposals without evidence remain incomplete until the independently printed total is confirmed. Cost shares describe who owes the cost; payer remains the one person who paid upfront. Whole-receipt percentages include tax, tip and discount and override item shares. Percentages total 100 with at most two decimal places; item units have at most six decimal places and allocations exactly matching selected member IDs. Their allocations must add to the purchased total before saving an expense. Tax included in line totals must not be added again. Receipt evidence, independent printed totals and sourceLines are separate from these financial choices. Default metadata explicitly marked by the app may be filled from receipt observations; saved user details require an explicit metadataPatch to change.';
+  tool.description += ' Supplying receiptScan means receipt recognition: TripTab preserves all saved personal shares, user-confirmed item names, amounts and quantities, and existing legacy manual names/prices whose field provenance is unknown; new recognition items remain unassigned. Save explicit user-requested financial/item corrections separately with upsertItems and metadataPatch, omitting receiptScan. Receipt-backed AI proposals without evidence remain incomplete until the independently printed total is confirmed. Cost shares describe who owes the cost; payer remains the one person who paid upfront. Whole-receipt percentages include tax, tip and discount and override item shares. Percentages total 100 with at most two decimal places; item units have at most six decimal places and allocations exactly matching selected member IDs. Their allocations must add to the purchased total before saving an expense. Tax included in line totals must not be added again. Receipt evidence, independent printed totals and sourceLines are separate from these financial choices. Default metadata explicitly marked by the app may be filled from receipt observations; saved user details require an explicit metadataPatch to change.';
   tool.description += ' Conversation corrections are AI proposals, even when dictated by a user: their field provenance is ai, never browser-confirmed user. A person must still review uncertain readings and warnings in TripTab. An existing draft accepts id-only or partial patches. A new draft needs payer as an existing trip member, and its initial metadata; missing purchase fields remain for review. Changed legacy metadata on an existing draft is rejected with instructions to use metadataPatch instead of silently ignored. A person may explicitly review an unavailable printed total in TripTab without inventing printed evidence; the AI cannot acknowledge this.';
 }
 
@@ -348,8 +348,7 @@ const MCP_CALL_LIMIT = 120;
 
 async function consumeToolBudget(providerId: string) {
   // Separate hashed namespace: AI traffic cannot reset or consume login budgets.
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`mcp:provider:${providerId}`));
-  const key = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+  const key = await hashToken(`mcp:provider:${providerId}`);
   const now = Date.now();
   const cutoff = now - MCP_WINDOW_MS;
   const database = db();
@@ -608,8 +607,7 @@ export async function POST(request: Request) {
         const values = createArgs.parse(args);
         // The retry token is scoped to the authenticated account. Derive a stable
         // cryptographic ID so a repeated request creates at most one holiday.
-        const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${user}:${values.request_id}`));
-        const tripId = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+        const tripId = await hashToken(`${user}:${values.request_id}`);
         const existing = ledger.data.trips.find(trip => trip.id === tripId);
         if (existing) {
           if (existing.ownerId !== user) throw new Error('This request does not belong to your account.');
@@ -673,19 +671,25 @@ export async function POST(request: Request) {
           }
           if (recognition) {
             // Receipt observations cannot rewrite confirmed text/prices or
-            // reinterpret a traveller's personal cost decisions.
-            if (previous?.fieldSources?.name === 'user') next.name = previous.name;
-            if (previous?.fieldSources?.amount === 'user') next.amount = previous.amount;
-            if (previous?.fieldSources?.quantity === 'user') next.quantity = previous.quantity;
+            // reinterpret a traveller's personal cost decisions. Unknown
+            // provenance on a saved legacy row is protected as manual input.
+            const protectName = !!previous && (previous.fieldSources?.name === 'user' || previous.fieldSources?.name === undefined);
+            const protectAmount = !!previous && (previous.fieldSources?.amount === 'user' || previous.fieldSources?.amount === undefined);
+            const protectQuantity = !!previous && (previous.fieldSources?.quantity === 'user'
+              || (previous.quantity !== undefined && previous.fieldSources?.quantity === undefined));
+            if (protectName) next.name = previous!.name;
+            if (protectAmount) next.amount = previous!.amount;
+            if (protectQuantity) next.quantity = previous!.quantity;
             next.members = previous?.members ?? [];
             next.percentages = previous?.percentages;
             next.units = previous?.units ?? (item.units ? { ...item.units, allocations: {} } : undefined);
             next.fieldSources = {
               ...previous?.fieldSources,
-              ...(item.name !== undefined && previous?.fieldSources?.name !== 'user' ? { name: 'receipt' as const } : {}),
-              ...(item.amount !== undefined && previous?.fieldSources?.amount !== 'user' ? { amount: 'receipt' as const } : {}),
-              ...(item.quantity !== undefined && previous?.fieldSources?.quantity !== 'user' ? { quantity: 'receipt' as const } : {}),
+              ...(item.name !== undefined && !protectName ? { name: 'receipt' as const } : {}),
+              ...(item.amount !== undefined && !protectAmount ? { amount: 'receipt' as const } : {}),
+              ...(item.quantity !== undefined && !protectQuantity ? { quantity: 'receipt' as const } : {}),
             };
+            if (!Object.keys(next.fieldSources).length) next.fieldSources = undefined;
           } else {
             next.fieldSources = {
               ...previous?.fieldSources,
@@ -721,6 +725,11 @@ export async function POST(request: Request) {
           ...Object.fromEntries(Object.keys(defaultReceiptMetadata).map(key => [key, 'receipt'])),
           ...Object.fromEntries(Object.keys(existing ? metadataPatch ?? {} : metadata).filter(key => ['title', 'currency', 'date', 'time', 'timezone', 'payer', 'tax', 'tip', 'discount'].includes(key)).map(key => [key, 'ai'])),
         };
+        const sourceLines = scanEvidence ? mergeReceiptSourceLines(existing?.receiptScan?.sourceLines, scanEvidence.sourceLines) : existing?.receiptScan?.sourceLines;
+        const scanWarnings = scanEvidence ? [...(existing?.receiptScan?.warnings ?? []), ...(scanEvidence.warnings ?? [])] : existing?.receiptScan?.warnings;
+        if ((sourceLines?.length ?? 0) > 1000 || (scanWarnings?.length ?? 0) > 1000) {
+          throw new Error('This receipt has reached its scan evidence limit. Your saved evidence is unchanged; review it before rescanning.');
+        }
         const candidate = {
           title: '', currency: null, tax: 0, tip: 0, discount: 0,
           ...existing,
@@ -740,8 +749,8 @@ export async function POST(request: Request) {
           fieldSources: Object.keys(fieldSources).length ? fieldSources : undefined,
           receiptScan: scanEvidence ? {
             ...existing?.receiptScan, ...scanEvidence,
-            sourceLines: mergeReceiptSourceLines(existing?.receiptScan?.sourceLines, scanEvidence.sourceLines),
-            status: 'incomplete', warnings: [...(existing?.receiptScan?.warnings ?? []), ...(scanEvidence.warnings ?? [])],
+            sourceLines,
+            status: 'incomplete', warnings: scanWarnings ?? [],
             fieldSources: {
               ...existing?.receiptScan?.fieldSources,
               ...(scanEvidence.printedSubtotal !== undefined && existing?.receiptScan?.fieldSources?.printedSubtotal !== 'user' ? { printedSubtotal: 'receipt' } : {}),
