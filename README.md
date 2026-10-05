@@ -24,12 +24,15 @@ React 19 and TypeScript, using [Vinext](https://github.com/cloudflare/vinext) wi
 
 ## Local development
 
-Use Node.js **24 LTS** (the version used by CI) and npm. Node.js 22.13.0 or newer is supported. From the repository checkout:
+Use Node.js **24 LTS** (the version used by CI) and npm. Node.js 22.13.0 or newer is supported. From the repository checkout, replace the example email below with the intended verified receipt AI owner's email:
 
 ```sh
 npm run install:ci
+export RECEIPT_AI_OWNER_EMAIL='owner@example.test'
 npm run build
 ```
+
+Keep this value exported when running `npm run dev` or `npm start`. Selecting an email does not verify an account: initial shared-key setup requires that owner's canonical TripTab account to be linked to its trusted provider identity.
 
 The initial build generates `dist/server/wrangler.json`. Before the first local run, apply all eleven migrations (`0000` through `0010`) in order:
 
@@ -77,7 +80,7 @@ Core features work without ChatGPT or an AI API key. Existing ChatGPT users can 
 
 Automatic receipt reading uses OpenAI's native image input through the Responses API. In **Profile & app settings → Receipt AI**, the verified account selected by `RECEIPT_AI_OWNER_EMAIL` saves one shared OpenAI API key that funds receipt reading for all signed-in app users. Only that canonical owner account can replace or remove the key or change the provider; a password account merely claiming the same email cannot manage it. After the first verified setup, the owner can also manage the key through its existing password login. The server verifies and encrypts the key; browser storage, ledger exports, API responses and audit snapshots never contain it. API usage is billed to the supplied OpenAI API project, separately from a ChatGPT subscription.
 
-Set `RECEIPT_AI_OWNER_EMAIL` explicitly before building or starting a preview; an absent or invalid value fails startup. It selects the verified bootstrap owner and has no personal-address fallback. Once pinned, the canonical owner remains able to manage the key even if this variable changes; participant processing uses the existing key independently. To transfer the pin, follow [the operator procedure](docs/operations.md#receipt-ai-owner-configuration-and-transfer).
+Set `RECEIPT_AI_OWNER_EMAIL` explicitly before building or starting a preview; an absent or invalid value fails startup. For a hosted release, configure the intended owner's email in the Sites build environment before building the version, and retain it in the preview/runtime configuration. A local shell export does not configure Sites. The value selects the verified bootstrap owner and has no personal-address fallback. Once pinned, the canonical owner remains able to manage the key even if this variable changes; participant processing uses the existing key independently. To transfer the pin, follow [the operator procedure](docs/operations.md#receipt-ai-owner-configuration-and-transfer).
 
 Create a project-scoped key in the intended OpenAI project, such as **TripTab**. A `sk-proj-…` key identifies its project automatically; no project name or additional project header is required.
 
@@ -117,7 +120,7 @@ Notification subscriptions are bound to their current account. Signing out attem
 
 GitHub hosts this source mirror. Pushing here does **not** automatically deploy or update the live app. The existing production app is published through ChatGPT Sites, whose managed source repository and deployment lifecycle are separate.
 
-For Sites changes, use the Sites build/publish workflow, including its production migrations and environment configuration. `.openai/hosting.json` identifies the existing Site and declares the `DB`, `RECEIPTS` and MCP capabilities. It contains no account credentials. Running `npm run build` or `npm start` alone does not publish anything.
+For Sites changes, use the Sites build/publish workflow, including its production migrations and environment configuration. Configure `RECEIPT_AI_OWNER_EMAIL` in that workflow's build environment before building the release. `.openai/hosting.json` identifies the existing Site and declares the `DB`, `RECEIPTS` and MCP capabilities. It contains no account credentials. Running `npm run build` or `npm start` alone does not publish anything.
 
 See [the operations runbook](docs/operations.md) for release records, migration precautions, D1/R2 backup and recovery steps, and the checks still needed before broader production use. A documented procedure is not an exercised restore or an automated backup service.
 

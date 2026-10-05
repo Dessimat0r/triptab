@@ -144,8 +144,55 @@ Push delivery is best effort. Every intended traveller receives their stored inb
 
 ## Receipt AI owner configuration and transfer
 
-Set `RECEIPT_AI_OWNER_EMAIL` explicitly in the build/preview environment to the intended verified bootstrap owner's email. Missing, empty or malformed values fail startup; CI uses an explicit synthetic address. There is no personal-address fallback. The selected email does not merge accounts and cannot claim an existing canonical owner pin. If a runtime variable is absent or malformed, existing participant access and pinned-owner management continue; initial setup remains unavailable.
+Set `RECEIPT_AI_OWNER_EMAIL` explicitly in the build/preview environment to the intended verified bootstrap owner's email. For local builds, export it before `npm run build`, as shown in the [README](../README.md#local-development), and keep it available for preview startup. For hosted releases, configure it in the Sites build environment before building the version and retain it in the preview/runtime configuration; a local shell export does not configure Sites. Missing, empty or malformed values fail startup; CI uses an explicit synthetic address. There is no personal-address fallback. The selected email does not merge accounts and cannot claim an existing canonical owner pin. If a runtime variable is absent or malformed, existing participant access and pinned-owner management continue; initial setup remains unavailable.
 
-Changing this email alone deliberately does not transfer an existing key. The old pinned owner can still replace/remove it, and participants retain access. For an intentional transfer, use the operator-only `migrateReceiptAIOwner` helper from `lib/receipt-ai-access.ts` in an authorized administrative D1 execution context. It has no public HTTP or MCP endpoint. Verify the target account through its trusted provider first, and obtain the existing `receipt_ai_settings.user_id` and `version`. Pass the desired configured email with `{ expectedUserId, expectedVersion, newUserId }`; the target must already have a matching canonical profile and provider link.
+Changing this email alone deliberately does not transfer an existing key. The old pinned owner can still replace/remove it, and participants retain access. An intentional transfer uses the operator-only `scripts/transfer-receipt-ai-owner.ts` CLI, which invokes the guarded `migrateReceiptAIOwner` helper. It has no public HTTP or MCP endpoint. The commands below are templates for a separately authorized operator transfer; deploying this code or documenting the procedure does not authorize a production transfer.
 
-The helper performs a version-guarded D1 batch: it switches the pin, clears the old ciphertext (its encryption binds the old account), selects API mode, advances the settings version and appends a private system audit event. A changed pin/version, unlinked target, email mismatch or audit failure leaves settings unchanged. After transfer, the new owner saves a fresh API key; participant reading is unavailable during this explicit key replacement. Do not copy or expose the old key. Record the operation and the new settings version in the release record, and update build/runtime configuration to the intended email. No transfer is performed automatically by deploying this code.
+First verify the target account through its trusted provider: it must already have a matching canonical TripTab profile and provider link. Obtain the actual Cloudflare account and D1 database identifiers through the authorized operator/Sites resource records, and the current `receipt_ai_settings.user_id` and positive integer `version` through an authorized database read. Read only the owner/version fields when identifying the pin; do not export key material. Use approved Wrangler authentication, such as `wrangler login` on the operator's machine, with read access for inspection and D1 write permissions for applying the transfer. Sites-managed databases may require an operator-provided configuration or supported Sites maintenance path before direct access is possible. Do not guess identifiers or use generated local placeholder bindings for production.
+
+Create a separate, minimal JSON Wrangler configuration at an absolute path, for example `/secure/path/receipt-owner-transfer.json`. Place it in a dedicated directory containing no `.env*` or `.dev.vars*` files; the CLI rejects those adjacent files to prevent loading application credentials. Replace every example identifier and database name below with the actual target resource. The CLI accepts only `name`, `compatibility_date`, optional `compatibility_flags`/`account_id`, and a single `d1_databases` entry bound as `DB`. Do not include `vars`, `env`, `main`, secrets or other bindings. A deployment-generated configuration with additional bindings is not an input to this operator command.
+
+```json
+{
+  "name": "triptab-owner-transfer",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "account_id": "00000000000000000000000000000000",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "OPERATOR_PROVIDED_DATABASE_NAME",
+      "database_id": "00000000-0000-4000-8000-000000000000",
+      "remote": true
+    }
+  ]
+}
+```
+
+Inspect the current pin's metadata using that explicit remote configuration:
+
+```sh
+node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB \
+  --remote --config /secure/path/receipt-owner-transfer.json \
+  --command "SELECT user_id,version,provider,api_key_encrypted IS NOT NULL AS key_configured FROM receipt_ai_settings WHERE id='shared';"
+```
+
+This query returns the owner/version, selected provider and whether a key is configured, never the ciphertext. Record the owner/version as the expected values for the transfer.
+
+Run the dry-run from the repository checkout after installing its locked dependencies. Use exactly one of `--remote` or `--local`. Remote execution requires the 32-hex-digit `--account-id` to match the configuration's `account_id`, the UUID `--database-id` to match its D1 entry, and that entry's `remote` value to be `true`. Replace the expected/current and new owner IDs with their canonical profile IDs, and replace `7` with the current positive settings version:
+
+```sh
+node --import ./scripts/sites-env.mjs --import tsx scripts/transfer-receipt-ai-owner.ts \
+  --config /secure/path/receipt-owner-transfer.json \
+  --remote \
+  --account-id 00000000000000000000000000000000 \
+  --database-id 00000000-0000-4000-8000-000000000000 \
+  --expected-owner OLD_CANONICAL_PROFILE_ID \
+  --expected-version 7 \
+  --new-owner NEW_CANONICAL_PROFILE_ID \
+  --owner-email 'new-owner@example.test'
+```
+
+Without `--apply`, the CLI verifies the selected database, existing owner/version and canonical target without changing settings. For local state, use an equivalent minimal configuration for the actual local database with `remote: false`; replace `--remote --account-id …` with `--local --persist-to /absolute/path/to/.wrangler/state`. Local execution requires `--persist-to`; remote execution must not use it.
+
+After reviewing a successful dry-run and authorizing the key-replacement interruption, rerun the same command with `--apply` appended. The helper performs a version-guarded D1 transaction: it switches the pin, clears the old ciphertext (its encryption binds the old account), selects API mode, advances the settings version and appends a private system audit event. A changed pin/version, unlinked target, email mismatch or audit failure leaves settings unchanged. After transfer, the new owner must save a fresh API key; participant reading is unavailable during this explicit key replacement. Do not copy or expose the old key. Record the operation and the new settings version in the release record, and update the Sites build/preview/runtime configuration to the intended email through its environment workflow.

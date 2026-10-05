@@ -65,8 +65,7 @@ Object.defineProperty(globalThis, Symbol.for('triptab.store-test-notifications')
 const envUrl = 'data:text/javascript;base64,' + Buffer.from("export const env=globalThis[Symbol.for('triptab.store-test-env')]; export const waitUntil=()=>{};").toString('base64');
 const notificationStoreUrl = 'data:text/javascript;base64,' + Buffer.from("export const db=()=>{throw new Error('Notification transport must be mocked');}; export class RequestError extends Error {}").toString('base64');
 const notificationSource = transpileWithSharedImports(await readFile(new URL('../lib/notifications.ts', import.meta.url), 'utf8'), { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
-  .replace("'cloudflare:workers'", JSON.stringify(envUrl)).replace("'./store'", JSON.stringify(notificationStoreUrl))
-  .replaceAll("'./audit'", JSON.stringify(new URL('../lib/audit.ts', import.meta.url).href));
+  .replace("'cloudflare:workers'", JSON.stringify(envUrl)).replace("'./store'", JSON.stringify(notificationStoreUrl));
 const notificationFormatterUrl = 'data:text/javascript;base64,' + Buffer.from(notificationSource).toString('base64');
 const notificationUrl = 'data:text/javascript;base64,' + Buffer.from(`export {activityNotification} from ${JSON.stringify(notificationFormatterUrl)}; export const notifyMembers=async(...args)=>{globalThis[Symbol.for('triptab.store-test-notifications')].push(args);};`).toString('base64');
 const source = await readFile(new URL('../lib/store.ts', import.meta.url), 'utf8');
@@ -77,7 +76,6 @@ const compiled = transpileWithSharedImports(source, { compilerOptions: { module:
   .replace("'./auth'", JSON.stringify(new URL('../lib/auth.ts', import.meta.url).href))
   .replace("'./activity-scope'", JSON.stringify(new URL('../lib/activity-scope.ts', import.meta.url).href))
   .replace("'./receipt-lifecycle'", JSON.stringify(new URL('../lib/receipt-lifecycle.ts', import.meta.url).href))
-  .replaceAll("'./audit'", JSON.stringify(new URL('../lib/audit.ts', import.meta.url).href))
   .replace("'./receipt-context'", JSON.stringify(new URL('../lib/receipt-context.ts', import.meta.url).href))
   .replace("'./receipt-memory-ownership'", JSON.stringify(new URL('../lib/receipt-memory-ownership.ts', import.meta.url).href))
   .replace("'./notifications'", JSON.stringify(notificationUrl));
@@ -1992,6 +1990,53 @@ test('scoped receipt saves ignore unrelated global writes but retain exact targe
   assert.equal(event.before?.title, 'Dinner'); assert.equal(event.after?.title, 'Recognised proposal');
 });
 
+test('scoped receipt saves compare the same visible legacy snapshot as ledger reads', async () => {
+  for (const legacy of ['assistant-author', 'unlinked-account', 'untrimmed-text', 'combined'] as const) {
+    const database = await storage();
+    const holiday = trip('legacy-scanned-trip');
+    holiday.expenses = [{ ...dinner(), bankAmount: 0 }];
+    holiday.drafts = [{ ...dinner(), id: 'receipt-proposal', status: 'waiting' }];
+    if (legacy === 'assistant-author' || legacy === 'combined') holiday.expenses[0].conversation = [{
+      id: 'old-answer', role: 'assistant', text: 'Earlier receipt reply', createdAt: '2026-10-04T20:31:00Z',
+      authorMemberId: 'a', authorName: 'Incorrect legacy attribution',
+    }];
+    if (legacy === 'unlinked-account' || legacy === 'combined') {
+      holiday.members[1].userId = 'no-current-membership';
+      holiday.members[1].email = 'legacy-unlinked@example.test';
+    }
+    if (legacy === 'untrimmed-text' || legacy === 'combined') holiday.payments = [{
+      id: 'legacy-payment', from: 'a', to: 'b', amount: 100, date: '2026-10-04', method: '  Cash  ', note: '  Earlier note  ',
+    }];
+    database.sqlite.prepare('INSERT INTO trips(id,owner,data) VALUES(?,?,?)').run(holiday.id, actor, JSON.stringify(holiday));
+    database.sqlite.prepare('INSERT INTO memberships(trip_id,user_id,member_id) VALUES(?,?,?)').run(holiday.id, actor, 'a');
+    database.sqlite.prepare('INSERT INTO sync_state(id,revision,last_write) VALUES(1,1,?)').run('legacy-setup');
+    await store.writeLedger(actor, { trips: [trip('other-trip')] }, 1);
+    const before = await store.readLedger(actor);
+    const snapshot = before.data.trips.find(value => value.id === holiday.id)!;
+    const proposal = structuredClone(snapshot); proposal.drafts[0].title = 'Recognised proposal';
+    database.beforeWriteBatch = () => {
+      const other = JSON.parse(database.sqlite.prepare('SELECT data FROM trips WHERE id=?').get('other-trip')!.data as string);
+      other.name = 'Latest concurrent trip';
+      database.sqlite.prepare('UPDATE trips SET data=? WHERE id=?').run(JSON.stringify(other), 'other-trip');
+      database.sqlite.prepare('UPDATE sync_state SET revision=revision+100,last_write=? WHERE id=1').run('unrelated-writer');
+    };
+    const saved = await store.writeLedger(actor, { trips: [proposal] }, before.revision, { source: 'web', tripSnapshot: snapshot });
+    const scanned = saved.data.trips.find(value => value.id === holiday.id)!;
+    assert.equal(scanned.drafts[0].title, 'Recognised proposal', legacy);
+    assert.equal(scanned.expenses[0].bankAmount, 0, 'unchanged legacy money remains grandfathered');
+    assert.equal(saved.data.trips.find(value => value.id === 'other-trip')?.name, 'Latest concurrent trip', legacy);
+    if (legacy === 'assistant-author' || legacy === 'combined') {
+      assert.equal(scanned.expenses[0].conversation![0].authorMemberId, undefined);
+      assert.equal(scanned.expenses[0].conversation![0].authorName, undefined);
+    }
+    if (legacy === 'unlinked-account' || legacy === 'combined') assert.equal(scanned.members[1].userId, undefined);
+    const event = lastEntity((await store.readActivity(actor, holiday.id, { limit: 50 })).events, 'draft', 'receipt-proposal');
+    assert.equal(event.before?.title, 'Dinner', legacy);
+    assert.equal(event.after?.title, 'Recognised proposal', legacy);
+    assert.equal(event.revision, saved.revision, legacy);
+  }
+});
+
 test('scoped receipt CAS rejects changed target data, owner and member context atomically without proposal history', async () => {
   for (const race of ['data', 'owner', 'membership', 'email'] as const) {
     const database = await storage();
@@ -2011,4 +2056,57 @@ test('scoped receipt CAS rejects changed target data, owner and member context a
     assert.equal(count(database), eventCount, race);
     assert.notEqual((await store.readLedger(actor)).data.trips.find(trip => trip.id === holiday.id)?.drafts[0].title, 'Recognised proposal', race);
   }
+});
+
+test('native D1 scoped receipt saves accept legacy display repairs and preserve current unrelated trips', async () => {
+  const worker = new Miniflare({ modules: true, script: 'export default {fetch(){return new Response("Scoped receipt test")}}',
+    compatibilityDate: '2026-05-15', d1Databases: { DB: 'receipt-snapshot-native' }, d1Persist: false, log: new Log(LogLevel.NONE) });
+  try {
+    const database = await worker.getD1Database('DB');
+    for (const file of (await readdir(new URL('../drizzle/', import.meta.url))).filter(file => file.endsWith('.sql')).sort()) {
+      await database.batch(unstable_splitSqlQuery(await readFile(new URL('../drizzle/' + file, import.meta.url), 'utf8')).map(sql => database.prepare(sql)));
+    }
+    binding.DB = database as unknown as D1Database;
+    const holiday = trip('native-legacy-receipt');
+    holiday.members[1].userId = 'stale-unlinked-account';
+    holiday.expenses = [{ ...dinner(), bankAmount: 0 }];
+    holiday.drafts = [{ ...dinner(), id: 'receipt-proposal', status: 'waiting', conversation: [{
+      id: 'old-answer', role: 'assistant', text: 'Earlier receipt reply', createdAt: '2026-10-04T20:31:00Z',
+      authorMemberId: 'a', authorName: 'Incorrect legacy attribution',
+    }] }];
+    holiday.payments = [{ id: 'legacy-payment', from: 'a', to: 'b', amount: 100, date: '2026-10-04', method: '  Cash  ' }];
+    const other = trip('native-other-trip');
+    await database.batch([
+      database.prepare('INSERT INTO profiles(id,email,display_name,created_at) VALUES(?,?,?,?)').bind(actor, 'owner@example.com', 'Original Owner', '2026-10-04T00:00:00Z'),
+      database.prepare('INSERT INTO trips(id,owner,data) VALUES(?,?,?)').bind(holiday.id, actor, JSON.stringify(holiday)),
+      database.prepare('INSERT INTO trips(id,owner,data) VALUES(?,?,?)').bind(other.id, actor, JSON.stringify(other)),
+      database.prepare('INSERT INTO memberships(trip_id,user_id,member_id) VALUES(?,?,?)').bind(holiday.id, actor, 'a'),
+      database.prepare('INSERT INTO memberships(trip_id,user_id,member_id) VALUES(?,?,?)').bind(other.id, actor, 'a'),
+      database.prepare('INSERT INTO sync_state(id,revision,last_write) VALUES(1,4,?)').bind('legacy-fixture'),
+    ]);
+    const before = await store.readLedger(actor);
+    const snapshot = before.data.trips.find(value => value.id === holiday.id)!;
+    assert.equal(snapshot.drafts[0].conversation![0].authorName, undefined);
+    assert.equal(snapshot.members[1].userId, 'stale-unlinked-account');
+    assert.equal(snapshot.payments[0].method, '  Cash  ');
+    other.name = 'Latest unrelated holiday';
+    await database.batch([
+      database.prepare('UPDATE trips SET data=? WHERE id=?').bind(JSON.stringify(other), other.id),
+      database.prepare('UPDATE sync_state SET revision=revision+100,last_write=? WHERE id=1').bind('unrelated-writer'),
+    ]);
+    const proposal = structuredClone(snapshot); proposal.drafts[0].title = 'Recognised proposal';
+    const saved = await store.writeLedger(actor, { trips: [proposal] }, before.revision, { source: 'web', tripSnapshot: snapshot });
+    const scanned = saved.data.trips.find(value => value.id === holiday.id)!;
+    assert.equal(saved.revision, 105);
+    assert.equal(scanned.drafts[0].title, 'Recognised proposal');
+    assert.equal(scanned.expenses[0].bankAmount, 0);
+    assert.equal(scanned.drafts[0].conversation![0].authorName, undefined);
+    assert.equal(scanned.members[1].userId, undefined);
+    assert.equal(saved.data.trips.find(value => value.id === other.id)?.name, 'Latest unrelated holiday');
+    const event = await database.prepare("SELECT before_data,after_data,revision FROM activity_events WHERE trip_id=? AND entity_type='draft' AND entity_id=?")
+      .bind(holiday.id, 'receipt-proposal').first<{ before_data: string; after_data: string; revision: number }>();
+    assert.equal(event?.revision, saved.revision);
+    assert.equal(JSON.parse(event!.before_data).conversation[0].authorName, 'Incorrect legacy attribution', 'the immutable before-image keeps original evidence');
+    assert.equal(JSON.parse(event!.after_data).conversation[0].authorName, undefined);
+  } finally { binding.DB = undefined; await worker.dispose(); }
 });

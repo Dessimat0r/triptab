@@ -304,6 +304,50 @@ test('valid incremental stream overhead above one megabyte does not discard a co
   assert.deepEqual(result, transcription);
 });
 
+test('large single-line events process fragmented bytes with linear encoding work', async () => {
+  const response = streamResponse([{ type: 'response.output_text.delta', delta: 'x'.repeat(5_900_000) }, completed()], { split: 8192 });
+  const originalEncode = TextEncoder.prototype.encode;
+  let encodedCharacters = 0;
+  TextEncoder.prototype.encode = function(value) {
+    encodedCharacters += value?.length ?? 0;
+    return originalEncode.call(this, value);
+  };
+  try { assert.deepEqual(await processReceiptImage(input, { fetcher: async () => response }), transcription); }
+  finally { TextEncoder.prototype.encode = originalEncode; }
+  assert.ok(encodedCharacters < 6_100_000, `each event is encoded once, rather than every growing prefix: ${encodedCharacters}`);
+});
+
+test('escaped delta, done, content-part, output-item and completed copies fit the bounded transport budget', async () => {
+  const result = JSON.stringify(transcription);
+  const text = ' '.repeat(980_000 - Buffer.byteLength(result)) + result;
+  const escaped = '"' + text.split('').map(char => '\\u' + char.charCodeAt(0).toString(16).padStart(4, '0')).join('') + '"';
+  const events = [
+    { type: 'response.output_text.delta', delta: text },
+    { type: 'response.output_text.done', text },
+    { type: 'response.content_part.done', part: { type: 'output_text', text } },
+    { type: 'response.output_item.done', item: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] } },
+    { ...completed(), response: { ...completed().response, output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] }] } },
+  ];
+  const bytes = new TextEncoder().encode(events.map(event => 'data: ' + JSON.stringify(event).replace(JSON.stringify(text), escaped) + '\n\n').join(''));
+  assert.ok(bytes.byteLength > 8 * 1024 * 1024);
+  let offset = 0;
+  const response = new Response(new ReadableStream({ pull(controller) {
+    if (offset >= bytes.length) { controller.close(); return; }
+    controller.enqueue(bytes.subarray(offset, offset + 8192)); offset += 8192;
+  } }), { headers: { 'content-type': 'text/event-stream' } });
+  assert.deepEqual(await processReceiptImage(input, { fetcher: async () => response }), transcription);
+});
+
+test('a maximal valid result with 16,000 token-sized delta envelopes fits the bounded transport budget', async () => {
+  const text = JSON.stringify(transcription) + '\n'.repeat(900_000);
+  assert.ok(new TextEncoder().encode(text).byteLength <= 1_000_000);
+  const deltas = Array.from({ length: 16_000 }, () => ({ type: 'response.output_text.delta', item_id: 'msg_0', output_index: 0, content_index: 0, delta: 'abcd' }));
+  const events = [...deltas, { type: 'response.output_text.done', text },
+    { type: 'response.completed', response: { status: 'completed', error: null,
+      output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] }] } }];
+  assert.deepEqual(await processReceiptImage(input, { fetcher: async () => streamResponse(events, { split: 8192 }) }), transcription);
+});
+
 test('stream, individual event and multi-line event buffers retain separate finite limits', async () => {
   const tooLargeEvent = 'data: ' + JSON.stringify({ type: 'response.output_text.delta', delta: 'x'.repeat(6_020_000) }) + '\n\n';
   const tooLargeMultiLine = Array.from({ length: 110 }, () => 'data: ' + 'x'.repeat(60_000)).join('\n') + '\n\n';
@@ -311,8 +355,16 @@ test('stream, individual event and multi-line event buffers retain separate fini
     await assert.rejects(processReceiptImage(input, { fetcher: async () => new Response(text,
       { headers: { 'content-type': 'text/event-stream' } }) }), /event that is too large/);
   }
-  const repeated = Array.from({ length: 12_000 }, () => ({ type: 'response.output_text.delta', delta: 'x'.repeat(700) }));
-  await assert.rejects(processReceiptImage(input, { fetcher: async () => streamResponse([...repeated, completed()], { split: 8192 }) }), /stream that is too large/);
+  const repeated = new TextEncoder().encode('data: ' + JSON.stringify({ type: 'response.output_text.delta', delta: 'x'.repeat(700_000) }) + '\n\n');
+  let copies = 0;
+  await assert.rejects(processReceiptImage(input, { fetcher: async () => new Response(new ReadableStream({ pull(controller) {
+    if (++copies > 60) { controller.close(); return; }
+    controller.enqueue(repeated);
+  } }), { headers: { 'content-type': 'text/event-stream' } }) }), /stream that is too large/);
+  assert.ok(copies < 60, 'the whole stream remains bounded despite enlarged escape allowance');
+  await assert.rejects(processReceiptImage(input, { fetcher: async () => streamResponse([
+    { ...completed(), response: { ...completed().response, output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: ' '.repeat(1_000_001) + JSON.stringify(transcription) }] }] } },
+  ]) }), /result that is too large/);
 });
 
 test('plan usage failures after streaming starts remain failures and never fall back to API billing', async () => {
@@ -1019,8 +1071,12 @@ const routeCode = transpileWithSharedImports(routeSource, { compilerOptions: { m
   .replace("'@/lib/receipt-ai'", JSON.stringify(new URL('../lib/receipt-ai.ts', import.meta.url).href))
   .replace("'zod'", JSON.stringify(import.meta.resolve('zod')));
 const route = await import(dataUrl(routeCode)) as { POST(request: Request): Promise<Response> };
-const requestBody = { tripId: trip.id, draftId: draft.id, receiptId: 'photo', revision: 7 };
+const requestBody = { tripId: trip.id, draftId: draft.id, receiptId: 'photo' };
 async function http(body: unknown = requestBody, headers: Record<string, string> = {}) {
+  if (body && typeof body === 'object' && !Array.isArray(body) && !Object.hasOwn(body, 'draftHash')) {
+    // Simulate the current client fencing the saved receipt it has displayed.
+    body = { ...body, draftHash: await sha256Hex(canonicalJson(state.data.trips[0]?.drafts[0] ?? draft)) };
+  }
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () => {
     state.providerCalls++; state.duringModel?.();
@@ -1097,7 +1153,7 @@ test('native operational logs retain safe attempt categories without imported ac
   assert.doesNotMatch(logged, /private\.user|private imported|test-api-key|Café|Coffee|Pastry|Shared context|private@example/);
 });
 
-test('HTTP refuses wrong account/trip/draft/image/revision and foreign or malformed requests before a model or key lookup', async () => {
+test('HTTP refuses wrong account/trip/draft/image and foreign or malformed requests before a model or key lookup', async () => {
   const scenarios: { body: unknown; status: number; headers?: Record<string, string> }[] = [
     { body: { ...requestBody, tripId: 'other' }, status: 404 },
     { body: { ...requestBody, draftId: 'other' }, status: 404 },
@@ -1118,6 +1174,37 @@ test('HTTP refuses wrong account/trip/draft/image/revision and foreign or malfor
   reset(); state.profileId = 'outsider';
   assert.equal((await http()).status, 404);
   assert.equal(state.accessCalls, 0); assert.equal(state.providerCalls, 0);
+});
+
+test('HTTP missing or malformed fingerprints and cached revision-only contracts require a reload before spending', async () => {
+  for (const legacy of [
+    { ...requestBody, draftHash: undefined },
+    { ...requestBody, draftHash: undefined, revision: 7 },
+    { ...requestBody, draftHash: 'not-a-fingerprint' },
+  ]) {
+    reset(); const before = structuredClone(state.data), response = await http(legacy);
+    assert.equal(response.status, 400);
+    assert.match((await response.json() as { error: string }).error, /Reload TripTab.*fingerprint is required/);
+    assert.equal(state.accessCalls, 0); assert.equal(state.providerCalls, 0); assert.equal(state.writeAttempts, 0);
+    assert.equal(budgetDatabase.prepare('SELECT COUNT(*) AS count FROM auth_rate_limits').get()!.count, 0);
+    assert.deepEqual(state.data, before);
+  }
+});
+
+test('legacy revision values remain compatible while the draft fingerprint alone fences inference', async () => {
+  for (const revision of [0, 999]) {
+    reset(); state.revision = 500;
+    assert.equal((await http({ ...requestBody, revision })).status, 200);
+    assert.equal(state.providerCalls, 1); assert.equal(state.writes, 1);
+  }
+  reset(); const draftHash = await sha256Hex(canonicalJson(state.data.trips[0].drafts[0]));
+  state.data.trips[0].drafts[0].title = 'Manual change after the cached client read';
+  assert.equal((await http({ ...requestBody, draftHash, revision: 500 })).status, 409);
+  assert.equal(state.providerCalls, 0); assert.equal(state.accessCalls, 0); assert.equal(state.writes, 0);
+  reset(); state.duringModel = () => { state.revision += 500; state.data.trips[0].name = 'Latest unrelated holiday title'; };
+  assert.equal((await http({ ...requestBody, revision: 0 })).status, 200);
+  assert.equal(state.providerCalls, 1); assert.equal(state.writes, 1);
+  assert.equal(state.data.trips[0].name, 'Latest unrelated holiday title');
 });
 
 test('HTTP missing/unsupported/oversized/deleted images and credential refusal cannot start inference or save a draft', async () => {
@@ -1292,6 +1379,15 @@ test('native recognition fills unknown-provenance null prices and blank names wh
   assert.equal(proposal.items[0].name, 'Readable coffee'); assert.equal(proposal.items[0].amount, 250);
   assert.equal(proposal.items[0].fieldSources?.amount, 'receipt');
   assert.equal(proposal.items[1].amount, 123); assert.equal(proposal.items[1].name, 'Human price');
+});
+
+test('native recognition treats a blank-named zero-price item with a quantity or scan source as saved manual input', () => {
+  for (const extra of [{ quantity: { total: 2 } }, { scanSource: { lineIndex: 4 } }]) {
+    const old: Draft = { ...draft, status: 'review', items: [{ id: 'legacy', name: '', amount: 0, members: ['alice'], ...extra }] };
+    const proposal = applyReceiptTranscription(trip, old, { ...transcription, items: [{ id: 'legacy', name: 'Read dinner', amount: 1200 }] });
+    assert.equal(proposal.items[0].amount, 0, JSON.stringify(extra));
+    assert.equal(proposal.items[0].fieldSources?.amount, undefined);
+  }
 });
 
 test('draft fingerprint rejects a changed receipt before spending and ignores unrelated revisions', async () => {

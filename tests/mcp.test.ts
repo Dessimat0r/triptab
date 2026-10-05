@@ -2354,6 +2354,20 @@ test('MCP evidence-limit failures retain saved receipts and report a specific re
   assert.equal(state.writes, 0);
 });
 
+test('a legacy blank-named zero-price item with a quantity or scan source is protected like the native path', async () => {
+  for (const extra of [{ quantity: { total: 2, label: 'slices' } }, { scanSource: { lineIndex: 4, observedText: 'DINNER 12.00' } }]) {
+    reset(); const item = state.data.trips[0].drafts[0].items[0];
+    Object.assign(item, { name: '', amount: 0, fieldSources: undefined, ...extra });
+    const saved = await invoke('update_receipt_draft', { trip_id: 'trip-1', revision: 3, draft: { id: 'draft-1',
+      upsertItems: [{ id: item.id, name: 'Read dinner', amount: 1200 }], receiptScan: { version: 1, printedTotal: 1200, printedCurrency: 'EUR' },
+    } });
+    assert.equal(saved.result.isError, undefined);
+    const result = content(saved).data.trips[0].drafts[0].items[0];
+    assert.equal(result.amount, 0, JSON.stringify(extra));
+    assert.equal(result.fieldSources?.amount, undefined);
+  }
+});
+
 test('MCP rescans fill missing and blank item fields without replacing manual populated or explicit user fields', async () => {
   for (const baseline of [{ name: '', amount: 0 }, { name: 'Coffee', amount: null }, { name: '', amount: null }]) {
     reset(); const item = state.data.trips[0].drafts[0].items[0];
@@ -2375,4 +2389,50 @@ test('MCP rescans fill missing and blank item fields without replacing manual po
   assert.equal(saved.result.isError, undefined);
   assert.equal(content(saved).data.trips[0].drafts[0].items[0].amount, 0);
   assert.equal(content(saved).data.trips[0].drafts[0].items[0].name, '');
+});
+
+test('MCP recognition aligns native placeholder rules for legacy zero prices with quantities or source evidence', async () => {
+  for (const details of [
+    { quantity: { total: 2, label: 'slices' } },
+    { scanSource: { lineIndex: 0, observedText: 'A previously entered zero price' } },
+    { quantity: { total: 2, label: 'slices' }, scanSource: { lineIndex: 0, observedText: 'Two previously entered slices' } },
+  ]) {
+    reset();
+    const item = state.data.trips[0].drafts[0].items[0];
+    Object.assign(item, { name: '', amount: 0, ...details });
+    const before = structuredClone(item);
+    const saved = await invoke('update_receipt_draft', { trip_id: 'trip-1', revision: 3, draft: { id: 'draft-1',
+      upsertItems: [{ id: item.id, name: 'Recognised slices', amount: 500, quantity: { total: 4, label: 'pieces' } }],
+      receiptScan: { version: 1, printedTotal: 500 },
+    } });
+    assert.equal(saved.result.isError, undefined);
+    const recognised = content(saved).data.trips[0].drafts[0].items[0];
+    assert.equal(recognised.name, 'Recognised slices', 'a missing name remains readable');
+    assert.equal(recognised.fieldSources?.name, 'receipt');
+    assert.equal(recognised.amount, 0, 'a legacy zero with quantity/source evidence is not an untouched placeholder');
+    assert.equal(recognised.fieldSources?.amount, undefined, 'recognition must not invent price provenance');
+    if (before.quantity) assert.deepEqual(recognised.quantity, before.quantity);
+  }
+});
+
+test('MCP recognition still fills true blank placeholders and unknown prices even when quantity evidence exists', async () => {
+  for (const baseline of [
+    { name: '', amount: 0 },
+    { name: '', amount: null, quantity: { total: 2, label: 'slices' } },
+    { name: 'Manual slice label', amount: null, scanSource: { lineIndex: 0, observedText: 'Previously unreadable price' } },
+  ]) {
+    reset();
+    const item = state.data.trips[0].drafts[0].items[0];
+    Object.assign(item, baseline);
+    const saved = await invoke('update_receipt_draft', { trip_id: 'trip-1', revision: 3, draft: { id: 'draft-1',
+      upsertItems: [{ id: item.id, name: 'Recognised slices', amount: 500 }],
+      receiptScan: { version: 1, printedTotal: 500 },
+    } });
+    assert.equal(saved.result.isError, undefined);
+    const recognised = content(saved).data.trips[0].drafts[0].items[0];
+    assert.equal(recognised.amount, 500);
+    assert.equal(recognised.fieldSources?.amount, 'receipt');
+    assert.equal(recognised.name, baseline.name || 'Recognised slices');
+    if (baseline.name) assert.equal(recognised.fieldSources?.name, undefined);
+  }
 });
