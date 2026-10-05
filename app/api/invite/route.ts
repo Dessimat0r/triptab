@@ -1,3 +1,4 @@
+import { encodeBase64url, sha256Hex } from '@/lib/data-utils';
 import { activityStatements, db, ensureProfile, failure, MAX_STORED_TRIP_BYTES, readBoundedBody, RequestError, sameOrigin } from '@/lib/store';
 import { notifyMembers } from '@/lib/notifications';
 import { parseStoredTrip, travellerFinancialPreview, type Trip } from '@/lib/model';
@@ -26,11 +27,6 @@ function tokenValue(value: unknown): string {
     throw new RequestError('This invitation link is invalid.', 404);
   }
   return value;
-}
-
-async function tokenHash(token: string): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token));
-  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
 }
 
 function targetEmail(value: unknown): string | null {
@@ -81,11 +77,11 @@ function inviteMember(invite: Invite): { trip: Trip; member: Member } {
 async function managementId(hash: string) {
   // The management reference is a separate digest. It cannot redeem the link
   // and never exposes the raw invitation token or its stored authentication hash.
-  return `invite_${await tokenHash(`triptab-invite-management:${hash}`)}`;
+  return `invite_${await sha256Hex(`triptab-invite-management:${hash}`)}`;
 }
 
 async function historySnapshot(invite: Invite) {
-  return tokenHash(`triptab-invite-history:${JSON.stringify([invite.token_hash, invite.trip_id, invite.member_id, invite.data])}`);
+  return sha256Hex(`triptab-invite-history:${JSON.stringify([invite.token_hash, invite.trip_id, invite.member_id, invite.data])}`);
 }
 
 async function checkTripOwner(tripId: string, profile: Profile) {
@@ -154,7 +150,7 @@ export async function GET(request: Request) {
       return await listInvitations(identifier(params.get('tripId'), 'trip'), profile);
     }
     if (params.getAll('token').length !== 1) throw new RequestError('This invitation link is invalid.', 404);
-    const invite = await getInvite(await tokenHash(tokenValue(params.get('token'))));
+    const invite = await getInvite(await sha256Hex(tokenValue(params.get('token'))));
     checkInvite(invite, profile);
     const { trip, member } = inviteMember(invite);
     if (member.userId && member.userId !== profile.id) {
@@ -194,9 +190,8 @@ async function createInvite(request: Request, profile: Profile, body: Record<str
   const email = targetEmail(body.email);
   const database = db();
   const member = await ownerTraveller(tripId, memberId, profile);
-  const token = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))))
-    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-  const hash = await tokenHash(token);
+  const token = encodeBase64url(crypto.getRandomValues(new Uint8Array(32)));
+  const hash = await sha256Hex(token);
   const auditId = crypto.randomUUID();
   const expiresAt = new Date(Date.now() + INVITE_LIFETIME).toISOString();
   const previous = (await database.prepare(`
@@ -276,7 +271,7 @@ async function revokeInvitation(profile: Profile, body: Record<string, unknown>)
 }
 
 async function acceptInvite(profile: Profile, body: Record<string, unknown>) {
-  const hash = await tokenHash(tokenValue(body.token));
+  const hash = await sha256Hex(tokenValue(body.token));
   const invite = await getInvite(hash);
   checkInvite(invite, profile);
   const { member } = inviteMember(invite);

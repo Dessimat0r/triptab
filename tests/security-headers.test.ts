@@ -1,7 +1,8 @@
+import { transpileWithSharedImports } from './helpers/transpile';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
-import { transpileModule, ModuleKind, ScriptTarget } from 'typescript';
+import { ModuleKind, ScriptTarget } from 'typescript';
 
 const boundary = { response: new Response('TripTab'), requests: [] as string[], bindings: [] as unknown[] };
 Object.defineProperty(globalThis, Symbol.for('triptab.worker-test'), { value: boundary, configurable: true });
@@ -16,7 +17,7 @@ export function runWithConnectorBinding(binding, run) {
 }
 `).toString('base64');
 const source = await readFile(new URL('../build/sites-worker.ts', import.meta.url), 'utf8');
-const compiled = transpileModule(source, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
+const compiled = transpileWithSharedImports(source, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
   .replace('"vinext/server/fetch-handler"', JSON.stringify(handlerUrl))
   .replace('"../lib/connector-context"', JSON.stringify(contextUrl))
   .replaceAll('import.meta.env.DEV', 'false');

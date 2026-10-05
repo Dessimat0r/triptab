@@ -34,6 +34,8 @@ npm run build
 
 Keep this value exported when running `npm run dev` or `npm start`. Selecting an email does not verify an account: initial shared-key setup requires that owner's canonical TripTab account to be linked to its trusted provider identity.
 
+On Windows PowerShell, set it with `$env:RECEIPT_AI_OWNER_EMAIL = "owner@example.test"` before building. A throwaway local checkout can use a synthetic well-formed address; shared-key setup still requires the configured owner's verified provider account.
+
 The initial build generates `dist/server/wrangler.json`. Before the first local run, apply all eleven migrations (`0000` through `0010`) in order:
 
 ```sh
@@ -80,7 +82,7 @@ Core features work without ChatGPT or an AI API key. Existing ChatGPT users can 
 
 Automatic receipt reading uses OpenAI's native image input through the Responses API. In **Profile & app settings → Receipt AI**, the verified account selected by `RECEIPT_AI_OWNER_EMAIL` saves one shared OpenAI API key that funds receipt reading for all signed-in app users. Only that canonical owner account can replace or remove the key or change the provider; a password account merely claiming the same email cannot manage it. After the first verified setup, the owner can also manage the key through its existing password login. The server verifies and encrypts the key; browser storage, ledger exports, API responses and audit snapshots never contain it. API usage is billed to the supplied OpenAI API project, separately from a ChatGPT subscription.
 
-Set `RECEIPT_AI_OWNER_EMAIL` explicitly before building or starting a preview; an absent or invalid value fails startup. For a hosted release, configure the intended owner's email in the Sites build environment before building the version, and retain it in the preview/runtime configuration. A local shell export does not configure Sites. The value selects the verified bootstrap owner and has no personal-address fallback. Once pinned, the canonical owner remains able to manage the key even if this variable changes; participant processing uses the existing key independently. To transfer the pin, follow [the operator procedure](docs/operations.md#receipt-ai-owner-configuration-and-transfer).
+Set `RECEIPT_AI_OWNER_EMAIL` explicitly before building or starting a preview; an absent or invalid value fails startup. For a hosted release, configure the intended owner's email in the Sites build environment before building the version, and retain it in the preview/runtime configuration. A local shell export does not configure Sites. The value selects the verified bootstrap owner and has no personal-address fallback. Once pinned, the canonical owner remains able to manage the key even if this variable changes; participant processing uses the existing key independently. To transfer the pin, use `npm run receipt-owner` with the explicit resource and owner guards in [the operator procedure](docs/operations.md#receipt-ai-owner-configuration-and-transfer).
 
 Create a project-scoped key in the intended OpenAI project, such as **TripTab**. A `sk-proj-…` key identifies its project automatically; no project name or additional project header is required.
 

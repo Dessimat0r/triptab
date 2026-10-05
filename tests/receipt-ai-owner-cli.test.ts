@@ -38,6 +38,22 @@ test('operator argument and config guards require explicit database/mode/version
   validateOwnerTransferConfig({ ...config, account_id: 'a'.repeat(32), d1_databases: [{ ...config.d1_databases[0], remote: true }] }, remote);
 });
 
+test('operator argument parser rejects unsafe or ambiguous account identifiers and versions', () => {
+  const withFlag = (name: string, value: string) => flags.map((entry, index) => flags[index - 1] === name ? value : entry);
+  const fresh = parseOwnerTransferOptions(withFlag('--new-owner', 'another-owner'));
+  assert.equal(fresh.newUserId, 'another-owner'); assert.equal(fresh.expectedVersion, 3);
+  for (const version of ['0', '-1', '1.0', '01', '1e3', ' 3', String(Number.MAX_SAFE_INTEGER), String(Number.MAX_SAFE_INTEGER + 1)]) {
+    assert.throws(() => parseOwnerTransferOptions(withFlag('--expected-version', version)), Error, `version ${version}`);
+  }
+  for (const value of ['unsafe account', 'a'.repeat(201), 'tab\there', 'del\u007f', '']) {
+    assert.throws(() => parseOwnerTransferOptions(withFlag('--new-owner', value)), Error, JSON.stringify(value));
+    assert.throws(() => parseOwnerTransferOptions(withFlag('--expected-owner', value)), Error, JSON.stringify(value));
+  }
+  assert.throws(() => parseOwnerTransferOptions(withFlag('--new-owner', 'flow-owner')), Error, 'a transfer to the current owner is refused');
+  assert.throws(() => parseOwnerTransferOptions([...flags, '--expected-version', '4']), Error, 'a repeated flag is refused');
+  assert.throws(() => parseOwnerTransferOptions(withFlag('--owner-email', 'not-an-email')));
+});
+
 test('native D1 operator preflight is read-only, transfer clears ciphertext, and canonical/version/audit guards preserve atomicity', async () => {
   const fixture = await createOwnerTransferDatabase();
   try {
