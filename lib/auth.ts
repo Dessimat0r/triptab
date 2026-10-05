@@ -95,20 +95,6 @@ type ProfileStateRow = ProfileRow & { has_password: number; chatgpt_linked: numb
 type ProviderStateRow = { [Key in keyof ProfileStateRow]: ProfileStateRow[Key] | null } & { linked_user_id: string | null; legacy_disconnected: number };
 type AuthSnapshot = { identity: AuthIdentity; row: ProfileStateRow | null };
 
-async function providerRow(provider: AuthIdentity, database: D1Database): Promise<ProviderStateRow> {
-  // Resolve the canonical link, profile and flags in one indexed snapshot.
-  // Disconnection checks the raw provider ID even if that profile is missing.
-  const row = await database.prepare(`SELECT p.id,p.email,p.display_name,p.created_at,l.user_id AS linked_user_id,
-    EXISTS (SELECT 1 FROM auth_credentials c WHERE c.user_id = p.id) AS has_password,
-    EXISTS (SELECT 1 FROM auth_links linked WHERE linked.user_id = p.id) AS chatgpt_linked,
-    EXISTS (SELECT 1 FROM auth_credentials c WHERE c.user_id = identity.provider_id) AS legacy_disconnected
-    FROM (SELECT ? AS provider_id) identity
-    LEFT JOIN auth_links l ON l.oai_user_id = identity.provider_id
-    LEFT JOIN profiles p ON p.id = COALESCE(l.user_id, identity.provider_id)`)
-    .bind(provider.id).first<ProviderStateRow>();
-  if (!row) throw new Error('UNAUTHORIZED');
-  return row;
-}
 function providerIdentity(provider: AuthIdentity, row: ProviderStateRow): AuthIdentity | null {
   if (row.linked_user_id !== null) {
     if (!row.id || row.email === null || row.display_name === null) return null;
@@ -117,50 +103,41 @@ function providerIdentity(provider: AuthIdentity, row: ProviderStateRow): AuthId
   return row.legacy_disconnected ? null : provider;
 }
 export async function sessionIdentity(request: Request, database: D1Database): Promise<AuthIdentity | null> {
-  const token = sessionToken(request);
-  if (!token) return null;
-  // Identity-only consumers, including exports, do not need credential or
-  // provider flags. Keep their authorization read confined to the session.
-  const row = await database.prepare(`SELECT p.id,p.email,p.display_name
-    FROM auth_sessions s JOIN profiles p ON p.id = s.user_id WHERE s.token_hash = ? AND s.expires_at > ?`)
-    .bind(await hashToken(token), new Date().toISOString()).first<Pick<ProfileRow, 'id' | 'email' | 'display_name'>>();
-  return row ? { id: row.id, email: row.email, displayName: row.display_name, kind: 'session' } : null;
+  // Session-only callers cannot fall back to provider headers or create a
+  // profile. They share precedence rules without reading account flags.
+  return (await authSnapshot(request, database, null, {}, false))?.identity ?? null;
 }
 export async function resolveIdentity(request: Request, options: { allowSession?: boolean } = {}, database: D1Database): Promise<AuthIdentity> {
-  if (options.allowSession !== false) {
-    const session = await sessionIdentity(request, database);
-    if (session) return session;
-    if ((request.headers.get('cookie') || '').split(';').some(value => value.trim() === `${SIGNED_OUT_COOKIE}=1`)) throw new Error('UNAUTHORIZED');
-  }
-  const provider = trustedChatGPTIdentity(request);
-  if (!provider) throw new Error('UNAUTHORIZED');
-  const identity = providerIdentity(provider, await providerRow(provider, database));
-  if (!identity) throw new Error('UNAUTHORIZED');
-  return identity;
+  const snapshot = await authSnapshot(request, database, trustedChatGPTIdentity(request), options, false);
+  if (!snapshot) throw new Error('UNAUTHORIZED');
+  return snapshot.identity;
 }
-async function authSnapshot(request: Request, database: D1Database, provider: AuthIdentity | null, options: { allowSession?: boolean }): Promise<AuthSnapshot | null> {
+async function authSnapshot(request: Request, database: D1Database, provider: AuthIdentity | null, options: { allowSession?: boolean }, accountFlags = true): Promise<AuthSnapshot | null> {
   const token = options.allowSession !== false ? sessionToken(request) : null;
   const signedOut = options.allowSession !== false && (request.headers.get('cookie') || '').split(';').some(value => value.trim() === `${SIGNED_OUT_COOKIE}=1`);
-  if (!token && (!provider || signedOut)) return null;
+  const allowedProvider = signedOut ? null : provider;
+  if (!token && !allowedProvider) return null;
   // Session precedence, provider linking, profile and flags share one SQL
-  // snapshot, including stale-cookie fallback. No inter-query principal switch.
+  // snapshot. A session with no profile cannot shadow a valid provider fallback.
+  // Identity-only reads omit account flags; session-only reads omit provider joins.
   const row = await database.prepare(`SELECT p.id,p.email,p.display_name,p.created_at,
-    s.user_id AS session_user_id,l.user_id AS linked_user_id,
-    EXISTS (SELECT 1 FROM auth_credentials c WHERE c.user_id=p.id) AS has_password,
-    EXISTS (SELECT 1 FROM auth_links linked WHERE linked.user_id=p.id) AS chatgpt_linked,
-    EXISTS (SELECT 1 FROM auth_credentials c WHERE c.user_id=identity.provider_id) AS legacy_disconnected
+    s.user_id AS session_user_id,${allowedProvider ? 'l.user_id' : 'NULL'} AS linked_user_id,
+    ${accountFlags ? 'EXISTS (SELECT 1 FROM auth_credentials c WHERE c.user_id=p.id)' : '0'} AS has_password,
+    ${accountFlags ? 'EXISTS (SELECT 1 FROM auth_links linked WHERE linked.user_id=p.id)' : '0'} AS chatgpt_linked,
+    ${allowedProvider ? 'EXISTS (SELECT 1 FROM auth_credentials c WHERE c.user_id=identity.provider_id)' : '0'} AS legacy_disconnected
     FROM (SELECT ? AS token_hash, ? AS provider_id) identity
     LEFT JOIN auth_sessions s ON s.token_hash=identity.token_hash AND s.expires_at>?
-    LEFT JOIN auth_links l ON l.oai_user_id=identity.provider_id
-    LEFT JOIN profiles p ON p.id=COALESCE(s.user_id,l.user_id,identity.provider_id)`)
-    .bind(token ? await hashToken(token) : null, provider?.id ?? null, new Date().toISOString())
+      AND EXISTS (SELECT 1 FROM profiles session_profile WHERE session_profile.id=s.user_id)
+    ${allowedProvider ? 'LEFT JOIN auth_links l ON l.oai_user_id=identity.provider_id' : ''}
+    LEFT JOIN profiles p ON p.id=${allowedProvider ? 'COALESCE(s.user_id,l.user_id,identity.provider_id)' : 's.user_id'}`)
+    .bind(token ? await hashToken(token) : null, allowedProvider?.id ?? null, new Date().toISOString())
     .first<ProviderStateRow & { session_user_id: string | null }>();
   if (!row) return null;
   if (row.session_user_id && row.id && row.email !== null && row.display_name !== null) {
     return { identity: { id: row.id, email: row.email, displayName: row.display_name, kind: 'session' }, row: row as ProfileStateRow };
   }
-  if (!provider || signedOut) return null;
-  const identity = providerIdentity(provider, row);
+  if (!allowedProvider) return null;
+  const identity = providerIdentity(allowedProvider, row);
   return identity ? { identity, row: row.id ? row as ProfileStateRow : null } : null;
 }
 async function createProviderProfile(identity: AuthIdentity, database: D1Database, request?: Request, options: { allowSession?: boolean; requireIdentityEmail?: boolean } = {}) {

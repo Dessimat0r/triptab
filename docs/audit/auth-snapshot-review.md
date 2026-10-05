@@ -6,4 +6,8 @@ The security boundary is the atomic read: changes before it affect the result; c
 
 Shared encodings and SHA-256 helpers keep password/session namespaces and verification behavior. Data-URL harnesses have a shared import resolver.
 
-Validation: 637 tests pass; TypeScript, production build and lint pass (four existing warnings). No production mutation, deployment or merge was performed.
+Earlier N5 validation: 637 tests passed; TypeScript, production build and lint pass (four existing warnings). No production mutation, deployment or merge was performed.
+
+## F8 — identity-only consumers and orphan sessions
+
+The subsequent PR8 review found a separate two-statement identity fallback and orphan session precedence. `resolveIdentity` and `sessionIdentity` now reuse the atomic SQL snapshot, excluding sessions without profiles from precedence. Identity-only reads omit optional flags, session-only reads omit provider joins, and neither creates a profile. Tests cover stale/expired/orphan/duplicate cookies, canonical links, disconnection, signed-out behavior and fresh revocation reads. PR5 full validation passes652 tests, TypeScript and lint (zero errors/four existing warnings); native and API access regressions also pass in the combined branch.
