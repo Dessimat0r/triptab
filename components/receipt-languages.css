@@ -7,6 +7,7 @@
 .item-name-row--preferred input { font-weight: 600; }
 .editor .translation-refresh { display: inline-flex; align-items: center; justify-content: center; gap: 6px; flex: 0 0 auto; width: auto; min-width: 44px; min-height: 44px; padding: 8px; font-size: 0.875rem; }
 .item-language-actions { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; min-width: 0; }
+.editor .item-language-actions { contain: layout; }
 .item-language-actions select { width: auto; max-width: 100%; margin: 0; padding: 4px 24px 4px 6px; font-size: 0.875rem; min-height: 44px; color: var(--muted); background-color: transparent; }
 .editor .translation-undo { min-height: 44px; padding: 4px 6px; font-size: 0.875rem; display: inline-flex; align-items: center; gap: 4px; }
 .translation-stale { color: var(--muted); }
@@ -19,8 +20,9 @@
 .receipt-language-control small { color: var(--muted); }
 .missing-name-translations { margin: 0 0 12px; min-width: 0; }
 .personal-language-settings { margin-top: 20px; }
-@media (max-width: 700px) {
-  .editor .item-name-field input { font-size: 16px; }
+@media (max-width: 700px), (any-pointer: coarse) {
+  .editor .item-name-field input,
+  .editor .item-language-actions select { font-size: max(16px, 1rem); }
 }
 @media (max-width: 480px) {
   .editor .item-top { display: grid; grid-template-columns: 16px minmax(0,1fr) 44px; }

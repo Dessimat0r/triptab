@@ -1,6 +1,5 @@
 /* The receipt dialog's own controls must fit the viewport at phone widths. */
 .editor-overlay,
-.editor,
 .editor form,
 .receipt-details-view,
 .editor-body,
@@ -13,7 +12,7 @@
 .editor {
   overflow-wrap: anywhere;
 }
-.editor input,
+.editor input:not([type="checkbox"], [type="radio"], [type="file"]),
 .editor select,
 .editor textarea {
   min-width: 0;
