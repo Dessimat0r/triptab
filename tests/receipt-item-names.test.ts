@@ -56,7 +56,7 @@ for(const target of ['source','target','merchant','receipt-language','reading-la
 });
 test('trip hints remain hints and provider detection supplies an unknown original language',async()=>{
   const f=fixture();f.props.item={...f.props.item,name:'Acqua',nameLanguage:undefined,translations:undefined};f.props.trip={...f.props.trip,receiptLanguage:'en'};f.props.receipt={...f.props.receipt,items:[f.props.item]};f.render();
-  f.click(f.button('Refresh item 1 English name'));await flush();assert.equal((f.requests[0].body.rows as {sourceLanguage?:unknown}[])[0].sourceLanguage,undefined);
+  f.click(f.button('Translate item 1 English name'));await flush();assert.equal((f.requests[0].body.rows as {sourceLanguage?:unknown}[])[0].sourceLanguage,undefined);
   f.requests[0].resolve('Water');await flush();f.render();assert.equal(f.props.item.nameLanguage,'it');assert.equal(f.props.item.translations?.en?.sourceLanguage,'it');
 });
 test('translation waits for saved language preferences and closing an editor aborts pending work',async()=>{

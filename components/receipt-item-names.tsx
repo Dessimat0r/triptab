@@ -58,16 +58,18 @@ export default function ReceiptItemNames(props:Props){
   function row(target:DisplayVersion){
     const translated=target==='reading',value=translated?reading?.text??'':item.name;
     const stale=reading&& (translated?reading.sourceText!==item.name:reading.pairedText!==reading.text);
-    return <div key={target} className={`item-name-row ${version===target?'primary':'secondary'}`}>
+    const fieldId=`item-name-${displayKey}-${target}`;
+    return <div key={target} className={`item-name-row ${version===target?'item-name-row--preferred':'item-name-row--alternate'}`}>
       <div className="item-name-field">
-        <span className="item-name-caption">{translated?languageName(language):`Receipt · ${originalLanguage?languageName(originalLanguage):'original'}`}{stale&&<span className="translation-stale"> · refresh suggested</span>}</span>
-        <input aria-label={`Item ${index+1} ${translated?languageName(language)+' name':'name'}`} lang={translated?language:originalLanguage} dir="auto"
-          placeholder={translated?`Translate to ${languageName(language)}`:'Item name'} value={value} required={!translated} maxLength={200}
+        <label className="item-name-caption" htmlFor={fieldId}>{translated?languageName(language):`Receipt · ${originalLanguage?languageName(originalLanguage):'original'}`}{stale&&<span className="translation-stale"> · refresh suggested</span>}</label>
+        <input id={fieldId} aria-label={`Item ${index+1} ${translated?languageName(language)+' name':'name'}`} lang={translated?language:originalLanguage} dir="auto"
+          placeholder={translated?`${languageName(language)} item name`:'Item name'} value={value} required={!translated} maxLength={200}
           onChange={event=>{setError('');setUndo(null);const text=event.target.value;onUpdate(current=>translated?editReadingName(current,language,text):{...current,name:text,fieldSources:{...current.fieldSources,name:'user'}});}} />
       </div>
-      <button type="button" className="iconbutton translation-refresh" aria-label={`Refresh item ${index+1} ${translated?languageName(language)+' name':'receipt name'}`} title={translated?'Translate receipt name':originalLanguage?'Translate reading name back to receipt language':'Choose a receipt language to translate back'}
+      <button type="button" className="iconbutton translation-refresh" aria-label={`${!value.trim()?'Translate':'Refresh'} item ${index+1} ${translated?languageName(language)+' name':'receipt name'}`} title={translated?`Translate receipt name into ${languageName(language)}`:originalLanguage?`Translate ${languageName(language)} name into ${languageName(originalLanguage)}`:'Choose a receipt language to translate back'}
         disabled={!settings.ready||pending!==null||!(translated?item.name.trim():reading?.text.trim())||(!translated&&!originalLanguage)} onClick={()=>void refresh(target)}>
         <RefreshCw size={15} className={pending===target?'translation-spinner':undefined} aria-hidden="true" />
+        {!value.trim()&&<span aria-hidden="true">Translate</span>}
       </button>
     </div>;
   }

@@ -1,14 +1,20 @@
 import { expect, test, type Page } from '@playwright/test';
 
 const memberName = 'Alexandria'.repeat(5);
+const originalName = 'Gedruckte Artikelbeschreibung '.repeat(6);
+const translatedName = 'An English receipt item description '.repeat(5);
 const trip = {
-  id: 'layout-trip', ownerId: 'layout-owner', name: 'Layout fixture', currency: 'GBP',
+  id: 'layout-trip', ownerId: 'layout-owner', name: 'Layout fixture', currency: 'GBP', receiptLanguage: 'de',
   members: [{ id: 'layout-alex', name: memberName, userId: 'layout-owner' }, { id: 'layout-sam', name: 'Sam' }],
   expenses: [], payments: [], drafts: [{
     id: 'layout-draft', receiptId: 'layout-photo', title: 'Receipt fixture', status: 'review',
     currency: 'EUR', date: '2026-10-05', time: '23:59', timezone: 'America/Argentina/Buenos_Aires',
-    payer: 'layout-alex', tax: 0, tip: 0, discount: 0,
-    items: [{ id: 'layout-item', name: 'A long receipt item description '.repeat(6), amount: 1250, members: ['layout-alex', 'layout-sam'] }],
+    payer: 'layout-alex', tax: 0, tip: 0, discount: 0, detectedLanguage: 'de',
+    items: [
+      { id: 'layout-item', name: originalName, nameLanguage: 'de', amount: 1250, members: ['layout-alex', 'layout-sam'],
+        translations: { en: { text: translatedName, sourceText: originalName, pairedText: translatedName, sourceLanguage: 'de', provenance: 'ai' } } },
+      { id: 'layout-untranslated', name: originalName, nameLanguage: 'de', amount: 1250, members: ['layout-alex', 'layout-sam'] },
+    ],
   }],
 };
 
@@ -21,9 +27,11 @@ async function fixtures(page: Page) {
     });
     const json = path === '/api/ledger' ? { data: { trips: [trip] }, revision: 1 }
       : path === '/api/profile' ? { id: 'layout-owner', displayName: 'Alex', email: 'layout@example.invalid', authMethod: 'password' }
+      : path === '/api/trip-language' ? { accountId: 'layout-owner', tripId: 'layout-trip', revision: 1,
+        preferences: { readingLanguage: 'en', primaryVersion: 'reading', itemVersions: {} } }
       : path === '/api/receipt/ai-status' ? { configured: false, connected: false, provider: 'api', eligible: false, manageable: false, siwcAvailable: false }
       : { events: [], notifications: [], items: [] };
-    return route.fulfill({ json });
+    return route.fulfill({ json, headers: path === '/api/ledger' ? { 'X-TripTab-Account': 'layout-owner' } : {} });
   });
 }
 
@@ -81,6 +89,11 @@ for (const { width, height, touch } of viewports) {
         await page.goto(receipt ? '/expenses?receiptDraft=layout-draft&receiptTrip=layout-trip' : '/expenses');
         if (!receipt) await page.getByRole('button', { name: 'Add expense', exact: true }).click();
         await expect(page.locator('.editor')).toBeVisible();
+        await expect(page.getByRole('combobox', { name: 'Show first for item 1', exact: true })).toBeEnabled();
+        if (receipt) {
+          await expect(page.getByRole('textbox', { name: 'Item 1 English name', exact: true })).toHaveValue(translatedName);
+          await expect(page.getByRole('button', { name: 'Translate item 2 English name', exact: true })).toBeEnabled();
+        }
         await fits(page);
         if (touch) {
           expect(await page.evaluate(() => matchMedia('(any-pointer: coarse)').matches)).toBe(true);
