@@ -819,7 +819,7 @@ test('a provider link winning before profile creation leaves no orphan profile o
   assert.equal(database.sqlite.prepare('SELECT COUNT(*) AS count FROM account_activity_events').get()?.count, 0);
 });
 
-test('profile reads reject a raced provider link even when the previous provider profile already exists', async () => {
+test('profile reads use a single coherent provider snapshot and observe a link change on the next request', async () => {
   const database = await storage();
   database.sqlite.prepare('INSERT INTO profiles (id,email,display_name,created_at) VALUES (?,?,?,?)')
     .run('old-provider', 'old@example.com', 'Old Traveller', '2026-10-04T00:00:00Z');
@@ -834,13 +834,14 @@ test('profile reads reject a raced provider link even when the previous provider
     }
     return prepare(sql);
   };
-  await assert.rejects(store.ensureProfile(providerRequest), /UNAUTHORIZED/);
+  assert.equal((await store.ensureProfile(providerRequest)).id, 'old-provider');
+  assert.equal(reads, 1);
   assert.equal(database.sqlite.prepare('SELECT display_name FROM profiles WHERE id=?').get('old-provider')?.display_name, 'Old Traveller');
   assert.equal(database.sqlite.prepare('SELECT COUNT(*) AS count FROM account_activity_events').get()?.count, 0);
   assert.equal((await store.ensureProfile(providerRequest)).id, actor);
 });
 
-test('profile reads recheck the original provider when its existing canonical link changes', async () => {
+test('each profile read observes its current canonical link without mixing another snapshot', async () => {
   const database = await storage();
   database.sqlite.prepare('INSERT INTO auth_links (oai_user_id,user_id,created_at) VALUES (?,?,?)')
     .run('linked-provider', actor, '2026-10-04T00:00:00Z');
@@ -854,7 +855,8 @@ test('profile reads recheck the original provider when its existing canonical li
     }
     return prepare(sql);
   };
-  await assert.rejects(store.ensureProfile(providerRequest), /UNAUTHORIZED/);
+  assert.equal((await store.ensureProfile(providerRequest)).id, actor);
+  assert.equal(reads, 1);
   assert.equal(database.sqlite.prepare('SELECT COUNT(*) AS count FROM account_activity_events').get()?.count, 0);
   assert.equal((await store.ensureProfile(providerRequest)).id, member);
 });

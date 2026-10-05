@@ -3,7 +3,7 @@ import { ZodError } from 'zod';
 import { LedgerValidationError, parseLedgerStructure, parseStoredTrip, validateLedger, type Ledger, type ReceiptMessage, type Trip } from './model';
 import type { LedgerFreshness } from './ledger-freshness';
 import { activityNotification, notifyMembers } from './notifications';
-import { AuthError, resolveIdentity, readAuthState } from './auth';
+import { AuthError, resolveIdentity, readAuthContext } from './auth';
 import { markRemovedReceipts, purgeDeletingReceipts, ReceiptLifecycleError } from './receipt-lifecycle';
 import { activityStatements, type ActivityEntity, type ActivitySource, type ActivityChange, type ActivityEvent } from './audit';
 import { assertReceiptActivityVersion, receiptActivityScope, resolveReceiptActivityFamily, validateReceiptActivityScope, ReceiptScopeChangedError, ReceiptScopeSizeError, type ReceiptActivityScope } from './activity-scope';
@@ -269,12 +269,11 @@ async function readActivityPage(user: string, tripId: string, options: { before?
 }
 
 export async function ensureProfile(request: Request, options: { allowSession?: boolean } = { allowSession: true }): Promise<Profile> {
-  const state = await readAuthState(request, db(), { ...options, requireIdentityEmail: true });
+  const { state, identity } = await readAuthContext(request, db(), { ...options, requireIdentityEmail: true });
   if (!state.authenticated || !state.profile) throw new Error('UNAUTHORIZED');
-  // Retain the final original-request identity check without attempted writes
-  // or repeated profile reads. Linking/revocation cannot switch principals.
-  const identity = await resolveIdentity(request, options, db());
-  if (identity.id !== state.profile.id) throw new Error('UNAUTHORIZED');
+  // Identity, profile and access flags come from one coherent indexed read.
+  // Multi-step bootstrap still rechecks the snapshot after its guarded write.
+  if (!identity || identity.id !== state.profile.id) throw new Error('UNAUTHORIZED');
   const profile = state.profile;
   return { id: profile.id, email: profile.email, displayName: profile.displayName, createdAt: profile.createdAt,
     authMethod: identity.kind === 'session' ? 'password' : 'chatgpt', hasPassword: state.hasPassword,
