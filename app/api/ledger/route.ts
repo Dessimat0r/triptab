@@ -42,7 +42,12 @@ export async function POST(r: Request) {
     const body: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
     if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('Invalid ledger request');
     const fields = body as Record<string, unknown>;
-    return Response.json(await writeLedger(profile.id, fields.data, fields.revision), { headers: { 'Cache-Control': 'private, no-store' } });
+    // Use the write's one coherent response snapshot: a later independent tag
+    // read could label this body with another participant's newer changes.
+    const { data, revision, freshness } = await writeLedger(profile.id, fields.data, fields.revision, { includeFreshness: true });
+    const etag = await ledgerEtagForSnapshot(freshness);
+    return Response.json({ data, revision }, { headers: { 'Cache-Control': 'private, no-store', ETag: etag,
+      'X-Ledger-Revision': String(revision) } });
   } catch (e) {
     return failure(e);
   }

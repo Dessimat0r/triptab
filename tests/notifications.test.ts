@@ -128,7 +128,9 @@ test('device preference audit is private, secret-free and unchanged by repeated 
   assert.equal((await pushRoute.POST(pushRequest('alice', 'subscribe'))).status, 200);
   const original = database.sqlite.prepare('SELECT created_at,generation FROM push_subscriptions WHERE user_id=?').get('alice');
   assert.equal((await pushRoute.POST(pushRequest('alice', 'subscribe'))).status, 200);
-  assert.deepEqual(database.sqlite.prepare('SELECT created_at,generation FROM push_subscriptions WHERE user_id=?').get('alice'), original);
+  const refreshed = database.sqlite.prepare('SELECT created_at,generation FROM push_subscriptions WHERE user_id=?').get('alice')!;
+  assert.equal(refreshed.generation, original!.generation);
+  assert.ok(String(refreshed.created_at) > String(original!.created_at), 'explicit re-enable refreshes dispatch recency without another opt-in');
   assert.equal((await pushRoute.POST(pushRequest('alice', 'status'))).status, 200);
   assert.equal((await pushRoute.POST(pushRequest('bob', 'subscribe'))).status, 409);
   assert.equal((await pushRoute.POST(pushRequest('bob', 'unsubscribe'))).status, 200);
@@ -150,6 +152,174 @@ test('device preference audit is private, secret-free and unchanged by repeated 
   assert.deepEqual(events[0].after, { enabled: false, service: 'fcm.googleapis.com', reason: 'disabled_on_device' });
   assert.doesNotMatch(JSON.stringify(events), /https:|browser-a|unused-fixture-key|endpoint|token|providerId|cookie/);
   assert.equal(database.sqlite.prepare('SELECT COUNT(*) AS count FROM activity_events').get()!.count, 0, 'device changes do not enter shared holiday history');
+});
+
+test('re-enabling an older device refreshes recency without changing ownership, generation or its audit', async () => {
+  const database = await storage();
+  await notifications.subscribe('alice', endpoint('old-device'));
+  database.sqlite.prepare('UPDATE push_subscriptions SET created_at=? WHERE endpoint=?').run('2020-01-01T00:00:00.000Z', endpoint('old-device'));
+  const original = database.sqlite.prepare('SELECT generation FROM push_subscriptions WHERE endpoint=?').get(endpoint('old-device'))!;
+  await notifications.subscribe('alice', endpoint('old-device'));
+  const refreshed = database.sqlite.prepare('SELECT user_id,created_at,generation FROM push_subscriptions WHERE endpoint=?').get(endpoint('old-device'))!;
+  assert.equal(refreshed.user_id, 'alice');
+  assert.equal(refreshed.generation, original.generation);
+  assert.ok(String(refreshed.created_at) > '2020-01-01T00:00:00.000Z');
+  assert.equal((await deviceEvents(database, 'alice')).length, 1);
+  await assert.rejects(notifications.subscribe('bob', endpoint('old-device')), /belongs to another account/);
+  assert.deepEqual(database.sqlite.prepare('SELECT user_id,created_at,generation FROM push_subscriptions WHERE endpoint=?').get(endpoint('old-device')), refreshed);
+});
+
+test('a stale re-enable cannot refresh a browser binding transferred to another account', async context => {
+  const database = await storage();
+  const value = endpoint('device');
+  await notifications.subscribe('alice', value);
+  const prepare = database.prepare.bind(database);
+  context.mock.method(database, 'prepare', (sql: string) => {
+    const statement = prepare(sql);
+    if (sql.startsWith('UPDATE push_subscriptions SET created_at = MAX')) {
+      const run = statement.run.bind(statement);
+      statement.run = async () => {
+        database.sqlite.prepare('UPDATE push_subscriptions SET user_id=?,generation=?,created_at=? WHERE endpoint=?')
+          .run('bob', 'new-account-generation', '2099-01-01T00:00:00.000Z', value);
+        return run();
+      };
+    }
+    return statement;
+  });
+  await assert.rejects(notifications.subscribe('alice', value), /settings changed/);
+  const current = database.sqlite.prepare('SELECT user_id,generation,created_at FROM push_subscriptions WHERE endpoint=?').get(value)!;
+  assert.equal(current.user_id, 'bob'); assert.equal(current.generation, 'new-account-generation');
+  assert.equal(current.created_at, '2099-01-01T00:00:00.000Z');
+  assert.equal((await deviceEvents(database, 'alice')).length, 1);
+  assert.deepEqual(await deviceEvents(database, 'bob'), []);
+});
+
+async function notificationGroup(database: SQLiteD1, travellers: number, devices: number) {
+  database.sqlite.prepare('INSERT INTO trips (id,owner,data) VALUES (?,?,?)').run('group-trip', 'bob', '{}');
+  const endpoints = new Map<string, string[]>();
+  for (let userIndex = 0; userIndex < travellers; userIndex++) {
+    const user = `traveller-${String(userIndex).padStart(2, '0')}`;
+    database.sqlite.prepare('INSERT INTO profiles (id,email,display_name,created_at) VALUES (?,?,?,?)').run(user, `${user}@example.test`, user, '2020-01-01T00:00:00.000Z');
+    database.sqlite.prepare('INSERT INTO memberships (trip_id,user_id,member_id) VALUES (?,?,?)').run('group-trip', user, user);
+    endpoints.set(user, []);
+    for (let device = 0; device < devices; device++) {
+      const value = endpoint(`${user}-device-${device}`);
+      endpoints.get(user)!.push(value);
+      database.sqlite.prepare('INSERT INTO push_subscriptions (endpoint,user_id,created_at,generation) VALUES (?,?,?,?)')
+        .run(value, user, new Date(Date.UTC(2020, 0, userIndex + 1, 0, 0, device)).toISOString(), `${user}-${device}-generation`);
+    }
+  }
+  return endpoints;
+}
+
+async function realVapidKey() {
+  const key = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+  return JSON.stringify(await crypto.subtle.exportKey('jwk', key.privateKey));
+}
+
+test('bounded push gives each traveller a device before extras and never exceeds six concurrent sends', async context => {
+  const database = await storage();
+  const devices = await notificationGroup(database, 20, 5);
+  const oldKey = environment.VAPID_PRIVATE_KEY;
+  environment.VAPID_PRIVATE_KEY = await realVapidKey();
+  const delivered: string[] = [];
+  let active = 0, peak = 0;
+  context.mock.method(globalThis, 'fetch', async (url: string | URL | Request, init?: RequestInit) => {
+    delivered.push(String(url)); active++; peak = Math.max(peak, active);
+    assert.equal(init?.redirect, 'manual'); assert.ok(init?.signal);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    active--; return new Response(null, { status: 201 });
+  });
+  try {
+    await notifications.notifyMembers('group-trip', 'bob', 'TripTab activity', 'Bob updated an expense.');
+    await Promise.all(environment.pending);
+    assert.equal(delivered.length, 40);
+    assert.ok(peak <= 6); assert.ok(peak > 1);
+    for (const endpoints of devices.values()) {
+      assert.equal(endpoints.filter(value => delivered.includes(value)).length, 2, 'a traveller cannot consume the budget before others get one device');
+    }
+    assert.equal(database.sqlite.prepare('SELECT COUNT(*) AS count FROM notifications').get()!.count, 20);
+    assert.equal(database.sqlite.prepare('SELECT COUNT(*) AS count FROM account_activity_events').get()!.count, 0, 'dispatch bookkeeping is not a preference change');
+    const before = database.sqlite.prepare('SELECT endpoint,created_at FROM push_subscriptions ORDER BY endpoint').all();
+    await notifications.notifyMembers('group-trip', 'bob', 'TripTab activity', 'Bob updated another expense.');
+    await Promise.all(environment.pending);
+    assert.equal(delivered.length, 40, 'the existing thirty-second throttle still suppresses duplicate pushes');
+    assert.deepEqual(database.sqlite.prepare('SELECT endpoint,created_at FROM push_subscriptions ORDER BY endpoint').all(), before);
+    assert.equal(database.sqlite.prepare('SELECT COUNT(*) AS count FROM notifications').get()!.count, 40, 'throttling does not suppress inbox entries');
+  } finally { environment.VAPID_PRIVATE_KEY = oldKey; }
+});
+
+test('fifty travellers with five devices rotate through every endpoint instead of starving old registrations', async context => {
+  const database = await storage();
+  const devices = await notificationGroup(database, 50, 5);
+  const userForEndpoint = new Map([...devices].flatMap(([user, values]) => values.map(value => [value, user] as const)));
+  const oldKey = environment.VAPID_PRIVATE_KEY;
+  environment.VAPID_PRIVATE_KEY = await realVapidKey();
+  context.mock.method(Date, 'now', () => Date.parse('2026-10-05T12:00:00.000Z'));
+  const allDelivered = new Set<string>();
+  let delivered: string[] = [];
+  context.mock.method(globalThis, 'fetch', async (url: string | URL | Request) => {
+    delivered.push(String(url)); allDelivered.add(String(url)); return new Response(null, { status: 201 });
+  });
+  try {
+    const firstUsers = new Set<string>();
+    for (let round = 0; round < 7; round++) {
+      database.sqlite.exec("UPDATE notifications SET created_at='2020-01-01T00:00:00.000Z'");
+      environment.pending = []; delivered = [];
+      await notifications.notifyMembers('group-trip', 'bob', 'TripTab activity', `Bob updated an expense ${round}.`);
+      await Promise.all(environment.pending);
+      assert.equal(delivered.length, 40);
+      const users = new Set(delivered.map(value => userForEndpoint.get(value)!));
+      assert.equal(users.size, 40, 'one device per traveller before extras in a large group');
+      if (round === 0) for (const user of users) firstUsers.add(user);
+      if (round === 1) for (const user of devices.keys()) {
+        if (!firstUsers.has(user)) assert.ok(users.has(user), 'travellers omitted by the first budget get priority next time');
+      }
+      assert.equal(database.sqlite.prepare('SELECT COUNT(*) AS count FROM notifications').get()!.count, 50 * (round + 1), 'every traveller receives every inbox update');
+    }
+    assert.equal(allDelivered.size, 250, 'all active devices receive an attempt within seven unthrottled updates');
+    assert.equal(database.sqlite.prepare('SELECT COUNT(*) AS count FROM push_subscriptions').get()!.count, 250);
+  } finally { environment.VAPID_PRIVATE_KEY = oldKey; }
+});
+
+test('push dispatch stops at its overall deadline while preserving every traveller inbox update', async context => {
+  const database = await storage();
+  await notificationGroup(database, 50, 1);
+  const oldKey = environment.VAPID_PRIVATE_KEY;
+  environment.VAPID_PRIVATE_KEY = await realVapidKey();
+  let now = Date.parse('2026-10-05T12:00:00.000Z'), calls = 0;
+  context.mock.method(Date, 'now', () => now);
+  context.mock.method(globalThis, 'fetch', async () => {
+    calls++; now += 24001; return new Response(null, { status: 201 });
+  });
+  try {
+    await notifications.notifyMembers('group-trip', 'bob', 'TripTab activity', 'Bob updated an expense.');
+    await Promise.all(environment.pending);
+    assert.equal(calls, 6, 'no further group of requests starts after the background budget');
+    assert.equal(database.sqlite.prepare('SELECT COUNT(*) AS count FROM notifications').get()!.count, 50);
+    assert.equal(database.sqlite.prepare('SELECT COUNT(*) AS count FROM push_subscriptions').get()!.count, 50);
+  } finally { environment.VAPID_PRIVATE_KEY = oldKey; }
+});
+
+test('stale delivery reservations cannot target a replacement binding or override its recency', async context => {
+  const database = await storage();
+  await notificationGroup(database, 1, 1);
+  const value = endpoint('traveller-00-device-0');
+  let calls = 0;
+  database.beforeBatch = statements => {
+    if (!statements.some(statement => statement.sql.startsWith('UPDATE push_subscriptions SET created_at'))) {
+      database.beforeBatch = () => database.sqlite.prepare('UPDATE push_subscriptions SET generation=?,created_at=? WHERE endpoint=?')
+        .run('replacement-generation', '2099-01-01T00:00:00.000Z', value);
+    }
+  };
+  context.mock.method(globalThis, 'fetch', async () => { calls++; return new Response(null, { status: 410 }); });
+  await notifications.notifyMembers('group-trip', 'bob', 'TripTab activity', 'Bob updated an expense.');
+  await Promise.all(environment.pending);
+  assert.equal(calls, 0);
+  const current = database.sqlite.prepare('SELECT generation,created_at FROM push_subscriptions WHERE endpoint=?').get(value)!;
+  assert.equal(current.generation, 'replacement-generation');
+  assert.equal(current.created_at, '2099-01-01T00:00:00.000Z');
+  assert.equal(database.sqlite.prepare('SELECT COUNT(*) AS count FROM account_activity_events').get()!.count, 0);
 });
 
 test('concurrent enable and quota races produce events only for committed device changes', async () => {

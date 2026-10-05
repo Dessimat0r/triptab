@@ -59,16 +59,17 @@ const workerSource = compile(await readFile(new URL('../build/sites-worker.ts', 
   .replace('"../lib/receipt-lifecycle"', JSON.stringify(new URL('../lib/receipt-lifecycle.ts', import.meta.url).href))
   .replaceAll('import.meta.env.DEV', 'false');
 const worker = (await import(dataUrl(workerSource)) as { default: {
-  scheduled(controller: ScheduledController, env: unknown, ctx: unknown): void;
+  scheduled(controller: ScheduledController, env: unknown, ctx: unknown): Promise<void>;
 } }).default;
 const scheduledTime = Date.parse('2026-10-04T13:00:00Z');
 function dispatch(env: unknown) {
   const pending: Promise<unknown>[] = [];
-  worker.scheduled({ cron: '*/15 * * * *', scheduledTime, noRetry() {} } as ScheduledController, env, {
+  const returned = worker.scheduled({ cron: '*/15 * * * *', scheduledTime, noRetry() {} } as ScheduledController, env, {
     waitUntil(task: Promise<unknown>) { pending.push(task); },
   });
   assert.equal(pending.length, 1, 'the actual Worker registers its cleanup lifetime with waitUntil');
-  return pending[0];
+  assert.equal(returned, pending[0], 'Cron observes the same cleanup failure directly from the handler');
+  return returned;
 }
 
 test('scheduled Worker cleans a quiet holiday in bounded audited runs without participant or connector requests', async () => {

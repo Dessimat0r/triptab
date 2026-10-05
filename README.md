@@ -96,7 +96,7 @@ The SIWC ChatGPT-plan provider is retained behind `CHATGPT_PLAN_ENABLED=true` an
 
 Push notifications require Worker environment values `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` (a P-256 private JWK encoded as JSON) and optionally `VAPID_SUBJECT`. Keep private keys and other secrets in the deployment environment, never in Git. Notifications also depend on browser support and user permission.
 
-Notification subscriptions are bound to their current account. Signing out clears that browser's subscription without removing the account's other devices. Activity notifications use a generic lock-screen title; finer recipient controls remain future work.
+Notification subscriptions are bound to their current account. Signing out attempts to remove that browser's subscription and clears its browser credentials without removing the account's other devices. Every traveller receives an inbox entry; push delivery is best effort and rotates fairly through up to 40 device attempts per update, prioritising one device per traveller before additional devices. Re-enabling refreshes delivery recency without recording another enable event. Dispatch uses six concurrent requests, a three-second request timeout and a 24-second overall budget. Activity notifications use a generic lock-screen title; finer recipient controls remain future work.
 
 ## Repository layout
 
