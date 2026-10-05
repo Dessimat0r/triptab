@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { validCalendarDate } from './dates';
 import { receiptMemorySchema } from './receipt-context';
+import { expenseIconSchema } from './expense-icons';
 import { fieldSourcesSchema, itemFieldSourcesSchema, scanSourceSchema, receiptScanSchema,
   reconcileReceiptScan, receiptScanSaveError, receiptScanHumanReviewChanged } from './receipt-scan';
 
@@ -239,6 +240,7 @@ const expenseItemSchema = rawItemSchema.extend({
 });
 const expenseBaseSchema = z.object({
   id, title: z.string().min(1).max(200), date: dateSchema,
+  icon: expenseIconSchema.optional(),
   // Provenance may reference a consumed or deleted draft retained in history.
   sourceDraftId: id.optional(),
   time: timeSchema.default('12:00'), timezone: timezoneSchema.default('Europe/London'),
@@ -267,6 +269,7 @@ function expenseItemAllocationValidation(expense: { items: Item[]; percentages?:
 export const expenseSchema = expenseBaseSchema.superRefine(expenseItemAllocationValidation);
 export const draftSchema = z.object({
   id, title: z.string().max(200), receiptId: id.optional(), expenseId: id.optional(),
+  icon: expenseIconSchema.optional(),
   currency: currencySchema.nullable().default('EUR'),
   date: dateSchema.optional(), time: timeSchema.optional(), timezone: timezoneSchema.optional(),
   fx: fxSchema.optional(), bankAmount: bankAmountSchema.optional(),

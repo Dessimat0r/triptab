@@ -115,7 +115,7 @@ test('opening and typing in a receipt does not recalculate all saved holiday bal
   assert.equal(editor.calls.balances, 1);
   assert.equal(editor.calls.settlements, 1);
   assert.equal(editor.calls.expenseShares, holiday.expenses.length, 'each saved row needs one cost-share preview');
-  const button = initial.find(element => element.props.className === 'expense');
+  const button = initial.find(element => element.type === 'button' && element.props.className === 'expense-open');
   assert(button && typeof button.props.onClick === 'function');
   button.props.onClick();
   editor.resetCounts();
@@ -184,7 +184,7 @@ test('the holiday and receipt editor remain usable without Intl.supportedValuesO
     const editor = controller(holiday);
     const initial = editor.render();
     assert(initial.some(element => element.props.children === 'Dinner 0'), 'the initial holiday screen renders');
-    const expense = initial.find(element => element.props.className === 'expense');
+    const expense = initial.find(element => element.type === 'button' && element.props.className === 'expense-open');
     assert(expense && typeof expense.props.onClick === 'function');
     expense.props.onClick();
     const opened = editor.render();

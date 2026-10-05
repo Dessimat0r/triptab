@@ -1,0 +1,70 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { ICON_CATALOG, ICON_BACKGROUNDS, expenseIconSchema, inferExpenseIcon, resolveExpenseIcon } from '../lib/expense-icons';
+import { draftSchema, expenseSchema, parseLedgerStructure, type Trip } from '../lib/model';
+import { isBlankReceipt, receiptEditableValue, receiptProposalEditor, type ReceiptEditor } from '../lib/receipt-processing';
+import { rebaseLedger } from '../lib/client-ledger';
+
+const icon = { symbol: 'Palmtree', background: 'pink' } as const;
+const receipt: ReceiptEditor = { id:'receipt', title:'Dinner', date:'2026-10-05', time:'12:00', timezone:'Europe/London',
+  currency:'GBP', payer:'alice', items:[{id:'item',name:'Pasta',amount:1000,members:['alice']}], tax:0,tip:0,discount:0 };
+
+test('merchant context outranks an individual purchased item and transport qualifiers', () => {
+  assert.deepEqual(inferExpenseIcon({title:'Lidl Lisboa',items:[{name:'Beer'}]}),{symbol:'ShoppingCart',background:'green'});
+  assert.equal(inferExpenseIcon({title:'Airport taxi'}).symbol,'Car');
+  assert.equal(inferExpenseIcon({title:'Car hire at the airport'}).symbol,'Car');
+});
+
+test('European merchant categories support accents, punctuation, and word boundaries', () => {
+  for (const [title,symbol] of [['Restaurante do Porto','Utensils'],['Bäckerei Müller','Croissant'],['Boulangerie de Paris','Croissant'],
+    ['Farmácia Central','Pill'],['Museo del Prado','Landmark'],['RENFE – Madrid','TrainFront'],['Caffè Roma','Coffee']]) {
+    assert.equal(inferExpenseIcon({title}).symbol,symbol,title);
+  }
+  assert.equal(inferExpenseIcon({title:'Barcode 123'}).symbol,'Receipt');
+});
+
+test('transcribed items suggest an icon even for a generic receipt title', () => {
+  assert.equal(inferExpenseIcon({title:'Receipt',items:[{name:'Cappuccino coffee'}]}).symbol,'Coffee');
+  assert.equal(inferExpenseIcon({items:[{name:'Milk 1L'},{name:'Bread'},{name:'Beer'}]}).symbol,'ShoppingCart');
+  assert.equal(inferExpenseIcon({title:'Unknown merchant',items:[{name:'Unreadable line'}]}).symbol,'Receipt');
+  for (const [name,symbol] of [['Chicken sandwich','Sandwich'],['Salad','Salad'],['Soup','Soup'],['Sport equipment','Volleyball'],['SIM card','Smartphone']]) {
+    assert.equal(inferExpenseIcon({title:'Receipt',items:[{name}]}).symbol,symbol,name);
+  }
+});
+
+test('all curated symbols and colours validate, and arbitrary markup is rejected', () => {
+  assert.equal(ICON_CATALOG.length,100);
+  assert.equal(new Set(ICON_CATALOG.map(entry=>entry[0])).size,100);
+  for (const [symbol] of ICON_CATALOG) assert(expenseIconSchema.safeParse({symbol,background:'indigo'}).success);
+  for (const [background] of ICON_BACKGROUNDS) assert(expenseIconSchema.safeParse({symbol:'Receipt',background}).success);
+  assert(!expenseIconSchema.safeParse({symbol:'<script>',background:'red'}).success);
+  assert(!expenseIconSchema.safeParse({symbol:'Receipt',background:'url(https://example.test)'}).success);
+  assert(!expenseIconSchema.safeParse({...icon,html:'injected'}).success);
+});
+
+test('manual icons round trip through stored expenses and drafts; legacy absence stays automatic', () => {
+  assert.deepEqual(expenseSchema.parse({...receipt,icon}).icon,icon);
+  assert.deepEqual(draftSchema.parse({...receipt,icon,status:'review'}).icon,icon);
+  const trip: Trip = {id:'trip',name:'Holiday',currency:'GBP',members:[{id:'alice',name:'Alice'}],expenses:[expenseSchema.parse(receipt)],drafts:[],payments:[]};
+  assert.equal(parseLedgerStructure({trips:[trip]}).trips[0].expenses[0].icon,undefined);
+  assert.equal(resolveExpenseIcon(trip.expenses[0]).symbol,'Utensils');
+  assert.deepEqual(resolveExpenseIcon({...receipt,icon}),icon);
+});
+
+test('receipt proposals preserve manual icon choices and explicitly resetting automatic mode', () => {
+  const draft = draftSchema.parse({...receipt,id:'draft',title:'Supermercado',icon:{symbol:'ShoppingCart',background:'green'},status:'review'});
+  assert.deepEqual(receiptProposalEditor({...receipt,icon},draft).icon,icon);
+  assert.equal(receiptProposalEditor({...receipt,icon:undefined},draft).icon,undefined);
+  assert.deepEqual(receiptEditableValue({...receipt,icon}),receiptEditableValue(receipt));
+  assert(isBlankReceipt({...receipt,title:'',icon,items:[]}), 'choosing an icon does not prevent initial receipt itemisation');
+});
+
+test('conflicting icon edits are protected by the ledger conflict guard', () => {
+  const trip: Trip = {id:'trip',name:'Holiday',currency:'GBP',members:[{id:'alice',name:'Alice'}],expenses:[expenseSchema.parse(receipt)],drafts:[],payments:[]};
+  const base={trips:[trip]},local=structuredClone(base),remote=structuredClone(base);
+  local.trips[0].expenses[0].icon=icon;
+  remote.trips[0].expenses[0].icon={symbol:'Coffee',background:'gold'};
+  const rebased=rebaseLedger(base,local,remote);
+  assert.deepEqual(rebased.conflicts,[{tripId:'trip',entityType:'expenses',entityId:'receipt'}]);
+  assert.deepEqual(rebased.data.trips[0].expenses[0].icon,remote.trips[0].expenses[0].icon);
+});

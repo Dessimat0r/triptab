@@ -80,6 +80,17 @@ function render(change: ActivityEvent) {
   return { fields, html: renderToStaticMarkup(createElement(renderer.ActivityChanges, { fields, before: true, after: true })) };
 }
 
+test('history names a selected icon and background and explains resetting automatic mode', () => {
+  const change = event([], []);
+  change.before!.icon={symbol:'Coffee',background:'gold'};
+  change.after!.icon={symbol:'Palmtree',background:'pink'};
+  const original=structuredClone(change);
+  assert.deepEqual(render(change).fields,[{label:'Icon & background',before:'Coffee · Gold',after:'Beach · Pink'}]);
+  delete change.after!.icon;
+  assert.equal(render(change).fields[0].after,'Automatic suggestion');
+  assert.deepEqual(change.before,original.before,'history never mutates the saved choice');
+});
+
 test('historical assistant-only attribution repair visibly explains the old label without assigning its reply to a human', () => {
   const change = event([question, { ...assistant, authorMemberId: 'alice', authorName: 'Alice' }], [question, assistant]);
   const original = structuredClone(change);

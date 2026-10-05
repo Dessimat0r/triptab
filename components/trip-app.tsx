@@ -13,6 +13,7 @@ import ShareSplit, { equalPercentages } from "@/components/share-split";
 import ReceiptCapture, { prepareReceiptImage } from "@/components/receipt-capture";
 import ReceiptChat from "@/components/receipt-chat";
 import ReceiptPhotoViewer from "@/components/receipt-photo-viewer";
+import ExpenseIconPicker from "@/components/expense-icon";
 import ReceiptScanReview, { receiptMoney } from "@/components/receipt-scan-review";
 import { receiptScanSaveError } from "@/lib/receipt-scan";
 import ItemReceiptConversation from "@/components/item-receipt-conversation";
@@ -690,7 +691,7 @@ export default function Home({ children }: { children: ReactNode }) {
     if (!equalSavedValue(processedReceipt, needsReview)) setProcessedReceipt(needsReview);
     if (!equalSavedValue(editing, next)) setEditing(previous => session === receiptSession.current && previous?.id === editing.id && previous.draftId === editing.draftId
       && previous.receiptId === editing.receiptId && equalSavedValue(receiptEditableValue(previous), receiptEditableValue(editing))
-      ? { ...next, conversation: mergeReceiptConversation(next.conversation, previous.conversation) } : previous);
+      ? { ...next, icon: previous.icon, conversation: mergeReceiptConversation(next.conversation, previous.conversation) } : previous);
   }
   async function storeEditorReceipt(entry: ReceiptEditor, receiptId?: string, keepProposal = false) {
     if (!trip) return null;
@@ -719,6 +720,7 @@ export default function Home({ children }: { children: ReactNode }) {
       id: previous?.id || entry.draftId || uid(),
       expenseId: target?.id,
       title: source.title.trim() || "Receipt",
+      icon: entry.icon,
       receiptId,
       currency: source.currency,
       date: source.date || undefined,
@@ -994,7 +996,7 @@ export default function Home({ children }: { children: ReactNode }) {
       setError("Check for the latest processed receipt before reviewing it.");
       return;
     }
-    openDraft({ ...latest, conversation: mergeReceiptConversation(latest.conversation, editing.conversation) });
+    openDraft({ ...latest, icon: editing.icon, conversation: mergeReceiptConversation(latest.conversation, editing.conversation) });
   }
   async function upload(file: File) {
     if (!trip) return;
@@ -1297,17 +1299,20 @@ export default function Home({ children }: { children: ReactNode }) {
                       <div className="panel expense-list">
                         {trip.expenses.length ? (
                           trip.expenses.map((e) => (
-                            <button
+                            <div
                               className="expense"
                               key={e.id}
+                            >
+                              <ExpenseIconPicker entry={e} disabled={saving || loading} onChange={icon => updateTrip({ ...trip,
+                                expenses: trip.expenses.map(expense => expense.id === e.id ? { ...expense, icon } : expense),
+                                drafts: trip.drafts.map(draft => draft.expenseId === e.id ? { ...draft, icon } : draft),
+                              })} />
+                              <button type="button" className="expense-open"
                               onClick={() => {
                                 setPaste("");
                                 openExpense(e);
                               }}
                             >
-                              <span className="expense-icon">
-                                <Receipt size={22} />
-                              </span>
                               <span className="expense-details">
                                 <b>{e.title}</b>
                                 <span>
@@ -1336,7 +1341,8 @@ export default function Home({ children }: { children: ReactNode }) {
                                 </small>
                                 {currentMemberIndex >= 0 && <small>Your share {expensePreviews.get(e.id)?.shares ? money(expensePreviews.get(e.id)!.shares![currentMemberIndex], trip.currency) : "needs review"}</small>}
                               </span>
-                            </button>
+                              </button>
+                            </div>
                           ))
                         ) : (
                           <div className="empty">
@@ -1457,18 +1463,17 @@ export default function Home({ children }: { children: ReactNode }) {
                         {trip.drafts.length ? (
                           trip.drafts.map((d) => (
                             <div className="draft" key={d.id}>
-                              {d.receiptId ? (
+                              <div className="draft-visual">
+                              {d.receiptId && (
                                 <img
                                   src={"/api/receipt?id=" + d.receiptId}
                                   alt={`Receipt image for ${d.title || "untitled receipt"}`}
                                   loading="lazy"
                                   decoding="async"
                                 />
-                              ) : (
-                                <span className="expense-icon">
-                                  <Receipt />
-                                </span>
                               )}
+                              <ExpenseIconPicker entry={d} disabled={saving || loading} onChange={icon => updateTrip({ ...trip, drafts: trip.drafts.map(draft => draft.id === d.id ? { ...draft, icon } : draft) })} />
+                              </div>
                               <div>
                                 <b>{d.title}</b>
                                 <small
@@ -2187,6 +2192,7 @@ export default function Home({ children }: { children: ReactNode }) {
                   onUseProcessed={reviewProcessedReceipt}
                 />
                 <div className="edit-fields">
+                  <ExpenseIconPicker entry={editing} showLabel disabled={saving || uploading || receiptChecking} onChange={icon => setEditing(previous => previous && { ...previous, icon })} />
                   {restoration && <RestorationNotice info={restoration} />}
                   {editing.receiptId && <ReceiptPhotoViewer receiptId={editing.receiptId} />}
                   <ReceiptScanReview entry={editing} onChange={setEditing} />

@@ -13,7 +13,8 @@ export type InitialReceiptReview = {
 };
 
 // Compare what the traveller can edit, independently of conversation, memory
-// and draft bookkeeping. An incoming proposal must not erase local edits.
+// and draft bookkeeping. Cosmetic icon choices are merged separately so they
+// do not prevent initial itemisation. An incoming proposal must not erase them.
 export function receiptEditableValue(entry: ReceiptEditor) {
   const { title, date, time, timezone, currency, payer, items, tax, tip, discount, percentages, fx, bankAmount, receiptScan, fieldSources } = entry;
   return { title, date, time, timezone, currency, payer, items, tax, tip, discount, percentages, fx, bankAmount, receiptScan, fieldSources };
@@ -45,6 +46,7 @@ export function mayFillInitialReceipt(initial: InitialReceiptReview | null, acco
 
 export function receiptProposalEditor(editor: ReceiptEditor, draft: Draft): ReceiptEditor {
   const next = { ...editor, ...draft, id: editor.id, draftId: draft.id, expenseId: draft.expenseId,
+    icon: editor.icon,
     date: draft.date || editor.date, time: draft.time || editor.time, timezone: draft.timezone || editor.timezone };
   // A proposal may replace defaults, but user-confirmed purchase details stay
   // authoritative even when a later external client carries older metadata.
