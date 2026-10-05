@@ -15,7 +15,7 @@ visit(syntax);assert(effect);
 function polling(overrides:Record<string,unknown>={}) {
   let callback:(()=>void)|undefined,delay=0,cleared=false;
   const calls:unknown[]=[];
-  const state={profile:{id:'owner'},auth:false,saving:false,uploading:false,loading:false,receiptProcessing:false,receiptRefreshActive:true,...overrides};
+  const state={profile:{id:'owner'},auth:false,saving:false,uploading:false,loading:false,receiptProcessing:false,...overrides};
   const events=new Map<string,(event?:unknown)=>void>();
   const target=(scope:string)=>({addEventListener(name:string,fn:(event?:unknown)=>void){events.set(`${scope}:${name}`,fn)},removeEventListener(name:string){events.delete(`${scope}:${name}`)}});
   const document={visibilityState:'visible',...target('document')},navigator={onLine:true,serviceWorker:target('worker')};
@@ -31,8 +31,8 @@ test('every open saved receipt polls quickly without requiring a copied prompt o
   assert.deepEqual(poll.calls,[{background:true}]);poll.cleanup();assert(poll.cleared);assert.equal(poll.listeners,0);
   assert.doesNotMatch(dependencies,/receiptCopied|receiptPrompt|receiptItemized|receiptHandoffOpened|\bediting\b|\btrip,(?!\?)/);
 });
-test('the rest of the app uses one slower conditional refresh loop',()=> {
-  const poll=polling({receiptRefreshActive:false});assert.equal(poll.delay,30000);poll.tick();assert.equal(poll.calls.length,1);
+test('every active section uses the same five-second conditional refresh loop',()=> {
+  const poll=polling();assert.equal(poll.delay,5000);poll.tick();assert.equal(poll.calls.length,1);
 });
 test('hidden and offline pages make no polling or push refresh requests',()=> {
   const poll=polling();poll.hide();poll.tick();poll.event('worker','message',{data:{type:'TRIPTAB_REFRESH'}});assert.equal(poll.calls.length,0);
@@ -44,12 +44,16 @@ test('visibility, focus, reconnect and push wake-ups use the background loader',
   poll.event('worker','message',{data:{type:'TRIPTAB_REFRESH'}});assert.deepEqual(poll.calls,Array(4).fill({background:true}));
   poll.event('worker','message',{data:{type:'SKIP_WAITING'}});poll.event('worker','message',{data:null});assert.equal(poll.calls.length,4);
 });
-test('saving, uploading, processing, loading and signed-out accounts pause all automatic triggers',()=> {
-  for(const state of [{saving:true},{uploading:true},{receiptProcessing:true},{loading:true},{auth:true}]) {
+test('saving, uploading, loading and signed-out accounts pause all automatic triggers',()=> {
+  for(const state of [{saving:true},{uploading:true},{loading:true},{auth:true}]) {
     const poll=polling(state);assert.equal(poll.started,false);assert.equal(poll.listeners,0);assert.equal(poll.calls.length,0);
   }
 });
 test('cleanup removes timers and push listeners when account or trip scope changes',()=> {
   const old=polling();old.cleanup();old.event('worker','message',{data:{type:'TRIPTAB_REFRESH'}});assert.equal(old.calls.length,0);
   const next=polling({profile:{id:'other-account'}});next.event('worker','message',{data:{type:'TRIPTAB_REFRESH'}});assert.equal(next.calls.length,1);
+});
+
+test('saved-data checks continue during a paid receipt request without starting additional processing',()=>{
+  const poll=polling({receiptProcessing:true});poll.tick();assert.deepEqual(poll.calls,[{background:true}]);
 });

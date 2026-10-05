@@ -11,6 +11,7 @@ const compiled = transpileWithSharedImports(source + '\nexport { changes };', {
   compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022, jsx: JsxEmit.ReactJSX },
 }).outputText
   .replace('import "./activity-details.css";', '')
+  .replace('from "./use-live-refresh"', `from ${JSON.stringify(import.meta.resolve('../components/use-live-refresh.ts'))}`)
   .replace('from "@/lib/money-format"', `from ${JSON.stringify(import.meta.resolve('../lib/money-format.ts'))}`);
 const renderer = await import('data:text/javascript;base64,' + Buffer.from(compiled).toString('base64')) as {
   changes(event: ActivityEvent, currency: 'GBP', names: Record<string, string>, accountNames?: Record<string, string>): {label: string; before: string; after: string}[];

@@ -162,7 +162,9 @@ self.addEventListener('notificationclick', (event) => {
     for (const client of windows) {
       if (new URL(client.url).origin !== self.location.origin) continue;
       try {
-        if (client.url !== url) await client.navigate(url);
+        // Preserve the active form and route. A notification opens a fresh
+        // destination only when there is no existing TripTab window.
+        client.postMessage({ type: 'TRIPTAB_REFRESH' });
         await client.focus();
         return;
       } catch {

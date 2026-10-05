@@ -30,6 +30,7 @@ import ReceiptItemNames, { TranslateMissingNames } from "@/components/receipt-it
 import type { ReceiptLanguage } from "@/lib/receipt-languages";
 import DataExport from "@/components/data-export";
 import { PwaUpdatePrompt } from "@/components/pwa-controls";
+import { dispatchLiveRefresh, useLiveRefresh } from "@/components/use-live-refresh";
 import { localDate, localTime } from "@/lib/dates";
 import { equalFinancialValue, equalSavedValue, hasNewMatchingPayment, rebaseLedger } from "@/lib/client-ledger";
 import { buildReceiptPrompt, chatgptReceiptUrl } from "@/lib/receipt-chatgpt";
@@ -216,6 +217,11 @@ export default function Home({ children }: { children: ReactNode }) {
   const latestSnapshot = useRef<{ data: Ledger; revision: number }>({ data: { trips: [] }, revision: 0 });
   const loadRequest = useRef(0);
   const inFlightLoad = useRef<{ requestId: number; background: boolean; promise: Promise<{ data: Ledger; revision: number } | undefined> } | null>(null);
+  const profileReadRequest = useRef(0);
+  const profileReadInFlight = useRef<{ accountId: string; requestId: number; promise: Promise<void> } | null>(null);
+  const activeProfile = useRef(profile);
+  const initialProfileRead = useRef(refreshProfile);
+  useLayoutEffect(() => { activeProfile.current = profile; }, [profile]);
   const applySnapshot = useCallback((snapshot: { data: Ledger; revision: number }, etag = "", invalidateRefresh = false) => {
     if (snapshot.revision < latestSnapshot.current.revision) return false;
     latestSnapshot.current = snapshot;
@@ -255,12 +261,21 @@ export default function Home({ children }: { children: ReactNode }) {
       return pending.promise;
     }
     const requestId = ++loadRequest.current;
+    const accountId = receiptSessionScope.current.accountId;
     const requestedEtag = savedEtag.current;
     if (!options?.background) setLoading(true);
     const promise = (async () => {
       try {
         const r = await fetch("/api/ledger", { cache: "no-store", headers: requestedEtag ? { "If-None-Match": requestedEtag } : {} });
         if (requestId !== loadRequest.current) return latestSnapshot.current;
+        const responseAccountId = r.headers.get("X-TripTab-Account");
+        const expectedAccountId = activeProfile.current?.id || accountId;
+        if (expectedAccountId && responseAccountId && responseAccountId !== expectedAccountId) {
+          // A different tab can replace the session cookie. Reconcile its
+          // profile before accepting amounts or waking account-bound panels.
+          void initialProfileRead.current(expectedAccountId);
+          return;
+        }
         if (r.status === 304 && requestedEtag) {
           if (r.headers.get("etag") !== requestedEtag) throw Error("The ledger refresh returned an inconsistent version. Refresh and try again.");
           const revisionHeader = r.headers.get("X-Ledger-Revision");
@@ -273,9 +288,11 @@ export default function Home({ children }: { children: ReactNode }) {
           }
           setLastRefreshed(new Date());
           setRefreshError("");
+          if (accountId === receiptSessionScope.current.accountId) dispatchLiveRefresh(accountId);
           return latestSnapshot.current;
         }
         if (r.status === 401) {
+          profileReadRequest.current++;
           setAuth(true);
           latestSnapshot.current = { data: { trips: [] }, revision: 0 };
           savedEtag.current = "";
@@ -291,6 +308,7 @@ export default function Home({ children }: { children: ReactNode }) {
         if (!r.ok) throw Error(b.error);
         if (!applySnapshot(b, r.headers.get("etag") || "")) return latestSnapshot.current;
         setAuth(false);
+        if (accountId === receiptSessionScope.current.accountId) dispatchLiveRefresh(accountId);
         const baseline = editorBaseline.current;
         if (baseline?.expense) {
           const current = b.data.trips.find(value => value.id === baseline.tripId)?.expenses.find(value => value.id === baseline.expense?.id);
@@ -314,9 +332,10 @@ export default function Home({ children }: { children: ReactNode }) {
     });
     return promise;
   }, [applySnapshot]);
-  const receiptRefreshActive = !!(editing?.draftId || editing?.expenseId);
+  useLiveRefresh(() => refreshProfile(profile?.id || ""), { accountId: profile?.id, enabled: !auth });
+  useLiveRefresh(() => profile?.id ? refreshReceiptAIStatus(profile.id) : undefined, { accountId: profile?.id, enabled: !auth });
   useEffect(() => {
-    if (auth || saving || uploading || loading || receiptProcessing) return;
+    if (auth || saving || uploading || loading) return;
     const refresh = () => {
       if (document.visibilityState !== "visible" || !navigator.onLine) return;
       void load({ background: true });
@@ -324,10 +343,10 @@ export default function Home({ children }: { children: ReactNode }) {
     const pushed = (event: MessageEvent) => {
       if (event.data?.type === "TRIPTAB_REFRESH") refresh();
     };
-    // One conditional-GET scheduler covers receipt and item chats, including
-    // already itemised receipts. Typing does not restart its timer. This reads
-    // saved replies only; it never starts a paid model request.
-    const timer = window.setInterval(refresh, receiptRefreshActive ? 5_000 : 30_000);
+    // One conditional-GET scheduler checks all visible data. Accepted checks
+    // also wake mounted private panels even when the ledger is unchanged.
+    // Typing never restarts it and no check starts a paid model request.
+    const timer = window.setInterval(refresh, 5_000);
     window.addEventListener("focus", refresh);
     window.addEventListener("online", refresh);
     document.addEventListener("visibilitychange", refresh);
@@ -339,7 +358,7 @@ export default function Home({ children }: { children: ReactNode }) {
       document.removeEventListener("visibilitychange", refresh);
       navigator.serviceWorker?.removeEventListener("message", pushed);
     };
-  }, [auth, profile?.id, trip?.id, saving, uploading, loading, receiptProcessing, receiptRefreshActive, load]);
+  }, [auth, profile?.id, trip?.id, saving, uploading, loading, load]);
   useEffect(() => {
     let active = true;
     Promise.resolve().then(() => {
@@ -381,13 +400,7 @@ export default function Home({ children }: { children: ReactNode }) {
     Promise.resolve().then(() => {
       load();
     });
-    fetch("/api/profile")
-      .then((r) => r.json())
-      .then((b: unknown) => {
-        const p = b as Profile & { profile?: Profile };
-        if (p.id || p.profile?.id) setProfile(p.profile || p);
-      })
-      .catch(() => {});
+    void initialProfileRead.current("");
     if ("serviceWorker" in navigator)
       navigator.serviceWorker
         .register("/sw.js", { scope: "/", updateViaCache: "none" })
@@ -402,7 +415,6 @@ export default function Home({ children }: { children: ReactNode }) {
     };
   }, [load]);
   useEffect(() => {
-    if (view !== "balances") return;
     // Navigation renders from the accepted snapshot immediately. Queue this
     // refresh after initial loading so direct links can share that request.
     void Promise.resolve().then(() => load({ background: true }));
@@ -423,17 +435,46 @@ export default function Home({ children }: { children: ReactNode }) {
   }
   async function accountAuthenticated(p: Profile) {
     resetReceiptReview(); setEditing(null); setReceiptAI(null);
+    setPaymentEditor(null);
+    profileReadRequest.current++;
     loadRequest.current++;
     latestSnapshot.current = { data: { trips: [] }, revision: 0 };
     savedEtag.current = "";
     setLedger({ trips: [] }); setRevision(0);
     setActivityRefreshKey(0);
     setProfile(p);
+    activeProfile.current = p;
+    receiptSessionScope.current = { accountId: p.id, tripId: "" };
     setAuth(false);
     setError("");
     await load();
+    const requestId = ++profileReadRequest.current;
     const response = await fetch("/api/profile", { cache: "no-store" });
-    if (response.ok) setProfile(await response.json() as Profile);
+    if (response.ok) {
+      const next = await response.json() as Profile;
+      if (requestId === profileReadRequest.current && next.id === p.id && activeProfile.current?.id === p.id) setProfile(next);
+    }
+  }
+  async function refreshProfile(accountId: string) {
+    if (profileReadInFlight.current?.accountId === accountId && profileReadInFlight.current.requestId === profileReadRequest.current) return profileReadInFlight.current.promise;
+    const requestId = ++profileReadRequest.current;
+    const promise = (async () => {
+      try {
+        const response = await fetch("/api/profile", { cache: "no-store" });
+        if (requestId !== profileReadRequest.current || (activeProfile.current?.id || "") !== accountId) return;
+        if (response.status === 401) { await load({ background: true, fresh: true }); return; }
+        if (!response.ok) return;
+        const body = await response.json() as Profile & { profile?: Profile };
+        const next = body.profile || body;
+        if (requestId !== profileReadRequest.current || (activeProfile.current?.id || "") !== accountId
+          || !next.id || typeof next.displayName !== "string" || typeof next.email !== "string") return;
+        if (accountId && next.id !== accountId) { await accountAuthenticated(next); return; }
+        setProfile(previous => equalSavedValue(previous, next) ? previous : next);
+      } catch { /* A later background check retries without disturbing forms. */ }
+    })();
+    profileReadInFlight.current = { accountId, requestId, promise };
+    void promise.finally(() => { if (profileReadInFlight.current?.promise === promise) profileReadInFlight.current = null; });
+    return promise;
   }
   async function openExistingChatGPTAccount() {
     try {
@@ -1416,7 +1457,7 @@ export default function Home({ children }: { children: ReactNode }) {
                       )}
                     </>
                   );
-      case "history": return <ActivityPanel tripId={trip.id} refreshKey={activityRefreshKey} currency={trip.currency} memberNames={memberNames} actorMemberNames={actorMemberNames} busy={saving || loading} onRestore={event => void reviewRestore(event)} />;
+      case "history": return <ActivityPanel tripId={trip.id} accountId={profile?.id} refreshKey={activityRefreshKey} currency={trip.currency} memberNames={memberNames} actorMemberNames={actorMemberNames} busy={saving || loading} onRestore={event => void reviewRestore(event)} />;
       case "receipts": return (
                     <>
                       <div className="sectionheading">
@@ -1573,7 +1614,7 @@ export default function Home({ children }: { children: ReactNode }) {
                           </button>
                         </form>
                       </div>
-                      <TripSharing key={`${trip.id}:${profile?.id || "anonymous"}`} trip={trip} profile={profile} onChanged={load} />
+                      <TripSharing key={`${trip.id}:${profile?.id || "anonymous"}`} trip={trip} profile={profile} onChanged={() => load({ background: true })} />
                       <TripDetails key={trip.id} trip={trip} accountId={profile?.id} busy={saving || loading} error={error} onSave={updateTrip} />
                       <PersonalLanguageSettings settings={languageSettings} />
                       <DataExport key={`${profile?.id || "anonymous"}:${trip.id}`} tripId={trip.id} compact />
@@ -1676,17 +1717,13 @@ export default function Home({ children }: { children: ReactNode }) {
               {profile?.displayName.slice(0, 1).toUpperCase() || "Y"}
             </span>
           </button>
-          <button
-            className="quiet"
-            aria-label="Refresh ledger"
-            onClick={() => void load()}
-            disabled={saving || loading}
-          >
-            <RefreshCw size={16} className={loading ? "spin" : ""} />
-            <span>Refresh</span>
-          </button>
+          <small className="muted">Updates automatically</small>
         </header>
         <main>
+          {(editing && editorBaseline.current?.tripId !== trip?.id || paymentEditor && paymentEditor.tripId !== trip?.id) && <p className="connection-banner" role="status">
+            This holiday is no longer available in this view. Its open form has been kept separate from other holidays.
+            <button type="button" className="quiet" onClick={() => { closeReceiptEditor(); setPaymentEditor(null); }}>Close unavailable form</button>
+          </p>}
           {offline && (
             <p className="connection-banner" role="status">
               You’re offline. Keep this screen open—your unsaved edits are still
@@ -1697,20 +1734,15 @@ export default function Home({ children }: { children: ReactNode }) {
           {invite && (
             <JoinTrip
               key={`${profile?.id || "anonymous"}:${invite}`}
+              accountId={profile?.id}
               token={invite}
               onAuthenticate={requestAccount}
               onJoined={async (id) => {
                 setInvite("");
                 replaceEntryUrl("/expenses");
                 closeReceiptEditor(); setSelected(id);
-                await load({ fresh: true });
-                fetch("/api/profile")
-                  .then((r) => r.json())
-                  .then((b: unknown) => {
-                    const p = b as Profile & { profile?: Profile };
-                    setProfile(p.profile || p);
-                  })
-                  .catch(() => {});
+                await load({ background: true, fresh: true });
+                await refreshProfile(profile?.id || "");
               }}
             />
           )}
@@ -1743,8 +1775,8 @@ export default function Home({ children }: { children: ReactNode }) {
                 <button className="textbutton" onClick={requestAccount}>Sign in to TripTab</button>
               )}
               {!auth && (
-                <button className="textbutton" onClick={() => void load()} disabled={saving}>
-                  Refresh ledger
+                <button className="textbutton" onClick={() => void load({ background: true, fresh: true })} disabled={saving}>
+                  Retry updates
                 </button>
               )}
             </div>
@@ -1924,7 +1956,7 @@ export default function Home({ children }: { children: ReactNode }) {
           </footer>
         </main>
       </div>
-      {paymentEditor && trip && <PaymentEditor key={paymentEditor.key} trip={trip} initial={paymentEditor.entry} restoredFrom={paymentEditor.restoredFrom} busy={saving || loading} error={error} onClose={() => setPaymentEditor(null)} onSave={savePayment} />}
+      {paymentEditor && trip?.id === paymentEditor.tripId && <PaymentEditor key={paymentEditor.key} trip={trip} initial={paymentEditor.entry} restoredFrom={paymentEditor.restoredFrom} busy={saving || loading} error={error} onClose={() => setPaymentEditor(null)} onSave={savePayment} />}
       {statement && trip && <MemberStatement trip={trip} memberId={statement} onClose={() => setStatement("")} />}
       {create && (
         <ModalA11y className="overlay" onClose={() => setCreate(false)}>
@@ -2080,7 +2112,7 @@ export default function Home({ children }: { children: ReactNode }) {
                 </p>
               </li>
               <li>
-                <strong>Refresh and check your split</strong>
+                <strong>Review the receipt and check your split</strong>
                 <p>
                   Check the printed total, prices and warnings, assign each item, then save the expense.
                   Nothing is posted automatically.
@@ -2099,7 +2131,7 @@ export default function Home({ children }: { children: ReactNode }) {
           </section>
         </ModalA11y>
       )}
-      {editing && trip && (
+      {editing && trip && editorBaseline.current?.tripId === trip.id && (
         <ModalA11y
           className="overlay editor-overlay"
           onClose={() => { if (!uploading && !saving) closeReceiptEditor(); }}
@@ -2711,6 +2743,7 @@ export default function Home({ children }: { children: ReactNode }) {
               {receiptHistoryOpen && <div id="receipt-history-view" className="receipt-history-view">
                 <ActivityPanel
                   tripId={trip.id}
+                  accountId={profile?.id}
                   expenseId={editing.expenseId || (trip.expenses.some(value => value.id === editing.id) ? editing.id : undefined)}
                   draftId={editing.expenseId || trip.expenses.some(value => value.id === editing.id) ? undefined : editing.draftId || editing.id}
                   title="Receipt history"
@@ -2738,10 +2771,13 @@ export default function Home({ children }: { children: ReactNode }) {
       {confirmationDialog}
       {account && (
         <AccountPanel
+          key={profile?.id || "anonymous"}
           profile={profile}
           trips={ledger.trips}
           onClose={() => setAccount(false)}
           onSaved={(p) => {
+            if (activeProfile.current?.id !== p.id) return;
+            profileReadRequest.current++;
             setProfile(p);
             setAccount(false);
           }}

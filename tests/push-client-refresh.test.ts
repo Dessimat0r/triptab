@@ -131,3 +131,31 @@ test('a closing or malformed client cannot stop other windows or existing push n
   assert.equal(unavailable.shown.length, 1);
   assert.equal(unavailable.messages.length, 0);
 });
+
+
+test('clicking a notification focuses and updates the open app without navigating its form', async () => {
+  let task:Promise<unknown>|undefined,focused=0,navigated=0,opened=0,closed=0;
+  const messages:unknown[]=[];
+  let click:(event:unknown)=>void=()=>{};
+  const client={url:'https://triptab.test/expenses?receipt=open',postMessage(value:unknown){messages.push(value)},async focus(){focused++},async navigate(){navigated++}};
+  const context=vm.createContext({URL,self:{location:{origin:'https://triptab.test'},
+    addEventListener(name:string,handler:(event:unknown)=>void){if(name==='notificationclick')click=handler},
+    clients:{async matchAll(){return [client]},async openWindow(){opened++}}
+  }});
+  vm.runInContext(source,context);
+  click({notification:{data:{url:'/balances'},close(){closed++}},waitUntil(value:Promise<unknown>){task=value}});
+  await task;assert.equal(focused,1);assert.equal(closed,1);assert.equal(navigated,0);assert.equal(opened,0);
+  assert.equal(JSON.stringify(messages), '[{"type":"TRIPTAB_REFRESH"}]');
+});
+
+test('notification clicks open the internal destination when there is no existing app window', async () => {
+  let task:Promise<unknown>|undefined,click:(event:unknown)=>void=()=>{};
+  const opened:string[]=[];
+  const context=vm.createContext({URL,self:{location:{origin:'https://triptab.test'},
+    addEventListener(name:string,handler:(event:unknown)=>void){if(name==='notificationclick')click=handler},
+    clients:{async matchAll(){return []},async openWindow(url:string){opened.push(url)}}
+  }});
+  vm.runInContext(source,context);
+  click({notification:{data:{url:'https://foreign.test/'},close(){}},waitUntil(value:Promise<unknown>){task=value}});
+  await task;assert.deepEqual(opened,['https://triptab.test/']);
+});

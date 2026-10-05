@@ -1,7 +1,8 @@
 "use client";
 import { languageName } from "@/lib/receipt-languages";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useLiveRefresh } from "./use-live-refresh";
 import type { Currency } from "@/lib/model";
 import type { ActivityEvent } from "@/lib/store";
 import { formatMoney } from "@/lib/money-format";
@@ -11,6 +12,7 @@ import "./activity-details.css";
 
 export type ActivityPanelProps = {
   tripId: string;
+  accountId?: string;
   expenseId?: string;
   draftId?: string;
   title?: string;
@@ -49,85 +51,105 @@ async function activityPage<T extends SequencedEvent>(endpoint: string, signal: 
 }
 
 /** Keep the reader's loaded range and open details while new immutable events arrive. */
-export function useActivityPages<T extends SequencedEvent>(endpoint: string, key: string, refreshKey: string | number = 0, ownerField?: keyof T) {
-  const [attempt, setAttempt] = useState(0);
+export function useActivityPages<T extends SequencedEvent>(endpoint: string, key: string, refreshKey: string | number = 0, ownerField?: keyof T, accountId?: string) {
   const [state, setState] = useState<State<T>>({ key: "", events: [], nextCursor: null, loading: true, error: "" });
   const saved = useRef(state);
+  const headRequest = useRef<AbortController | null>(null);
   const olderRequest = useRef<AbortController | null>(null);
+  const refreshAfterOlder = useRef(false);
+  const scope = useRef({ endpoint, key, accountId });
   const active: State<T> = state.key === key ? state : { key, events: [], nextCursor: null, loading: true, error: "" };
-  useEffect(() => { saved.current = state; }, [state]);
-  useEffect(() => {
-    const refresh = () => {
-      if (document.visibilityState === "visible") setAttempt(value => value + 1);
-    };
-    window.addEventListener("focus", refresh);
-    document.addEventListener("visibilitychange", refresh);
-    return () => {
-      window.removeEventListener("focus", refresh);
-      document.removeEventListener("visibilitychange", refresh);
-    };
-  }, []);
+  useLayoutEffect(() => { saved.current = state; scope.current = { endpoint, key, accountId }; }, [state, endpoint, key, accountId]);
 
-  useEffect(() => {
+  const refresh = useCallback(async () => {
+    if (scope.current.key !== key || scope.current.endpoint !== endpoint || scope.current.accountId !== accountId) return;
+    // Do not restart an in-flight check or interrupt a reader loading older
+    // pages. A queued check fills in anything that arrived during pagination.
+    if (headRequest.current) return;
+    if (olderRequest.current) { refreshAfterOlder.current = true; return; }
     const controller = new AbortController();
-    olderRequest.current?.abort();
+    headRequest.current = controller;
     let previous = saved.current.key === key ? saved.current : null;
-    setState(value => value.key === key ? { ...value, loading: true, error: "" } : { key, events: [], nextCursor: null, loading: true, error: "" });
-    async function refresh() {
+    setState(value => value.key === key
+      ? value.error ? { ...value, error: "" } : value
+      : { key, events: [], nextCursor: null, loading: true, error: "" });
+    try {
       let page = await activityPage<T>(endpoint, controller.signal);
-      // Account switching must never merge one person's private history with
-      // the newly authenticated account, even if its panel stayed mounted.
+      if (ownerField && accountId && page.events.some(event => event[ownerField] !== accountId)) throw new ActivityError("Your account changed. Reopen your account to view its history.", 401);
       if (ownerField && previous?.events[0]?.[ownerField] !== page.events[0]?.[ownerField]) previous = null;
       const owner = ownerField ? page.events[0]?.[ownerField] : undefined;
       const known = new Set(previous?.events.map(event => event.id));
       const events = [...page.events];
-      // More than one new page may have arrived. Reach the already loaded range
-      // before merging, so refreshing never leaves an inaccessible history gap.
       let overlaps = page.events.some(event => known.has(event.id));
       while (previous?.events.length && events.length && !overlaps && page.nextCursor !== null) {
         const cursor = page.nextCursor;
         page = await activityPage<T>(endpoint, controller.signal, cursor);
+        if (ownerField && accountId && page.events.some(event => event[ownerField] !== accountId)) throw new ActivityError("Your account changed. Reopen your account to view its history.", 401);
         if (ownerField && page.events.some(event => event[ownerField] !== owner)) throw new ActivityError("Your account changed. Reload account activity.", 401);
         if (page.nextCursor !== null && page.nextCursor >= cursor) throw new ActivityError("The activity page did not advance. Please try again.");
         events.push(...page.events);
         overlaps = page.events.some(event => known.has(event.id));
       }
-      if (controller.signal.aborted) return;
-      // A now-empty authorized result must not retain previously visible data.
-      const combined = events.length ? [...events, ...(previous?.events || [])] : [];
+      if (controller.signal.aborted || scope.current.key !== key || scope.current.accountId !== accountId) return;
+      // Audit records are append-only. Keep previously authorized objects for
+      // known IDs so expanded receipt diffs do not recalculate every poll.
+      const retained = new Map(previous?.events.map(event => [event.id, event]));
+      const combined = events.length ? [...events.map(event => retained.get(event.id) || event), ...(previous?.events || [])] : [];
       const unique = [...new Map(combined.map(event => [event.id, event])).values()].sort((left, right) => right.sequence - left.sequence);
-      setState({ key, events: unique, nextCursor: overlaps && previous ? previous.nextCursor : page.nextCursor, loading: false, error: "" });
-    }
-    refresh().catch(cause => {
-      if (controller.signal.aborted) return;
+      const nextCursor = overlaps && previous ? previous.nextCursor : page.nextCursor;
+      setState(value => value.key === key && !value.loading && !value.error && value.nextCursor === nextCursor &&
+        value.events.length === unique.length && unique.every((event, index) => event === value.events[index])
+        ? value : { key, events: unique, nextCursor, loading: false, error: "" });
+    } catch (cause) {
+      if (controller.signal.aborted || scope.current.key !== key || scope.current.accountId !== accountId) return;
       setState(value => ({ ...(value.key === key ? value : { key, events: [], nextCursor: null }),
         ...(cause instanceof ActivityError && [401, 403].includes(cause.status) ? { events: [], nextCursor: null } : {}),
         loading: false, error: cause instanceof Error ? cause.message : "Unable to load activity." }));
-    });
-    return () => { controller.abort(); olderRequest.current?.abort(); };
-  }, [endpoint, key, refreshKey, attempt, ownerField]);
+    } finally { if (headRequest.current === controller) headRequest.current = null; }
+  }, [endpoint, key, ownerField, accountId]);
+
+  useEffect(() => {
+    refreshAfterOlder.current = false;
+    void refresh();
+    return () => { headRequest.current?.abort(); headRequest.current = null; olderRequest.current?.abort(); olderRequest.current = null; refreshAfterOlder.current = false; };
+  }, [refresh]);
+  useEffect(() => { void refresh(); }, [refreshKey, refresh]);
+  useLiveRefresh(refresh, { accountId });
+  useEffect(() => {
+    if (refreshAfterOlder.current && !olderRequest.current && !headRequest.current) {
+      refreshAfterOlder.current = false;
+      void refresh();
+    }
+  }, [state, refresh]);
 
   async function loadOlder() {
-    if (active.loading || active.nextCursor === null) return;
+    if (headRequest.current || olderRequest.current || active.loading || active.nextCursor === null) return;
     const controller = new AbortController();
-    olderRequest.current?.abort(); olderRequest.current = controller;
+    olderRequest.current = controller;
     setState(previous => previous.key === key ? { ...previous, loading: true, error: "" } : previous);
     try {
       const page = await activityPage<T>(endpoint, controller.signal, active.nextCursor);
+      if (ownerField && accountId && page.events.some(event => event[ownerField] !== accountId)) throw new ActivityError("Your account changed. Reopen your account to view its history.", 401);
       if (ownerField && page.events.some(event => event[ownerField] !== active.events[0]?.[ownerField])) throw new ActivityError("Your account changed. Reload account activity.", 401);
       if (page.nextCursor !== null && page.nextCursor >= active.nextCursor) throw new ActivityError("The activity page did not advance. Please try again.");
-      if (!controller.signal.aborted) setState(previous => {
+      if (!controller.signal.aborted && scope.current.key === key && scope.current.accountId === accountId) setState(previous => {
         if (previous.key !== key) return previous;
-        const events = [...new Map([...previous.events, ...page.events].map(event => [event.id, event])).values()].sort((left, right) => right.sequence - left.sequence);
+        const retained = new Map(previous.events.map(event => [event.id, event]));
+        const events = [...new Map([...previous.events, ...page.events.map(event => retained.get(event.id) || event)].map(event => [event.id, event])).values()].sort((left, right) => right.sequence - left.sequence);
         return { ...previous, events, nextCursor: page.nextCursor, loading: false, error: "" };
       });
     } catch (cause) {
-      if (!controller.signal.aborted) setState(previous => previous.key === key ? { ...previous,
+      if (!controller.signal.aborted && scope.current.key === key && scope.current.accountId === accountId) setState(previous => previous.key === key ? { ...previous,
         ...(cause instanceof ActivityError && [401, 403].includes(cause.status) ? { events: [], nextCursor: null } : {}),
         loading: false, error: cause instanceof Error ? cause.message : "Unable to load older changes." } : previous);
+    } finally {
+      if (olderRequest.current === controller) {
+        olderRequest.current = null;
+        if (controller.signal.aborted) refreshAfterOlder.current = false;
+      }
     }
   }
-  return { ...active, loadOlder, retry: () => setAttempt(value => value + 1) };
+  return { ...active, loadOlder, retry: () => void refresh() };
 }
 
 function same(left: unknown, right: unknown): boolean {
@@ -402,11 +424,11 @@ function ActivityEventDetails(props: ActivityDetailProps) {
   </details>;
 }
 
-export default function ActivityPanel({ tripId, expenseId, draftId, title, description, emptyText, refreshKey = 0, currency, memberNames = {}, actorMemberNames = {}, onRestore, busy = false }: ActivityPanelProps) {
+export default function ActivityPanel({ tripId, accountId, expenseId, draftId, title, description, emptyText, refreshKey = 0, currency, memberNames = {}, actorMemberNames = {}, onRestore, busy = false }: ActivityPanelProps) {
   const scope = expenseId ? { kind: "expenseId", id: expenseId } : draftId ? { kind: "draftId", id: draftId } : null;
   const query = new URLSearchParams({ tripId });
   if (scope) query.set(scope.kind, scope.id);
-  const history = useActivityPages<ActivityEvent>(`/api/activity?${query.toString()}`, JSON.stringify([tripId, scope?.kind, scope?.id]), refreshKey);
+  const history = useActivityPages<ActivityEvent>(`/api/activity?${query.toString()}`, JSON.stringify([accountId, tripId, scope?.kind, scope?.id]), refreshKey, undefined, accountId);
   const heading = title ?? (scope ? "Receipt history" : "Activity");
   const help = description ?? (scope
     ? "See who changed this receipt, its reviews and images, with the complete details before and after each change."
@@ -414,7 +436,7 @@ export default function ActivityPanel({ tripId, expenseId, draftId, title, descr
   return <section className={`activity-panel${scope ? " receipt-activity" : ""}`} aria-label={scope ? heading : "Holiday activity"} aria-busy={history.loading}>
     <h2 className="subheading">{heading}</h2>
     {help && <p className="footnote">{help}</p>}
-    <button type="button" className="quiet" disabled={history.loading} onClick={history.retry}>{history.error ? scope ? "Retry receipt history" : "Retry activity" : scope ? "Refresh receipt history" : "Refresh activity"}</button>
+    {history.error ? <button type="button" className="quiet" disabled={history.loading} onClick={history.retry}>{scope ? "Retry receipt history" : "Retry activity"}</button> : <p className="footnote">History updates automatically.</p>}
     {history.loading && !history.events.length && <p role="status">Loading activity…</p>}
     {history.loading && !!history.events.length && <p role="status">Checking for changes…</p>}
     {history.error && <p className="error" role="alert">{history.error}</p>}

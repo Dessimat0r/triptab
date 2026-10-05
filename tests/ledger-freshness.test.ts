@@ -143,11 +143,32 @@ test('authenticated conditional HEAD returns no ledger body and private caching'
   const changed = await HEAD(new Request('https://triptab.test/api/ledger', { method: 'HEAD', headers: { 'If-None-Match': 'old' } }));
   assert.equal(changed.status, 200); assert.equal(changed.body, null);
 });
-test('anonymous GET and HEAD reveal no freshness metadata', async () => {
+test('every successful ledger response identifies its authenticated account independently of request headers', async () => {
+  authenticated = true;
+  const etag = await ledgerEtag(database, 'bob');
+  const cases = [
+    { handler: GET, method: 'GET', expected: 200, conditional: false },
+    { handler: GET, method: 'GET', expected: 304, conditional: true },
+    { handler: HEAD, method: 'HEAD', expected: 200, conditional: false },
+    { handler: HEAD, method: 'HEAD', expected: 304, conditional: true },
+    { handler: POST, method: 'POST', expected: 200, conditional: false },
+  ];
+  for (const { handler, method, expected, conditional } of cases) {
+    const headers: Record<string, string> = { 'X-TripTab-Account': 'client-forged-account' };
+    if (conditional) headers['If-None-Match'] = etag;
+    const response = await handler(new Request('https://triptab.test/api/ledger', { method, headers }));
+    assert.equal(response.status, expected, `${method} ${expected}`);
+    assert.equal(response.headers.get('x-triptab-account'), 'bob', `${method} ${expected} must use the authenticated profile`);
+    assert.equal(response.headers.get('cache-control'), 'private, no-store');
+  }
+});
+test('anonymous GET, HEAD and POST reveal no freshness or account metadata', async () => {
   authenticated = false;
-  for(const handler of [GET,HEAD]) {
-    const response = await handler(new Request('https://triptab.test/api/ledger'));
+  for(const handler of [GET,HEAD,POST]) {
+    const method = handler === HEAD ? 'HEAD' : handler === POST ? 'POST' : 'GET';
+    const response = await handler(new Request('https://triptab.test/api/ledger', { method }));
     assert.equal(response.status,401); assert.equal(response.headers.get('etag'),null); assert.equal(response.headers.get('x-ledger-revision'),null);
+    assert.equal(response.headers.get('x-triptab-account'), null);
     if(handler===HEAD) assert.equal(response.body,null);
   }
 });

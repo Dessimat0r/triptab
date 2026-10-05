@@ -54,7 +54,7 @@ export default function AccountPanel({
   const chatgptLinkHref = "/signin-with-chatgpt?return_to=" + encodeURIComponent("/?connect=chatgpt");
   const [activityRefresh, setActivityRefresh] = useState(0);
   const refreshActivity = () => setActivityRefresh(value => value + 1);
-  const [name, setName] = useState(profile?.displayName || ""),
+  const [nameDraft, setName] = useState<string | null>(null),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
     [password, setPassword] = useState(""),
@@ -63,6 +63,7 @@ export default function AccountPanel({
     [passwordBusy, setPasswordBusy] = useState(false),
     [accountError, setAccountError] = useState(""),
     [accountBusy, setAccountBusy] = useState(false);
+  const name = nameDraft ?? profile?.displayName ?? "";
   return (
     <ModalA11y className="overlay" onClose={onClose}>
       <section
@@ -316,7 +317,7 @@ export default function AccountPanel({
           </p>
         )}
         {profile && <DataExport key={profile.id} trips={trips} />}
-        {profile && <AccountActivityPanel key={profile.id} refreshKey={activityRefresh} />}
+        {profile && <AccountActivityPanel key={profile.id} accountId={profile.id} refreshKey={activityRefresh} />}
         <PwaControls accountId={profile?.id} onChanged={refreshActivity} />
         {profile && (
           <div className="account-signout">
