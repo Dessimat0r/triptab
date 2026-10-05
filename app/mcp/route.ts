@@ -705,6 +705,8 @@ export async function POST(request: Request) {
           && existing.fieldSources?.[key as keyof NonNullable<Draft['fieldSources']>] === 'default')) : {};
         const metadata = existing ? { ...defaultReceiptMetadata, ...metadataPatch } : { ...legacyMetadata, ...metadataPatch };
         const cleanMetadata = Object.fromEntries(Object.entries(metadata).map(([key, value]) => [key, value === null && key !== 'currency' ? undefined : value]));
+        const mergedSourceLines = scanEvidence ? mergeReceiptSourceLines(existing?.receiptScan?.sourceLines, scanEvidence.sourceLines) : undefined;
+        if (mergedSourceLines && mergedSourceLines.length > 1000) throw Error('This receipt has reached its scan evidence limit. Your saved evidence is unchanged; review it before rescanning.');
         const currencyChanged = existing && metadata.currency !== undefined && metadata.currency !== existing.currency;
         const fieldSources = {
           ...existing?.fieldSources,
@@ -730,7 +732,7 @@ export async function POST(request: Request) {
           fieldSources: Object.keys(fieldSources).length ? fieldSources : undefined,
           receiptScan: scanEvidence ? {
             ...existing?.receiptScan, ...scanEvidence,
-            sourceLines: mergeReceiptSourceLines(existing?.receiptScan?.sourceLines, scanEvidence.sourceLines),
+            sourceLines: mergedSourceLines,
             status: 'incomplete', warnings: [...(existing?.receiptScan?.warnings ?? []), ...(scanEvidence.warnings ?? [])],
             fieldSources: {
               ...existing?.receiptScan?.fieldSources,

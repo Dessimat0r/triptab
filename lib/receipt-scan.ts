@@ -61,6 +61,8 @@ export type ReceiptScan = z.infer<typeof receiptScanSchema>;
 export type ReceiptScanWarning = z.infer<typeof receiptScanWarningSchema>;
 // Rescans may number lines differently. Preserve distinct observations, including
 // unmapped adjustments, instead of treating a position as an evidence identity.
+// The merged length is not capped here: each caller validates the 1,000-line limit
+// and reports it in its own error format.
 export function mergeReceiptSourceLines(previous: ReceiptScan['sourceLines'], incoming: ReceiptScan['sourceLines']) {
   if (previous === undefined && incoming === undefined) return undefined;
   const lines = [...previous ?? []];
@@ -69,7 +71,6 @@ export function mergeReceiptSourceLines(previous: ReceiptScan['sourceLines'], in
     const key = canonical(line);
     if (!keys.has(key)) { lines.push(line); keys.add(key); }
   }
-  if (lines.length > 1000) throw Error('This receipt has reached its scan evidence limit. Review it before rescanning.');
   return lines;
 }
 
