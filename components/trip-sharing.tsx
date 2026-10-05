@@ -20,7 +20,7 @@ export function TripSharing({ trip, profile, onChanged }: { trip: Trip; profile:
     [copied, setCopied] = useState(false),
     [invitations, setInvitations] = useState<InvitationList & { key: string }>({ key: "", invitations: [], hasMore: false });
   const available = trip.members.filter(member => !member.userId);
-  const availableKey = JSON.stringify(available.map(member => ({ id: member.id, name: member.name })));
+  const availableKey = JSON.stringify(available.map(member => ({ id: member.id })));
   const owner = trip.ownerId === profile?.id;
   const invitationKey = `${trip.id}:${profile?.id || ""}`;
   const { confirm, dialog: confirmationDialog, confirming } = useConfirmation(invitationKey);

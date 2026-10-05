@@ -510,10 +510,10 @@ test('lists native holiday and natural-language expense tools with write annotat
     assert.ok(tool);
     assert.equal(tool.annotations.readOnlyHint, false);
     if (name !== 'create_holiday') {
-      const schema = tool.inputSchema.properties.draft as { properties: { percentages: { additionalProperties: Record<string, unknown> }; items: { items: { properties: Record<string, unknown> } } } };
+      const schema = tool.inputSchema.properties.draft as { properties: { percentages: { anyOf: { additionalProperties?: Record<string, unknown> }[] }; items: { items: { properties: Record<string, unknown> } } } };
       const percentages = schema.properties.items.items.properties.percentages as { additionalProperties: Record<string, unknown> };
       assert.deepEqual(percentages.additionalProperties, { type: 'number', minimum: 0, maximum: 100 });
-      assert.deepEqual(schema.properties.percentages.additionalProperties, { type: 'number', minimum: 0, maximum: 100 });
+      assert.deepEqual(schema.properties.percentages.anyOf[0].additionalProperties, { type: 'number', minimum: 0, maximum: 100 });
       const units = schema.properties.items.items.properties.units as { properties: { total: Record<string, unknown>; label: { maxLength: number }; allocations: { additionalProperties: Record<string, unknown> } }; required: string[]; additionalProperties: boolean };
       assert.equal(units.properties.total.type, 'number');
       assert.equal(units.properties.total.exclusiveMinimum, 0);
@@ -1918,7 +1918,7 @@ test('receipt correction upserts preserve omitted lines, manual metadata, shares
   } });
   assert.equal(reply.result.isError, undefined);
   const saved = content(reply).data.trips[0].drafts[0];
-  assert.deepEqual(saved.items, [{ ...before.items[0], name: 'Corrected main course', fieldSources: { name: 'user' } }, before.items[1]]);
+  assert.deepEqual(saved.items, [{ ...before.items[0], name: 'Corrected main course', fieldSources: { name: 'assistant' } }, before.items[1]]);
   for (const key of ['title', 'currency', 'payer', 'date', 'bankAmount', 'fx', 'conversation', 'memory'] as const) {
     assert.deepEqual(saved[key], before[key], key);
   }
@@ -2161,5 +2161,5 @@ test('receipt recognition preserves confirmed item text, prices, quantities and 
   } });
   assert.equal(corrected.result.isError, undefined);
   assert.equal(content(corrected).data.trips[0].drafts[0].items[0].amount, 900);
-  assert.equal(content(corrected).data.trips[0].drafts[0].items[0].fieldSources?.amount, 'user');
+  assert.equal(content(corrected).data.trips[0].drafts[0].items[0].fieldSources?.amount, 'assistant');
 });

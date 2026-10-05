@@ -45,8 +45,8 @@ test('receipt history explains unresolved prices, independent totals and partici
   const scan = fields.find(field => field.label === 'Receipt scan review')!;
   assert.match(scan.after, /Printed subtotal: Not recorded/);
   assert.match(scan.after, /Printed total:.*12\.50/);
-  assert.match(scan.after, /Needs review: unreadable-amount/);
-  assert.match(scan.after, /Reviewed: included-tax-ambiguous/);
+  assert.match(scan.after, /Needs review: Item price is unreadable/);
+  assert.match(scan.after, /Reviewed: Check whether this tax is already included/);
   assert.match(scan.after, /VAT included.*1\.50.*included/);
   assert.match(scan.after, /Source images: photo-1/);
   assert.match(html, /Price needs confirmation/);

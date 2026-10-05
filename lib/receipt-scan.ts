@@ -3,7 +3,7 @@ import { z } from 'zod';
 const amount = z.number().int().min(0).max(100000000);
 const identifier = z.string().min(1).max(100);
 const confidence = z.enum(['high', 'medium', 'low']);
-const source = z.enum(['default', 'receipt', 'user']);
+const source = z.enum(['default', 'receipt', 'assistant', 'user']);
 export const scanSourceSchema = z.object({
   lineIndex: z.number().int().min(0).max(1000).optional(),
   observedText: z.string().max(1000).optional(),
@@ -19,7 +19,7 @@ export const itemFieldSourcesSchema = z.object({
 }).strict();
 export const fieldSourcesSchema = z.object({
   title: source.optional(), currency: source.optional(), date: source.optional(), time: source.optional(),
-  timezone: z.enum(['default', 'user']).optional(), payer: z.enum(['default', 'user']).optional(),
+  timezone: z.enum(['default', 'assistant', 'user']).optional(), payer: z.enum(['default', 'assistant', 'user']).optional(),
   tax: source.optional(), tip: source.optional(), discount: source.optional(),
 }).strict();
 export const RECEIPT_SCAN_WARNING_CODES = [
@@ -59,6 +59,20 @@ export const receiptScanSchema = z.object({
 }).strict();
 export type ReceiptScan = z.infer<typeof receiptScanSchema>;
 export type ReceiptScanWarning = z.infer<typeof receiptScanWarningSchema>;
+// Rescans may number lines differently. Preserve distinct observations, including
+// unmapped adjustments, instead of treating a position as an evidence identity.
+export function mergeReceiptSourceLines(previous: ReceiptScan['sourceLines'], incoming: ReceiptScan['sourceLines']) {
+  if (previous === undefined && incoming === undefined) return undefined;
+  const lines = [...previous ?? []];
+  const keys = new Set(lines.map(canonical));
+  for (const line of incoming ?? []) {
+    const key = canonical(line);
+    if (!keys.has(key)) { lines.push(line); keys.add(key); }
+  }
+  if (lines.length > 1000) throw Error('This receipt has reached its scan evidence limit. Review it before rescanning.');
+  return lines;
+}
+
 export type ScanSource = z.infer<typeof scanSourceSchema>;
 export type FieldSources = z.infer<typeof fieldSourcesSchema>;
 
@@ -246,7 +260,7 @@ export function receiptScanFingerprint(entry: ScannableReceipt): string {
   const scan = entry.receiptScan;
   return `scan-v1:${sha256(canonical({ currency: entry.currency, items: entry.items,
     tax: entry.tax, tip: entry.tip, discount: entry.discount, percentages: entry.percentages,
-    fieldSources: entry.fieldSources,
+    fieldSources: entry.fieldSources && { currency: entry.fieldSources.currency, tax: entry.fieldSources.tax, tip: entry.fieldSources.tip, discount: entry.fieldSources.discount },
     receiptScan: scan && { version: scan.version, printedCurrency: scan.printedCurrency, printedSubtotal: scan.printedSubtotal,
       printedTotal: scan.printedTotal, sourceLines: scan.sourceLines, fieldSources: scan.fieldSources,
       warnings: scan.warnings.filter(warning => !generatedCodes.has(warning.code) && warning.code !== 'unassigned-item'),
@@ -280,3 +294,19 @@ export function receiptScanHumanReviewChanged(entry: ScannableReceipt, previous?
   if (resolved.length && previous && receiptScanFingerprint(entry) !== receiptScanFingerprint(previous)) return true;
   return resolved.some(warning => !oldResolutions.has(warningKey(warning)));
 }
+
+export const receiptWarningNames: Record<string, string> = {
+  "unreadable-amount": "Item price is unreadable. Enter the full line price after checking the image.",
+  "uncertain-description": "Item description needs checking against the image.",
+  "currency-mismatch": "Original currency differs from the printed currency. Check both before saving.",
+  "ambiguous-currency": "The receipt currency needs your confirmation.",
+  "subtotal-mismatch": "The item prices differ from the printed subtotal.",
+  "total-mismatch": "The item prices and adjustments differ from the printed total.",
+  "possible-duplicate": "These lines may be duplicates. Check the image before removing anything.",
+  "unmapped-adjustment": "A discount, refund or charge needs checking. Correct the affected item's full line price and shares, or the receipt adjustment, before confirming it is handled.",
+  "included-tax-ambiguous": "Check whether this tax is already included. Only extra tax should be added.",
+  "image-may-be-incomplete": "The image may not contain the whole receipt. Check every line and the printed total.",
+  "low-confidence": "This receipt detail is uncertain. Check it against the image.",
+  "missing-printed-total": "The printed total has not been independently verified. Read it from the image and enter it below.",
+  "unassigned-item": "Choose who owes this item's cost.",
+};

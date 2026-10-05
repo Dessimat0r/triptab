@@ -1929,3 +1929,15 @@ test('native conditional GET follows silent trip normalization without fabricati
     assert.equal((await database.prepare('SELECT COUNT(*) AS count FROM activity_events').first<{count:number}>())!.count,0);
   } finally { binding.DB=undefined;await worker.dispose(); }
 });
+
+test('successful ledger POST returns the ETag of its exact response snapshot for conditional refresh', async () => {
+  const database = await storage(); const initial = await create(database);
+  const request = new Request('https://triptab.test/api/ledger', {method:'POST', headers:{'origin':'https://triptab.test','content-type':'application/json','oai-authenticated-user-id':actor,'oai-authenticated-user-email':'owner@example.com','oai-authenticated-user-full-name':'Original%20Owner'}, body:JSON.stringify(initial)});
+  const route = await ledgerRoute(); const response = await route.POST(request);
+  assert.equal(response.status, 200);
+  const body = await response.json() as typeof initial;
+  const tag = response.headers.get('etag'); assert.equal(tag, await ledgerEtag(database.asD1(), actor));
+  assert.equal(response.headers.get('x-ledger-revision'), String(body.revision));
+  assert.deepEqual(Object.keys(body).sort(), ['data','revision']);
+  assert.equal((await route.GET(ledgerReadRequest(tag!))).status, 304);
+});

@@ -299,3 +299,20 @@ test('a background 401 clears saved account data even if its response body is em
     assert.equal(editor.loading, false);
   }
 });
+
+test('a foreground financial action starts a fresh read after an earlier foreground snapshot', async () => {
+  const replies: ((response: Response) => void)[] = [];
+  const editor = controller(async () => new Promise(resolve => {replies.push(resolve);}));
+  editor.applySnapshot({data: {trips: []}, revision: 5}, '"saved"');
+  const poll = editor.load();
+  let finished = false;
+  const financial = editor.load().then(result => {finished = true; return result;});
+  assert.equal(replies.length, 2, 'financial review needs a read started after the action');
+  replies[0](Response.json({data: {trips: []}, revision: 6}, {headers: {ETag: '"earlier-poll"'}}));
+  await poll;
+  assert.equal(finished, false, 'an earlier background response cannot resolve the fresh financial check');
+  replies[1](Response.json({data: {trips: []}, revision: 7}, {headers: {ETag: '"fresh-payment"'}}));
+  const result = await financial as Snapshot;
+  assert.equal(result.revision, 7);
+  assert.equal(editor.revision, 7);
+});

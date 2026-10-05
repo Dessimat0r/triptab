@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { CURRENCIES, MAX_AMOUNT, MAX_UNITS, draftSchema, receiptQuantitySchema, total, type Currency, type Draft, type Trip } from './model';
-import { reconcileReceiptScan, type ReceiptScanWarning } from './receipt-scan';
+import { mergeReceiptSourceLines, reconcileReceiptScan, type ReceiptScanWarning } from './receipt-scan';
 
 export class ReceiptAIError extends Error {
   constructor(message: string, public readonly status = 502, public readonly code = 'receipt_processing_failed') {
@@ -414,6 +414,7 @@ export function applyReceiptTranscription(_trip: Trip, draft: Draft, transcripti
   }
   const fieldSources = { ...draft.fieldSources };
   const canRead = (field: 'title' | 'currency' | 'date' | 'time' | 'tax' | 'tip' | 'discount') => {
+    if (['date', 'time'].includes(field) && !options.readPurchaseDetails && draft[field]) return false;
     const source = fieldSources[field];
     if (source !== undefined) return source !== 'user'
       && (field !== 'currency' || source === 'default' || draft.currency === null);
@@ -445,14 +446,7 @@ export function applyReceiptTranscription(_trip: Trip, draft: Draft, transcripti
     ...(source.confidence !== null ? { confidence: source.confidence } : {}),
     kind: source.kind, amount: source.amount, ...(source.mappedTo !== null ? { mappedTo: source.mappedTo } : {}),
   }));
-  const sourceLines = [...(draft.receiptScan?.sourceLines ?? [])];
-  for (const line of incomingSourceLines) {
-    const index = sourceLines.findIndex(previous => line.lineIndex !== undefined
-      ? previous.lineIndex === line.lineIndex
-      : previous.lineIndex === undefined && line.observedText !== undefined && previous.observedText === line.observedText);
-    if (index < 0) sourceLines.push(line);
-    else sourceLines[index] = line;
-  }
+  const sourceLines = mergeReceiptSourceLines(draft.receiptScan?.sourceLines, incomingSourceLines) ?? [];
   const warningKeys = new Set<string>();
   const uniqueWarnings = warnings.filter(warning => {
     const key = JSON.stringify([warning.code, warning.itemId, warning.itemIds, warning.lineIndex, warning.observedText, warning.difference]);

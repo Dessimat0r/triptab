@@ -91,7 +91,7 @@ test('the verified owner sees a masked empty shared key field and a disabled sub
   assert.match(rendered.html, /funds receipt processing for all signed-in users/);
 });
 
-test('submitting a key sends it only to the same-origin server, immediately clears the field and never echoes provider errors', async () => {
+test('submitting a key sends it only to the same-origin server, retains the masked field on failure and never echoes provider errors', async () => {
   const calls: { url: string; options?: RequestInit }[] = [];
   let finish!: (response: Response) => void;
   const ui = controller(async (url, options) => {
@@ -106,7 +106,7 @@ test('submitting a key sends it only to the same-origin server, immediately clea
   assert(form);
   (form.props.onSubmit as (event: unknown) => void)({ preventDefault() {} });
   const pending = ui.render();
-  assert.equal(keyInput(pending).props.value, '');
+  assert.equal(keyInput(pending).props.value, 'sk-test-ephemeral-key');
   const post = calls.find(call => call.options?.method === 'POST');
   assert.equal(post?.url, '/api/receipt/ai-settings');
   assert.equal(post?.options?.credentials, 'same-origin');
@@ -114,9 +114,9 @@ test('submitting a key sends it only to the same-origin server, immediately clea
   finish(Response.json({ error: 'sk-test-ephemeral-key' }, { status: 500 }));
   await settle();
   rendered = ui.render();
-  assert.doesNotMatch(rendered.html, /sk-test-ephemeral-key/);
   assert.match(rendered.html, /Receipt AI settings are temporarily unavailable/);
-  assert.equal(keyInput(rendered).props.value, '');
+  assert.equal(keyInput(rendered).props.type, 'password');
+  assert.equal(keyInput(rendered).props.value, 'sk-test-ephemeral-key');
 });
 
 test('removing a saved key refreshes settings and notifies the receipt editor without exposing credentials', async () => {
@@ -203,8 +203,9 @@ async function failedKeySave(failure: () => Promise<Response>) {
   (form.props.onSubmit as (event: unknown) => void)({ preventDefault() {} });
   await settle();
   const rendered = ui.render();
-  assert.equal(keyInput(rendered).props.value, '', 'a failed save never retains the submitted key');
-  assert.doesNotMatch(rendered.html, /sk-test-sensitive-value|RAW_PROVIDER_ERROR/);
+  assert.equal(keyInput(rendered).props.value, 'sk-test-sensitive-value', 'a failed save retains the masked key for retry');
+  assert.equal(keyInput(rendered).props.type, 'password');
+  assert.doesNotMatch(rendered.html.replace(/value="[^"]*"/g, ''), /sk-test-sensitive-value|RAW_PROVIDER_ERROR/);
   assert.deepEqual(ui.notifications, [], 'a rejected save must not announce a settings change');
   return rendered.html;
 }

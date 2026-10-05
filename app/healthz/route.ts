@@ -6,8 +6,10 @@ export async function GET() {
   try {
     // Compilation of this read-only query also detects missing migrations.
     await db().prepare(`SELECT r.state, r.created_at, r.legacy_cleanup_after, e.sequence, m.message_data, t.receipt_link_version,
+      a.sequence, i.audit_id, p.generation, r.content_type, r.size_bytes, r.sha256,
       ai.id, ai.user_id, ai.provider, ai.api_key_encrypted, pc.credentials, pt.transaction_data
       FROM receipts r CROSS JOIN activity_events e CROSS JOIN trips t
+      CROSS JOIN account_activity_events a CROSS JOIN invites i CROSS JOIN push_subscriptions p
       CROSS JOIN receipt_messages m INDEXED BY receipt_messages_trip_message_idx
       CROSS JOIN current_receipt_links l INDEXED BY current_receipt_links_entity_idx
       CROSS JOIN receipt_history_links h INDEXED BY receipt_history_links_snapshot_idx

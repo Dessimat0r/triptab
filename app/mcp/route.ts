@@ -4,7 +4,7 @@ import { resolveIdentity } from '@/lib/auth';
 import { draftSchema, tripSchema, draftUnitsSchema, receiptQuantitySchema, CURRENCIES, type Currency, type Trip, type Ledger, type Draft, type Expense } from '@/lib/model';
 import { receiptMemorySchema, type ReceiptMemory } from '@/lib/receipt-context';
 import { validateReceiptMemoryOwnership } from '@/lib/receipt-memory-ownership';
-import { reconcileReceiptScan, receiptScanFingerprint, scanSourceSchema, sourceLineSchema, receiptScanWarningSchema, RECEIPT_SCAN_WARNING_CODES } from '@/lib/receipt-scan';
+import { mergeReceiptSourceLines, reconcileReceiptScan, receiptScanFingerprint, scanSourceSchema, sourceLineSchema, receiptScanWarningSchema, RECEIPT_SCAN_WARNING_CODES } from '@/lib/receipt-scan';
 
 export const dynamic = 'force-dynamic';
 
@@ -203,7 +203,7 @@ delete metadataProperties.receiptId;
 delete metadataProperties.items;
 for (const key of ['percentages', 'fx', 'bankAmount']) metadataProperties[key] = { anyOf: [metadataProperties[key], { type: 'null' }] };
 metadataProperties.currency = { anyOf: [metadataProperties.currency, { type: 'null' }] };
-publishedMetadata.currency = metadataProperties.currency;
+for (const key of ['currency', 'percentages', 'fx', 'bankAmount']) publishedMetadata[key] = metadataProperties[key];
 publishedDraft.properties = {
   ...publishedMetadata,
   upsertItems: { type: 'array', maxItems: 200, items: publishedItem, description: 'Create or correct only these stable item IDs. Omitted existing items are retained. New items may have null unreadable amounts and no selected travellers.' },
@@ -240,7 +240,7 @@ tools.push({
   description: 'Create or update an expense draft from the user’s natural-language payment details for review in TripTab. Use this for a card charge, cash purchase, dinner, taxi or other expense without an image. It never posts an expense or records a settlement transfer. ' + expenseDraftTool.description,
 });
 for (const tool of tools.filter(tool => ['update_receipt_draft', 'create_expense_draft'].includes(tool.name))) {
-  tool.description += ' Supplying receiptScan means receipt recognition: TripTab preserves all saved personal shares and user-confirmed item names, amounts and quantities; new recognition items remain unassigned. Save explicit user-requested financial/item corrections separately with upsertItems and metadataPatch, omitting receiptScan. Receipt-backed AI proposals without evidence remain incomplete until the independently printed total is confirmed. Cost shares describe who owes the cost; payer remains the one person who paid upfront. Whole-receipt percentages include tax, tip and discount and override item shares. Percentages total 100 with at most two decimal places; item units have at most six decimal places and allocations exactly matching selected member IDs. Their allocations must add to the purchased total before saving an expense. Tax included in line totals must not be added again. Receipt evidence, independent printed totals and sourceLines are separate from these financial choices. Default metadata explicitly marked by the app may be filled from receipt observations; saved user details require an explicit metadataPatch to change.';
+  tool.description += ' Supplying receiptScan means receipt recognition: TripTab preserves all saved personal shares and user-confirmed item names, amounts and quantities; new recognition items remain unassigned. Assistant corrections remain proposals and never count as human confirmation. Save explicit user-requested financial/item corrections separately with upsertItems and metadataPatch, omitting receiptScan. Receipt-backed AI proposals without evidence remain incomplete until the independently printed total is confirmed. Cost shares describe who owes the cost; payer remains the one person who paid upfront. Whole-receipt percentages include tax, tip and discount and override item shares. Percentages total 100 with at most two decimal places; item units have at most six decimal places and allocations exactly matching selected member IDs. Their allocations must add to the purchased total before saving an expense. Tax included in line totals must not be added again. Receipt evidence, independent printed totals and sourceLines are separate from these financial choices. Default metadata explicitly marked by the app may be filled from receipt observations; saved user details require an explicit metadataPatch to change.';
 }
 
 const idSchema = z.string().min(1).max(100);
@@ -685,9 +685,9 @@ export async function POST(request: Request) {
           } else if (previous) {
             next.fieldSources = {
               ...previous.fieldSources,
-              ...(item.name !== undefined && item.name !== previous.name ? { name: 'user' as const } : {}),
-              ...(item.amount !== undefined && item.amount !== previous.amount ? { amount: 'user' as const } : {}),
-              ...(item.quantity !== undefined && JSON.stringify(next.quantity) !== JSON.stringify(previous.quantity) ? { quantity: 'user' as const } : {}),
+              ...(item.name !== undefined && item.name !== previous.name ? { name: 'assistant' as const } : {}),
+              ...(item.amount !== undefined && item.amount !== previous.amount ? { amount: 'assistant' as const } : {}),
+              ...(item.quantity !== undefined && JSON.stringify(next.quantity) !== JSON.stringify(previous.quantity) ? { quantity: 'assistant' as const } : {}),
             };
             if (!Object.keys(next.fieldSources).length) next.fieldSources = undefined;
           }
@@ -709,7 +709,7 @@ export async function POST(request: Request) {
         const fieldSources = {
           ...existing?.fieldSources,
           ...Object.fromEntries(Object.keys(defaultReceiptMetadata).map(key => [key, 'receipt'])),
-          ...Object.fromEntries(Object.keys(metadataPatch ?? {}).filter(key => ['title', 'currency', 'date', 'time', 'timezone', 'payer', 'tax', 'tip', 'discount'].includes(key)).map(key => [key, 'user'])),
+          ...Object.fromEntries(Object.keys(metadataPatch ?? {}).filter(key => ['title', 'currency', 'date', 'time', 'timezone', 'payer', 'tax', 'tip', 'discount'].includes(key)).map(key => [key, 'assistant'])),
         };
         const candidate = {
           title: '', currency: null, tax: 0, tip: 0, discount: 0,
@@ -730,6 +730,7 @@ export async function POST(request: Request) {
           fieldSources: Object.keys(fieldSources).length ? fieldSources : undefined,
           receiptScan: scanEvidence ? {
             ...existing?.receiptScan, ...scanEvidence,
+            sourceLines: mergeReceiptSourceLines(existing?.receiptScan?.sourceLines, scanEvidence.sourceLines),
             status: 'incomplete', warnings: [...(existing?.receiptScan?.warnings ?? []), ...(scanEvidence.warnings ?? [])],
             fieldSources: {
               ...existing?.receiptScan?.fieldSources,

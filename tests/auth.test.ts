@@ -458,8 +458,9 @@ test('audit insertion failures roll back registration, password changes, links a
   assert.equal(Number(database.sqlite.prepare('SELECT COUNT(*) AS count FROM auth_links').get()?.count), 0);
   await assert.rejects(performAuthAction(sessionRequest(local.cookie!), { action: 'login', email: 'traveller@example.com', password }, database.asD1()), /audit unavailable/);
   assert.ok(await sessionIdentity(sessionRequest(local.cookie!), database.asD1()));
-  await assert.rejects(performAuthAction(sessionRequest(local.cookie!), { action: 'logout' }, database.asD1()), /audit unavailable/);
-  assert.ok(await sessionIdentity(sessionRequest(local.cookie!), database.asD1()));
+  const logout = await performAuthAction(sessionRequest(local.cookie!), { action: 'logout' }, database.asD1());
+  assert.equal(logout.state.authenticated, false);
+  assert.equal(await sessionIdentity(sessionRequest(local.cookie!), database.asD1()), null);
   assert.equal(auditCount(database), before);
 });
 

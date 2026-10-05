@@ -1,4 +1,5 @@
 "use client";
+import { receiptWarningNames } from "@/lib/receipt-scan";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Currency } from "@/lib/model";
@@ -202,7 +203,7 @@ function scanDescription(value: unknown, currency: string | undefined): string {
   const scan = auditRecord(value);
   if (!scan) return "No recorded scan evidence";
   const labels: Record<string, string> = { matched: "Matches printed total", "needs-review": "Needs review", incomplete: "Incomplete receipt evidence" };
-  const warnings = entries(scan.warnings).map(warning => `${warning.resolved ? "Reviewed" : "Needs review"}: ${auditText(warning.message) || auditText(warning.code)}${warning.itemId ? ` (item ${auditText(warning.itemId)})` : ""}`);
+  const warnings = entries(scan.warnings).map(warning => `${warning.resolved ? "Reviewed" : "Needs review"}: ${receiptWarningNames[auditText(warning.code)] || "Check this receipt detail."}${warning.itemId ? ` (item ${auditText(warning.itemId)})` : ""}`);
   const lines = entries(scan.sourceLines).map(line => `${typeof line.lineIndex === "number" ? `Line ${line.lineIndex + 1}: ` : ""}${auditText(line.observedText) || auditText(line.kind)}${typeof line.amount === "number" ? ` · ${money(line.amount, currency)}` : ""}${line.mappedTo ? ` · ${auditText(line.mappedTo)}` : ""}`);
   return [labels[auditText(scan.status)] || "Status not recorded",
     `Printed subtotal: ${money(scan.printedSubtotal, currency)}`,

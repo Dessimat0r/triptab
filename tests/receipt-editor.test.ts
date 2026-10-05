@@ -67,6 +67,7 @@ const controllerSource = `return function createController(initial, boundary) {
   const setReceiptProcessing = next => {receiptProcessing=next};
   const setReceiptItemized = next => {receiptItemized=next};
   const setUploading = next => {uploading=next};
+  const setReceiptAIConnecting = () => {};
   const setView = next => {view=next}, setHelp = next => {help=next}, prepareReceiptImage = async file => file;
   const setReceiptHistoryOpen = next => {receiptHistoryOpen=next};
   const setRestoration = next => {restoration=next};
@@ -84,7 +85,7 @@ const controllerSource = `return function createController(initial, boundary) {
   ${handlers}
   return {${names.join(',')},get editing(){return editing},get trip(){return trip},get error(){return error},get updates(){return updates},get baseline(){return editorBaseline.current},get processed(){return processedReceipt},
     edit(next){editing={...editing,...next};activeReceiptEditor.current=editing},remote(next,revision=updates.length){trip=structuredClone(next);latestSnapshot.current={data:{trips:[trip]},revision}},
-    get prompt(){return receiptPrompt},get handoffError(){return receiptHandoffError},get clipboard(){return clipboard},get requests(){return requests},get processing(){return receiptProcessing},get itemized(){return receiptItemized},get pending(){return receiptPending},
+    get prompt(){return receiptPrompt},get handoffError(){return receiptHandoffError},get clipboard(){return clipboard},get requests(){return requests},get processing(){return receiptProcessing},get itemized(){return receiptItemized},get pending(){return receiptPending},get uploading(){return uploading},
     network(next){network=next},clipboardUnavailable(){clipboardFailure=true},persistenceFailure(){failSave=true},
     aiConnected(){receiptAI={accountId:profile.id,configured:true,connected:true,provider:'api',eligible:true,manageable:true,siwcAvailable:false}},
     participantAccount(connected=true){profile.id='participant';receiptSessionScope.current.accountId='participant';receiptAI={accountId:'participant',configured:connected,connected,provider:'api',eligible:true,manageable:false,siwcAvailable:false}},
@@ -108,7 +109,7 @@ type Controller = {
   reviewRestore(event: {tripId:string;entityType:string;entityId:string;actorName:string;createdAt:string;before:Expense}):Promise<void>;
   editing: Editing | null; trip: Trip; error: string; updates: Trip[]; baseline: { tripId: string; expense?: Expense } | null;
   processed: Draft | null; edit(next: Partial<Editing>): void; remote(next: Trip,revision?:number): void; conflict(next: Expense | null): void;
-  prompt:string;handoffError:string;clipboard:string[];requests:{url:string;options?:RequestInit}[];processing:boolean;itemized:boolean;pending:boolean;
+  prompt:string;handoffError:string;clipboard:string[];requests:{url:string;options?:RequestInit}[];processing:boolean;itemized:boolean;pending:boolean;uploading:boolean;
   network(next:(url:string,options?:RequestInit)=>Promise<unknown>):void;clipboardUnavailable():void;persistenceFailure():void;aiConnected():void;accountSwitch():void;
   participantAccount(connected?:boolean):void;statusNetwork(next:()=>Promise<unknown>):void;deferAIState():void;ai:{connected:boolean;accountId:string}|null;
   restoring(): void; restoration: unknown;
@@ -613,4 +614,17 @@ test('opening a legacy populated draft does not relabel saved metadata as replac
   assert.equal(editor.editing?.fieldSources?.date, undefined);
   assert.equal(editor.editing?.fieldSources?.time, undefined);
   assert.equal(editor.editing?.fieldSources?.tax, undefined);
+});
+
+test('closing a pending upload clears its busy state and its late response cannot fill a new editor', async () => {
+  const initial = fixture(), editor = controller(initial); editor.openExpense(initial.expenses[0]);
+  let finish!: (response: unknown) => void;
+  editor.network(() => new Promise(resolve => { finish = resolve; }));
+  const pendingUpload = editor.captureEditorReceipt(new File(['image'], 'receipt.png', {type: 'image/png'}));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(editor.uploading, true);
+  editor.closeReceiptEditor(); assert.equal(editor.uploading, false);
+  editor.openExpense(initial.expenses[0]);
+  finish({ok:true,json:async()=>({id:'late-photo'})}); await pendingUpload;
+  assert.equal(editor.uploading, false); assert.equal(editor.editing?.receiptId, 'replacement-photo');
 });

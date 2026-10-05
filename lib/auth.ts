@@ -445,7 +445,7 @@ async function unlinkChatGPT(request: Request, database: D1Database) {
   return { state: await readAuthState(request, database) };
 }
 export async function performAuthAction(request: Request, body: Record<string, unknown>, database: D1Database): Promise<{ state: AuthState; cookie?: string; additionalCookies?: string[] }> {
-  if (['register', 'login', 'set_password', 'logout'].includes(String(body.action))) await cleanupExpiredAuthData(database);
+  if (['register', 'login', 'set_password'].includes(String(body.action))) await cleanupExpiredAuthData(database);
   switch (body.action) {
     case 'register': return register(request, body, database);
     case 'login': return login(request, body, database);
@@ -469,18 +469,24 @@ export async function performAuthAction(request: Request, body: Record<string, u
       const token = sessionToken(request);
       let actor: AuthIdentity | null = null;
       try { actor = await resolveIdentity(request, {}, database); }
-      catch (error) { if (!(error instanceof Error) || error.message !== 'UNAUTHORIZED') throw error; }
-      if (actor) {
-        const profile = await profileRow(actor, database);
-        const event = { userId: actor.id, actorName: profile.display_name, entityType: 'session' as const, entityId: 'browser',
-          action: 'delete' as const, before: { active: true }, after: { active: false }, source: actor.kind === 'chatgpt' ? 'chatgpt' as const : 'web' as const };
-        if (actor.kind === 'session' && token) await database.batch([
-          database.prepare('DELETE FROM auth_sessions WHERE token_hash = ? AND user_id = ?').bind(await hashToken(token), actor.id),
-          accountAuditStatement(database, event, { sql: 'changes() > 0', bindings: [] }),
-        ]);
-        else await database.batch([accountAuditStatement(database, event,
-          { sql: 'NOT EXISTS (SELECT 1 FROM auth_links WHERE oai_user_id = ? AND user_id <> ?)', bindings: [actor.id, actor.id] })]);
+      catch { /* Revocation does not require a resolvable account. */ }
+      try {
+        if (actor) {
+          const profile = await profileRow(actor, database);
+          const event = { userId: actor.id, actorName: profile.display_name, entityType: 'session' as const, entityId: 'browser',
+            action: 'delete' as const, before: { active: true }, after: { active: false }, source: actor.kind === 'chatgpt' ? 'chatgpt' as const : 'web' as const };
+          if (actor.kind === 'session' && token) await database.batch([
+            database.prepare('DELETE FROM auth_sessions WHERE token_hash = ? AND user_id = ?').bind(await hashToken(token), actor.id),
+            accountAuditStatement(database, event, { sql: 'changes() > 0', bindings: [] }),
+          ]);
+          else await database.batch([accountAuditStatement(database, event,
+            { sql: 'NOT EXISTS (SELECT 1 FROM auth_links WHERE oai_user_id = ? AND user_id <> ?)', bindings: [actor.id, actor.id] })]);
+        }
+      } catch {
+        // Audit/profile outages must not keep a browser session active.
+        console.error('TripTab logout audit unavailable', { code: 'logout_audit_unavailable' });
       }
+      if (token) await database.prepare('DELETE FROM auth_sessions WHERE token_hash = ?').bind(await hashToken(token)).run();
       // The provider's own session belongs to ChatGPT; it cannot be signed out here.
       return { state: { authenticated: false, hasPassword: false, chatgptLinked: false, chatgptAvailable: !!trustedChatGPTIdentity(request), emailVerified: false }, cookie: cookie(request, '', true), additionalCookies: [signedOutCookie(request, true)] };
     }

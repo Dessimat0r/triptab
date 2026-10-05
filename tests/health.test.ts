@@ -93,3 +93,12 @@ test('partial registry migrations cannot report ready without their indexed iden
     const response = await GET(); assert.equal(response.status, 503); assert.deepEqual(await response.json(), { status: 'unavailable' });
   });
 });
+
+ test('partial migration 0005 columns never produce a healthy result', async context => {
+  for (const [table, column] of [['invites','audit_id'], ['push_subscriptions','generation'], ['receipts','content_type'], ['receipts','size_bytes'], ['receipts','sha256']]) await context.test(`${table}.${column}`, async () => {
+    sqlite = new DatabaseSync(':memory:'); receiptBinding = true;
+    for (const file of (await readdir(new URL('../drizzle/', import.meta.url))).filter(file => file.endsWith('.sql')).sort()) sqlite.exec(await readFile(new URL('../drizzle/' + file, import.meta.url), 'utf8'));
+    sqlite.exec(`ALTER TABLE ${table} DROP COLUMN ${column}`);
+    assert.equal((await GET()).status, 503);
+  });
+});

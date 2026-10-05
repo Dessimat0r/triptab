@@ -482,7 +482,7 @@ async function validateTripReceiptMemory(trip: Trip, previous: Trip | undefined,
   return changed;
 }
 
-export async function writeLedger(id: string, data: unknown, revision: unknown, options: { source?: ActivitySource } = {}) {
+export async function writeLedger(id: string, data: unknown, revision: unknown, options: { source?: ActivitySource; includeFreshness?: boolean } = {}) {
   // Parse bounded structure first. New financial rules are applied after access
   // checks, with trusted stored snapshots allowing unchanged legacy entries to
   // remain available until their owner explicitly repairs them.
@@ -632,7 +632,8 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
     });
   }
   // Omitted trips remain available: ledger saves never delete shared records.
-  return readLedger(id);
+  const { data: savedData, revision: savedRevision, freshness } = await readLedgerSnapshot(id);
+  return { data: savedData, revision: savedRevision, ...(options.includeFreshness ? { freshness } : {}) };
 }
 
 export function failure(e: unknown) {

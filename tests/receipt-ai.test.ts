@@ -1002,3 +1002,9 @@ test('HTTP does not reinterpret a saved natural-language share question as initi
   assert.equal(state.providerCalls, 0);
   assert.equal(state.writes, 0);
 });
+
+test('opting out of purchase detail reading protects existing date/time even with receipt provenance', () => {
+  const existing = {...draft, date: '2026-10-04', time: '12:00', fieldSources: {date:'receipt' as const, time:'receipt' as const}};
+  const result = applyReceiptTranscription(trip, existing, transcription, undefined, {readPurchaseDetails:false});
+  assert.equal(result.date, existing.date); assert.equal(result.time, existing.time);
+});

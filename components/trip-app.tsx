@@ -119,18 +119,18 @@ function Amount({
           const n = Math.round(Number(s) * 100);
           if (s && s !== "." && (!Number.isSafeInteger(n) || n > 100000000)) return;
           set(s);
-          if (nullable && (!s || s === ".")) onChange(null);
-          else if (Number.isSafeInteger(n)) onChange(n);
+          if (nullable && (!s || s === ".")) { if (value !== null) onChange(null); }
+          else if (s && s !== "." && Number.isSafeInteger(n) && n !== value) onChange(n);
         }
       }}
       onBlur={() => {
         const n = Math.round(Number(v) * 100);
-        if ((nullable && !v) || !Number.isSafeInteger(n) || n > 100000000) {
-          if (nullable) { onChange(null); set(""); }
+        if ((nullable && (!v || v === ".")) || !Number.isSafeInteger(n) || n > 100000000) {
+          if (nullable) { if (value !== null) onChange(null); set(""); }
           else set(((value ?? 0) / 100).toFixed(2));
           return;
         }
-        onChange(n);
+        if (n !== value) onChange(n);
         set((n / 100).toFixed(2));
       }}
     />
@@ -239,8 +239,8 @@ export default function Home({ children }: { children: ReactNode }) {
   const load = useCallback(async (options?: { background?: boolean }) => {
     const pending = inFlightLoad.current;
     // Background refreshes share the active request. A foreground action starts
-    // a fresh read if the pending request began before it in the background.
-    if (pending?.requestId === loadRequest.current && (!pending.background || options?.background)) {
+    // a fresh read: any pending response may predate its own mutation.
+    if (pending?.requestId === loadRequest.current && options?.background) {
       if (!options?.background) setLoading(true);
       return pending.promise;
     }
@@ -631,6 +631,9 @@ export default function Home({ children }: { children: ReactNode }) {
     reviewedReceipt.current = null;
     blankReceiptEditor.current = null;
     editorDraftBinding.current = null;
+    setUploading(false);
+    setReceiptAIConnecting(false);
+    setReceiptChecking(false);
     setReceiptPending(false);
     setReceiptCopied(false);
     setReceiptPrompt("");
@@ -710,7 +713,11 @@ export default function Home({ children }: { children: ReactNode }) {
         // Incomplete live text (NaN) cannot be written as JSON. Preserve the
         // item and its last usable quantities; the question includes that text.
         const old = previous?.items.find(value => value.id === item.id) || target?.items.find(value => value.id === item.id);
-        return draftItemSchema.parse({ ...item, members: old?.members || item.members, percentages: old?.percentages, units: old?.units });
+        const fallback = draftItemSchema.safeParse({ ...item, members: old?.members || item.members, percentages: old?.percentages, units: old?.units });
+        return fallback.success ? fallback.data : old ?? draftItemSchema.parse({
+          id: item.id, name: item.name.slice(0, 200), amount: Number.isSafeInteger(item.amount) && item.amount !== null && item.amount >= 0 && item.amount <= 100000000 ? item.amount : null,
+          members: [],
+        });
       }),
       receiptScan: source.receiptScan,
       fieldSources: source.fieldSources,

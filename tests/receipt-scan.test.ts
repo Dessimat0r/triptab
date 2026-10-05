@@ -289,3 +289,10 @@ test('legacy posted expenses remain unchanged with no invented printed values or
   assert.equal(reconcileReceiptScan(legacy), undefined);
   assert.deepEqual(result.trips[0].expenses[0], legacy);
 });
+
+ test('rescan source positions cannot replace or erase adjustment evidence', async () => {
+  const { mergeReceiptSourceLines } = await import('../lib/receipt-scan');
+  const old = {lineIndex: 4, kind: 'adjustment' as const, observedText: 'Coupon -2.00', amount: -200, mappedTo: 'unmapped' as const};
+  const next = {lineIndex: 4, kind: 'total' as const, observedText: 'TOTAL 10.00', amount: 1000};
+  assert.deepEqual(mergeReceiptSourceLines([old], [next, old]), [old, next]);
+});
