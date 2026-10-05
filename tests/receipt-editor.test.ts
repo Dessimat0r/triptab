@@ -3,7 +3,9 @@ import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { createSourceFile, isFunctionDeclaration, ModuleKind, ScriptKind, ScriptTarget, transpileModule } from 'typescript';
-import { equalFinancialValue } from '../lib/client-ledger';
+import { equalFinancialValue, equalSavedValue } from '../lib/client-ledger';
+import { buildReceiptPrompt } from '../lib/receipt-chatgpt';
+import { isBlankReceipt, isUnchangedInitialReceipt, matchingReceiptProposal, mayFillInitialReceipt, receiptEditableValue, receiptProposalEditor } from '../lib/receipt-processing';
 import { itemSchema, itemSplitError, ledgerSchema, receiptSplitError, total, validateLedger, type Draft, type Expense, type ReceiptMessage, type Trip } from '../lib/model';
 
 // Execute the actual page handlers against a small state/persistence boundary.
@@ -13,7 +15,7 @@ const pageSource = await readFile(new URL('../components/trip-app.tsx', import.m
 const syntax = createSourceFile('page.tsx', pageSource, ScriptTarget.Latest, true, ScriptKind.TSX);
 const home = syntax.statements.find(statement => isFunctionDeclaration(statement) && statement.name?.text === 'Home');
 assert(home && isFunctionDeclaration(home) && home.body);
-const names = ['openExpense', 'openDraft', 'newExpense', 'keepExpenseEdits', 'editorIsCurrent', 'resetReceiptReview', 'storeEditorReceipt', 'submitExpense', 'checkEditorReceipt', 'reviewProcessedReceipt', 'reviewRestore'];
+const names = ['openExpense', 'openDraft', 'newExpense', 'keepExpenseEdits', 'editorIsCurrent', 'resetReceiptReview', 'closeReceiptEditor', 'isReceiptSessionCurrent', 'stageEditorReceiptPrompt', 'refreshReceiptAIStatus', 'prepareEditorReceipt', 'copyEditorReceiptPrompt', 'captureEditorReceipt', 'upload', 'processEditorReceipt', 'readEditorReceipt', 'sendReceiptQuestion', 'reconcileEditorReceipt', 'storeEditorReceipt', 'submitExpense', 'checkEditorReceipt', 'reviewProcessedReceipt', 'reviewRestore'];
 const declarations = [...syntax.statements, ...home.body.statements].filter(isFunctionDeclaration);
 const handlers = ['mergeReceiptConversation', 'hasPendingReceiptQuestions', ...names].map(name => {
   const declaration = declarations.find(statement => statement.name?.text === name);
@@ -24,26 +26,47 @@ const controllerSource = `return function createController(initial, boundary) {
   let trip = structuredClone(initial), editing = null, processedReceipt = null, error = '', editorConflict = null;
   let receiptPending = false, receiptCopied = false, receiptPrompt = '', receiptHistoryOpen = false, restoration = null;
   let paste = '', fxError = '', referenceRate = null;
-  let receiptChecking = false;
-  const uploading = false, saving = false, profile = {id:'owner'};
+  let receiptChecking = false, uploading = false, receiptProcessing = false, receiptItemized = false, receiptHandoffError = '', receiptHandoffOpened = false;
+  const saving = false, profile = {id:'owner'};
+  let receiptAI = null, clipboardFailure = false, failSave = false, network, statusNetwork;
+  let commitAIState = true;
+  let commitLayout = true, view = '', help = false;
+  const clipboard = [], requests = [];
+  const navigator = {clipboard:{writeText:async value=>{if(clipboardFailure)throw Error('Blocked clipboard');clipboard.push(value)}}};
+  const receiptSession={current:0}, receiptSessionScope={current:{accountId:'owner',tripId:trip.id}}, initialReceiptReview={current:null}, reviewedReceipt={current:null}, blankReceiptEditor={current:null};
+  const editorDraftBinding={current:null};
+  const activeReceiptEditor={current:null};
+  const receiptProcessRequest={current:0},receiptProcessInFlight={current:false};
+  const receiptAIStatusRequest={current:0};
   const updates = [], editorBaseline = {current:null};
   const latestSnapshot = {current:{data:{trips:[trip]},revision:0}};
-  const {itemSchema,itemSplitError,receiptSplitError,total,equalFinancialValue} = boundary;
+  const {itemSchema,itemSplitError,receiptSplitError,total,equalFinancialValue,equalSavedValue,buildReceiptPrompt,isBlankReceipt,isUnchangedInitialReceipt,matchingReceiptProposal,mayFillInitialReceipt,receiptEditableValue,receiptProposalEditor} = boundary;
   const uid = boundary.uid, today = () => '2026-10-04', localTime = () => '12:00';
   const money = (amount, currency) => currency+' '+amount/100;
   const previewTotal = entry => total(entry);
   const confirm = async () => true;
   const load = async () => ({data:{trips:[trip]},revision:updates.length});
   const setPaymentEditor = () => {};
-  const setEditing = next => {editing = typeof next === 'function' ? next(editing) : next};
+  const setEditing = next => {editing = typeof next === 'function' ? next(editing) : next;if(commitLayout)activeReceiptEditor.current=editing};
   const setError = next => {error=next};
   const setProcessedReceipt = next => {processedReceipt=typeof next === 'function' ? next(processedReceipt) : next};
   const setReceiptChecking = next => {receiptChecking=next};
-  const fetch = async () => ({ok:true,headers:{get:()=>''},json:async()=>({data:{trips:[structuredClone(trip)]},revision:updates.length})});
-  const applySnapshot = snapshot => {latestSnapshot.current=snapshot;trip=snapshot.data.trips[0]};
+  const fetch = async (url,options) => {
+    requests.push({url,options});
+    if(url==='/api/receipt/ai-status')return statusNetwork?statusNetwork():({ok:true,json:async()=>receiptAI||{configured:false,connected:false,provider:'api',eligible:true,manageable:true,siwcAvailable:false}});
+    return network?network(url,options):({ok:true,headers:{get:()=>''},json:async()=>({data:{trips:[structuredClone(trip)]},revision:updates.length})});
+  };
+  const setReceiptAI = next => {if(commitAIState)receiptAI=next};
+  const applySnapshot = snapshot => {if(snapshot.revision<latestSnapshot.current.revision)return false;latestSnapshot.current=snapshot;trip=snapshot.data.trips[0];return true};
   const setReceiptPending = next => {receiptPending=next};
   const setReceiptCopied = next => {receiptCopied=next};
   const setReceiptPrompt = next => {receiptPrompt=next};
+  const setReceiptHandoffError = next => {receiptHandoffError=next};
+  const setReceiptHandoffOpened = next => {receiptHandoffOpened=next};
+  const setReceiptProcessing = next => {receiptProcessing=next};
+  const setReceiptItemized = next => {receiptItemized=next};
+  const setUploading = next => {uploading=next};
+  const setView = next => {view=next}, setHelp = next => {help=next}, prepareReceiptImage = async file => file;
   const setReceiptHistoryOpen = next => {receiptHistoryOpen=next};
   const setRestoration = next => {restoration=next};
   const setEditorConflict = next => {editorConflict=next};
@@ -51,6 +74,7 @@ const controllerSource = `return function createController(initial, boundary) {
   const setPaste = next => {paste=next};
   const setFxError = next => {fxError=next};
   async function updateTrip(next) {
+    if(failSave)return false;
     error = '';
     const parsed = boundary.validateLedger(boundary.ledgerSchema.parse({trips:[next]}),{previous:{trips:[trip]}});
     trip = parsed.trips[0]; latestSnapshot.current = {data:{trips:[trip]},revision:updates.length+1};
@@ -58,7 +82,14 @@ const controllerSource = `return function createController(initial, boundary) {
   }
   ${handlers}
   return {${names.join(',')},get editing(){return editing},get trip(){return trip},get error(){return error},get updates(){return updates},get baseline(){return editorBaseline.current},get processed(){return processedReceipt},
-    edit(next){editing={...editing,...next}},remote(next){trip=structuredClone(next)},
+    edit(next){editing={...editing,...next};activeReceiptEditor.current=editing},remote(next,revision=updates.length){trip=structuredClone(next);latestSnapshot.current={data:{trips:[trip]},revision}},
+    get prompt(){return receiptPrompt},get handoffError(){return receiptHandoffError},get clipboard(){return clipboard},get requests(){return requests},get processing(){return receiptProcessing},get itemized(){return receiptItemized},get pending(){return receiptPending},
+    network(next){network=next},clipboardUnavailable(){clipboardFailure=true},persistenceFailure(){failSave=true},
+    aiConnected(){receiptAI={accountId:profile.id,configured:true,connected:true,provider:'api',eligible:true,manageable:true,siwcAvailable:false}},
+    participantAccount(connected=true){profile.id='participant';receiptSessionScope.current.accountId='participant';receiptAI={accountId:'participant',configured:connected,connected,provider:'api',eligible:true,manageable:false,siwcAvailable:false}},
+    statusNetwork(next){statusNetwork=next},deferAIState(){commitAIState=false},get ai(){return receiptAI},
+    deferLayout(){commitLayout=false;activeReceiptEditor.current=null},get view(){return view},get help(){return help},
+    accountSwitch(){receiptSession.current++;receiptSessionScope.current={accountId:'other',tripId:trip.id}},
     conflict(next){editorConflict={latest:next}},restoring(){restoration={actorName:'Earlier traveller',createdAt:'2026-10-04T00:00:00Z',adjustments:[]}},
     get restoration(){return restoration}};
 }`;
@@ -70,13 +101,19 @@ type Controller = {
   storeEditorReceipt(entry: Editing, receiptId?: string, keepProposal?: boolean): Promise<Draft | null>;
   submitExpense(event: { preventDefault(): void }): Promise<void>;
   checkEditorReceipt(repliesOnly?:boolean):Promise<void>; reviewProcessedReceipt():void;
+  closeReceiptEditor():void;prepareEditorReceipt():Promise<void>;captureEditorReceipt(file:File):Promise<void>;processEditorReceipt(draft?:Draft):Promise<boolean>;reconcileEditorReceipt(trip:Trip):void;
+  upload(file:File):Promise<void>;deferLayout():void;view:string;help:boolean;
+  sendReceiptQuestion(text:string,itemId?:string):Promise<boolean>;
   reviewRestore(event: {tripId:string;entityType:string;entityId:string;actorName:string;createdAt:string;before:Expense}):Promise<void>;
   editing: Editing | null; trip: Trip; error: string; updates: Trip[]; baseline: { tripId: string; expense?: Expense } | null;
-  processed: Draft | null; edit(next: Partial<Editing>): void; remote(next: Trip): void; conflict(next: Expense | null): void;
+  processed: Draft | null; edit(next: Partial<Editing>): void; remote(next: Trip,revision?:number): void; conflict(next: Expense | null): void;
+  prompt:string;handoffError:string;clipboard:string[];requests:{url:string;options?:RequestInit}[];processing:boolean;itemized:boolean;pending:boolean;
+  network(next:(url:string,options?:RequestInit)=>Promise<unknown>):void;clipboardUnavailable():void;persistenceFailure():void;aiConnected():void;accountSwitch():void;
+  participantAccount(connected?:boolean):void;statusNetwork(next:()=>Promise<unknown>):void;deferAIState():void;ai:{connected:boolean;accountId:string}|null;
   restoring(): void; restoration: unknown;
 };
 const createController = new Function(compiled)() as (initial: Trip, boundary: object) => Controller;
-const controller = (trip: Trip) => createController(trip, { uid: randomUUID, ledgerSchema, itemSchema, itemSplitError, receiptSplitError, total, validateLedger, equalFinancialValue });
+const controller = (trip: Trip) => createController(trip, { uid: randomUUID, ledgerSchema, itemSchema, itemSplitError, receiptSplitError, total, validateLedger, equalFinancialValue, equalSavedValue, buildReceiptPrompt, isBlankReceipt, isUnchangedInitialReceipt, matchingReceiptProposal, mayFillInitialReceipt, receiptEditableValue, receiptProposalEditor });
 const stamp = '2026-10-04T12:00:00Z';
 const question: ReceiptMessage = { id: 'question', role: 'user', text: 'Check the replacement image', createdAt: stamp };
 const reply: ReceiptMessage = { id: 'reply', role: 'assistant', replyTo: question.id, text: 'Reviewed replacement image', createdAt: stamp };
@@ -270,4 +307,198 @@ test('ordinary edits retain consumed-draft provenance while an explicit new copy
   assert.notEqual(editor.editing?.id,posted.id); assert.equal(editor.editing?.sourceDraftId,undefined); assert.equal(editor.editing?.draftId,undefined);
   assert.equal(editor.restoration,null); assert.equal(editor.processed,null); await submit(editor);
   assert.equal(editor.trip.expenses[0].sourceDraftId,undefined,'a new copy cannot claim a consumed draft belonging to its earlier expense');
+});
+
+const response = (body: unknown, ok = true) => ({ok,headers:{get:()=>''},json:async()=>body});
+const receiptFile = () => new File(['receipt pixels'], 'photo.jpg', {type:'image/jpeg'});
+function itemizedTrip(initial: Trip, amount = 2300): Trip {
+  const next=structuredClone(initial);
+  const draft=next.drafts[0];
+  draft.status='review';draft.source='ai';draft.title='Transcribed dinner';
+  draft.items=[{id:'native-item',name:'Dinner from image',amount,members:['a','b']}];
+  return next;
+}
+
+test('copying a saved receipt never overwrites a newer native proposal with stale editor values', async () => {
+  const initial=fixture();const editor=controller(initial);editor.openExpense(initial.expenses[0]);
+  const newer=itemizedTrip(initial,9900);editor.remote(newer);const original=structuredClone(newer.drafts[0]);
+  await editor.prepareEditorReceipt();
+  assert.equal(editor.updates.length,0);assert.deepEqual(editor.trip.drafts[0],original);
+  assert.equal(editor.editing?.items[0].amount,2000);assert(editor.prompt.includes('replacement-draft'));
+  assert.equal(editor.clipboard[0],editor.prompt);
+});
+
+test('clipboard failure keeps the exact saved prompt visible without writing or changing items', async () => {
+  const initial=fixture();const editor=controller(initial);editor.openExpense(initial.expenses[0]);editor.clipboardUnavailable();
+  await editor.prepareEditorReceipt();
+  assert.equal(editor.updates.length,0);assert(editor.prompt.includes('get_receipt_image'));
+  assert.match(editor.handoffError,/Select and copy the exact receipt prompt/);
+  assert.deepEqual(editor.editing?.items,initial.drafts[0].items);
+});
+
+test('a failed draft save cannot launch AI processing or mark the uploaded photo as stored', async () => {
+  const editor=controller(blankTrip());editor.newExpense();editor.aiConnected();editor.persistenceFailure();
+  editor.network(async()=>response({receiptId:'new-photo'}));
+  await editor.captureEditorReceipt(receiptFile());
+  assert.equal(editor.requests.length,1);assert.equal(editor.prompt,'');assert.equal(editor.pending,true);
+  assert.match(editor.handoffError,/draft could not be saved/);assert.equal(editor.trip.drafts.length,0);
+});
+
+test('native reading starts only after image and canonical draft save, and fills an unchanged new editor without posting', async () => {
+  const editor=controller(blankTrip());editor.newExpense();const id=editor.editing!.id;editor.aiConnected();
+  editor.network(async(url,options)=>{
+    if(url.startsWith('/api/receipt?'))return response({receiptId:'new-photo'});
+    assert.equal(url,'/api/receipt/process');
+    const args=JSON.parse(String(options?.body));assert.equal(args.receiptId,'new-photo');
+    assert.equal(args.draftId,editor.trip.drafts[0].id);assert.equal(args.revision,1);
+    assert.equal(args.readPurchaseDetails,true,'printed metadata can replace untouched browser defaults');
+    assert.equal(editor.trip.drafts[0].status,'waiting');assert.equal(editor.trip.expenses.length,0);
+    return response({data:{trips:[itemizedTrip(editor.trip)]},revision:2});
+  });
+  await editor.captureEditorReceipt(receiptFile());editor.reconcileEditorReceipt(editor.trip);editor.reconcileEditorReceipt(editor.trip);
+  assert.equal(editor.editing!.id,id);assert.equal(editor.editing!.items[0].name,'Dinner from image');
+  assert.equal(editor.itemized,true);assert.equal(editor.processed,null);assert.equal(editor.trip.expenses.length,0);
+  assert.equal(editor.updates.length,1,'only the waiting draft was saved by the browser');
+});
+
+test('metadata selected before uploading requires review rather than automatic replacement', async () => {
+  const editor=controller(blankTrip());editor.newExpense();editor.edit({payer:'b',date:'2026-09-03'});editor.aiConnected();
+  editor.network(async url=>url.startsWith('/api/receipt?')?response({receiptId:'new-photo'}):response({data:{trips:[itemizedTrip(editor.trip)]},revision:2}));
+  await editor.captureEditorReceipt(receiptFile());editor.reconcileEditorReceipt(editor.trip);
+  assert.equal(editor.editing!.payer,'b');assert.equal(editor.editing!.date,'2026-09-03');assert.equal(editor.editing!.items[0].amount,0);
+  assert(editor.processed);assert.equal(editor.itemized,false);assert.equal(editor.trip.expenses.length,0);
+});
+
+test('typing while native reading is pending preserves local values and offers the completed proposal for review', async () => {
+  const editor=controller(blankTrip());editor.newExpense();editor.aiConnected();
+  let release!:(value:unknown)=>void, started!:()=>void;
+  const pendingResponse=new Promise(resolve=>{release=resolve}),processingStarted=new Promise<void>(resolve=>{started=resolve});
+  editor.network(async url=>{
+    if(url.startsWith('/api/receipt?'))return response({receiptId:'new-photo'});
+    started();return pendingResponse;
+  });
+  const captured=editor.captureEditorReceipt(receiptFile());await processingStarted;assert.equal(editor.processing,true);
+  editor.edit({title:'My local correction',payer:'b',items:[{id:'local',name:'Local item',amount:4500,members:['b']}]});
+  release(response({data:{trips:[itemizedTrip(editor.trip)]},revision:2}));await captured;editor.reconcileEditorReceipt(editor.trip);
+  assert.equal(editor.editing!.title,'My local correction');assert.equal(editor.editing!.items[0].amount,4500);
+  assert.equal(editor.editing!.payer,'b');assert(editor.processed);assert.equal(editor.processing,false);assert.equal(editor.trip.expenses.length,0);
+});
+
+test('a reading response from a previous account cannot apply its proposal', async () => {
+  const editor=controller(blankTrip());editor.newExpense();editor.aiConnected();
+  let release!:(value:unknown)=>void, started!:()=>void;
+  const pendingResponse=new Promise(resolve=>{release=resolve}),processingStarted=new Promise<void>(resolve=>{started=resolve});
+  editor.network(async url=>{if(url.startsWith('/api/receipt?'))return response({receiptId:'new-photo'});started();return pendingResponse;});
+  const captured=editor.captureEditorReceipt(receiptFile());await processingStarted;editor.accountSwitch();
+  release(response({data:{trips:[itemizedTrip(editor.trip)]},revision:2}));await captured;
+  assert.equal(editor.trip.drafts[0].status,'waiting');assert.equal(editor.editing!.items[0].amount,0);
+});
+
+test('closing and reopening while a receipt check is pending cannot apply its snapshot or stale review state', async () => {
+  const initial=fixture();const editor=controller(initial);editor.openExpense(initial.expenses[0]);
+  let release!:(value:unknown)=>void;editor.network(async()=>new Promise(resolve=>{release=resolve}));
+  const check=editor.checkEditorReceipt();editor.closeReceiptEditor();editor.newExpense();const id=editor.editing!.id;
+  release(response({data:{trips:[itemizedTrip(initial)]},revision:1}));await check;
+  assert.equal(editor.editing!.id,id);assert.equal(editor.editing!.items[0].amount,0);assert.equal(editor.processed,null);
+  assert.equal(editor.trip.drafts[0].status,'waiting');assert.equal(editor.prompt,'');
+});
+
+test('native failures preserve the photo and draft with a retryable error instead of fabricated receipt lines', async () => {
+  const editor=controller(blankTrip());editor.newExpense();editor.aiConnected();
+  editor.network(async url=>url.startsWith('/api/receipt?')?response({receiptId:'new-photo'}):response({error:'The image is unreadable. Try another photo.'},false));
+  await editor.captureEditorReceipt(receiptFile());
+  assert.equal(editor.processing,false);assert.match(editor.handoffError,/unreadable/);
+  assert.equal(editor.editing!.receiptId,'new-photo');assert.equal(editor.trip.drafts[0].status,'waiting');
+  assert.equal(editor.editing!.items[0].amount,0);assert(editor.prompt.includes('new-photo'));assert.equal(editor.trip.expenses.length,0);
+});
+
+test('item share questions keep the full connected-tool handoff even when automatic receipt reading is configured', async () => {
+  const initial=fixture(pending('review'));const editor=controller(initial);editor.openExpense(initial.expenses[0]);editor.aiConnected();
+  assert.equal(await editor.sendReceiptQuestion('Alice ate 2.5 bars and Bob ate 5. Set their item shares.','replacement-item'),true);
+  assert.equal(editor.requests.length,0,'the transcription-only endpoint cannot resolve split changes');
+  assert(editor.prompt.includes('reply_to_receipt_chat'));assert(editor.prompt.includes('replacement-item'));
+  assert(editor.prompt.includes('Alice ate 2.5 bars'));assert.equal(editor.clipboard.at(-1),editor.prompt);
+  assert.equal(editor.trip.expenses[0].items[0].amount,1000,'asking is not posting financial changes');
+});
+
+test('a remotely changed receipt image or review target cannot be consumed by a stale editor save', async context => {
+  for(const mutation of ['image','target','removed'])await context.test(mutation,async()=>{
+    const initial=fixture();const editor=controller(initial);editor.openExpense(initial.expenses[0]);
+    const changed=structuredClone(initial);
+    if(mutation==='image')changed.drafts[0].receiptId='another-photo';
+    if(mutation==='target')changed.drafts[0].expenseId='another-expense';
+    if(mutation==='removed')changed.drafts=[];
+    editor.remote(changed);await submit(editor);
+    assert.equal(editor.updates.length,0);assert.match(editor.error,/receipt draft changed or is no longer available/);
+    assert.equal(editor.editing?.receiptId,'replacement-photo');assert.deepEqual(editor.trip.drafts,changed.drafts);
+  });
+});
+
+test('inbox upload dispatches printed purchase metadata even before the new editor layout effect commits', async () => {
+  const editor=controller(blankTrip());editor.aiConnected();editor.deferLayout();
+  assert.equal(editor.editing,null);
+  let dispatched: Record<string, unknown> | undefined;
+  editor.network(async(url,options)=>{
+    if(url.startsWith('/api/receipt?'))return response({receiptId:'inbox-photo'});
+    assert.equal(url,'/api/receipt/process');
+    const args=JSON.parse(String(options?.body));
+    dispatched=args;
+    assert.equal(args.receiptId,'inbox-photo');assert.equal(args.draftId,editor.trip.drafts[0].id);assert.equal(args.revision,1);
+    assert.equal(editor.trip.drafts[0].status,'waiting');assert.equal(editor.trip.expenses.length,0);
+    return response({data:{trips:[itemizedTrip(editor.trip)]},revision:2});
+  });
+  await editor.upload(receiptFile());
+  assert.equal(dispatched?.readPurchaseDetails,true,'the same upload continuation must bind the computed new editor rather than its previous null ref');
+  assert.equal(editor.requests.length,3);assert.equal(editor.view,'receipts');assert.equal(editor.help,false);
+  assert.equal((editor.editing as Editing | null)?.receiptId,'inbox-photo');assert.equal(editor.trip.expenses.length,0);
+  assert(editor.prompt.includes('inbox-photo'));
+});
+
+test('a signed-in participant can automatically read a receipt through shared API access without key-management permission', async () => {
+  const editor=controller(blankTrip());editor.participantAccount();editor.newExpense();
+  let dispatched:Record<string,unknown>|undefined;
+  editor.network(async(url,options)=>{
+    if(url.startsWith('/api/receipt?'))return response({receiptId:'participant-photo'});
+    dispatched=JSON.parse(String(options?.body));
+    return response({data:{trips:[itemizedTrip(editor.trip)]},revision:2});
+  });
+  await editor.captureEditorReceipt(receiptFile());editor.reconcileEditorReceipt(editor.trip);editor.reconcileEditorReceipt(editor.trip);
+  assert.equal(editor.requests[2]?.url,'/api/receipt/process');assert.equal(dispatched?.receiptId,'participant-photo');
+  assert.equal(editor.editing?.items[0].name,'Dinner from image');assert.equal(editor.itemized,true);
+  assert.equal(editor.trip.expenses.length,0,'shared inference still requires a separate approved expense save');
+});
+
+test('uploads refresh newly activated shared AI and do not wait for an old participant render to update', async context => {
+  for (const source of ['editor','inbox'] as const) await context.test(source, async () => {
+    const editor=controller(blankTrip());editor.participantAccount(false);editor.deferAIState();
+    if(source==='editor')editor.newExpense();
+    editor.statusNetwork(async()=>response({configured:true,connected:true,provider:'api',eligible:true,manageable:false,siwcAvailable:false}));
+    editor.network(async(url)=>url.startsWith('/api/receipt?')?response({receiptId:'newly-enabled-photo'}):response({data:{trips:[itemizedTrip(editor.trip)]},revision:2}));
+
+    await (source==='editor'?editor.captureEditorReceipt(receiptFile()):editor.upload(receiptFile()));
+    const status=editor.requests.find(request=>request.url==='/api/receipt/ai-status');
+    const processing=editor.requests.find(request=>request.url==='/api/receipt/process');
+    assert.equal(status?.options?.cache,'no-store','key activation in another browser requires a fresh server read');
+    assert.equal(editor.ai?.connected,false,'React has not yet committed the status update to this upload closure');
+    assert(processing,'the returned shared service status must start reading even while the previous render was disconnected');
+    assert.equal(JSON.parse(String(processing.options?.body)).receiptId,'newly-enabled-photo');
+    assert.equal(editor.trip.drafts[0].status,'review');assert.equal(editor.trip.expenses.length,0);
+  });
+});
+
+test('a pending shared AI status refresh cannot start reading for a different account or editor', async context => {
+  for (const change of ['account','editor'] as const) await context.test(change, async () => {
+    const editor=controller(blankTrip());editor.participantAccount(false);editor.newExpense();
+    let release!:(value:unknown)=>void, started!:()=>void;
+    const status=new Promise(resolve=>{release=resolve}),statusStarted=new Promise<void>(resolve=>{started=resolve});
+    editor.statusNetwork(async()=>{started();return status});
+    editor.network(async()=>response({receiptId:'saved-before-status'}));
+    const captured=editor.captureEditorReceipt(receiptFile());await statusStarted;
+    if(change==='account')editor.accountSwitch();else{editor.closeReceiptEditor();editor.newExpense();}
+    release(response({configured:true,connected:true,provider:'api',eligible:true,manageable:false,siwcAvailable:false}));
+    await captured;
+    assert.equal(editor.requests.some(request=>request.url==='/api/receipt/process'),false);
+    assert.equal(editor.trip.drafts[0].status,'waiting');assert.equal(editor.trip.expenses.length,0);
+    if(change==='account')assert.equal(editor.ai?.connected,false,'old-account status cannot update current service state');
+  });
 });

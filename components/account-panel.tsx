@@ -5,6 +5,7 @@ import ModalA11y from "./modal-accessibility";
 import PwaControls, { clearBrowserNotifications } from "./pwa-controls";
 import DataExport from "./data-export";
 import AccountActivityPanel from "./account-activity-panel";
+import ReceiptAISettings from "./receipt-ai-settings";
 import type { Trip } from "@/lib/model";
 export type Profile = {
   id: string;
@@ -50,6 +51,7 @@ export default function AccountPanel({
   trips?: Pick<Trip, "id" | "name">[];
 }) {
   const id = useId();
+  const chatgptLinkHref = "/signin-with-chatgpt?return_to=" + encodeURIComponent("/?connect=chatgpt");
   const [activityRefresh, setActivityRefresh] = useState(0);
   const refreshActivity = () => setActivityRefresh(value => value + 1);
   const [name, setName] = useState(profile?.displayName || ""),
@@ -294,10 +296,7 @@ export default function AccountPanel({
               ) : (
                 <a
                   className="quiet account-link"
-                  href={
-                    "/signin-with-chatgpt?return_to=" +
-                    encodeURIComponent("/?connect=chatgpt")
-                  }
+                  href={chatgptLinkHref}
                 >
                   Link ChatGPT · optional
                 </a>
@@ -308,6 +307,7 @@ export default function AccountPanel({
                 </p>
               )}
             </section>
+            <ReceiptAISettings key={profile.id} accountId={profile.id} verificationHref={chatgptLinkHref} onChanged={refreshActivity} />
           </>
         ) : (
           <p className="footnote">

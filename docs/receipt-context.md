@@ -1,6 +1,6 @@
 # Receipt quantities, conversations and memory
 
-TripTab stores item quantities, receipt discussions and remembered context with the receipt in D1. All travellers with access to the holiday can read its shared receipt context. AI assistance is optional and runs in the user's connected ChatGPT/Codex using TripTab's authenticated MCP tools.
+TripTab stores item quantities, receipt discussions and remembered context with the receipt in D1. All travellers with access to the holiday can read its shared receipt context. Automatic image transcription is optional and uses the owner's server-encrypted OpenAI API key for all signed-in app users. Tool-capable questions, remembered aliases and share changes remain available through the user's connected ChatGPT/Codex and TripTab's authenticated MCP tools.
 
 ## Quantities divide the full line price
 
@@ -38,12 +38,18 @@ New aliases must point to an active item or traveller; a new speaker scope must 
 
 ## Connected AI workflow and human review
 
+Once the verified owner saves the shared API key in **Profile & app settings → Receipt AI**, scanning or uploading starts native image transcription for any signed-in participant after both image and draft are saved. Only the owner can manage the shared key; other users see the service's availability without key controls. The reader receives the actual stored image and shared receipt context, and returns typed item names, integer line totals, currency and legible purchase details. It preserves existing assignments, quantities, whole-receipt percentages, payer, conversations and memory. New unassigned lines initially split equally. Additional tax, tip and discount are recorded once; inclusive tax is not added again. Unreadable lines and mismatched printed totals are explained in the receipt conversation.
+
+Reading succeeds only after a valid completed response. Errors, timeouts, changed images, revoked access and stale revisions do not post or overwrite an expense. A new untouched blank editor fills with the returned items; an edited or posted receipt requires **Review proposed changes**. Changes made while reading remain in the editor. Saving the reviewed expense records its action in the ordinary receipt history.
+
+For questions and requested share changes, use the connected-tool workflow:
+
 1. Enter a receipt manually or attach a photo. Ask a receipt/item question, or copy the receipt-reading prompt.
 2. Paste and run that prompt in the connected ChatGPT/Codex client. The client reads TripTab context/image tools and can save a reply or a proposed receipt draft through MCP.
-3. Use **Check for replies** to retrieve saved replies and proposals. Inspect the proposed details in TripTab's review interface.
+3. Replies and matching proposals refresh automatically while the receipt is open and when returning to TripTab. **Check for replies** is also available. Inspect the proposed details in TripTab's review interface.
 4. **Save** separately to post or update the expense. A reply, remembered context or proposed draft alone does not approve a financial change.
 
-The copy/check/review flow does not invoke a model directly from the web app. The user's connected client performs AI processing; email/password accounts and manual receipts work independently of that connection.
+The connected-tool prompt requires a real request in ChatGPT/Codex; copying or opening it is not a completed model request. The API image reader does not silently replace this workflow with a transcription-only answer to a share-changing question. Email/password accounts and manual receipts remain independent of AI. The future SIWC plan provider is retained but disabled until its separately approved hosted plan permission is configured.
 
 ## Limits and existing receipts
 

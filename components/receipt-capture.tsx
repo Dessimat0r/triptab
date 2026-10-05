@@ -1,7 +1,7 @@
 "use client";
 
 import { useId, useState, type ChangeEvent } from "react";
-import { Camera, Check, Copy, ImagePlus, RefreshCw, Trash2 } from "lucide-react";
+import { Camera, Check, Copy, ExternalLink, ImagePlus, RefreshCw, Trash2 } from "lucide-react";
 
 const MAX_UPLOAD_BYTES = 5 * 1024 * 1024;
 const MAX_SOURCE_BYTES = 40 * 1024 * 1024;
@@ -82,11 +82,29 @@ export type ReceiptCaptureProps = {
   stored: boolean;
   copied: boolean;
   ready?: boolean;
+  itemized?: boolean;
   prompt?: string;
+  chatgptUrl?: string;
+  connected?: boolean;
+  aiConfigured?: boolean;
+  aiConnected?: boolean;
+  aiProvider?: "api" | "siwc";
+  aiEligible?: boolean;
+  aiManageable?: boolean;
+  aiManagementReason?: string;
+  aiSiwcAvailable?: boolean;
+  aiReason?: string;
+  processing?: boolean;
+  handoffOpened?: boolean;
+  assistantError?: string;
   onCapture: (file: File) => void | Promise<void>;
   onPreparingChange?: (preparing: boolean) => void;
   onRemove?: () => void;
   onPrepare: () => void;
+  onOpenChatGPT?: () => void;
+  onConnectChatGPT?: () => void;
+  onProcess?: () => void;
+  onConnectPlan?: () => void;
   onRefresh: () => void;
   onUseProcessed: () => void;
 };
@@ -97,11 +115,29 @@ export default function ReceiptCapture({
   stored,
   copied,
   ready = false,
+  itemized = false,
   prompt,
+  chatgptUrl,
+  connected = false,
+  aiConfigured = false,
+  aiConnected = false,
+  aiProvider = "api",
+  aiEligible = false,
+  aiManageable = false,
+  aiManagementReason,
+  aiSiwcAvailable = false,
+  aiReason,
+  processing = false,
+  handoffOpened = false,
+  assistantError,
   onCapture,
   onPreparingChange,
   onRemove,
   onPrepare,
+  onOpenChatGPT,
+  onConnectChatGPT,
+  onProcess,
+  onConnectPlan,
   onRefresh,
   onUseProcessed,
 }: ReceiptCaptureProps) {
@@ -110,12 +146,56 @@ export default function ReceiptCapture({
   const cameraId = useId();
   const imageId = useId();
   const errorId = useId();
+  const promptId = useId();
   const [preparing, setPreparing] = useState(false);
   const [captureError, setCaptureError] = useState("");
-  const locked = busy || preparing;
+  const locked = busy || preparing || processing;
   const receiptUrl = receiptId
     ? "/api/receipt?id=" + encodeURIComponent(receiptId)
     : undefined;
+  const automaticAvailable = aiConfigured && aiEligible && (aiProvider === "api" || aiSiwcAvailable);
+  const readingText = aiProvider === "api" ? "Reading receipt with AI…" : "Reading receipt with ChatGPT…";
+  const handoffStatus = "Send the prepared request in ChatGPT with TripTab enabled. Return here after it saves the receipt details; TripTab checks for items automatically.";
+  let assistanceStatus: string;
+  if (ready) {
+    assistanceStatus = "Processed items are ready to review. Saving the expense applies your reviewed items.";
+  } else if (itemized) {
+    assistanceStatus = "Receipt details filled. Check the items and save the expense.";
+  } else if (receiptUrl && !aiConnected && aiManagementReason === "verification_required") {
+    assistanceStatus = "Verify your account with ChatGPT in Your account before managing shared receipt AI. You can enter items manually at any time.";
+  } else if (receiptUrl && aiEligible && aiProvider === "api") {
+    assistanceStatus = aiConnected
+      ? (assistantError
+        ? "Your image is saved. Retry reading it with receipt AI, use the request below, or enter items yourself."
+        : "Receipt AI is provided by TripTab. TripTab can read this image and suggest receipt items.")
+      : (aiManageable
+        ? "Set up shared receipt AI in Your account to read uploaded receipts automatically for all signed-in users. You can enter items manually at any time."
+        : "TripTab's shared receipt AI is not connected yet. You can use linked ChatGPT tools or enter items manually at any time.");
+  } else if (receiptUrl && automaticAvailable) {
+    assistanceStatus = aiConnected
+      ? (assistantError
+        ? "Your image is saved. Retry reading it with ChatGPT, use the request below, or enter items yourself."
+        : "Your ChatGPT plan is connected. TripTab can read this image and suggest receipt items.")
+      : "Connect your ChatGPT plan to let TripTab read uploaded receipts automatically. You can enter items manually at any time.";
+  } else if (receiptUrl) {
+    assistanceStatus = aiEligible && aiProvider === "siwc" && !aiSiwcAvailable
+      ? "ChatGPT plan processing is switched off. You can use linked ChatGPT tools or enter items yourself."
+      : (aiEligible
+        ? (aiReason === "not_connected"
+          ? "TripTab's shared receipt AI is not connected yet. You can use linked ChatGPT tools or enter items manually at any time."
+          : (connected
+          ? "Automatic receipt reading is not available for this site yet. Use the request below with your linked ChatGPT, or enter items yourself."
+          : "Automatic receipt reading is not available for this site yet. Link ChatGPT tools to use the request below, or enter items manually at any time."))
+        : "Sign in to use TripTab's shared receipt AI. You can use linked ChatGPT tools or enter items manually at any time.");
+  } else if (!connected) {
+    assistanceStatus = "Link ChatGPT tools in Your account to ask about these receipt details. You can enter items manually at any time.";
+  } else if (handoffOpened) {
+    assistanceStatus = handoffStatus;
+  } else if (stored && prompt) {
+    assistanceStatus = "Your receipt request is ready. Open ChatGPT and send it to help with these receipt details.";
+  } else {
+    assistanceStatus = "Prepare the receipt request to send it to ChatGPT.";
+  }
 
   async function capture(event: ChangeEvent<HTMLInputElement>) {
     const file = event.currentTarget.files?.[0];
@@ -135,6 +215,18 @@ export default function ReceiptCapture({
   return (
     <section className="receipt-capture" aria-labelledby={titleId} aria-busy={locked}>
       <h3 id={titleId}>Receipt image</h3>
+      <div className="receipt-capture-status" role="status" aria-live="polite" aria-atomic="true">
+        {locked ? <p>{processing ? readingText : (preparing ? "Preparing receipt photo…" : "Please wait…")}</p> : (receiptUrl || prompt) && (
+          <>
+            <p>{receiptUrl
+              ? (stored ? "Receipt image stored with this receipt." : "Receipt attached. Save your expense to keep it.")
+              : (stored ? "Receipt details saved for ChatGPT." : "Save your receipt details before sending the request to ChatGPT.")}</p>
+            <p>{assistanceStatus}</p>
+            {handoffOpened && receiptUrl && !ready && !itemized && <p>{handoffStatus}</p>}
+            {copied && !ready && !itemized && <p>Receipt request copied. Paste and send it in your connected ChatGPT or Codex.</p>}
+          </>
+        )}
+      </div>
       <div className="receipt-capture-inputs">
         <label
           htmlFor={cameraId}
@@ -181,39 +273,54 @@ export default function ReceiptCapture({
       )}
       <p id={hintId} className="receipt-capture-hint">
         Photos are resized to a readable JPEG copy and camera metadata is removed before uploading. {" "}
-        You can process your receipt in your connected ChatGPT or Codex, then check for
-        processed items here. Review the processed receipt before choosing Save
-        expense. You can also enter items yourself.
+        When receipt AI is connected, TripTab reads uploaded receipts automatically and suggests items. {" "}
+        Review the items here before choosing Save expense. You can also enter items yourself.
       </p>
       {captureError && <p id={errorId} className="receipt-chat-error" role="alert">{captureError}</p>}
-      {receiptUrl && (
+      {assistantError && <p className="receipt-chat-error" role="alert">{assistantError}</p>}
+      {(receiptUrl || prompt) && (
         <div className="receipt-capture-processing">
+          {ready && <button type="button" className="primary" disabled={locked} onClick={onUseProcessed}>
+            Review processed receipt
+          </button>}
+          {!ready && !itemized && receiptUrl && automaticAvailable && aiConnected && onProcess && <button type="button" className="primary" disabled={locked || !stored} onClick={onProcess}>
+            <RefreshCw size={17} aria-hidden="true" />
+            {processing ? readingText : (assistantError ? "Retry reading receipt" : (aiProvider === "api" ? "Read receipt with AI" : "Read receipt with ChatGPT"))}
+          </button>}
+          {!ready && !itemized && receiptUrl && aiManageable && aiProvider === "api" && !aiConnected && onConnectPlan && <button type="button" className="primary" disabled={locked} onClick={onConnectPlan}>
+            Set up receipt AI
+          </button>}
+          {!ready && !itemized && receiptUrl && !aiManageable && !aiConnected && aiManagementReason === "verification_required" && onConnectPlan && <button type="button" className="primary" disabled={locked} onClick={onConnectPlan}>
+            Verify receipt AI setup
+          </button>}
+          {!ready && !itemized && receiptUrl && automaticAvailable && aiProvider === "siwc" && !aiConnected && onConnectPlan && <button type="button" className="primary" disabled={locked} onClick={onConnectPlan}>
+            Connect ChatGPT plan
+          </button>}
+          {!ready && !itemized && connected && stored && prompt && chatgptUrl && (
+            locked ? <button type="button" className={aiConfigured ? "quiet" : "primary"} disabled>
+              <ExternalLink size={17} aria-hidden="true" /> Open ChatGPT
+            </button> : <a className={aiConfigured ? "quiet" : "primary"} href={chatgptUrl} target="_blank" rel="noopener noreferrer" onClick={onOpenChatGPT}>
+              <ExternalLink size={17} aria-hidden="true" /> Open ChatGPT
+            </a>
+          )}
+          {!ready && !itemized && !connected && onConnectChatGPT && <button type="button" className={aiConfigured ? "quiet" : "primary"} disabled={locked} onClick={onConnectChatGPT}>
+            Link ChatGPT tools
+          </button>}
           <button type="button" className="quiet" disabled={locked} onClick={onPrepare}>
             {copied ? <Check size={17} aria-hidden="true" /> : <Copy size={17} aria-hidden="true" />}
-            Copy receipt prompt
+            {prompt ? "Copy receipt request" : "Prepare receipt request"}
           </button>
           <button type="button" className="quiet" disabled={locked} onClick={onRefresh}>
             <RefreshCw size={17} aria-hidden="true" />
             Check for processed items
           </button>
-          {ready && <button type="button" className="primary" disabled={locked} onClick={onUseProcessed}>
-            Review processed receipt
-          </button>}
         </div>
       )}
-      {prompt && <details className="receipt-capture-prompt">
-        <summary>View receipt prompt</summary>
-        <textarea aria-label="Receipt assistant prompt" value={prompt} readOnly />
+      {prompt && <details className="receipt-capture-prompt" open>
+        <summary>Request to send in ChatGPT</summary>
+        <p>If ChatGPT opens without the request, copy this text into the conversation and send it with TripTab enabled.</p>
+        <textarea id={promptId} aria-label="Receipt assistant prompt" value={prompt} readOnly onFocus={event => event.currentTarget.select()} />
       </details>}
-      <div className="receipt-capture-status" role="status" aria-live="polite" aria-atomic="true">
-        {locked ? <p>{preparing ? "Preparing receipt photo…" : "Please wait…"}</p> : receiptUrl && (
-          <>
-            <p>{stored ? "Receipt image stored with this receipt." : "Receipt attached. Save your expense to keep it."}</p>
-            {copied && <p>Prompt copied. Open your connected ChatGPT or Codex to process it.</p>}
-            {ready && <p>Processed items are ready to review</p>}
-          </>
-        )}
-      </div>
     </section>
   );
 }

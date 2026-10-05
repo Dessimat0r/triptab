@@ -24,6 +24,11 @@ test('missing migration produces a generic unavailable status instead of a false
   sqlite = new DatabaseSync(':memory:'); sqlite.exec('CREATE TABLE receipts(id TEXT); CREATE TABLE activity_events(sequence INTEGER);'); receiptBinding = true;
   const response = await GET(); assert.equal(response.status, 503); assert.deepEqual(await response.json(), { status: 'unavailable' });
 });
+test('receipt AI cannot report ready until encrypted key and gated plan storage is migrated', async () => {
+  sqlite = new DatabaseSync(':memory:'); receiptBinding = true;
+  for (const name of (await readdir(new URL('../drizzle/', import.meta.url))).filter(name => name.endsWith('.sql') && Number(name.slice(0, 4)) <= 9).sort()) sqlite.exec(await readFile(new URL('../drizzle/' + name, import.meta.url), 'utf8'));
+  const response = await GET(); assert.equal(response.status, 503); assert.deepEqual(await response.json(), { status: 'unavailable' });
+});
 test('the previous receipt-cleanup schema cannot report ready without the message registry migration', async () => {
   sqlite = new DatabaseSync(':memory:'); receiptBinding = true;
   for (const name of (await readdir(new URL('../drizzle/', import.meta.url))).filter(name => name.endsWith('.sql') && Number(name.slice(0, 4)) <= 6).sort()) sqlite.exec(await readFile(new URL('../drizzle/' + name, import.meta.url), 'utf8'));

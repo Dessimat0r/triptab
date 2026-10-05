@@ -32,17 +32,19 @@ findPanel(syntax);
 assert(panelKeys.length);
 const controllerSource = `return function controller(fetch) {
   let ledger = {trips: []}, revision = 0, activityRefreshKey = 0, loading = false, error = '', auth = false, profile = {id: 'current-account'};
+  let editing = {id:'private-receipt'}, receiptAI = {connected:true}, receiptResets = 0;
   const latestSnapshot = {current: {data: ledger, revision}}, savedEtag = {current: ''}, loadRequest = {current: 0}, inFlightLoad = {current: null}, editorBaseline = {current: null};
   const setLedger = next => {ledger = next}, setRevision = next => {revision = next}, setActivityRefreshKey = next => {activityRefreshKey = next};
   const setLoading = next => {loading = next}, setError = next => {error = next};
   const setLastRefreshed = () => {}, setAuth = next => {auth = next}, setProfile = next => {profile = next}, setEditorConflict = () => {};
+  const resetReceiptReview = () => {receiptResets++}, setEditing = next => {editing=next}, setReceiptAI = next => {receiptAI=next};
   ${callbacks}
   ${accountAuthenticated.getText(syntax)}
-  return {load,applySnapshot,accountAuthenticated,setError,get revision(){return revision},get ledger(){return ledger},get refreshKey(){return ${panelKeys[0]}},get panelKeys(){return [${panelKeys.join(',')}]},get loading(){return loading},get error(){return error},get auth(){return auth},get profile(){return profile}};
+  return {load,applySnapshot,accountAuthenticated,setError,get revision(){return revision},get ledger(){return ledger},get refreshKey(){return ${panelKeys[0]}},get panelKeys(){return [${panelKeys.join(',')}]},get loading(){return loading},get error(){return error},get auth(){return auth},get profile(){return profile},get editing(){return editing},get receiptAI(){return receiptAI},get receiptResets(){return receiptResets}};
 }`;
 const compiled = transpileModule(controllerSource, { compilerOptions: { module: ModuleKind.CommonJS, target: ScriptTarget.ES2022 } }).outputText;
 type Snapshot = {data: Ledger; revision: number};
-type Controller = {load(options?: {background?: boolean}): Promise<unknown>; applySnapshot(snapshot: Snapshot, etag?: string, invalidateRefresh?: boolean): boolean; accountAuthenticated(profile: object): Promise<void>; setError(message: string): void; revision: number; ledger: Ledger; refreshKey: string | number; panelKeys: (string | number)[]; loading: boolean; error: string; auth: boolean; profile: {id: string} | null};
+type Controller = {load(options?: {background?: boolean}): Promise<unknown>; applySnapshot(snapshot: Snapshot, etag?: string, invalidateRefresh?: boolean): boolean; accountAuthenticated(profile: object): Promise<void>; setError(message: string): void; revision: number; ledger: Ledger; refreshKey: string | number; panelKeys: (string | number)[]; loading: boolean; error: string; auth: boolean; profile: {id: string} | null; editing:object|null;receiptAI:object|null;receiptResets:number};
 const controller = new Function(compiled)() as (fetch: (url: string, options: RequestInit) => Promise<Response>) => Controller;
 
 test('an invitation event refreshes the History panel with no ledger revision change', async () => {
@@ -191,6 +193,8 @@ test('account authentication starts its own refresh epoch and never reuses the p
   assert.equal(editor.revision, 1);
   assert.equal(editor.refreshKey, '"second-account"');
   assert.equal(requests, 3);
+  assert.equal(editor.receiptResets,1,'the account transition invalidates outstanding receipt work');
+  assert.equal(editor.editing,null);assert.equal(editor.receiptAI,null,'AI access belongs to the account that loaded it');
 });
 
 test('a foreground financial action starts a fresh read after an earlier background snapshot', async () => {

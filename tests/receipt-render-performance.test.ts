@@ -7,6 +7,8 @@ import * as model from '../lib/model';
 import * as dates from '../lib/dates';
 import * as clientLedger from '../lib/client-ledger';
 import * as moneyFormat from '../lib/money-format';
+import * as receiptProcessing from '../lib/receipt-processing';
+import * as receiptChatgpt from '../lib/receipt-chatgpt';
 import { createSourceFile, isArrayBindingPattern, isBindingElement, isCallExpression, isFunctionDeclaration, isIdentifier, isVariableStatement, JsxEmit, ModuleKind, ScriptKind, ScriptTarget, transpileModule } from 'typescript';
 
 // Run Home's actual render and event handlers with a small hook boundary. Child
@@ -48,6 +50,7 @@ function controller(trip: model.Trip, fetcher?: typeof fetch) {
   }
   let stateIndex = 0, refIndex = 0, memoIndex = 0;
   const navigationEffects: (() => void)[] = [];
+  const layoutEffects: (() => void)[] = [];
   const hooks = { ...React,
     useState(initial: unknown) {
       const key = states[stateIndex++];
@@ -61,6 +64,7 @@ function controller(trip: model.Trip, fetcher?: typeof fetch) {
       return memos[index].value;
     },
     useCallback: (callback: unknown) => callback,
+    useLayoutEffect(callback: () => void) { layoutEffects.push(callback); },
     useEffect(callback: () => void, dependencies: unknown[]) {
       // Run the real section-entry refresh, while excluding mount listeners.
       if (dependencies?.length === 2 && dependencies[0] === state.view && typeof dependencies[1] === 'function') navigationEffects.push(callback);
@@ -75,6 +79,8 @@ function controller(trip: model.Trip, fetcher?: typeof fetch) {
     if (name === '@/lib/dates') return dates;
     if (name === '@/lib/client-ledger') return clientLedger;
     if (name === '@/lib/money-format') return moneyFormat;
+    if (name === '@/lib/receipt-processing') return receiptProcessing;
+    if (name === '@/lib/receipt-chatgpt') return receiptChatgpt;
     if (name === '@/components/trip-routing') return {
       TripTabRouteProvider: component, TripTabNavigation: component, TripTabLink: component,
       useTripTabEntryQuery: () => '',
@@ -91,6 +97,7 @@ function controller(trip: model.Trip, fetcher?: typeof fetch) {
       const provider = shell.find(element => typeof element.props.renderSection === 'function');
       assert(provider, 'the persistent shell supplies the active route body');
       const body = elements((provider.props.renderSection as (view: unknown) => React.ReactNode)(state.view));
+      for (const effect of layoutEffects.splice(0)) effect();
       for (const effect of navigationEffects.splice(0)) effect();
       return [...shell, ...body];
     },

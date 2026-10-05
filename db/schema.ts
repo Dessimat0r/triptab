@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, uniqueIndex, index } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, text, integer, uniqueIndex, index, check } from 'drizzle-orm/sqlite-core';
 import { sql } from 'drizzle-orm';
 
 // Keep the original table so existing migration history remains intact.
@@ -34,6 +34,26 @@ export const authLinks = sqliteTable('auth_links', {
   userId: text('user_id').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
   createdAt: text('created_at').notNull(),
 }, table => [index('auth_links_user_idx').on(table.userId)]);
+
+// Plan-usage credentials are AES-GCM encrypted with per-account associated data.
+// They are distinct from the dispatch-owned ChatGPT identity/MCP connection.
+export const chatgptPlanConnections = sqliteTable('chatgpt_plan_connections', {
+  userId: text('user_id').primaryKey().references(() => profiles.id, { onDelete: 'cascade' }),
+  credentials: text('credentials').notNull(), version: integer('version').notNull().default(1),
+  refreshUntil: integer('refresh_until').notNull().default(0),
+});
+export const chatgptPlanTransactions = sqliteTable('chatgpt_plan_transactions', {
+  stateHash: text('state_hash').primaryKey(),
+  userId: text('user_id').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
+  transactionData: text('transaction_data').notNull(), expiresAt: integer('expires_at').notNull(),
+}, table => [index('chatgpt_plan_transactions_user_idx').on(table.userId), index('chatgpt_plan_transactions_expiry_idx').on(table.expiresAt)]);
+export const receiptAISettings = sqliteTable('receipt_ai_settings', {
+  id: text('id').primaryKey().default('shared'),
+  userId: text('user_id').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
+  apiKeyEncrypted: text('api_key_encrypted'), provider: text('provider', { enum: ['api', 'siwc'] }).notNull().default('api'),
+  version: integer('version').notNull().default(1),
+}, table => [check('receipt_ai_settings_id_check', sql`${table.id} = 'shared'`),
+  check('receipt_ai_settings_provider_check', sql`${table.provider} IN ('api','siwc')`)]);
 
 export const authRateLimits = sqliteTable('auth_rate_limits', {
   keyHash: text('key_hash').primaryKey(),

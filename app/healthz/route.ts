@@ -5,11 +5,14 @@ export const dynamic = 'force-dynamic';
 export async function GET() {
   try {
     // Compilation of this read-only query also detects missing migrations.
-    await db().prepare(`SELECT r.state, r.created_at, r.legacy_cleanup_after, e.sequence, m.message_data, t.receipt_link_version
+    await db().prepare(`SELECT r.state, r.created_at, r.legacy_cleanup_after, e.sequence, m.message_data, t.receipt_link_version,
+      ai.id, ai.user_id, ai.provider, ai.api_key_encrypted, pc.credentials, pt.transaction_data
       FROM receipts r CROSS JOIN activity_events e CROSS JOIN trips t
       CROSS JOIN receipt_messages m INDEXED BY receipt_messages_trip_message_idx
       CROSS JOIN current_receipt_links l INDEXED BY current_receipt_links_entity_idx
-      CROSS JOIN receipt_history_links h INDEXED BY receipt_history_links_snapshot_idx LIMIT 0`).all();
+      CROSS JOIN receipt_history_links h INDEXED BY receipt_history_links_snapshot_idx
+      CROSS JOIN receipt_ai_settings ai CROSS JOIN chatgpt_plan_connections pc
+      CROSS JOIN chatgpt_plan_transactions pt INDEXED BY chatgpt_plan_transactions_user_idx LIMIT 0`).all();
     const receiptHistoryIndexes = ['activity_events_trip_entity_idx', 'activity_events_draft_before_expense_idx',
       'activity_events_draft_after_expense_idx', 'activity_events_expense_before_source_draft_idx',
       'activity_events_expense_after_source_draft_idx', 'current_receipt_links_expense_idx',

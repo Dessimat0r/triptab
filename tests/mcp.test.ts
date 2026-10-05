@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
+import { deflateSync } from 'node:zlib';
 import { Ajv } from 'ajv';
 import { transpileModule, ModuleKind, ScriptTarget } from 'typescript';
 import { expenseTotal, shares, validateLedger } from '../lib/model';
@@ -23,6 +24,8 @@ const initialTrip: Trip = {
     fx: { rate: 0.85, asOf: '2026-08-14', source: 'reference' }, bankAmount: 8700,
   }],
 };
+type StoredReceiptImage = { bytes: Uint8Array; mimeType?: string; size?: number };
+type ReceiptRow = { owner: string; tripId: string; state: 'active' | 'pending' | 'deleting' };
 
 const state = {
   data: { trips: [structuredClone(initialTrip)] } as Ledger,
@@ -35,6 +38,12 @@ const state = {
   writeSources: [] as string[],
   providerLinks: new Map<string, string>(),
   identitySessionFlags: [] as boolean[],
+  receiptObjects: new Map<string, StoredReceiptImage>(),
+  receiptRows: new Map<string, ReceiptRow>(),
+  receiptAccessCalls: [] as { actor: string; id: string }[],
+  imageReads: [] as string[],
+  imageByteReads: [] as string[],
+  receiptStorageUnavailable: false,
 };
 function reset() {
   rateDatabase.exec('DELETE FROM auth_rate_limits');
@@ -48,6 +57,12 @@ function reset() {
   state.writeSources = [];
   state.providerLinks = new Map();
   state.identitySessionFlags = [];
+  state.receiptObjects = new Map();
+  state.receiptRows = new Map();
+  state.receiptAccessCalls = [];
+  state.imageReads = [];
+  state.imageByteReads = [];
+  state.receiptStorageUnavailable = false;
 }
 const mockStore = {
   async readLedger(actor: string) {
@@ -84,9 +99,31 @@ const mockStore = {
       run: async () => { assert.ok(sql.includes('auth_rate_limits')); const result = rateDatabase.prepare(sql).run(...values); return { meta: { changes: Number(result.changes) } }; },
     }) }) };
   },
-  bucket() { throw new Error('Receipt storage was not expected in this test'); },
-  receiptKey: (actor: string, id: string) => `${actor}/${id}`,
-  receiptAccess: async () => null,
+  bucket() {
+    return { async get(key: string) {
+      state.imageReads.push(key);
+      if (state.receiptStorageUnavailable) throw new Error('Receipt storage is unavailable.');
+      const image = state.receiptObjects.get(key);
+      return image ? {
+        size: image.size ?? image.bytes.byteLength,
+        httpMetadata: { contentType: image.mimeType },
+        async arrayBuffer() {
+          state.imageByteReads.push(key);
+          return Uint8Array.from(image.bytes).buffer;
+        },
+      } : null;
+    } };
+  },
+  receiptKey: (actor: string, id: string) => `${encodeURIComponent(actor)}/${id}`,
+  async receiptAccess(actor: string, id: string) {
+    state.receiptAccessCalls.push({ actor, id });
+    const row = state.receiptRows.get(id);
+    const trip = state.data.trips.find(value => value.id === row?.tripId);
+    // The production receiptAccess SQL is tested separately in receipt.test.ts.
+    // Here, substitute that boundary while exercising the real MCP guards.
+    return row?.state === 'active' && trip && (trip.ownerId === actor || trip.members.some(member => member.userId === actor))
+      ? { owner: row.owner, tripId: row.tripId } : null;
+  },
 };
 const mockAuth = {
   async resolveIdentity(request: Request, options: { allowSession: boolean }) {
@@ -151,6 +188,50 @@ const receiptChatReply = {
   tripId: 'trip-1', draftId: 'draft-1', questionId: receiptQuestion.id,
   responseId: 'a744f349-86c7-4a57-aa13-0db6aebc6e22', text: 'The listed total includes service.', revision: 3,
 };
+
+// Complete, decodable 2×2 fixtures; these are image bytes, not MIME-labelled text.
+const jpegImage = Buffer.from('/9j/2wBDAAYEBQYFBAYGBQYHBwYIChAKCgkJChQODwwQFxQYGBcUFhYaHSUfGhsjHBYWICwgIyYnKSopGR8tMC0oMCUoKSj/2wBDAQcHBwoIChMKChMoGhYaKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCj/wAARCAACAAIDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAf/xAAcEAADAAIDAQAAAAAAAAAAAAABAgMABQQGByH/xAAUAQEAAAAAAAAAAAAAAAAAAAAG/8QAGhEAAAcAAAAAAAAAAAAAAAAAAAECBDNxsf/aAAwDAQACEQMRAD8Auvm+n1l/O+rWvruHStNVxXd3gpZmMVJJJH0nGMYVcSrs9Ap3Ouz0f//Z', 'base64');
+const webpImage = Buffer.from('UklGRjoAAABXRUJQVlA4IC4AAACQAQCdASoCAAIAAUAmJaQAAudZtgAA/vZ//5wOIS38q//7Rj88te91eiYeAAAA', 'base64');
+function pngImage() {
+  // A valid RGB PNG crossing the route's 8192-byte base64 conversion boundary.
+  function chunk(name: string, bytes: Buffer) {
+    const body = Buffer.concat([Buffer.from(name, 'ascii'), bytes]);
+    let checksum = 0xffffffff;
+    for (const byte of body) {
+      checksum ^= byte;
+      for (let bit = 0; bit < 8; bit++) checksum = (checksum >>> 1) ^ ((checksum & 1) ? 0xedb88320 : 0);
+    }
+    const result = Buffer.alloc(bytes.length + 12);
+    result.writeUInt32BE(bytes.length); body.copy(result, 4);
+    result.writeUInt32BE((checksum ^ 0xffffffff) >>> 0, result.length - 4);
+    return result;
+  }
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(64, 0); header.writeUInt32BE(64, 4); header[8] = 8; header[9] = 2;
+  const pixels = Buffer.alloc(64 * (1 + 64 * 3));
+  let seed = 0x13579bdf;
+  for (let row = 0; row < 64; row++) for (let column = 1; column < 193; column++) {
+    seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5;
+    pixels[row * 193 + column] = seed & 0xff;
+  }
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk('IHDR', header), chunk('IDAT', deflateSync(pixels)), chunk('IEND', Buffer.alloc(0)),
+  ]);
+}
+function savedReceiptImage(id = 'receipt-1', mimeType = 'image/png', bytes: Uint8Array = pngImage(), owner = user) {
+  const key = mockStore.receiptKey(owner, id);
+  state.data.trips[0].drafts[0].receiptId = id;
+  state.receiptRows.set(id, { owner, tripId: initialTrip.id, state: 'active' });
+  state.receiptObjects.set(key, { bytes, mimeType });
+  return key;
+}
+function assertImageReply(reply: Reply, bytes: Uint8Array, mimeType: string) {
+  assert.equal(reply.result.isError, undefined);
+  assert.deepEqual(reply.result.content, [{ type: 'image', data: Buffer.from(bytes).toString('base64'), mimeType }]);
+  const image = reply.result.content![0] as unknown as { data: string };
+  assert.deepEqual(Buffer.from(image.data, 'base64'), Buffer.from(bytes), 'native vision receives every original image byte');
+}
 
 test('browser-session cookies alone cannot authorize private AI tools', async () => {
   reset();
@@ -222,6 +303,202 @@ test('a linked provider’s profile lookup excludes an unrelated browser session
   assert.equal(state.data.trips.find(trip => trip.id === holiday.id)!.members[0].email, profile.email);
   assert.equal(state.profileHeadersRead, 1);
   assert.deepEqual(state.ledgerWriters, [user]);
+});
+
+test('native receipt vision returns complete PNG, JPEG and WebP image content without changing the ledger', async () => {
+  const png = pngImage();
+  assert.ok(png.byteLength > 8192, 'the valid PNG exercises multiple base64 chunks');
+  for (const [mimeType, bytes] of [['image/png', png], ['image/jpeg', jpegImage], ['image/webp', webpImage]] as const) {
+    reset();
+    const key = savedReceiptImage('receipt-1', mimeType, bytes);
+    const before = structuredClone(state.data);
+    const reply = await invoke('get_receipt_image', { receipt_id: 'receipt-1' });
+    assertImageReply(reply, bytes, mimeType);
+    assert.deepEqual(state.receiptAccessCalls, [{ actor: user, id: 'receipt-1' }]);
+    assert.deepEqual(state.imageReads, [key]);
+    assert.deepEqual(state.imageByteReads, [key]);
+    assert.deepEqual(state.data, before);
+    assert.equal(state.revision, 3);
+    assert.equal(state.writes, 0);
+  }
+});
+
+test('linked native vision uses the canonical shared member and the original uploader’s encoded storage key', async () => {
+  reset();
+  const member = 'shared-member', provider = 'chatgpt-linked-member', uploader = 'original/uploader@example.com';
+  state.data.trips[0].members[1].userId = member;
+  state.providerLinks.set(provider, member);
+  const key = savedReceiptImage('shared-receipt', 'image/jpeg', jpegImage, uploader);
+  const response = await route.POST(new Request('https://triptab.test/mcp', {
+    method: 'POST', headers: { 'content-type': 'application/json', 'oai-authenticated-user-id': provider, cookie: 'tt_session=unrelated-owner' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'get_receipt_image', arguments: { receipt_id: 'shared-receipt' } } }),
+  }));
+  assertImageReply(await response.json() as Reply, jpegImage, 'image/jpeg');
+  assert.deepEqual(state.ledgerReaders, [member]);
+  assert.deepEqual(state.receiptAccessCalls, [{ actor: member, id: 'shared-receipt' }]);
+  assert.equal(key, 'original%2Fuploader%40example.com/shared-receipt');
+  assert.deepEqual(state.imageReads, [key]);
+  assert.deepEqual(state.identitySessionFlags, [false]);
+  assert.equal(state.writes, 0);
+});
+
+test('an unlinked or differently linked provider cannot borrow a browser session to see a saved receipt image', async () => {
+  for (const linkedActor of [undefined, 'unrelated-account']) {
+    reset();
+    savedReceiptImage();
+    if (linkedActor) state.providerLinks.set('other-provider', linkedActor);
+    const response = await route.POST(new Request('https://triptab.test/mcp', {
+      method: 'POST', headers: { 'content-type': 'application/json', 'oai-authenticated-user-id': 'other-provider', cookie: 'tt_session=receipt-owner' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'get_receipt_image', arguments: { receipt_id: 'receipt-1' } } }),
+    }));
+    const reply = await response.json() as Reply;
+    assert.equal(reply.result.isError, true);
+    assert.match(reply.result.content![0].text, /Receipt not in your ledger/);
+    assert.deepEqual(state.ledgerReaders, [linkedActor ?? 'other-provider']);
+    assert.deepEqual(state.receiptAccessCalls, []);
+    assert.deepEqual(state.imageReads, []);
+    assert.equal(state.writes, 0);
+  }
+});
+
+test('a guessed or malformed image ID never accesses receipt metadata or image storage', async () => {
+  reset();
+  savedReceiptImage();
+  for (const receipt_id of ['not-in-ledger', '../receipt-1', 'receipt-1?owner=other', '', 'x'.repeat(101)]) {
+    const reply = await invoke('get_receipt_image', { receipt_id });
+    assert.equal(reply.result.isError, true);
+    assert.match(reply.result.content![0].text, receipt_id === 'not-in-ledger' ? /Receipt not in your ledger/ : /Invalid tool fields/);
+  }
+  assert.deepEqual(state.receiptAccessCalls, []);
+  assert.deepEqual(state.imageReads, []);
+  assert.equal(state.writes, 0);
+});
+
+test('removed and replaced receipt photos lose native access while a still-shared posted reference retains it', async () => {
+  reset();
+  savedReceiptImage('old-photo', 'image/jpeg', jpegImage);
+  savedReceiptImage('new-photo', 'image/webp', webpImage);
+  const removed = await invoke('get_receipt_image', { receipt_id: 'old-photo' });
+  assert.equal(removed.result.isError, true);
+  assert.deepEqual(state.receiptAccessCalls, []);
+  assertImageReply(await invoke('get_receipt_image', { receipt_id: 'new-photo' }), webpImage, 'image/webp');
+  const { status, ...expense } = state.data.trips[0].drafts[0];
+  assert.equal(status, 'review');
+  state.data.trips[0].expenses = [{ ...expense, id: 'posted-with-old-photo', receiptId: 'old-photo', date: '2026-08-15', time: '20:30', timezone: 'Europe/Lisbon' }];
+  assertImageReply(await invoke('get_receipt_image', { receipt_id: 'old-photo' }), jpegImage, 'image/jpeg');
+  state.data.trips[0].drafts = [];
+  state.data.trips[0].expenses = [];
+  const priorReads = state.imageReads.length;
+  for (const receipt_id of ['old-photo', 'new-photo']) {
+    const reply = await invoke('get_receipt_image', { receipt_id });
+    assert.equal(reply.result.isError, true);
+    assert.match(reply.result.content![0].text, /Receipt not in your ledger/);
+  }
+  assert.equal(state.imageReads.length, priorReads, 'stale R2 objects do not grant native access');
+});
+
+test('native receipt access requires active metadata and current holiday membership even with a saved image reference', async () => {
+  for (const unavailable of ['pending', 'deleting', 'missing', 'foreign-trip'] as const) {
+    reset();
+    savedReceiptImage();
+    if (unavailable === 'missing') state.receiptRows.delete('receipt-1');
+    else if (unavailable === 'foreign-trip') {
+      state.data.trips.push({ ...structuredClone(initialTrip), id: 'foreign-trip', ownerId: 'other-owner', members: [{ id: 'other', name: 'Other', userId: 'other-owner' }], drafts: [] });
+      state.receiptRows.get('receipt-1')!.tripId = 'foreign-trip';
+    } else state.receiptRows.get('receipt-1')!.state = unavailable;
+    const reply = await invoke('get_receipt_image', { receipt_id: 'receipt-1' });
+    assert.equal(reply.result.isError, true);
+    assert.match(reply.result.content![0].text, /Receipt not in your shared trips/);
+    assert.deepEqual(state.receiptAccessCalls, [{ actor: user, id: 'receipt-1' }]);
+    assert.deepEqual(state.imageReads, []);
+    assert.deepEqual(state.imageByteReads, []);
+    assert.equal(state.writes, 0);
+  }
+});
+
+test('native image reads reject missing, unsupported and oversized objects before reading their bytes', async () => {
+  for (const problem of ['missing', 'missing-mime', 'image/gif', 'text/html', 'oversized', 'unavailable'] as const) {
+    reset();
+    const key = savedReceiptImage();
+    const image = state.receiptObjects.get(key)!;
+    if (problem === 'missing') state.receiptObjects.delete(key);
+    else if (problem === 'missing-mime') delete image.mimeType;
+    else if (problem === 'oversized') image.size = 5 * 1024 * 1024 + 1;
+    else if (problem === 'unavailable') state.receiptStorageUnavailable = true;
+    else image.mimeType = problem;
+    const reply = await invoke('get_receipt_image', { receipt_id: 'receipt-1' });
+    assert.equal(reply.result.isError, true);
+    assert.match(reply.result.content![0].text, problem === 'missing' ? /image is missing/ : problem === 'oversized' ? /exceeds 5 MB/ : problem === 'unavailable' ? /storage is unavailable/ : /Unsupported receipt image type/);
+    assert.deepEqual(state.imageReads, [key]);
+    assert.deepEqual(state.imageByteReads, []);
+    assert.equal(state.revision, 3);
+    assert.equal(state.writes, 0);
+  }
+});
+
+test('image itemisation binds the saved draft, photo and revision and never modifies an approved expense', async () => {
+  reset();
+  savedReceiptImage();
+  const draft = state.data.trips[0].drafts[0];
+  const { status, ...posted } = draft;
+  assert.equal(status, 'review');
+  state.data.trips[0].expenses = [{ ...posted, id: 'posted-expense', date: '2026-08-15', time: '20:30', timezone: 'Europe/Lisbon' }];
+  draft.expenseId = 'posted-expense';
+  draft.status = 'waiting';
+  draft.items = [];
+  draft.conversation = [structuredClone(receiptQuestion)];
+  draft.memory = { notes: 'The receipt includes service.', aliases: [] };
+  const before = structuredClone(state.data);
+  const proposal = { ...expenseDraft, id: draft.id, receiptId: 'receipt-1' };
+  for (const args of [
+    { trip_id: initialTrip.id, revision: 2, draft: proposal },
+    { trip_id: initialTrip.id, revision: 3, draft: { ...proposal, receiptId: 'foreign-photo' } },
+    { trip_id: initialTrip.id, revision: 3, draft: { ...proposal, id: 'another-draft' } },
+    { trip_id: 'foreign-trip', revision: 3, draft: proposal },
+  ]) {
+    const reply = await invoke('update_receipt_draft', args);
+    assert.equal(reply.result.isError, true);
+    assert.deepEqual(state.data, before);
+    assert.equal(state.writes, 0);
+  }
+  const context = await invoke('get_receipt_context', { tripId: initialTrip.id, draftId: draft.id });
+  assert.equal(contextContent(context).receipt.receiptId, 'receipt-1');
+  assert.equal(contextContent(context).revision, 3);
+  assertImageReply(await invoke('get_receipt_image', { receipt_id: 'receipt-1' }), pngImage(), 'image/png');
+  const reply = await invoke('update_receipt_draft', { trip_id: initialTrip.id, revision: 3, draft: proposal });
+  assert.equal(reply.result.isError, undefined);
+  const reviewed = content(reply).data.trips[0].drafts[0];
+  assert.equal(content(reply).revision, 4);
+  assert.equal(reviewed.receiptId, 'receipt-1');
+  assert.equal(reviewed.expenseId, 'posted-expense');
+  assert.equal(reviewed.status, 'review');
+  assert.equal(reviewed.source, 'ai');
+  assert.equal(reviewed.currency, 'EUR');
+  assert.deepEqual(reviewed.items, proposal.items);
+  assert.deepEqual(reviewed.conversation, before.trips[0].drafts[0].conversation);
+  assert.deepEqual(reviewed.memory, before.trips[0].drafts[0].memory);
+  assert.deepEqual(state.data.trips[0].expenses, before.trips[0].expenses);
+  assert.deepEqual(state.writeSources, ['chatgpt']);
+  assert.equal(state.writes, 1);
+});
+
+test('a stale image proposal cannot restore a photo replaced in the app, and an omitted photo preserves the current binding', async () => {
+  reset();
+  savedReceiptImage('old-photo', 'image/jpeg', jpegImage);
+  savedReceiptImage('new-photo', 'image/webp', webpImage);
+  state.revision = 4;
+  const before = structuredClone(state.data);
+  for (const revision of [3, 4]) {
+    const reply = await invoke('update_receipt_draft', { trip_id: initialTrip.id, revision, draft: { ...expenseDraft, id: 'draft-1', receiptId: 'old-photo' } });
+    assert.equal(reply.result.isError, true);
+    assert.deepEqual(state.data, before);
+    assert.equal(state.writes, 0);
+  }
+  const reply = await invoke('update_receipt_draft', { trip_id: initialTrip.id, revision: 4, draft: { ...expenseDraft, id: 'draft-1' } });
+  assert.equal(reply.result.isError, undefined);
+  assert.equal(content(reply).data.trips[0].drafts[0].receiptId, 'new-photo');
+  assert.equal(content(reply).data.trips[0].drafts[0].status, 'review');
+  assert.equal(state.writes, 1);
 });
 
 test('lists native holiday and natural-language expense tools with write annotations', async () => {
