@@ -542,14 +542,10 @@
   ],
   "verification": {
     "fullRegressionSuite": {
-      "tests": 935,
-      "passed": 935,
+      "tests": 951,
+      "passed": 951,
       "failed": 0,
       "skipped": 0
-    },
-    "additionalExternalPollingBudgetCases": {
-      "tests": 3,
-      "passed": 3
     },
     "typescript": "passed",
     "productionBuild": "passed",
@@ -560,7 +556,35 @@
     "compiledMobileViewportChecks": 62,
     "compiledReviewJourneys": 4,
     "compiledActualNativeRouteJourneys": 5,
-    "bundledAccountExportJourneys": 2
+    "bundledAccountExportJourneys": 2,
+    "externalPollingBudgetCases": {
+      "tests": 3,
+      "passed": 3,
+      "includedInFullSuite": true
+    },
+    "stackedBranches": {
+      "PR3": {
+        "tests": 508,
+        "passed": 508
+      },
+      "PR4": {
+        "tests": 583,
+        "passed": 583
+      },
+      "PR5": {
+        "tests": 633,
+        "passed": 633
+      },
+      "PR6": {
+        "tests": 822,
+        "passed": 822
+      },
+      "PR7": {
+        "tests": 951,
+        "passed": 951
+      }
+    },
+    "stackedBranchTypecheckBuildLint": "All changed branches passed typecheck, production build and lint; zero errors and four existing warnings per branch."
   },
   "paidModelCalls": 0,
   "productionDeployment": "Recorded separately in the final PR7 description after successful publication. Source verification does not by itself claim deployment.",
