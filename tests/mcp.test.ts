@@ -46,7 +46,7 @@ const state = {
   imageReads: [] as string[],
   imageByteReads: [] as string[],
   receiptStorageUnavailable: false,
-  receiptNotifications: [] as { tripId: string; caller: string; authorMemberId?: string; writes: number }[],
+  receiptNotifications: [] as { tripId: string; caller: string; authorMemberId?: string; scope: 'receipt' | 'item'; context: { tripName?: string; receiptName?: string; itemName?: string }; writes: number }[],
   receiptNotificationFailure: false,
 };
 function reset() {
@@ -143,8 +143,8 @@ const mockAuth = {
 Object.defineProperty(globalThis, Symbol.for('triptab.mcp-test-store'), { value: mockStore, configurable: true });
 Object.defineProperty(globalThis, Symbol.for('triptab.mcp-test-auth'), { value: mockAuth, configurable: true });
 const mockNotifications = {
-  async notifyReceiptReply(tripId: string, caller: string, authorMemberId?: string) {
-    state.receiptNotifications.push({ tripId, caller, authorMemberId, writes: state.writes });
+  async notifyReceiptReply(tripId: string, caller: string, authorMemberId?: string, scope: 'receipt' | 'item' = 'receipt', context: { tripName?: string; receiptName?: string; itemName?: string } = {}) {
+    state.receiptNotifications.push({ tripId, caller, authorMemberId, scope, context, writes: state.writes });
     if (state.receiptNotificationFailure) throw new Error('Notification service unavailable.');
   },
 };
@@ -1248,7 +1248,7 @@ test('receipt reply retries are idempotent and response ID collisions are reject
   }
   assert.equal(state.writes, 1);
   assert.equal(state.data.trips[0].drafts[0].conversation!.length, 3);
-  assert.deepEqual(state.receiptNotifications, [{ tripId: 'trip-1', caller: user, authorMemberId: undefined, writes: 1 }], 'only the committed first reply schedules an alert');
+  assert.deepEqual(state.receiptNotifications, [{ tripId: 'trip-1', caller: user, authorMemberId: undefined, scope: 'receipt', context: { tripName: 'Lisbon', receiptName: 'Dinner', itemName: undefined }, writes: 1 }], 'only the committed first reply schedules an alert');
 });
 
 test('receipt replies notify the saved question author after committing, with best effort delivery', async context => {
@@ -1259,7 +1259,7 @@ test('receipt replies notify the saved question author after committing, with be
   context.mock.method(console, 'warn', (...values: unknown[]) => { warnings.push(values); });
   const reply = await invoke('reply_to_receipt_chat', receiptChatReply);
   assert.equal(reply.result.isError, undefined);
-  assert.deepEqual(state.receiptNotifications, [{ tripId: 'trip-1', caller: user, authorMemberId: 'b', writes: 1 }]);
+  assert.deepEqual(state.receiptNotifications, [{ tripId: 'trip-1', caller: user, authorMemberId: 'b', scope: 'receipt', context: { tripName: 'Lisbon', receiptName: 'Dinner', itemName: undefined }, writes: 1 }]);
   assert.equal(state.data.trips[0].drafts[0].conversation!.at(-1)!.text, receiptChatReply.text);
   assert.equal(warnings.length, 1);
   assert.doesNotMatch(JSON.stringify(warnings), /service unavailable|Alex|includes service/);
@@ -2478,4 +2478,27 @@ test('MCP recognition still fills true blank placeholders and unknown prices eve
     assert.equal(recognised.name, baseline.name || 'Recognised slices');
     if (baseline.name) assert.equal(recognised.fieldSources?.name, undefined);
   }
+});
+
+test('a committed reply announces item chat scope to the saved author without repeating on retry', async () => {
+  reset();
+  state.data.trips[0].drafts[0].conversation = [{ ...receiptQuestion, itemId: 'item-1', authorMemberId: 'b', authorName: 'Alex' }];
+  const reply = await invoke('reply_to_receipt_chat', receiptChatReply);
+  assert.equal(reply.result.isError, undefined);
+  assert.deepEqual(state.receiptNotifications, [{ tripId: 'trip-1', caller: user, authorMemberId: 'b', scope: 'item', context: { tripName: 'Lisbon', receiptName: 'Dinner', itemName: 'Dinner' }, writes: 1 }]);
+  const retry = await invoke('reply_to_receipt_chat', receiptChatReply);
+  assert.equal(retry.result.isError, undefined);
+  assert.equal(state.receiptNotifications.length, 1);
+});
+
+test('item reply labels can use the same receipt linked expense when a draft no longer has that item', async () => {
+  reset();
+  const draft = state.data.trips[0].drafts[0];
+  draft.expenseId = 'linked-expense'; draft.items = [];
+  draft.conversation = [{ ...receiptQuestion, itemId: 'item-1', authorMemberId: 'b' }];
+  state.data.trips[0].expenses.push(expenseSchema.parse({ ...expenseDraft, id: 'linked-expense', title: 'Saved dinner', items: [{ id: 'item-1', name: 'Historical Strudel', amount: 1200, members: ['a', 'b'] }] }));
+  const reply = await invoke('reply_to_receipt_chat', receiptChatReply);
+  assert.equal(reply.result.isError, undefined);
+  assert.deepEqual(state.receiptNotifications[0].context, { tripName: 'Lisbon', receiptName: 'Dinner', itemName: 'Historical Strudel' });
+  assert.equal(state.receiptNotifications[0].authorMemberId, 'b');
 });

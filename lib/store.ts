@@ -677,7 +677,7 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
     });
   }
   for (const trip of changedTrips) {
-    const notification = activityNotification(profile?.display_name || 'A traveller', changes.filter(change => change.tripId === trip.id));
+    const notification = activityNotification(profile?.display_name || 'A traveller', changes.filter(change => change.tripId === trip.id), { tripName: trip.name });
     if (!notification) continue;
     await notifyMembers(trip.id, id, notification.title, notification.body).catch(() => {
       console.warn('TripTab could not queue a holiday update notification.');
