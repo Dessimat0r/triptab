@@ -617,7 +617,11 @@ export async function POST(request: Request) {
           result = toolLedger(await writeLedger(user, ledger.data, ledger.revision, { source: 'chatgpt' }), values.tripId);
           // Queue only after the reply commits. Idempotent retries above never
           // send another alert, and notification failures cannot undo a reply.
-          await notifyReceiptReply(values.tripId, user, question.authorMemberId, question.itemId ? 'item' : 'receipt').catch(() => {
+          await notifyReceiptReply(values.tripId, user, question.authorMemberId, question.itemId ? 'item' : 'receipt', {
+            tripName: trip!.name, receiptName: draft.title,
+            itemName: question.itemId ? draft.items.find(item => item.id === question.itemId)?.name
+              || trip!.expenses.find(expense => expense.id === draft.expenseId)?.items.find(item => item.id === question.itemId)?.name : undefined,
+          }).catch(() => {
             console.warn('TripTab could not queue a receipt reply notification.');
           });
           logReceiptTool('chat-write', { tripId: values.tripId, draftId: draft.id, revision: ledger.revision + 1 });

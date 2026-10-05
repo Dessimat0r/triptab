@@ -351,7 +351,7 @@ async function acceptInvite(profile: Profile, body: Record<string, unknown>) {
     }
     throw new RequestError('The trip or invitation changed. Refresh before joining again.', 409);
   }
-  const notification = joinedNotification(profile.displayName);
+  const notification = joinedNotification(profile.displayName, nextTrip.name);
   await notifyMembers(invite.trip_id, profile.id, notification.title, notification.body).catch(() => {
     console.warn('The traveller joined but its notification could not be queued.');
   });

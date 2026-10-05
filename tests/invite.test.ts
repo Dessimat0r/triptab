@@ -59,7 +59,7 @@ const notifications: unknown[][] = [];
 Object.defineProperty(globalThis, Symbol.for('triptab.invite-test-env'), { value: binding, configurable: true });
 Object.defineProperty(globalThis, Symbol.for('triptab.invite-test-notifications'), { value: notifications, configurable: true });
 const envUrl = 'data:text/javascript;base64,' + Buffer.from("export const env=globalThis[Symbol.for('triptab.invite-test-env')];").toString('base64');
-const notificationUrl = 'data:text/javascript;base64,' + Buffer.from("export const activityNotification=()=>null; export const joinedNotification=name=>({title:'Traveller joined',body:name+' joined the holiday.'}); export const notifyMembers=async(...args)=>{globalThis[Symbol.for('triptab.invite-test-notifications')].push(args);};").toString('base64');
+const notificationUrl = 'data:text/javascript;base64,' + Buffer.from("export const activityNotification=()=>null; export const joinedNotification=(name,tripName)=>({title:tripName||'Traveller joined',body:name+' joined the holiday.'}); export const notifyMembers=async(...args)=>{globalThis[Symbol.for('triptab.invite-test-notifications')].push(args);};").toString('base64');
 const source = await readFile(new URL('../lib/store.ts', import.meta.url), 'utf8');
 const compiled = transpileWithSharedImports(source, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
   .replace("'zod'", JSON.stringify(pathToFileURL(createRequire(import.meta.url).resolve('zod').replace(/\.cjs$/, '.js')).href))

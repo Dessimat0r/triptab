@@ -154,6 +154,7 @@ type NotificationChange = {
   before?: Record<string, unknown> | null;
   after?: Record<string, unknown> | null;
 };
+export type NotificationContext = { tripName?: string; receiptName?: string; itemName?: string; receiptCount?: number; itemCount?: number };
 
 function compactText(value: string, limit: number) {
   const clean = value.replace(/[\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, ' ').replace(/\s+/g, ' ').trim();
@@ -183,7 +184,45 @@ function conversation(value: unknown) {
   });
 }
 
-/** Describe saved field categories, never their private names, values or text. */
+function contextualNotification(actorName: string, description: { title: string; summary: string }, context: NotificationContext) {
+  const receiptBudget = context.tripName ? 25 : 50;
+  const countedName = (name: string | undefined, count: number | undefined, noun: string, budget: number) => {
+    if (!name) return '';
+    const clean = compactText(name, Math.max(budget, Array.from(name).length));
+    if (!clean) return '';
+    const suffix = count && count > 1 ? ` +${count - 1} ${count === 2 ? noun : `${noun}s`}` : '';
+    return `${compactText(clean, Math.max(1, budget - Array.from(suffix).length))}${suffix}`;
+  };
+  const trip = compactText(context.tripName || '', context.receiptName ? 22 : 50);
+  const receipt = countedName(context.receiptName, context.receiptCount, 'receipt', receiptBudget);
+  const item = countedName(context.itemName, context.itemCount, 'item', 48);
+  const title = trip && receipt ? `${trip} · ${receipt}` : trip || receipt || description.title;
+  if (!trip && !receipt && !item) return { title: compactText(title, 50), body: compactText(`${shortActor(actorName)} ${description.summary}.`, 160) };
+  // Reserve space for every supplied label. Long names cannot hide the action.
+  const action = compactText(description.summary.replace(/ on (?:an expense|a receipt)$/, ''), 80);
+  const editor = compactText(actorName, 26) || 'A traveller';
+  return { title: compactText(title, 50), body: `${editor} ${action}${item ? ` · ${item}` : ''}.` };
+}
+
+function changedItems(event: NotificationChange) {
+  const previous = records(event.before?.items), current = records(event.after?.items);
+  const before = new Map(previous.map(item => [item.id, item])), after = new Map(current.map(item => [item.id, item]));
+  const affected = new Set<unknown>();
+  for (const id of new Set([...after.keys(), ...before.keys()])) {
+    const old = before.get(id), next = after.get(id);
+    if (!old || !next || changed(old, next, ['name', 'nameLanguage', 'translations', 'amount', 'quantity', 'members', 'percentages', 'units'])) affected.add(id);
+  }
+  const oldMessages = new Map(conversation(event.before?.conversation).map(message => [message.id, message]));
+  const newMessages = new Map(conversation(event.after?.conversation).map(message => [message.id, message]));
+  for (const id of new Set([...newMessages.keys(), ...oldMessages.keys()])) {
+    const old = oldMessages.get(id), next = newMessages.get(id);
+    if (canonicalJson(old) === canonicalJson(next)) continue;
+    for (const message of [next, old]) if (typeof message?.itemId === 'string') affected.add(message.itemId);
+  }
+  return [...affected].map(id => after.get(id) || before.get(id)).filter((item): item is Record<string, unknown> => typeof item?.name === 'string' && !!item.name.trim());
+}
+
+/** Describe saved field categories separately from the named receipt context. */
 function updateDescription(event: NotificationChange): { title: string; summary: string } | null {
   const { before, after, entityType } = event;
   if (!before || !after) return null;
@@ -219,11 +258,16 @@ function updateDescription(event: NotificationChange): { title: string; summary:
     if (canonicalJson(conversation(before.conversation)) !== canonicalJson(conversation(after.conversation))) {
       const previous = new Set(conversation(before.conversation).map(message => message.id));
       const messages = conversation(after.conversation).filter(message => !previous.has(message.id));
-      const itemChat = messages.length > 0 && messages.every(message => typeof message.itemId === 'string');
-      const itemChats = new Set(messages.map(message => message.itemId)).size;
+      const oldMessages = new Map(conversation(before.conversation).map(message => [message.id, message]));
+      const newMessages = new Map(conversation(after.conversation).map(message => [message.id, message]));
+      const edited = [...new Set([...newMessages.keys(), ...oldMessages.keys()])].filter(id => canonicalJson(oldMessages.get(id)) !== canonicalJson(newMessages.get(id)))
+        .flatMap(id => [newMessages.get(id), oldMessages.get(id)].filter((message): message is Record<string, unknown> => !!message));
+      const scopedMessages = messages.length ? messages : edited;
+      const itemChat = scopedMessages.length > 0 && scopedMessages.every(message => typeof message.itemId === 'string');
+      const itemChats = new Set(scopedMessages.map(message => message.itemId)).size;
       if (!details.length) return { title: itemChat ? 'Item chat updated' : 'Receipt chat updated', summary: messages.length
         ? `added ${messages.length === 1 ? 'a message' : `${messages.length} messages`} to ${itemChat ? itemChats > 1 ? `${itemChats} item chats` : 'an item chat' : 'a receipt chat'}`
-        : 'updated a receipt chat' };
+        : itemChat ? itemChats > 1 ? `updated ${itemChats} item chats` : 'updated an item chat' : 'updated a receipt chat' };
       details.push({ label: 'receipt chat', title: 'Receipt chat updated' });
     }
     if (details.length === 1 && (added || removed)) return { title: 'Receipt items updated', summary: `${list([
@@ -261,22 +305,40 @@ function groupDescription(events: readonly NotificationChange[]) {
     summary: events.length === 1 ? `${verb} ${entity === 'expense' || entity === 'invite' ? 'an' : 'a'} ${noun}` : `${verb} ${events.length} ${noun}s` };
 }
 
-/** Compact lock-screen copy uses saved actions without revealing holiday contents. */
-export function activityNotification(actorName: string, changes: readonly NotificationChange[]) {
+/** Include requested saved labels, with no financial values or conversation text. */
+export function activityNotification(actorName: string, changes: readonly NotificationChange[], context: NotificationContext = {}) {
   const events = changes.filter(change => change.entityType !== 'draft');
   if (!events.length) return null;
   let description = events.length === 1 && events[0].action === 'update' ? updateDescription(events[0]) : null;
   if (!description) {
-    const types = [...new Set(events.map(event => event.entityType))];
+    const priority: ActivityEntity[] = ['expense', 'payment', 'member', 'receipt', 'invite', 'trip'];
+    const types = [...new Set(events.map(event => event.entityType))].sort((a, b) => priority.indexOf(a) - priority.indexOf(b));
     const groups = types.map(type => groupDescription(events.filter(event => event.entityType === type)));
     const remaining = events.filter(event => !types.slice(0, 2).includes(event.entityType)).length;
     description = groups.length === 1 ? groups[0] : { title: 'Holiday activity', summary: `${list(groups.slice(0, 2).map(group => group.summary))}${remaining ? `, plus ${remaining} other ${remaining === 1 ? 'update' : 'updates'}` : ''}` };
   }
-  return { title: compactText(description.title, 50), body: compactText(`${shortActor(actorName)} ${description.summary}.`, 160) };
+  const receipts = events.filter(event => event.entityType === 'expense');
+  let receipt = receipts[0];
+  let items = receipt ? changedItems(receipt) : [];
+  for (const candidate of receipts.slice(1)) {
+    if (items.length) break;
+    const affected = changedItems(candidate);
+    if (affected.length) { receipt = candidate; items = affected; }
+  }
+  const tripEvent = events.find(event => event.entityType === 'trip');
+  const receiptName = receipt?.after?.title || receipt?.before?.title;
+  const tripName = tripEvent?.after?.name || tripEvent?.before?.name;
+  return contextualNotification(actorName, description, { ...context,
+    tripName: context.tripName || (typeof tripName === 'string' ? tripName : undefined),
+    receiptName: typeof receiptName === 'string' ? receiptName : context.receiptName,
+    receiptCount: receipts.length || context.receiptCount,
+    itemName: typeof items[0]?.name === 'string' ? items[0].name : context.itemName,
+    itemCount: items.length || context.itemCount,
+  });
 }
 
-export function joinedNotification(actorName: string) {
-  return { title: 'Traveller joined', body: `${shortActor(actorName)} joined the holiday.` };
+export function joinedNotification(actorName: string, tripName?: string) {
+  return contextualNotification(actorName, { title: 'Traveller joined', summary: 'joined the holiday' }, { tripName });
 }
 
 async function signingKey() {
@@ -406,9 +468,14 @@ export async function notifyMembers(tripId: string, actor: string, title: string
   try { waitUntil(delivery); } catch { await delivery; }
 }
 
-/** A saved answer is announced without carrying receipt or conversation text. */
-export async function notifyReceiptReply(tripId: string, caller: string, authorMemberId?: string, scope: 'receipt' | 'item' = 'receipt') {
-  const delivery = deliverNotifications(tripId, caller, scope === 'item' ? 'Item chat reply ready' : 'Receipt chat reply ready',
-    scope === 'item' ? 'ChatGPT or Codex answered your question about a receipt item.' : 'ChatGPT or Codex answered your receipt question.', authorMemberId ?? null);
+/** Names identify the saved question; the actual reply text stays in the app. */
+export async function notifyReceiptReply(tripId: string, caller: string, authorMemberId?: string, scope: 'receipt' | 'item' = 'receipt', context: NotificationContext = {}) {
+  const hasContext = context.tripName || context.receiptName || context.itemName;
+  const notification = hasContext ? contextualNotification('ChatGPT or Codex', {
+    title: scope === 'item' ? 'Item chat reply ready' : 'Receipt chat reply ready',
+    summary: scope === 'item' ? 'replied in item chat' : 'replied in receipt chat',
+  }, context) : { title: scope === 'item' ? 'Item chat reply ready' : 'Receipt chat reply ready',
+    body: scope === 'item' ? 'ChatGPT or Codex answered your question about a receipt item.' : 'ChatGPT or Codex answered your receipt question.' };
+  const delivery = deliverNotifications(tripId, caller, notification.title, notification.body, authorMemberId ?? null);
   try { waitUntil(delivery); } catch { await delivery; }
 }

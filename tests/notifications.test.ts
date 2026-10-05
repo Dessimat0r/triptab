@@ -83,7 +83,7 @@ function pushRequest(user: string, mode: string, value = endpoint('browser-a')) 
 function rows(database: SQLiteD1) { return database.sqlite.prepare('SELECT endpoint,user_id FROM push_subscriptions ORDER BY endpoint').all(); }
 async function deviceEvents(database: SQLiteD1, user: string) { return (await readAccountActivity(database.asD1(), user, { limit: 50 })).events.filter(event => event.entityType === 'notifications'); }
 
-test('activity wording handles singular, plural and mixed edits without exposing holiday contents', () => {
+test('generic fallback wording handles singular, plural and mixed edits without exposing financial values', () => {
   const examples = [
     { events: [{ entityType: 'expense', action: 'update' }], title: 'Expense updated', words: 'Bob updated an expense.' },
     { events: [{ entityType: 'payment', action: 'create' }], title: 'Payment recorded', words: 'Bob recorded a payment.' },
@@ -92,11 +92,11 @@ test('activity wording handles singular, plural and mixed edits without exposing
     { events: [{ entityType: 'payment', action: 'delete' }, { entityType: 'payment', action: 'delete' }], title: 'Payments removed', words: 'Bob removed 2 payments.' },
     { events: [{ entityType: 'member', action: 'update' }, { entityType: 'member', action: 'update' }], title: 'Travellers updated', words: 'Bob updated 2 travellers.' },
     { events: [{ entityType: 'expense', action: 'create' }, { entityType: 'expense', action: 'delete' }], title: 'Expenses updated', words: 'Bob changed 2 expenses.' },
-    { events: [{ entityType: 'member', action: 'update' }, { entityType: 'expense', action: 'update' }, { entityType: 'payment', action: 'create' }], title: 'Holiday activity', words: 'Bob updated a traveller and updated an expense, plus 1 other update.' },
+    { events: [{ entityType: 'member', action: 'update' }, { entityType: 'expense', action: 'update' }, { entityType: 'payment', action: 'create' }], title: 'Holiday activity', words: 'Bob updated an expense and recorded a payment, plus 1 other update.' },
     { events: [{ entityType: 'trip', action: 'update' }], title: 'Holiday details changed', words: 'Bob updated the holiday details.' },
   ] as const;
   for (const example of examples) {
-    const privateSnapshot = { name: 'Secret holiday', title: 'Private receipt', note: 'Private payment', amount: 12345 };
+    const privateSnapshot = { note: 'Private payment', amount: 12345 };
     const changes = example.events.map(event => ({ ...event, before: privateSnapshot, after: privateSnapshot }));
     const message = notifications.activityNotification('Bob', changes)!;
     assert.equal(message.title, example.title);
@@ -123,8 +123,8 @@ test('notification copy sanitizes and bounds actor names without dropping the ac
 test('deliberate collection reorders describe display order without inventing additions', () => {
   const trip = { entityType: 'trip', action: 'update', before: { expenseOrder: ['a', 'b'] }, after: { expenseOrder: ['b', 'a'] } } as const;
   assert.equal(notifications.activityNotification('Alice', [trip])!.body, 'Alice changed the display order.');
-  assert.equal(notifications.activityNotification('Alice', [trip, { entityType: 'expense', entityId: 'a', action: 'update' }])!.body, 'Alice updated the holiday details and updated an expense.');
-  assert.equal(notifications.activityNotification('Alice', [{ ...trip, before: { memberOrder: ['a', 'b'] }, after: { memberOrder: ['a', 'c', 'b'] } }, { entityType: 'member', entityId: 'c', action: 'create' }])!.body, 'Alice updated the holiday details and added a traveller.');
+  assert.equal(notifications.activityNotification('Alice', [trip, { entityType: 'expense', entityId: 'a', action: 'update' }])!.body, 'Alice updated an expense and updated the holiday details.');
+  assert.equal(notifications.activityNotification('Alice', [{ ...trip, before: { memberOrder: ['a', 'b'] }, after: { memberOrder: ['a', 'c', 'b'] } }, { entityType: 'member', entityId: 'c', action: 'create' }])!.body, 'Alice added a traveller and updated the holiday details.');
 });
 
 test('device preference audit is private, secret-free and unchanged by repeated or foreign requests', async () => {
@@ -647,25 +647,25 @@ test('a late ownership response cannot unsubscribe a newly approved account subs
   } finally { globalThis.fetch = originalFetch; if (originalNavigator) Object.defineProperty(globalThis, 'navigator', originalNavigator); else Reflect.deleteProperty(globalThis, 'navigator'); }
 });
 
-test('expense notifications describe allocation edits without revealing receipt data', () => {
+test('expense notifications describe allocation edits with item names but no financial values', () => {
   const before = { items: [{ id: 'i', name: 'Secret restaurant', amount: 12345, members: ['a'], percentages: { a: 100 } }], percentages: { a: 100 } };
   const after = { items: [{ ...before.items[0], members: ['a', 'b'], percentages: { a: 50, b: 50 } }], percentages: { a: 50, b: 50 } };
   const message = notifications.activityNotification('Chris', [{ entityType: 'expense', action: 'update', before, after }])!;
   assert.equal(message.title, 'Expense split changed');
-  assert.equal(message.body, 'Chris changed item splits and the receipt split on an expense.');
-  assert.doesNotMatch(JSON.stringify(message), /Secret restaurant|12345|50|100/);
+  assert.equal(message.body, 'Chris changed item splits and the receipt split · Secret restaurant.');
+  assert.doesNotMatch(JSON.stringify(message), /12345|50|100/);
   const unchanged = notifications.activityNotification('Chris', [{ entityType: 'expense', action: 'update', before,
     after: { percentages: { a: 100 }, items: [{ percentages: { a: 100 }, members: ['a'], amount: 12345, name: 'Secret restaurant', id: 'i' }] } }])!;
   assert.equal(unchanged.body, 'Chris updated an expense.', 'key insertion order must not invent a split edit');
 });
 
-test('receipt additions and removals report item counts without item names or prices', () => {
+test('receipt additions and removals report item labels and counts without prices', () => {
   const before = { items: [{ id: 'old', name: 'Private coffee', amount: 875, members: ['a'] }] };
   const after = { items: Array.from({ length: 3 }, (_, index) => ({ id: `new-${index}`, name: 'Private food', amount: 725, members: ['a'] })) };
   const message = notifications.activityNotification('Chris', [{ entityType: 'expense', action: 'update', before, after }])!;
   assert.equal(message.title, 'Receipt items updated');
-  assert.equal(message.body, 'Chris added 3 items and removed 1 item on a receipt.');
-  assert.doesNotMatch(JSON.stringify(message), /Private|875|725/);
+  assert.equal(message.body, 'Chris added 3 items and removed 1 item · Private food +3 items.');
+  assert.doesNotMatch(JSON.stringify(message), /875|725/);
 });
 
 test('notification descriptions distinguish card conversions, payment timing and holiday dates', () => {
@@ -691,7 +691,7 @@ test('chat notifications distinguish new item messages from existing-message edi
   assert.doesNotMatch(JSON.stringify(message), /Secret|private-item/);
   const edited = notifications.activityNotification('Chris', [{ entityType: 'expense', action: 'update', before,
     after: { conversation: [{ ...before.conversation[0], text: 'Edited secret' }] } }])!;
-  assert.equal(edited.body, 'Chris updated a receipt chat.');
+  assert.equal(edited.body, 'Chris updated an item chat.');
   const reordered = notifications.activityNotification('Chris', [{ entityType: 'expense', action: 'update', before: { conversation: [{ id: 'a' }, { id: 'b' }] }, after: { conversation: [{ id: 'b' }, { id: 'a' }] } }])!;
   assert.equal(reordered.body, 'Chris updated a receipt chat.');
 });
@@ -700,8 +700,8 @@ test('notifications for broad edits stay compact and retain the action after a l
   const before = { items: [{ id: 'i', name: 'Secret', amount: 20, members: ['a'] }], payer: 'a', bankAmount: 20, tax: 0, title: 'Private', date: '2026-10-01' };
   const after = { items: [{ id: 'i', name: 'Other secret', amount: 30, members: ['b'] }], payer: 'b', bankAmount: 30, tax: 10, title: 'Other private', date: '2026-10-02' };
   const message = notifications.activityNotification('C'.repeat(500), [{ entityType: 'expense', action: 'update', before, after }])!;
-  assert.equal(message.title, 'Expense updated');
-  assert.match(message.body, /changed item splits and item prices and other details on an expense\.$/);
+  assert.equal(message.title, 'Other private');
+  assert.match(message.body, /changed item splits and item prices and other details · Other secret\.$/);
   assert.ok(Array.from(message.title).length <= 50);
   assert.ok(Array.from(message.body).length <= 160);
 });
@@ -719,8 +719,8 @@ test('cash-currency edits and unit-label edits do not claim a card conversion or
   const item = { id: 'i', name: 'Secret drink', amount: 1200, members: ['a', 'b'], units: { total: 2, allocations: { a: 1, b: 1 }, label: 'glasses' } };
   const units = notifications.activityNotification('Chris', [{ entityType: 'expense', action: 'update', before: { items: [item] }, after: { items: [{ ...item, units: { ...item.units, label: 'bottles' } }] } }])!;
   assert.equal(units.title, 'Receipt quantities updated');
-  assert.equal(units.body, 'Chris changed item quantity details on an expense.');
-  assert.doesNotMatch(JSON.stringify(units), /split|Secret|glasses|bottles|1200/);
+  assert.equal(units.body, 'Chris changed item quantity details · Secret drink.');
+  assert.doesNotMatch(JSON.stringify(units), /split|glasses|bottles|1200/);
 });
 
 test('messages in different item threads report multiple chats without revealing context', () => {
@@ -733,4 +733,86 @@ test('legacy assistant attribution cleanup does not invent a chat edit during a 
   const assistant = { id: 'r', role: 'assistant', text: 'Private answer', authorMemberId: 'a', authorName: 'Original owner' };
   const message = notifications.activityNotification('Chris', [{ entityType: 'expense', action: 'update', before: { tip: 0, conversation: [assistant] }, after: { tip: 100, conversation: [{ id: assistant.id, role: assistant.role, text: assistant.text }] } }])!;
   assert.deepEqual(message, { title: 'Receipt tip updated', body: 'Chris changed the tip on an expense.' });
+});
+
+test('named notifications retain holiday, receipt, affected item, editor and action', () => {
+  const item = { id: 'i', name: 'Apfelstrudel', amount: 1600, members: ['a'], percentages: { a: 100 } };
+  const message = notifications.activityNotification('Chris', [{ entityType: 'expense', action: 'update', before: { title: 'Café Mozart', items: [item] }, after: { title: 'Café Mozart', items: [{ ...item, members: ['a', 'b'], percentages: { a: 50, b: 50 } }] } }], { tripName: 'Austria weekend' })!;
+  assert.deepEqual(message, { title: 'Austria weekend · Café Mozart', body: 'Chris changed item splits · Apfelstrudel.' });
+  assert.doesNotMatch(JSON.stringify(message), /1600|100|50/);
+});
+
+test('renamed and removed items keep the correct saved name in notification context', () => {
+  const item = { id: 'i', name: 'Old label', amount: 900, members: ['a'] };
+  const renamed = notifications.activityNotification('Chris', [{ entityType: 'expense', action: 'update', before: { title: 'Lunch', items: [item] }, after: { title: 'Lunch', items: [{ ...item, name: 'New label' }] } }], { tripName: 'Vienna' })!;
+  assert.equal(renamed.title, 'Vienna · Lunch');
+  assert.equal(renamed.body, 'Chris changed item descriptions · New label.');
+  const removed = notifications.activityNotification('Chris', [{ entityType: 'expense', action: 'update', before: { title: 'Lunch', items: [item] }, after: { title: 'Lunch', items: [] } }], { tripName: 'Vienna' })!;
+  assert.equal(removed.body, 'Chris removed 1 item · Old label.');
+  const receipt = notifications.activityNotification('Chris', [{ entityType: 'expense', action: 'delete', before: { title: 'Lunch', items: [item] }, after: null }], { tripName: 'Vienna' })!;
+  assert.deepEqual(receipt, { title: 'Vienna · Lunch', body: 'Chris removed an expense · Old label.' });
+});
+
+test('receipt-wide changes and item reorders never name an unrelated item', () => {
+  const items = [{ id: 'a', name: 'Strudel', amount: 100, members: ['a'] }, { id: 'b', name: 'Coffee', amount: 200, members: ['a'] }];
+  const tip = notifications.activityNotification('Chris', [{ entityType: 'expense', action: 'update', before: { title: 'Lunch', tip: 0, items }, after: { title: 'Lunch', tip: 100, items } }], { tripName: 'Vienna' })!;
+  assert.deepEqual(tip, { title: 'Vienna · Lunch', body: 'Chris changed the tip.' });
+  const reordered = notifications.activityNotification('Chris', [{ entityType: 'expense', action: 'update', before: { title: 'Lunch', items }, after: { title: 'Lunch', items: [...items].reverse() } }], { tripName: 'Vienna' })!;
+  assert.equal(reordered.body, 'Chris changed receipt items.');
+  assert.doesNotMatch(JSON.stringify(tip) + JSON.stringify(reordered), /Strudel|Coffee/);
+});
+
+test('multiple items and receipts retain one representative label and truthful counts', () => {
+  const items = [{ id: 'a', name: 'Strudel', amount: 100, members: ['a'] }, { id: 'b', name: 'Coffee', amount: 200, members: ['a'] }];
+  const first = { entityType: 'expense' as const, action: 'update' as const, before: { title: 'Lunch', items }, after: { title: 'Lunch', items: items.map(item => ({ ...item, amount: item.amount + 100 })) } };
+  const single = notifications.activityNotification('Chris', [first], { tripName: 'Vienna' })!;
+  assert.equal(single.body, 'Chris changed item prices · Strudel +1 item.');
+  const batch = notifications.activityNotification('Chris', [{ entityType: 'trip', action: 'update' }, first, { entityType: 'expense', action: 'update', before: { title: 'Dinner' }, after: { title: 'Dinner' } }], { tripName: 'Vienna' })!;
+  assert.equal(batch.title, 'Vienna · Lunch +1 receipt');
+  assert.match(batch.body, /^Chris updated 2 expenses and updated the holiday details · Strudel \+1 item\.$/);
+});
+
+test('item-chat edits resolve the affected item by ID and never include message text', () => {
+  const items = [{ id: 'a', name: 'Strudel', amount: 100, members: ['a'] }, { id: 'b', name: 'Coffee', amount: 200, members: ['a'] }];
+  const oldMessage = { id: 'q', role: 'user', itemId: 'b', text: 'Private question' };
+  const message = notifications.activityNotification('Chris', [{ entityType: 'expense', action: 'update', before: { title: 'Lunch', items, conversation: [oldMessage] }, after: { title: 'Lunch', items, conversation: [{ ...oldMessage, text: 'Private correction' }] } }], { tripName: 'Vienna' })!;
+  assert.equal(message.body, 'Chris updated an item chat · Coffee.');
+  assert.doesNotMatch(JSON.stringify(message), /Private|Strudel|itemId/);
+});
+
+test('long context labels are independently shortened without hiding the editor, action or item', () => {
+  const item = { id: 'i', name: 'I'.repeat(200), amount: 100, members: ['a'] };
+  const message = notifications.activityNotification(`\u202eE${'d'.repeat(200)}\n`, [{ entityType: 'expense', action: 'update', before: { title: 'R'.repeat(200), items: [item] }, after: { title: 'R'.repeat(200), items: [{ ...item, amount: 200 }] } }], { tripName: 'T'.repeat(200) })!;
+  assert.equal(message.title, `${'T'.repeat(21)}… · ${'R'.repeat(24)}…`);
+  assert.match(message.body, /^Ed+… changed item prices · I+…\.$/);
+  assert.ok(Array.from(message.title).length <= 50);
+  assert.ok(Array.from(message.body).length <= 160);
+  assert.doesNotMatch(message.body, /[\n\u202e]/);
+  const emoji = notifications.activityNotification('😀'.repeat(100), [{ entityType: 'expense', action: 'update', before: { title: '🍽'.repeat(100), items: [item] }, after: { title: '🍽'.repeat(100), items: [{ ...item, name: '🍫'.repeat(100) }] } }], { tripName: '🌍'.repeat(100) })!;
+  assert.ok(Array.from(emoji.title).length <= 50); assert.ok(Array.from(emoji.body).length <= 160);
+  assert.ok(emoji.title.length <= 100); assert.ok(emoji.body.length <= 240);
+  assert.match(emoji.body, /changed item descriptions/);
+});
+
+test('named receipt replies retain saved author routing and identify the actual assistant', async () => {
+  const database = await storage();
+  database.sqlite.prepare('INSERT INTO trips (id,owner,data) VALUES (?,?,?)').run('named-trip', 'bob', '{}');
+  database.sqlite.prepare('INSERT INTO memberships (trip_id,user_id,member_id) VALUES (?,?,?)').run('named-trip', 'alice', 'author-a');
+  database.sqlite.prepare('INSERT INTO memberships (trip_id,user_id,member_id) VALUES (?,?,?)').run('named-trip', 'bob', 'caller-b');
+  await notifications.notifyReceiptReply('named-trip', 'bob', 'author-a', 'item', { tripName: 'Vienna', receiptName: 'Café Mozart', itemName: 'Apfelstrudel' });
+  await Promise.all(environment.pending);
+  const inbox = await notifications.latestNotifications('alice');
+  assert.equal(inbox[0].title, 'Vienna · Café Mozart');
+  assert.equal(inbox[0].body, 'ChatGPT or Codex replied in item chat · Apfelstrudel.');
+  assert.deepEqual(await notifications.latestNotifications('bob'), []);
+  assert.deepEqual(notifications.joinedNotification('Chris', 'Vienna'), { title: 'Vienna', body: 'Chris joined the holiday.' });
+});
+
+test('a batch chooses an available affected item with its own receipt rather than an unrelated receipt', () => {
+  const item = { id: 'i', name: 'Strudel', amount: 100, members: ['a'] };
+  const message = notifications.activityNotification('Chris', [
+    { entityType: 'expense', action: 'update', before: { title: 'Breakfast', tip: 0, items: [item] }, after: { title: 'Breakfast', tip: 100, items: [item] } },
+    { entityType: 'expense', action: 'update', before: { title: 'Dessert', items: [item] }, after: { title: 'Dessert', items: [{ ...item, amount: 200 }] } },
+  ], { tripName: 'Vienna' })!;
+  assert.deepEqual(message, { title: 'Vienna · Dessert +1 receipt', body: 'Chris updated 2 expenses · Strudel.' });
 });
