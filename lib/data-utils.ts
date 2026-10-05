@@ -16,7 +16,16 @@ export function decodeBase64url(value: string): Uint8Array<ArrayBuffer> {
   if (!/^[A-Za-z0-9_-]+$/.test(value) || value.length % 4 === 1) throw Error('Invalid base64url data');
   return Uint8Array.from(atob(value.replace(/-/g, '+').replace(/_/g, '/')), character => character.charCodeAt(0));
 }
-export async function sha256Hex(value: string | Uint8Array<ArrayBuffer>): Promise<string> {
+export function encodeHex(bytes: Uint8Array): string {
+  return Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+}
+async function sha256(value: string | Uint8Array<ArrayBuffer>): Promise<Uint8Array<ArrayBuffer>> {
   const bytes = typeof value === 'string' ? new TextEncoder().encode(value) : value;
-  return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), byte => byte.toString(16).padStart(2, '0')).join('');
+  return new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
+}
+export async function sha256Hex(value: string | Uint8Array<ArrayBuffer>): Promise<string> {
+  return encodeHex(await sha256(value));
+}
+export async function sha256Base64url(value: string | Uint8Array<ArrayBuffer>): Promise<string> {
+  return encodeBase64url(await sha256(value));
 }

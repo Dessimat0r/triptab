@@ -1,8 +1,9 @@
+import { transpileWithSharedImports } from './helpers/transpile';
 import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
-import { ModuleKind, ScriptTarget, transpileModule } from 'typescript';
+import { ModuleKind, ScriptTarget } from 'typescript';
 import {
   AuthError, hashPassword, hashToken, performAuthAction, readAuthState,
   resolveIdentity, sessionIdentity, verifyPassword, consumeAuthRateLimit, cleanupExpiredAuthData,
@@ -69,7 +70,7 @@ async function register(database: SQLiteD1, email = 'traveller@example.com') {
 }
 
 async function logoutRoute(database: SQLiteD1, revokePush = async () => {}) {
-  const compiled = transpileModule(await readFile(new URL('../app/api/auth/route.ts', import.meta.url), 'utf8'), {
+  const compiled = transpileWithSharedImports(await readFile(new URL('../app/api/auth/route.ts', import.meta.url), 'utf8'), {
     compilerOptions: { target: ScriptTarget.ES2022, module: ModuleKind.CommonJS },
   }).outputText;
   const loaded = { exports: {} as { POST(request: Request): Promise<Response> } };
@@ -474,7 +475,7 @@ test('HTTP auth endpoint enforces same origin, JSON, body bounds and private res
   const storeURL = 'data:text/javascript;base64,' + Buffer.from(`const store=globalThis[Symbol.for('triptab.auth-test-store')];${Object.keys(store).map(key => `export const ${key}=store.${key};`).join('\n')}`).toString('base64');
   const source = await readFile(new URL('../app/api/auth/route.ts', import.meta.url), 'utf8');
   const notificationsURL = 'data:text/javascript;base64,' + Buffer.from("export const browserPushCookie=async()=> 'tt_push=; Path=/; HttpOnly; Max-Age=0'; export const revokeBrowserPush=async()=>{};").toString('base64');
-  const compiled = transpileModule(source, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText.replaceAll("'./data-utils'", JSON.stringify(new URL('../lib/data-utils.ts', import.meta.url).href)).replaceAll("'./receipt-ai-config'", JSON.stringify(new URL('../lib/receipt-ai-config.ts', import.meta.url).href)).replaceAll("'@/lib/data-utils'", JSON.stringify(new URL('../lib/data-utils.ts', import.meta.url).href)).replaceAll("'@/lib/receipt-ai-config'", JSON.stringify(new URL('../lib/receipt-ai-config.ts', import.meta.url).href))
+  const compiled = transpileWithSharedImports(source, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
     .replace("'@/lib/auth'", JSON.stringify(new URL('../lib/auth.ts', import.meta.url).href))
     .replace("'@/lib/notifications'", JSON.stringify(notificationsURL))
     .replace("'@/lib/store'", JSON.stringify(storeURL));

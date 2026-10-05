@@ -1,8 +1,9 @@
+import { transpileWithSharedImports } from './helpers/transpile';
 import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
-import { ModuleKind, ScriptTarget, transpileModule } from 'typescript';
+import { ModuleKind, ScriptTarget } from 'typescript';
 import { hashToken } from '../lib/auth';
 import type { Trip } from '../lib/model';
 import type { ActivityEvent } from '../lib/store';
@@ -47,7 +48,7 @@ Object.defineProperty(globalThis, Symbol.for('triptab.export-test-env'), { value
 const envUrl = 'data:text/javascript;base64,' + Buffer.from("export const env=globalThis[Symbol.for('triptab.export-test-env')];").toString('base64');
 const notificationUrl = 'data:text/javascript;base64,' + Buffer.from('export const activityNotification=()=>null; export const notifyMembers=async()=>{};').toString('base64');
 const storeSource = await readFile(new URL('../lib/store.ts', import.meta.url), 'utf8');
-const storeCompiled = transpileModule(storeSource, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText.replaceAll("'./data-utils'", JSON.stringify(new URL('../lib/data-utils.ts', import.meta.url).href)).replaceAll("'./receipt-ai-config'", JSON.stringify(new URL('../lib/receipt-ai-config.ts', import.meta.url).href)).replaceAll("'@/lib/data-utils'", JSON.stringify(new URL('../lib/data-utils.ts', import.meta.url).href)).replaceAll("'@/lib/receipt-ai-config'", JSON.stringify(new URL('../lib/receipt-ai-config.ts', import.meta.url).href))
+const storeCompiled = transpileWithSharedImports(storeSource, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
   .replace("'cloudflare:workers'", JSON.stringify(envUrl))
   .replace("'zod'", JSON.stringify(import.meta.resolve('zod')))
   .replace("'./model'", JSON.stringify(new URL('../lib/model.ts', import.meta.url).href))
@@ -61,18 +62,18 @@ const storeCompiled = transpileModule(storeSource, { compilerOptions: { module: 
 const storeUrl = 'data:text/javascript;base64,' + Buffer.from(storeCompiled).toString('base64');
 const store = await import(storeUrl) as typeof import('../lib/store');
 const routeSource = await readFile(new URL('../app/api/export/route.ts', import.meta.url), 'utf8');
-const routeCompiled = transpileModule(routeSource, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText.replaceAll("'./data-utils'", JSON.stringify(new URL('../lib/data-utils.ts', import.meta.url).href)).replaceAll("'./receipt-ai-config'", JSON.stringify(new URL('../lib/receipt-ai-config.ts', import.meta.url).href)).replaceAll("'@/lib/data-utils'", JSON.stringify(new URL('../lib/data-utils.ts', import.meta.url).href)).replaceAll("'@/lib/receipt-ai-config'", JSON.stringify(new URL('../lib/receipt-ai-config.ts', import.meta.url).href))
+const routeCompiled = transpileWithSharedImports(routeSource, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
   .replace("'@/lib/store'", JSON.stringify(storeUrl))
   .replace("'@/lib/audit'", JSON.stringify(new URL('../lib/audit.ts', import.meta.url).href))
   .replace("'@/lib/model'", JSON.stringify(new URL('../lib/model.ts', import.meta.url).href));
 const route = await import('data:text/javascript;base64,' + Buffer.from(routeCompiled).toString('base64')) as { GET(request: Request): Promise<Response> };
 const accountRouteSource = await readFile(new URL('../app/api/account-activity/route.ts', import.meta.url), 'utf8');
-const accountRouteCompiled = transpileModule(accountRouteSource, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText.replaceAll("'./data-utils'", JSON.stringify(new URL('../lib/data-utils.ts', import.meta.url).href)).replaceAll("'./receipt-ai-config'", JSON.stringify(new URL('../lib/receipt-ai-config.ts', import.meta.url).href)).replaceAll("'@/lib/data-utils'", JSON.stringify(new URL('../lib/data-utils.ts', import.meta.url).href)).replaceAll("'@/lib/receipt-ai-config'", JSON.stringify(new URL('../lib/receipt-ai-config.ts', import.meta.url).href))
+const accountRouteCompiled = transpileWithSharedImports(accountRouteSource, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
   .replace("'@/lib/store'", JSON.stringify(storeUrl))
   .replace("'@/lib/audit'", JSON.stringify(new URL('../lib/audit.ts', import.meta.url).href));
 const accountRoute = await import('data:text/javascript;base64,' + Buffer.from(accountRouteCompiled).toString('base64')) as { GET(request: Request): Promise<Response> };
 const entrySource = await readFile(new URL('../app/api/activity-entry/route.ts', import.meta.url), 'utf8');
-const entryCompiled = transpileModule(entrySource, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText.replace("'@/lib/store'", JSON.stringify(storeUrl));
+const entryCompiled = transpileWithSharedImports(entrySource, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText.replace("'@/lib/store'", JSON.stringify(storeUrl));
 const entryRoute = await import('data:text/javascript;base64,' + Buffer.from(entryCompiled).toString('base64')) as { GET(request: Request): Promise<Response> };
 const tokens = { owner: 'a'.repeat(43), joined: 'b'.repeat(43), outsider: 'c'.repeat(43) };
 

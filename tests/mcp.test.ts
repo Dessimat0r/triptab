@@ -1,10 +1,11 @@
+import { transpileWithSharedImports } from './helpers/transpile';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
 import { deflateSync } from 'node:zlib';
 import { Ajv } from 'ajv';
-import { transpileModule, ModuleKind, ScriptTarget } from 'typescript';
+import { ModuleKind, ScriptTarget } from 'typescript';
 import { expenseTotal, expenseSchema, shares, validateLedger } from '../lib/model';
 import type { Ledger, Trip, Draft } from '../lib/model';
 import type { ReceiptMemory } from '../lib/receipt-context';
@@ -149,7 +150,7 @@ const authUrl = 'data:text/javascript;base64,' + Buffer.from(`
 export const resolveIdentity = globalThis[Symbol.for('triptab.mcp-test-auth')].resolveIdentity;
 export { hashToken } from ${JSON.stringify(new URL('../lib/auth.ts', import.meta.url).href)};
 `).toString('base64');
-const compiled = transpileModule(source, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText.replaceAll("'./data-utils'", JSON.stringify(new URL('../lib/data-utils.ts', import.meta.url).href)).replaceAll("'./receipt-ai-config'", JSON.stringify(new URL('../lib/receipt-ai-config.ts', import.meta.url).href)).replaceAll("'@/lib/data-utils'", JSON.stringify(new URL('../lib/data-utils.ts', import.meta.url).href)).replaceAll("'@/lib/receipt-ai-config'", JSON.stringify(new URL('../lib/receipt-ai-config.ts', import.meta.url).href))
+const compiled = transpileWithSharedImports(source, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
   .replace("'@/lib/store'", JSON.stringify(storeUrl))
   .replace("'@/lib/auth'", JSON.stringify(authUrl))
   .replace("'@/lib/model'", JSON.stringify(new URL('../lib/model.ts', import.meta.url).href))
@@ -2351,4 +2352,27 @@ test('MCP evidence-limit failures retain saved receipts and report a specific re
   assert.match(failed.result.content![0].text, /scan evidence limit.*saved evidence is unchanged/);
   assert.deepEqual(state.data, before);
   assert.equal(state.writes, 0);
+});
+
+test('MCP rescans fill missing and blank item fields without replacing manual populated or explicit user fields', async () => {
+  for (const baseline of [{ name: '', amount: 0 }, { name: 'Coffee', amount: null }, { name: '', amount: null }]) {
+    reset(); const item = state.data.trips[0].drafts[0].items[0];
+    Object.assign(item, baseline);
+    const saved = await invoke('update_receipt_draft', { trip_id: 'trip-1', revision: 3, draft: { id: 'draft-1',
+      upsertItems: [{ id: item.id, name: 'Read coffee', amount: 250 }], receiptScan: { version: 1, printedTotal: 250, printedCurrency: 'EUR' },
+    } });
+    assert.equal(saved.result.isError, undefined);
+    const result = content(saved).data.trips[0].drafts[0].items[0];
+    assert.equal(result.name, baseline.name || 'Read coffee'); assert.equal(result.amount, 250);
+    assert.equal(result.fieldSources?.amount, 'receipt');
+    assert.equal(content(saved).data.trips[0].drafts[0].receiptScan?.warnings.some(w => w.code === 'unreadable-amount'), false);
+  }
+  reset(); const item = state.data.trips[0].drafts[0].items[0];
+  item.name = ''; item.amount = 0; item.fieldSources = { name: 'user', amount: 'user' };
+  const saved = await invoke('update_receipt_draft', { trip_id: 'trip-1', revision: 3, draft: { id: 'draft-1',
+    upsertItems: [{ id: item.id, name: 'Read coffee', amount: 250 }], receiptScan: { version: 1, printedTotal: 250 },
+  } });
+  assert.equal(saved.result.isError, undefined);
+  assert.equal(content(saved).data.trips[0].drafts[0].items[0].amount, 0);
+  assert.equal(content(saved).data.trips[0].drafts[0].items[0].name, '');
 });

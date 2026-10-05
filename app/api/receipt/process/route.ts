@@ -1,3 +1,4 @@
+import { canonicalJson, sha256Hex } from '@/lib/data-utils';
 import { env } from 'cloudflare:workers';
 import { z } from 'zod';
 import { bucket, db, ensureProfile, failure, readBoundedBody, readLedger, receiptAccess, receiptKey, RequestError, sameOrigin, writeLedger } from '@/lib/store';
@@ -6,7 +7,7 @@ import { applyReceiptTranscription, consumeReceiptProcessBudget, processReceiptI
 
 export const dynamic = 'force-dynamic';
 const id = z.string().min(1).max(100);
-const requestSchema = z.object({ tripId: id, draftId: id, receiptId: id.regex(/^[-a-z0-9]+$/i), revision: z.number().int().min(0), questionId: id.optional(), readPurchaseDetails: z.boolean().optional() }).strict();
+const requestSchema = z.object({ tripId: id, draftId: id, receiptId: id.regex(/^[-a-z0-9]+$/i), revision: z.number().int().min(0), draftHash: z.string().regex(/^[a-f0-9]{64}$/).optional(), questionId: id.optional(), readPurchaseDetails: z.boolean().optional() }).strict();
 type Operation = { attemptId: string; tripId: string; draftId: string; receiptId: string };
 function logOperation(event: string, operation: Operation, details: Record<string, string | number | undefined> = {}) {
   // Legacy/imported IDs can contain user text. Keep operational tokens only;
@@ -34,7 +35,8 @@ export async function POST(request: Request) {
     const trip = ledger.data.trips.find(value => value.id === values.tripId);
     const draft = trip?.drafts.find(value => value.id === values.draftId);
     if (!trip || !draft) throw new RequestError('Receipt draft not found in your holidays.', 404);
-    if (ledger.revision !== values.revision || draft.receiptId !== values.receiptId) throw new RequestError('This receipt changed. Refresh before processing it.', 409);
+    if (values.draftHash && await sha256Hex(canonicalJson(draft)) !== values.draftHash) throw new RequestError('This receipt changed. Refresh before processing it.', 409);
+    if (draft.receiptId !== values.receiptId) throw new RequestError('This receipt changed. Refresh before processing it.', 409);
     if ((draft.conversation?.length ?? 0) >= 100) throw new RequestError('This receipt conversation has reached its limit of 100 messages.');
     const access = await receiptAccess(profile.id, values.receiptId);
     if (!access || access.tripId !== trip.id) throw new RequestError('This receipt image is unavailable.', 404);
@@ -75,6 +77,7 @@ export async function POST(request: Request) {
         || currentImage.httpMetadata?.contentType !== mimeType) {
         throw new RequestError('This receipt image changed during processing. Refresh before trying again.', 409);
       }
+      const tripSnapshot = structuredClone(currentTrip);
       const proposal = applyReceiptTranscription(currentTrip, currentDraft, transcription, undefined, {
         readPurchaseDetails: values.readPurchaseDetails, attemptId: operation.attemptId,
         processedAt: new Date().toISOString(), processor: connection.provider === 'api' ? 'native-api' : 'native-siwc',
@@ -82,7 +85,7 @@ export async function POST(request: Request) {
       });
       currentTrip.drafts[currentTrip.drafts.findIndex(value => value.id === proposal.id)] = proposal;
       try {
-        const saved = await writeLedger(profile.id, latest.data, latest.revision, { source: 'web' });
+        const saved = await writeLedger(profile.id, { trips: [currentTrip] }, latest.revision, { source: 'web', tripSnapshot });
         const savedDraft = saved.data.trips.find(value => value.id === trip.id)?.drafts.find(value => value.id === draft.id);
         logOperation('native-proposal-stored', operation, {
           status: savedDraft?.receiptScan?.status, lineCount: savedDraft?.items.length ?? 0, revision: saved.revision });

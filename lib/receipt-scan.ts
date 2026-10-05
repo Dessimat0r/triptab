@@ -228,8 +228,6 @@ export function reconcileReceiptScan(entry: ScannableReceipt): ReceiptScan | und
     status: incomplete ? 'incomplete' : unresolved.length ? 'needs-review' : 'matched' };
 }
 
-
-
 // Synchronous browser/Worker SHA-256 keeps the review fingerprint independent
 // of runtime-specific crypto imports. It is an invalidation marker, not auth.
 function sha256(value: string): string {

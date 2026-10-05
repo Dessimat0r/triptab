@@ -252,7 +252,7 @@ async function completedReceipt(response: Response, provider: 'api' | 'siwc'): P
   // Deltas, event envelopes and the completed result repeat output. Bound that
   // transport separately from a single event/final result so a valid receipt
   // does not fail merely because the provider streamed it in small increments.
-  const maxStreamBytes = 8 * 1024 * 1024, maxEventBytes = 1_000_000, maxResultBytes = 1_000_000;
+  const maxStreamBytes = 8 * 1024 * 1024, maxEventBytes = 6 * 1_000_000 + 16_384, maxResultBytes = 1_000_000;
   const encoder = new TextEncoder();
   let pending = '', eventData: string[] = [], eventBytes = 0, bytes = 0;
   function event() {
@@ -389,7 +389,7 @@ export function applyReceiptTranscription(_trip: Trip, draft: Draft, transcripti
       // A legacy saved value may have been entered or corrected by a person.
       // Only the untouched, empty initial placeholder is safe to infer from
       // shape; current recognized/default fields carry explicit provenance.
-      return !previous || (source === undefined ? untouched && blank(previous) : source !== 'user');
+      return !previous || (source === undefined ? (field === 'name' ? !previous.name.trim() : previous.amount === null || blank(previous)) : source !== 'user');
     };
     const readName = canObserve('name'), readAmount = canObserve('amount');
     const nextQuantity = previous ? (quantity && previous.fieldSources?.quantity !== 'user'

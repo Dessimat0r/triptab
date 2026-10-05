@@ -4,7 +4,7 @@ import { readFile, readdir } from 'node:fs/promises';
 import test from 'node:test';
 import { ModuleKind, ScriptTarget, transpileModule } from 'typescript';
 import { hashToken } from '../lib/auth';
-import { getReceiptAIAccess, receiptAIStatus, saveReceiptAISettings, removeReceiptAIKey, receiptAIKeyCheckDiagnostic, ReceiptAIAccessError, type ReceiptAIEnvironment } from '../lib/receipt-ai-access';
+import { getReceiptAIAccess, migrateReceiptAIOwner, receiptAIStatus, saveReceiptAISettings, removeReceiptAIKey, receiptAIKeyCheckDiagnostic, ReceiptAIAccessError, type ReceiptAIEnvironment } from '../lib/receipt-ai-access';
 
 class Statement {
   private values: (string | number | null)[] = [];
@@ -411,9 +411,52 @@ test('removal fences first-time and no-key setup requests still validating remot
 
 test('receipt AI owner is configured, normalized and missing or malformed owner configuration fails closed', async () => {
   const db=await storage();
-  for(const email of [undefined,'','not-an-email']) await assert.rejects(receiptAIStatus(request('owner',true),owner,db.database,{...config,RECEIPT_AI_OWNER_EMAIL:email}),{code:'not_configured'});
+  for (const email of [undefined, '', 'not-an-email']) {
+    const environment = { ...config, RECEIPT_AI_OWNER_EMAIL: email };
+    assert.equal((await receiptAIStatus(request('owner', true), owner, db.database, environment)).manageable, false);
+    await assert.rejects(saveReceiptAISettings(request('owner', true), owner, db.database, environment, { apiKey: key }, forbiddenFetch), { code: 'not_configured' });
+  }
   const alternate = await receiptAIStatus(request('owner',true),owner,db.database,{...config,RECEIPT_AI_OWNER_EMAIL:'different@example.com'});
   assert.equal(alternate.manageable,false);
   const configured = await receiptAIStatus(request('owner',true),owner,db.database,{...config,RECEIPT_AI_OWNER_EMAIL:' DESSIMAT0R@GMAIL.COM '});
   assert.equal(configured.manageable,true);
+});
+
+test('owner configuration changes cannot interrupt participant access or strand the existing pinned owner', async () => {
+  const db = await storage();
+  await saveReceiptAISettings(request('owner', true), owner, db.database, config, { apiKey: key }, keyCheck());
+  for (const email of [undefined, 'bad', 'other@example.test']) {
+    const environment = { ...config, RECEIPT_AI_OWNER_EMAIL: email };
+    const participant = await receiptAIStatus(request('other'), other, db.database, environment);
+    assert.equal(participant.connected, true); assert.equal(participant.manageable, false);
+    assert.equal((await getReceiptAIAccess(request('other'), other, db.database, environment)).accessToken, key);
+    assert.equal((await receiptAIStatus(request(), owner, db.database, environment)).manageable, true);
+    await assert.rejects(removeReceiptAIKey(request('other'), other, db.database, environment), { status: 403 });
+  }
+  await saveReceiptAISettings(request(), owner, db.database, { ...config, RECEIPT_AI_OWNER_EMAIL: 'other@example.test' }, { apiKey: replacement }, keyCheck(replacement));
+  await removeReceiptAIKey(request(), owner, db.database, { ...config, RECEIPT_AI_OWNER_EMAIL: undefined });
+  assert.equal(row(db)?.user_id, owner.id); assert.equal(row(db)?.api_key_encrypted, null);
+});
+
+test('operator owner migration requires a canonical target and version, clears old ciphertext and audits atomically', async () => {
+  const db = await storage();
+  await saveReceiptAISettings(request('owner', true), owner, db.database, config, { apiKey: key }, keyCheck());
+  const before = row(db)!;
+  const environment = { ...config, RECEIPT_AI_OWNER_EMAIL: other.email };
+  const input = { expectedUserId: owner.id, expectedVersion: before.version as number, newUserId: other.id };
+  await assert.rejects(migrateReceiptAIOwner(db.database, environment, input), { code: 'settings_changed' });
+  assert.deepEqual(row(db), before);
+  db.sqlite.prepare('INSERT INTO auth_links(oai_user_id,user_id,created_at) VALUES(?,?,?)').run('other-provider', other.id, new Date().toISOString());
+  db.sqlite.exec("CREATE TRIGGER fail_owner_audit BEFORE INSERT ON account_activity_events WHEN NEW.source='system' BEGIN SELECT RAISE(ABORT,'operator audit failed'); END");
+  await assert.rejects(migrateReceiptAIOwner(db.database, environment, input), /operator audit failed/);
+  assert.deepEqual(row(db), before);
+  db.sqlite.exec('DROP TRIGGER fail_owner_audit');
+  await migrateReceiptAIOwner(db.database, environment, input);
+  assert.equal(row(db)?.user_id, other.id); assert.equal(row(db)?.api_key_encrypted, null);
+  assert.equal(row(db)?.version, (before.version as number) + 1);
+  assert.equal((await receiptAIStatus(request('other'), other, db.database, environment)).manageable, true);
+  await assert.rejects(removeReceiptAIKey(request(), owner, db.database, environment), { status: 403 });
+  await assert.rejects(migrateReceiptAIOwner(db.database, environment, input), { code: 'settings_changed' });
+  await saveReceiptAISettings(request('other'), other, db.database, environment, { apiKey: replacement }, keyCheck(replacement));
+  assert.equal((await getReceiptAIAccess(request(), owner, db.database, environment)).accessToken, replacement);
 });

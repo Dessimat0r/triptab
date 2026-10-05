@@ -17,7 +17,7 @@ The [combined finding-by-finding record](pr-review-2026-10-05.json) covers every
 
 ## Intentional behavior and remaining scope
 
-The shared API owner’s verified email remains the configured deployment default. RECEIPT_AI_OWNER_EMAIL validates that policy at startup and runtime; missing or malformed runtime configuration fails closed, and the existing canonical account pin remains. Established auth/profile reads use one coherent identity/profile snapshot; guarded bootstrap and multi-step provider fallback retain identity revalidation. Existing-draft id-only patches are intentional, while changed legacy metadata requires metadataPatch. Initial stale native requests fail before spending the API budget.
+RECEIPT_AI_OWNER_EMAIL is required explicitly at build/preview startup and has no personal-email fallback. Runtime configuration only gates bootstrap management; existing participants and the pinned owner retain access. An operator-only version-guarded transfer clears the old ciphertext and audits the new pin. Established auth/profile reads resolve session precedence, provider links and flags in one SQL snapshot, including stale cookies. Guarded bootstrap retains a post-write snapshot check. Existing-draft id-only patches are intentional, while changed legacy metadata requires metadataPatch. The browser supplies a draft hash; a changed source draft/image fails before spending, while an unrelated global revision does not.
 
 SHA-256 hex, base64url and canonical JSON helpers are shared across callers. Receipt fingerprint key ordering and synchronous review fingerprints remain compatible; credential validation still rejects malformed encodings. Ordered multi-photo recognition and first-class signed/item-specific adjustments remain separate product scope. Unsupported negative evidence is retained and blocks silent application.
 
@@ -25,6 +25,23 @@ Actual hosted ChatGPT/Codex tool exposure and live vision benchmarks remain unpe
 
 ## Validation and release boundary
 
-The combined source passes 969 regression tests, TypeScript, production build and lint (zero errors, four existing warnings), plus the recorded compiled mobile/native-route/export journeys. This PR retains two additional focused regressions for purchase-detail opt-out and snapshot-consistent save ETags; final exact-head CI is recorded in its description.
+The combined source passes 981 regression tests, TypeScript, production build and lint (zero errors, four existing warnings), plus the recorded compiled mobile/native-route/export journeys. This PR retains two additional focused regressions for purchase-detail opt-out and snapshot-consistent save ETags; final exact-head CI is recorded in its description.
 
 No private key was read, no paid model call was made and no production financial data was changed. No SQL migration was added or replayed. GitHub does not deploy the Site; successful publication and matching source provenance are recorded separately in PR #7’s description.
+
+## 11:36–11:37 UTC re-review (PRs #5–#8)
+
+| Finding | Fix and regression evidence |
+| --- | --- |
+| N1 — recognition over-protects blanks/nulls | Native and MCP observation fill unknown-provenance empty names, null prices and blank placeholders. Populated legacy manual values and explicitly user-confirmed fields stay protected. Missing-price warnings regenerate from the resulting fields. |
+| N2 — deployment-wide scan conflicts | The browser sends a canonical source-draft hash. Preflight ignores the global counter; commit writes only the target trip under its existing receipt-link data version and exact membership/ownership/access guards. Other-trip writes cannot lose its CAS or be overwritten. History uses the transaction's current global revision. Same-trip conflicts retain three guarded retries without repeating inference. SQLite regressions inject 100 unrelated revisions at commit and assert current data/history, then race target data/owner/member changes. |
+| N3 — personal owner fallback | Build/preview requires a valid explicit owner email. CI uses a synthetic address; README and operations describe configuration rather than a fixed personal identity. Regression covers absent, empty, malformed and normalized values. |
+| N4 — availability/stranded ownership | Missing or changed runtime owner configuration cannot block participant access or the pinned owner's replacement/removal. Bootstrap fails closed. The documented operator helper transfers only to a canonically linked configured target, checks expected owner/version, clears old ciphertext and audits in one batch. Tests cover denial, successful new-owner setup and rollback on audit failure. |
+| N4b — lost rotated refresh token | Persist renewed credentials/version before rejecting reduced plan permission. Subsequent processing remains denied without refresh; disconnect revokes the newly rotated token. |
+| N5 — auth duplication/link races | One indexed SQL snapshot includes live-session precedence and canonical provider lookup, even with stale cookies. There is no second read whose principal can disagree with the first. Link/session changes before that snapshot affect it; later requests observe later changes. Bootstrap still guards link, credentials and session transitions atomically. Explicit race tests pin canonical IDs, stored email and verification flags, including disconnection. |
+| N6 — remaining codec/hash copies | Shared SHA-256 bytes/hex/base64url helpers cover setup budgets and PKCE; password-derived bytes use shared hex encoding. Hash namespaces, password verification and credential error boundaries remain intact. |
+| N7 — escaped completion envelope | A final result retains its 1 MB raw-text cap; individual events allow the worst-case JSON escape expansion plus envelope, bounded separately from the 8 MiB stream cap. A valid escaped event exceeding 1 MB succeeds; oversized events/results/transport still reject. |
+| N8 — refactor noise | Removed redundant blank lines and token/endpoint hash wrappers; purposeful hash calls at budget writes remain. |
+| N9 — copied test import rewriting | Data-URL harnesses use a shared transpilation helper; central shared-module resolution preserves caller-specific mocks. |
+
+No production owner transfer, deployment or PR merge is performed by this review update.

@@ -14,7 +14,7 @@ const { d1, r2 } = hostingConfig;
 const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === "seatbelt";
 const managedLinux = readExecutionProfile() === "managed-linux";
 
-const receiptAIOwnerEmail = (process.env.RECEIPT_AI_OWNER_EMAIL || "dessimat0r@gmail.com").trim().toLowerCase();
+const receiptAIOwnerEmail = (process.env.RECEIPT_AI_OWNER_EMAIL || "").trim().toLowerCase();
 if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(receiptAIOwnerEmail) || receiptAIOwnerEmail.length > 320) {
   throw new Error("Set RECEIPT_AI_OWNER_EMAIL to the verified owner's email before building TripTab.");
 }

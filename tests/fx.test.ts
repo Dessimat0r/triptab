@@ -1,7 +1,8 @@
+import { transpileWithSharedImports } from './helpers/transpile';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
-import { ModuleKind, ScriptTarget, transpileModule } from 'typescript';
+import { ModuleKind, ScriptTarget } from 'typescript';
 
 let authenticated = true;
 Object.defineProperty(globalThis, Symbol.for('triptab.fx-test-owner'), {
@@ -16,9 +17,9 @@ export const owner = globalThis[Symbol.for('triptab.fx-test-owner')];
 // The route, date comparisons and provider validation are real; authentication
 // and the external reference-rate service are the only substituted boundaries.
 const source = await readFile(new URL('../app/api/fx/route.ts', import.meta.url), 'utf8');
-const compiled = transpileModule(source, {
+const compiled = transpileWithSharedImports(source, {
   compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 },
-}).outputText.replaceAll("'./data-utils'", JSON.stringify(new URL('../lib/data-utils.ts', import.meta.url).href)).replaceAll("'./receipt-ai-config'", JSON.stringify(new URL('../lib/receipt-ai-config.ts', import.meta.url).href)).replaceAll("'@/lib/data-utils'", JSON.stringify(new URL('../lib/data-utils.ts', import.meta.url).href)).replaceAll("'@/lib/receipt-ai-config'", JSON.stringify(new URL('../lib/receipt-ai-config.ts', import.meta.url).href))
+}).outputText
   .replace("'@/lib/store'", JSON.stringify(ownerUrl))
   .replace("'@/lib/dates'", JSON.stringify(new URL('../lib/dates.ts', import.meta.url).href))
   .replace("'@/lib/model'", JSON.stringify(new URL('../lib/model.ts', import.meta.url).href));

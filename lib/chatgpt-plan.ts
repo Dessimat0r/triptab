@@ -1,4 +1,4 @@
-import { encodeBase64url as base64url, decodeBase64url } from './data-utils';
+import { encodeBase64url as base64url, decodeBase64url, sha256Base64url } from './data-utils';
 import { accountAuditStatement } from './audit';
 
 // This is a separately approved plan-usage client, not the Sites identity client.
@@ -37,7 +37,6 @@ function decode(value: string): Uint8Array<ArrayBuffer> {
   catch { throw new ChatGPTPlanError('ChatGPT connection data is invalid.', 401); }
 }
 const random = () => base64url(crypto.getRandomValues(new Uint8Array(32)));
-async function digest(value: string) { return base64url(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)))); }
 
 function configuration(environment: ChatGPTPlanEnvironment): Configuration | null {
   if (environment.CHATGPT_PLAN_ENABLED !== 'true') return null;
@@ -121,11 +120,11 @@ export async function startChatGPTPlanAuthorization(database: D1Database, userId
   const now = Date.now();
   await database.batch([
     database.prepare('DELETE FROM chatgpt_plan_transactions WHERE expires_at <= ? OR user_id = ?').bind(now, userId),
-    database.prepare('INSERT INTO chatgpt_plan_transactions (state_hash,user_id,transaction_data,expires_at) VALUES (?,?,?,?)').bind(await digest(state), userId, encrypted, now + 10 * 60_000),
+    database.prepare('INSERT INTO chatgpt_plan_transactions (state_hash,user_id,transaction_data,expires_at) VALUES (?,?,?,?)').bind(await sha256Base64url(state), userId, encrypted, now + 10 * 60_000),
   ]);
   const url = new URL(AUTHORIZE);
   url.search = new URLSearchParams({ client_id: config.clientId, redirect_uri: config.redirectUri, response_type: 'code', scope: SCOPE, resource: RESOURCE,
-    state, nonce, code_challenge: await digest(verifier), code_challenge_method: 'S256' }).toString();
+    state, nonce, code_challenge: await sha256Base64url(verifier), code_challenge_method: 'S256' }).toString();
   return { authorizationUrl: url.toString(), cookie: `${COOKIE}=${state}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=600` };
 }
 function stateCookie(request: Request): string | null {
@@ -216,7 +215,7 @@ export async function finishChatGPTPlanAuthorization(database: D1Database, user:
   const cookie = stateCookie(request), state = url.searchParams.get('state');
   if (!cookie || state !== cookie || url.searchParams.getAll('state').length !== 1) throw new ChatGPTPlanError('This ChatGPT connection attempt could not be verified.', 400, 'state_invalid');
   const row = await database.prepare('DELETE FROM chatgpt_plan_transactions WHERE state_hash = ? AND user_id = ? AND expires_at > ? RETURNING transaction_data')
-    .bind(await digest(state), user.id, Date.now()).first<{ transaction_data: string }>();
+    .bind(await sha256Base64url(state), user.id, Date.now()).first<{ transaction_data: string }>();
   if (!row) throw new ChatGPTPlanError('This ChatGPT connection attempt expired or was already used.', 400, 'state_invalid');
   const pending = await unseal<Transaction>(row.transaction_data, user.id, 'transaction', config.key);
   // Revalidate saved transactions created before return-path hardening as well.
@@ -277,10 +276,10 @@ export async function chatGPTPlanAccessToken(database: D1Database, userId: strin
       if (identity.subject !== saved.subject) throw new ChatGPTPlanError('The ChatGPT account changed during renewal. Please reconnect.', 401, 'account_changed');
     }
     saved = tokensFromResponse(body, identity, saved);
-    if (!saved.scopes.includes(PLAN_SCOPE) || !saved.scopes.includes('resource.invoke')) throw new ChatGPTPlanError('ChatGPT plan permission is no longer enabled. Please reconnect.', 403, 'permission_required');
     const changed = await database.prepare('UPDATE chatgpt_plan_connections SET credentials=?,version=version+1,refresh_until=0 WHERE user_id=? AND version=? AND refresh_until=? RETURNING version')
       .bind(await seal(saved, userId, 'tokens', config.key), userId, row.version, lease).first<{ version: number }>();
     if (!changed) throw new ChatGPTPlanError('The ChatGPT connection changed while it was renewing. Try again.', 409, 'connection_changed');
+    if (!saved.scopes.includes(PLAN_SCOPE) || !saved.scopes.includes('resource.invoke')) throw new ChatGPTPlanError('ChatGPT plan permission is no longer enabled. Please reconnect.', 403, 'permission_required');
     return { accessToken: saved.accessToken, model: config.model };
   } finally {
     await database.prepare('UPDATE chatgpt_plan_connections SET refresh_until=0 WHERE user_id=? AND version=? AND refresh_until=?').bind(userId, row.version, lease).run();
