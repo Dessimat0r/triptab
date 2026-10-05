@@ -102,6 +102,8 @@ export type ReceiptCaptureProps = {
   processing?: boolean;
   handoffOpened?: boolean;
   assistantError?: string;
+  refreshError?: string;
+  offline?: boolean;
   onCapture: (file: File) => void | Promise<void>;
   onPreparingChange?: (preparing: boolean) => void;
   onRemove?: () => void;
@@ -135,6 +137,8 @@ export default function ReceiptCapture({
   processing = false,
   handoffOpened = false,
   assistantError,
+  refreshError,
+  offline,
   onCapture,
   onPreparingChange,
   onRemove,
@@ -323,12 +327,13 @@ export default function ReceiptCapture({
             {copied ? <Check size={17} aria-hidden="true" /> : <Copy size={17} aria-hidden="true" />}
             {prompt ? "Copy receipt request" : "Prepare receipt request"}
           </button>
-          <button type="button" className="quiet" disabled={locked} onClick={onRefresh}>
+          {refreshError && !offline && <button type="button" className="quiet" disabled={locked} onClick={onRefresh}>
             <RefreshCw size={17} aria-hidden="true" />
-            Check for processed items
-          </button>
+            Retry updates
+          </button>}
         </div>
       )}
+      {stored && <p className="receipt-chat-note" role="status">{offline ? "You’re offline. Receipt updates resume when you reconnect." : refreshError ? "Unable to refresh receipt updates. We’ll keep trying automatically." : "Processed items and replies appear automatically while this receipt is open."}</p>}
       {prompt && <details className="receipt-capture-prompt" open>
         <summary>Request to send in ChatGPT</summary>
         <p>{handoffNeedsPaste

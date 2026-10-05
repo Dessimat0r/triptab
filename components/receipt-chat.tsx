@@ -17,6 +17,8 @@ export type ReceiptChatProps = {
   currentMemberId?: string;
   memory?: ReceiptMemory;
   error?: string;
+  refreshError?: string;
+  offline?: boolean;
   onSend: (text: string, itemId?: string) => Promise<boolean> | boolean;
   onRefresh: () => void;
 };
@@ -33,7 +35,7 @@ function messageTime(createdAt: string) {
       });
 }
 
-export default function ReceiptChat({ messages, busy, itemId, scopeLabel, contextTitle, itemNames, memberNames, currentMemberId, memory, error, onSend, onRefresh }: ReceiptChatProps) {
+export default function ReceiptChat({ messages, busy, itemId, scopeLabel, contextTitle, itemNames, memberNames, currentMemberId, memory, error, refreshError, offline, onSend, onRefresh }: ReceiptChatProps) {
   const titleId = useId();
   const questionId = useId();
   const hintId = useId();
@@ -85,7 +87,7 @@ export default function ReceiptChat({ messages, busy, itemId, scopeLabel, contex
     <section className="receipt-chat" aria-labelledby={titleId} aria-busy={working} data-item-id={itemId}>
       <h3 id={titleId}>{heading}</h3>
       <p id={hintId} className="receipt-chat-hint">
-        Questions are saved here and a prompt is prepared. Open a ChatGPT or Codex conversation with the TripTab tools enabled and use that prompt, then check for a reply. TripTab cannot verify which tools are available in an external conversation. You can also edit the receipt yourself.
+        Questions are saved here and a prompt is prepared. Open a ChatGPT or Codex conversation with the TripTab tools enabled and use that prompt. Replies appear here automatically. TripTab cannot verify which tools are available in an external conversation. You can also edit the receipt yourself.
       </p>
       {itemId && <p className="receipt-chat-scope">“This” refers to {itemLabel}. You can also ask about other items or the whole receipt.</p>}
       {memory && <details className="receipt-chat-memory">
@@ -145,13 +147,13 @@ export default function ReceiptChat({ messages, busy, itemId, scopeLabel, contex
           <MessageCircle size={17} aria-hidden="true" />
           Save question & prepare prompt
         </button>
-        <button type="button" className="quiet" disabled={working} onClick={onRefresh}>
+        {refreshError && !offline && <button type="button" className="quiet" disabled={working} onClick={onRefresh}>
           <RefreshCw size={17} aria-hidden="true" />
-          Check for replies
-        </button>
+          Retry updates
+        </button>}
       </div>
       {visibleError && <p id={errorId} className="receipt-chat-error" role="alert">{visibleError}</p>}
-      <p className="receipt-chat-note">Proposed changes need your review before the expense is updated.</p>
+      <p className="receipt-chat-note" role="status">{offline ? "You’re offline. Replies will update when you reconnect. " : refreshError ? "Unable to refresh replies. We’ll keep trying automatically. " : ""}Proposed changes need your review before the expense is updated.</p>
     </section>
   );
 }

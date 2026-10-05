@@ -88,6 +88,15 @@ test('handoff errors leave the stored photo and readable request available', () 
   assert.match(html, /Stored receipt image for review/);
 });
 
+test('receipt proposals update automatically and show a retry only after refresh failure', () => {
+  assert.match(visibleText(render()), /Processed items and replies appear automatically/);
+  assert.doesNotMatch(visibleText(render()), /Check for processed items|Retry updates/);
+  assert.match(visibleText(render({ refreshError: 'Network failure' })), /Retry updates/);
+  const offline = visibleText(render({ refreshError: 'Network failure', offline: true }));
+  assert.match(offline, /Receipt updates resume when you reconnect/);
+  assert.doesNotMatch(offline, /Retry updates/);
+});
+
 test('linking the ChatGPT tool account does not grant automatic plan processing', () => {
   const html = render({ aiConfigured: true, aiConnected: false, onProcess() {}, onConnectPlan() {} });
   assert.match(visibleText(html), /Connect ChatGPT plan/);

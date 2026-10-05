@@ -17,7 +17,7 @@ const pageSource = await readFile(new URL('../components/trip-app.tsx', import.m
 const syntax = createSourceFile('page.tsx', pageSource, ScriptTarget.Latest, true, ScriptKind.TSX);
 const home = syntax.statements.find(statement => isFunctionDeclaration(statement) && statement.name?.text === 'Home');
 assert(home && isFunctionDeclaration(home) && home.body);
-const names = ['openExpense', 'openDraft', 'newExpense', 'keepExpenseEdits', 'editorIsCurrent', 'resetReceiptReview', 'closeReceiptEditor', 'isReceiptSessionCurrent', 'stageEditorReceiptPrompt', 'refreshReceiptAIStatus', 'prepareEditorReceipt', 'copyEditorReceiptPrompt', 'captureEditorReceipt', 'upload', 'processEditorReceipt', 'readEditorReceipt', 'sendReceiptQuestion', 'reconcileEditorReceipt', 'storeEditorReceipt', 'submitExpense', 'checkEditorReceipt', 'reviewProcessedReceipt', 'reviewRestore'];
+const names = ['openExpense', 'openDraft', 'newExpense', 'keepExpenseEdits', 'editorIsCurrent', 'resetReceiptReview', 'closeReceiptEditor', 'isReceiptSessionCurrent', 'stageEditorReceiptPrompt', 'refreshReceiptAIStatus', 'prepareEditorReceipt', 'copyEditorReceiptPrompt', 'captureEditorReceipt', 'upload', 'processEditorReceipt', 'readEditorReceipt', 'sendReceiptQuestion', 'reconcileEditorReceipt', 'storeEditorReceipt', 'submitExpense', 'reviewProcessedReceipt', 'reviewRestore'];
 const declarations = [...syntax.statements, ...home.body.statements].filter(isFunctionDeclaration);
 const handlers = ['mergeReceiptConversation', 'hasPendingReceiptQuestions', ...names].map(name => {
   const declaration = declarations.find(statement => statement.name?.text === name);
@@ -28,7 +28,7 @@ const controllerSource = `return function createController(initial, boundary) {
   let trip = structuredClone(initial), editing = null, processedReceipt = null, error = '', editorConflict = null;
   let receiptPending = false, receiptCopied = false, receiptPrompt = '', receiptHistoryOpen = false, restoration = null;
   let paste = '', fxError = '', referenceRate = null;
-  let receiptChecking = false, uploading = false, receiptProcessing = false, receiptItemized = false, receiptHandoffError = '', receiptHandoffOpened = false, receiptAIConnecting = false;
+  let uploading = false, receiptProcessing = false, receiptItemized = false, receiptHandoffError = '', receiptHandoffOpened = false, receiptAIConnecting = false;
   const saving = false, profile = {id:'owner'};
   let receiptAI = null, clipboardFailure = false, failSave = false, network, statusNetwork;
   let commitAIState = true;
@@ -52,7 +52,6 @@ const controllerSource = `return function createController(initial, boundary) {
   const setEditing = next => {editing = typeof next === 'function' ? next(editing) : next;if(commitLayout)activeReceiptEditor.current=editing};
   const setError = next => {error=next};
   const setProcessedReceipt = next => {processedReceipt=typeof next === 'function' ? next(processedReceipt) : next};
-  const setReceiptChecking = next => {receiptChecking=next};
   const fetch = async (url,options) => {
     requests.push({url,options});
     if(url==='/api/receipt/ai-status')return statusNetwork?statusNetwork():({ok:true,json:async()=>receiptAI||{configured:false,connected:false,provider:'api',eligible:true,manageable:true,siwcAvailable:false}});
@@ -103,7 +102,7 @@ type Controller = {
   editorIsCurrent(): boolean; resetReceiptReview(): void;
   storeEditorReceipt(entry: Editing, receiptId?: string, keepProposal?: boolean): Promise<Draft | null>;
   submitExpense(event: { preventDefault(): void }): Promise<void>;
-  checkEditorReceipt(repliesOnly?:boolean):Promise<void>; reviewProcessedReceipt():void;
+  reviewProcessedReceipt():void;
   closeReceiptEditor():void;prepareEditorReceipt():Promise<void>;captureEditorReceipt(file:File):Promise<void>;processEditorReceipt(draft?:Draft):Promise<boolean>;reconcileEditorReceipt(trip:Trip):void;
   upload(file:File):Promise<void>;deferLayout():void;view:string;help:boolean;
   sendReceiptQuestion(text:string,itemId?:string):Promise<boolean>;
@@ -241,13 +240,14 @@ test('an unanswered pending draft is rebuilt from latest saved values so reopeni
   assert.deepEqual(editor.editing?.conversation,[question]); await submit(editor); assertChosenFinancials(editor.trip.expenses[0],latest);
 });
 
-test('reply refresh after choosing saved values preserves financials across different draft and saved photos', async () => {
+test('automatic replies after choosing saved values preserve financials across different draft and saved photos', async () => {
   const initial=fixture(pending('review')); const editor=controller(initial); editor.openExpense(initial.expenses[0]);
   const changed=structuredClone(initial); const latest=latestCorrection(changed.expenses[0]); changed.expenses[0]=latest; editor.remote(changed);
   assert.equal(editor.editorIsCurrent(),false); editor.openExpense(latest,false);
+  const priorError=editor.error;
   const newer=structuredClone(changed); newer.drafts[0].conversation!.push({...question,id:'fresh-question',text:'Keep this new follow-up'});
   newer.drafts[0].memory={notes:'Memory refreshed without replacing chosen financials',aliases:[]}; editor.remote(newer);
-  await editor.checkEditorReceipt(true); assert.equal(editor.error,''); assertChosenFinancials(editor.editing,latest);
+  editor.reconcileEditorReceipt(editor.trip); assert.equal(editor.error,priorError,'background replies preserve existing local validation messages'); assertChosenFinancials(editor.editing,latest);
   assert.equal(editor.processed,null,'a proposal for another photo cannot become the selected processed proposal');
   assert(editor.editing?.conversation?.some(message=>message.id==='fresh-question'));
   assert.equal(editor.editing?.memory?.notes,'Memory refreshed without replacing chosen financials');
@@ -260,21 +260,30 @@ test('reply refresh after choosing saved values preserves financials across diff
 });
 
 test('a cached processed proposal cannot supply items after its photo changes', async () => {
-  const initial=fixture(pending('review')); const editor=controller(initial); editor.openExpense(initial.expenses[0]); await editor.checkEditorReceipt(true);
+  const initial=fixture(); const editor=controller(initial); editor.openExpense(initial.expenses[0]);
+  const incoming=structuredClone(initial); incoming.drafts[0].status='review'; incoming.drafts[0].conversation=[question,reply];
+  editor.remote(incoming); editor.reconcileEditorReceipt(editor.trip);
   assert.equal(editor.processed?.receiptId,'replacement-photo'); const changed=structuredClone(initial);
-  changed.drafts[0].receiptId='unreviewed-new-photo'; changed.drafts[0].items[0].amount=9999; editor.remote(changed);
+  changed.drafts[0].receiptId='unreviewed-new-photo'; changed.drafts[0].items[0].amount=9999;
+  changed.drafts[0].conversation=[question,{...reply,id:'new-photo-reply',text:'Answer about the new photo'}];
+  changed.drafts[0].memory={notes:'Context for the unreviewed new photo',aliases:[]};editor.remote(changed);
+  editor.reconcileEditorReceipt(editor.trip); assert.equal(editor.processed,null,'a replacement image invalidates the cached financial proposal');
+  assert(!editor.editing?.conversation?.some(message=>message.id==='new-photo-reply'),'the old image binding cannot import a replacement image’s discussion');
+  assert.equal(editor.editing?.memory?.notes,initial.drafts[0].memory?.notes);
   const entry={...editor.editing!,items:editor.editing!.items.map(item=>({...item,amount:3000})),conversation:[...editor.editing!.conversation!,{...question,id:'photo-question'}]};
   const saved=await editor.storeEditorReceipt(entry,entry.receiptId,true); assert(saved);
   assert.equal(saved.receiptId,'replacement-photo'); assert.equal(saved.items[0].amount,3000,'unreviewed items for another photo must not replace local values');
 });
 
-test('checking and reviewing a replacement draft retains posted and local receipt context', async () => {
-  const draft=pending('review'); delete draft.memory;
+test('automatic replies and reviewing a replacement draft retain posted and local receipt context', async () => {
+  const draft=pending(); delete draft.memory;
   const initial=fixture(draft); const postedQuestion={...question,id:'posted-question',text:'Already saved on the posted expense'};
   initial.expenses[0].conversation=[postedQuestion]; initial.expenses[0].memory={notes:'Memory retained on the posted expense',aliases:[]};
-  const editor=controller(initial); editor.openExpense(initial.expenses[0]); const localQuestion={...question,id:'local-question',text:'Local question retained while checking'};
+  const editor=controller(initial); editor.openExpense(initial.expenses[0]); const localQuestion={...question,id:'local-question',text:'Local question retained during automatic updates'};
   editor.edit({conversation:[...editor.editing!.conversation!,localQuestion]});
-  await editor.checkEditorReceipt(); assert.equal(editor.error,''); assert.equal(editor.processed?.id,draft.id);
+  const incoming=structuredClone(initial); incoming.drafts[0].status='review'; incoming.drafts[0].conversation=[question,reply];
+  incoming.drafts[0].items[0].amount=2500; editor.remote(incoming); editor.reconcileEditorReceipt(editor.trip);
+  assert.equal(editor.error,''); assert.equal(editor.processed?.id,draft.id);
   assert.deepEqual(editor.editing?.conversation?.map(message=>message.id),['posted-question','question','reply','local-question']);
   assert.equal(editor.editing?.memory?.notes,'Memory retained on the posted expense'); assert.equal(editor.editing?.receiptId,'replacement-photo');
   editor.reviewProcessedReceipt(); assert.equal(editor.editing?.receiptId,'replacement-photo');
@@ -409,9 +418,10 @@ test('choosing an icon before upload preserves it through the saved draft and in
 
 test('retaining an incoming proposal for chat keeps the current icon or an explicit automatic reset', async () => {
   for (const icon of [{symbol:'Palmtree',background:'pink'} as const,undefined]) {
-    const initial=fixture(pending('review'));initial.drafts[0].icon={symbol:'Coffee',background:'gold'};
+    const initial=fixture();initial.drafts[0].icon={symbol:'Coffee',background:'gold'};
     const editor=controller(initial);editor.openExpense(initial.expenses[0]);editor.edit({icon});
-    await editor.checkEditorReceipt();
+    const incoming=structuredClone(initial);incoming.drafts[0].status='review';incoming.drafts[0].items[0].amount=2500;
+    editor.remote(incoming);editor.reconcileEditorReceipt(editor.trip);assert(editor.processed);
     const saved=await editor.storeEditorReceipt(editor.editing!,editor.editing!.receiptId,true);
     assert.deepEqual(saved?.icon,icon);
     editor.reviewProcessedReceipt();
@@ -452,13 +462,19 @@ test('a reading response from a previous account cannot apply its proposal', asy
   assert.equal(editor.trip.drafts[0].status,'waiting');assert.equal(editor.editing!.items.length,0);
 });
 
-test('closing and reopening while a receipt check is pending cannot apply its snapshot or stale review state', async () => {
+test('an automatic receipt snapshot after closing and reopening cannot replace the new editor or its review state', () => {
   const initial=fixture();const editor=controller(initial);editor.openExpense(initial.expenses[0]);
-  let release!:(value:unknown)=>void;editor.network(async()=>new Promise(resolve=>{release=resolve}));
-  const check=editor.checkEditorReceipt();editor.closeReceiptEditor();editor.newExpense();const id=editor.editing!.id;
-  release(response({data:{trips:[itemizedTrip(initial)]},revision:1}));await check;
+  editor.closeReceiptEditor();editor.newExpense();const id=editor.editing!.id;
+  editor.remote(itemizedTrip(initial),1);editor.reconcileEditorReceipt(editor.trip);
   assert.equal(editor.editing!.id,id);assert.equal(editor.editing!.items[0].amount,0);assert.equal(editor.processed,null);
-  assert.equal(editor.trip.drafts[0].status,'waiting');assert.equal(editor.prompt,'');
+  assert.equal(editor.trip.drafts[0].status,'review','accepted ledger changes are available outside the unrelated new editor');assert.equal(editor.prompt,'');
+});
+
+test('an automatic snapshot for another holiday cannot import its replies or proposal into the open receipt', () => {
+  const initial=fixture();const editor=controller(initial);editor.openExpense(initial.expenses[0]);
+  const previous=structuredClone(editor.editing);const other=itemizedTrip(initial);other.id='another-holiday';
+  other.drafts[0].conversation=[question,reply];editor.remote(other,1);editor.reconcileEditorReceipt(editor.trip);
+  assert.deepEqual(editor.editing,previous);assert.equal(editor.processed,null);
 });
 
 test('native failures preserve the photo and draft with a retryable error instead of fabricated receipt lines', async () => {

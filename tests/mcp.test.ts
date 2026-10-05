@@ -46,6 +46,8 @@ const state = {
   imageReads: [] as string[],
   imageByteReads: [] as string[],
   receiptStorageUnavailable: false,
+  receiptNotifications: [] as { tripId: string; caller: string; authorMemberId?: string; writes: number }[],
+  receiptNotificationFailure: false,
 };
 function reset() {
   rateDatabase.exec('DELETE FROM auth_rate_limits');
@@ -65,6 +67,8 @@ function reset() {
   state.imageReads = [];
   state.imageByteReads = [];
   state.receiptStorageUnavailable = false;
+  state.receiptNotifications = [];
+  state.receiptNotificationFailure = false;
 }
 const mockStore = {
   async readLedger(actor: string) {
@@ -138,6 +142,13 @@ const mockAuth = {
 };
 Object.defineProperty(globalThis, Symbol.for('triptab.mcp-test-store'), { value: mockStore, configurable: true });
 Object.defineProperty(globalThis, Symbol.for('triptab.mcp-test-auth'), { value: mockAuth, configurable: true });
+const mockNotifications = {
+  async notifyReceiptReply(tripId: string, caller: string, authorMemberId?: string) {
+    state.receiptNotifications.push({ tripId, caller, authorMemberId, writes: state.writes });
+    if (state.receiptNotificationFailure) throw new Error('Notification service unavailable.');
+  },
+};
+Object.defineProperty(globalThis, Symbol.for('triptab.mcp-test-notifications'), { value: mockNotifications, configurable: true });
 
 // Compile the real route and substitute only its external storage boundary.
 // Schemas, authorization branches, tool dispatch and ledger validation remain real.
@@ -150,10 +161,14 @@ const authUrl = 'data:text/javascript;base64,' + Buffer.from(`
 export const resolveIdentity = globalThis[Symbol.for('triptab.mcp-test-auth')].resolveIdentity;
 export { hashToken } from ${JSON.stringify(new URL('../lib/auth.ts', import.meta.url).href)};
 `).toString('base64');
+const notificationsUrl = 'data:text/javascript;base64,' + Buffer.from(`
+export const notifyReceiptReply = globalThis[Symbol.for('triptab.mcp-test-notifications')].notifyReceiptReply;
+`).toString('base64');
 const compiled = transpileWithSharedImports(source, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
   .replace("'@/lib/trip-language-preferences'", JSON.stringify('data:text/javascript;base64,'+Buffer.from('export const readTripLanguagePreferences=async()=>({preferences:{readingLanguage:"en"},revision:0});').toString('base64')))
   .replace("'@/lib/store'", JSON.stringify(storeUrl))
   .replace("'@/lib/auth'", JSON.stringify(authUrl))
+  .replace("'@/lib/notifications'", JSON.stringify(notificationsUrl))
   .replace("'@/lib/model'", JSON.stringify(new URL('../lib/model.ts', import.meta.url).href))
   .replace("'@/lib/receipt-context'", JSON.stringify(new URL('../lib/receipt-context.ts', import.meta.url).href))
   .replace("'@/lib/receipt-memory-ownership'", JSON.stringify(new URL('../lib/receipt-memory-ownership.ts', import.meta.url).href))
@@ -1233,6 +1248,33 @@ test('receipt reply retries are idempotent and response ID collisions are reject
   }
   assert.equal(state.writes, 1);
   assert.equal(state.data.trips[0].drafts[0].conversation!.length, 3);
+  assert.deepEqual(state.receiptNotifications, [{ tripId: 'trip-1', caller: user, authorMemberId: undefined, writes: 1 }], 'only the committed first reply schedules an alert');
+});
+
+test('receipt replies notify the saved question author after committing, with best effort delivery', async context => {
+  reset();
+  state.data.trips[0].drafts[0].conversation = [{ ...receiptQuestion, authorMemberId: 'b', authorName: 'Alex' }];
+  state.receiptNotificationFailure = true;
+  const warnings: unknown[][] = [];
+  context.mock.method(console, 'warn', (...values: unknown[]) => { warnings.push(values); });
+  const reply = await invoke('reply_to_receipt_chat', receiptChatReply);
+  assert.equal(reply.result.isError, undefined);
+  assert.deepEqual(state.receiptNotifications, [{ tripId: 'trip-1', caller: user, authorMemberId: 'b', writes: 1 }]);
+  assert.equal(state.data.trips[0].drafts[0].conversation!.at(-1)!.text, receiptChatReply.text);
+  assert.equal(warnings.length, 1);
+  assert.doesNotMatch(JSON.stringify(warnings), /service unavailable|Alex|includes service/);
+  const retry = await invoke('reply_to_receipt_chat', receiptChatReply);
+  assert.equal(retry.result.isError, undefined);
+  assert.equal(state.receiptNotifications.length, 1, 'retrying a saved reply does not retry its notification');
+});
+
+test('receipt replies rejected before committing never schedule a notification', async () => {
+  reset();
+  state.data.trips[0].drafts[0].conversation = [structuredClone(receiptQuestion)];
+  const reply = await invoke('reply_to_receipt_chat', { ...receiptChatReply, revision: 2 });
+  assert.equal(reply.result.isError, true);
+  assert.equal(state.writes, 0);
+  assert.deepEqual(state.receiptNotifications, []);
 });
 
 test('item chat replies inherit the saved question context and expose it in scoped receipt reads', async () => {
