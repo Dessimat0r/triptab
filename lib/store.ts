@@ -192,6 +192,10 @@ async function readActivityPage(user: string, tripId: string, options: { before?
       length(CAST(json_object('id', e.id, 'sequence', e.sequence, 'tripId', e.trip_id,
         'actorId', e.actor_id, 'actorName', e.actor_name, 'createdAt', e.created_at,
         'entityType', e.entity_type, 'entityId', e.entity_id, 'action', e.action,
+        'before', NULL, 'after', NULL, 'revision', e.revision, 'source', e.source) AS BLOB)) AS metadataBytes,
+      length(CAST(json_object('id', e.id, 'sequence', e.sequence, 'tripId', e.trip_id,
+        'actorId', e.actor_id, 'actorName', e.actor_name, 'createdAt', e.created_at,
+        'entityType', e.entity_type, 'entityId', e.entity_id, 'action', e.action,
         'before', NULL, 'after', NULL, 'revision', e.revision, 'source', e.source) AS BLOB))
       + length(CAST(COALESCE(e.before_data, '') AS BLOB))
       + length(CAST(COALESCE(e.after_data, '') AS BLOB)) AS bytes
@@ -200,37 +204,62 @@ async function readActivityPage(user: string, tripId: string, options: { before?
       AND ${scope.condition}
       AND (t.owner = ? OR EXISTS (SELECT 1 FROM memberships m WHERE m.trip_id = t.id AND m.user_id = ?))
     ORDER BY e.sequence DESC LIMIT ?
-  `).bind(...scope.bindings, tripId, options.before ?? Number.MAX_SAFE_INTEGER, user, user, limit + 1).all<{ id: string; sequence: number; bytes: number }>();
+  `).bind(...scope.bindings, tripId, options.before ?? Number.MAX_SAFE_INTEGER, user, user, limit + 1).all<{ id: string; sequence: number; bytes: number; metadataBytes: number }>();
   if (family) {
     if (!await tripAccess(user, tripId)) throw new RequestError('Your access to this trip changed. Refresh before viewing its history.', 403);
     await assertReceiptActivityVersion(db(), tripId, family.version);
   }
-  const selected: { id: string; sequence: number }[] = [];
+  const selected: { id: string; sequence: number; omit: boolean }[] = [];
   let bytes = 128; // Envelope, commas and the bounded sequence cursor.
   for (const candidate of candidates.results.slice(0, limit)) {
-    if (bytes + candidate.bytes + 1 > MAX_ACTIVITY_BYTES) break;
-    selected.push(candidate);
-    bytes += candidate.bytes + 1;
+    const omit = candidate.bytes + 128 > MAX_ACTIVITY_BYTES;
+    const size = omit ? candidate.metadataBytes + 512 : candidate.bytes;
+    if (bytes + size + 1 > MAX_ACTIVITY_BYTES) break;
+    selected.push({ ...candidate, omit });
+    bytes += size + 1;
   }
   if (!selected.length) {
-    if (candidates.results.length) throw new RequestError('This history entry is too large to load as a page.', 413);
+    if (candidates.results.length) throw new RequestError('This history entry metadata is too large to load safely.', 413);
     return { events: [], nextCursor: null };
   }
   // Recheck access while fetching only the chosen immutable IDs, so membership
   // loss between metadata and snapshot reads cannot expose history or cursors.
-  const rows = await db().prepare(`
+  const completeIds = selected.filter(event => !event.omit).map(event => event.id);
+  const omittedIds = selected.filter(event => event.omit).map(event => event.id);
+  const rows = completeIds.length ? await db().prepare(`
     SELECT e.* FROM activity_events e JOIN trips t ON t.id = e.trip_id
     WHERE e.trip_id = ? AND e.id IN (SELECT value FROM json_each(?))
       ${family ? 'AND t.receipt_link_version = ?' : ''}
       AND (t.owner = ? OR EXISTS (SELECT 1 FROM memberships m WHERE m.trip_id = t.id AND m.user_id = ?))
     ORDER BY e.sequence DESC
-  `).bind(tripId, JSON.stringify(selected.map(event => event.id)), ...(family ? [family.version] : []), user, user).all<ActivityRow>();
+  `).bind(tripId, JSON.stringify(completeIds), ...(family ? [family.version] : []), user, user).all<ActivityRow>() : { results: [] as ActivityRow[] };
+  if (omittedIds.length) {
+    const metadata = await db().prepare(`
+      SELECT e.id, e.sequence, e.trip_id, e.actor_id, e.actor_name, e.created_at,
+        e.entity_type, e.entity_id, e.action, NULL AS before_data, NULL AS after_data, e.revision, e.source
+      FROM activity_events e JOIN trips t ON t.id = e.trip_id
+      WHERE e.trip_id = ? AND e.id IN (SELECT value FROM json_each(?))
+        ${family ? 'AND t.receipt_link_version = ?' : ''}
+        AND (t.owner = ? OR EXISTS (SELECT 1 FROM memberships m WHERE m.trip_id = t.id AND m.user_id = ?))
+      ORDER BY e.sequence DESC
+    `).bind(tripId, JSON.stringify(omittedIds), ...(family ? [family.version] : []), user, user).all<ActivityRow>();
+    rows.results.push(...metadata.results);
+    rows.results.sort((left, right) => right.sequence - left.sequence);
+  }
   if (family) await assertReceiptActivityVersion(db(), tripId, family.version);
   if (rows.results.length !== selected.length) throw new RequestError('Your access to this trip changed. Refresh before viewing its history.', 403);
+  const summary = (event: ActivityEvent): ActivityEvent => ({ ...event, before: null, after: null, snapshotOmitted: true,
+    snapshotDownload: `/api/activity-entry?${new URLSearchParams({ tripId, eventId: event.id })}` });
+  let responseBytes = 128;
   const result = {
     // Audit evidence is immutable. Role-first UI labels handle legacy mistaken
     // assistant attribution without rewriting either historical snapshot.
-    events: rows.results.map(row => ({ id: row.id, sequence: row.sequence, tripId: row.trip_id, actorId: row.actor_id, actorName: row.actor_name, createdAt: row.created_at, entityType: row.entity_type, entityId: row.entity_id, action: row.action, before: row.before_data ? JSON.parse(row.before_data) : null, after: row.after_data ? JSON.parse(row.after_data) : null, revision: row.revision, source: row.source })),
+    events: rows.results.map(row => {
+      let event: ActivityEvent = { id: row.id, sequence: row.sequence, tripId: row.trip_id, actorId: row.actor_id, actorName: row.actor_name, createdAt: row.created_at, entityType: row.entity_type, entityId: row.entity_id, action: row.action, before: row.before_data ? JSON.parse(row.before_data) : null, after: row.after_data ? JSON.parse(row.after_data) : null, revision: row.revision, source: row.source };
+      if (omittedIds.includes(event.id) || responseBytes + new TextEncoder().encode(JSON.stringify(event)).byteLength + 1 > MAX_ACTIVITY_BYTES) event = summary(event);
+      responseBytes += new TextEncoder().encode(JSON.stringify(event)).byteLength + 1;
+      return event;
+    }),
     nextCursor: candidates.results.length > selected.length ? selected[selected.length - 1].sequence : null,
   };
   if (new TextEncoder().encode(JSON.stringify(result)).byteLength > MAX_ACTIVITY_BYTES) {

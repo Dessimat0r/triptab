@@ -348,7 +348,8 @@ function ActivityDetailBody({ event, currency, memberNames, actorMemberNames }: 
       </>}
     </dl>
     <p className="footnote">Traveller references use current holiday names with stable IDs. Message authors retain their recorded names.</p>
-    <ActivityChanges fields={fields} before={!!event.before} after={!!event.after} />
+    {event.snapshotOmitted ? <p className="footnote">The full before and after details are too large for this history page. They remain saved. <a href={event.snapshotDownload} download>Download full shared history entry</a> to inspect the original snapshots, including shared traveller contacts.</p>
+      : <ActivityChanges fields={fields} before={!!event.before} after={!!event.after} />}
   </>;
 }
 

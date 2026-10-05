@@ -20,7 +20,7 @@ export default function DataExport({ trips = [], tripId, compact = false }: Data
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
   const [history, setHistory] = useState<{ tripId: string; nextCursor: number | null } | null>(null);
-  const [accountHistoryCursor, setAccountHistoryCursor] = useState<number | null>(null);
+  const [accountHistoryCursors, setAccountHistoryCursors] = useState<{ json: number | null; csv: number | null }>({ json: null, csv: null });
   const request = useRef<AbortController | null>(null);
   useEffect(() => () => { request.current?.abort(); }, []);
 
@@ -37,7 +37,7 @@ export default function DataExport({ trips = [], tripId, compact = false }: Data
       if (scope === "trip" || scope === "activity") params.set("tripId", selectedTrip);
       if (scope === "trip" && format === "json" && receipts) params.set("receipts", "1");
       if (scope === "activity" && older && history?.tripId === selectedTrip && history.nextCursor !== null) params.set("before", String(history.nextCursor));
-      if (scope === "account-activity" && older && accountHistoryCursor !== null) params.set("before", String(accountHistoryCursor));
+      if (scope === "account-activity" && older && accountHistoryCursors[format] !== null) params.set("before", String(accountHistoryCursors[format]));
       const response = await fetch(`/api/export?${params}`, { cache: "no-store", credentials: "same-origin", signal: controller.signal });
       if (!response.ok) {
         const body = await response.json() as { error?: string };
@@ -58,7 +58,7 @@ export default function DataExport({ trips = [], tripId, compact = false }: Data
         const cursor = response.headers.get("x-export-next-cursor");
         const nextCursor = cursor && /^[1-9]\d*$/.test(cursor) && Number.isSafeInteger(Number(cursor)) ? Number(cursor) : null;
         if (scope === "activity") setHistory({ tripId: selectedTrip, nextCursor });
-        else setAccountHistoryCursor(nextCursor);
+        else setAccountHistoryCursors(previous => ({ ...previous, [format]: nextCursor }));
         setStatus(nextCursor === null ? "History downloaded. There are no older changes." : "History page downloaded. Download older changes to continue.");
       } else setStatus("Your download is ready.");
     } catch (cause) {
@@ -76,7 +76,8 @@ export default function DataExport({ trips = [], tripId, compact = false }: Data
       {!compact && <>
         <button type="button" className="quiet" disabled={busy} onClick={() => download("account-activity", "json")}><Download size={17} aria-hidden="true" />Account history JSON</button>
         <button type="button" className="quiet" disabled={busy} onClick={() => download("account-activity", "csv")}><Download size={17} aria-hidden="true" />Account history CSV</button>
-        {accountHistoryCursor !== null && <button type="button" className="quiet" disabled={busy} onClick={() => download("account-activity", "csv", true)}><Download size={17} aria-hidden="true" />Older account history CSV</button>}
+        {accountHistoryCursors.json !== null && <button type="button" className="quiet" disabled={busy} onClick={() => download("account-activity", "json", true)}><Download size={17} aria-hidden="true" />Older account history JSON</button>}
+        {accountHistoryCursors.csv !== null && <button type="button" className="quiet" disabled={busy} onClick={() => download("account-activity", "csv", true)}><Download size={17} aria-hidden="true" />Older account history CSV</button>}
       </>}
     </div>
     {(trips.length > 0 || tripId) && <>

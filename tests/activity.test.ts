@@ -249,8 +249,11 @@ test('receipt byte budgets exclude unrelated large snapshots and retain complete
   assert.equal(new Set([...first.events, ...second.events].map(value => value.id)).size, dinnerIds.size + 3);
   event(database, 'related-oversized', 'expense', 'dinner', null, { title: 'x'.repeat(store.MAX_ACTIVITY_BYTES) });
   database.queries.length = 0;
-  await assert.rejects(store.readActivity('joined', 'trip', { expenseId: 'dinner' }), error => error instanceof store.RequestError && error.status === 413);
-  assert.ok(database.queries.every(sql => !sql.includes('SELECT e.*')), 'an oversized scoped entry is rejected before materializing snapshots');
+  const oversized = await store.readActivity('joined', 'trip', { expenseId: 'dinner', limit: 1 });
+  assert.equal(oversized.events[0].id, 'related-oversized');
+  assert.equal(oversized.events[0].snapshotOmitted, true);
+  assert.ok(oversized.nextCursor);
+  assert.ok(database.queries.every(sql => !sql.includes('SELECT e.*')), 'an oversized scoped entry returns metadata without materializing its snapshot');
 });
 
 test('distinct source draft provenance retains every prelink event and old photo through posting and deletion', async () => {

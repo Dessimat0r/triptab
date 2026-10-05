@@ -51,7 +51,11 @@ const worker = {
         throw new Error('TripTab scheduled receipt cleanup did not complete.');
       }
     };
-    ctx.waitUntil(cleanup());
+    const task = cleanup();
+    ctx.waitUntil(task);
+    // Also return the rejection from the scheduled handler itself. This makes
+    // the Cron invocation fail even in hosts that only track its return value.
+    return task;
   },
   async fetch(request: Request, env: Cloudflare.Env, ctx: ExecutionContext<{ CONNECTORS?: ConnectorBinding }>) {
     let binding = ctx.props?.CONNECTORS;

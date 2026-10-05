@@ -242,6 +242,13 @@ function cookie(request: Request, token: string, expired = false) {
 function signedOutCookie(request: Request, signedOut: boolean) {
   return cookie(request, signedOut ? '1' : '', !signedOut).replace(`${SESSION_COOKIE}=`, `${SIGNED_OUT_COOKIE}=`);
 }
+/** Clear browser credentials even when an optional logout audit cannot load. */
+export function signedOutAuthResult(request: Request): { state: AuthState; cookie: string; additionalCookies: string[] } {
+  return {
+    state: { authenticated: false, hasPassword: false, chatgptLinked: false, chatgptAvailable: !!trustedChatGPTIdentity(request), emailVerified: false },
+    cookie: cookie(request, '', true), additionalCookies: [signedOutCookie(request, true)],
+  };
+}
 type MutationGate = { sql: string; bindings: unknown[] };
 async function prepareSession(user: string, actorName: string, request: Request, database: D1Database, gate?: MutationGate) {
   const token = randomToken();
@@ -445,7 +452,7 @@ async function unlinkChatGPT(request: Request, database: D1Database) {
   return { state: await readAuthState(request, database) };
 }
 export async function performAuthAction(request: Request, body: Record<string, unknown>, database: D1Database): Promise<{ state: AuthState; cookie?: string; additionalCookies?: string[] }> {
-  if (['register', 'login', 'set_password', 'logout'].includes(String(body.action))) await cleanupExpiredAuthData(database);
+  if (['register', 'login', 'set_password'].includes(String(body.action))) await cleanupExpiredAuthData(database);
   switch (body.action) {
     case 'register': return register(request, body, database);
     case 'login': return login(request, body, database);
@@ -468,21 +475,61 @@ export async function performAuthAction(request: Request, body: Record<string, u
     case 'logout': {
       const token = sessionToken(request);
       let actor: AuthIdentity | null = null;
-      try { actor = await resolveIdentity(request, {}, database); }
-      catch (error) { if (!(error instanceof Error) || error.message !== 'UNAUTHORIZED') throw error; }
-      if (actor) {
-        const profile = await profileRow(actor, database);
-        const event = { userId: actor.id, actorName: profile.display_name, entityType: 'session' as const, entityId: 'browser',
+      let actorName: string | undefined;
+      try {
+        actor = await resolveIdentity(request, {}, database);
+        // A session identity already came from its stored profile. A provider
+        // signout must never create a missing profile merely to log an event.
+        actorName = actor.kind === 'session' ? actor.displayName :
+          (await database.prepare('SELECT display_name FROM profiles WHERE id = ?').bind(actor.id).first<{ display_name: string }>())?.display_name;
+      } catch (error) {
+        if (!(error instanceof Error) || error.message !== 'UNAUTHORIZED') console.warn('TripTab could not load the logout audit actor.');
+      }
+      const statements: D1PreparedStatement[] = [];
+      let logoutAudit: Parameters<typeof accountAuditStatement>[1] | undefined;
+      let providerAuditGate: { sql: string; bindings: unknown[] } | undefined;
+      // Possession of this opaque cookie is sufficient to revoke it, including
+      // orphaned, expired or signed-out sessions with no resolvable profile.
+      if (token) statements.push(database.prepare('DELETE FROM auth_sessions WHERE token_hash = ?').bind(await hashToken(token)));
+      if (actor && actorName !== undefined) {
+        const event = { userId: actor.id, actorName, entityType: 'session' as const, entityId: 'browser',
           action: 'delete' as const, before: { active: true }, after: { active: false }, source: actor.kind === 'chatgpt' ? 'chatgpt' as const : 'web' as const };
-        if (actor.kind === 'session' && token) await database.batch([
-          database.prepare('DELETE FROM auth_sessions WHERE token_hash = ? AND user_id = ?').bind(await hashToken(token), actor.id),
-          accountAuditStatement(database, event, { sql: 'changes() > 0', bindings: [] }),
-        ]);
-        else await database.batch([accountAuditStatement(database, event,
-          { sql: 'NOT EXISTS (SELECT 1 FROM auth_links WHERE oai_user_id = ? AND user_id <> ?)', bindings: [actor.id, actor.id] })]);
+        logoutAudit = event;
+        if (actor.kind === 'session' && token) statements.push(accountAuditStatement(database, event, { sql: 'changes() > 0', bindings: [] }));
+        else {
+          providerAuditGate = {
+          sql: 'EXISTS (SELECT 1 FROM profiles WHERE id = ?) AND NOT EXISTS (SELECT 1 FROM auth_links WHERE oai_user_id = ? AND user_id <> ?)',
+          bindings: [actor.id, actor.chatgptId || actor.id, actor.id],
+          };
+          statements.push(accountAuditStatement(database, event, providerAuditGate));
+        }
+      }
+      // When an actor is known, revocation and its audit still commit together.
+      if (statements.length) {
+        try { await database.batch(statements); }
+        catch (error) {
+          // Signout must revoke a credential even when audit storage prevents
+          // the normal atomic batch. Retry its exact deletion independently;
+          // an audit outage must never leave a usable copy of this cookie.
+          if (token) {
+            const tokenHash = await hashToken(token);
+            const revoked = await database.prepare('DELETE FROM auth_sessions WHERE token_hash = ?').bind(tokenHash).run();
+            if (revoked.meta.changes && logoutAudit) {
+              try {
+                const result = await database.batch([accountAuditStatement(database, logoutAudit, {
+                  sql: `NOT EXISTS (SELECT 1 FROM auth_sessions WHERE token_hash = ?)${providerAuditGate ? ` AND ${providerAuditGate.sql}` : ''}`,
+                  bindings: [tokenHash, ...(providerAuditGate?.bindings || [])],
+                })]);
+                if (result[0].meta.changes) return signedOutAuthResult(request);
+              } catch { /* Report the original failure after preserving revocation. */ }
+            }
+          }
+          console.warn('TripTab logout audit did not complete.');
+          throw error;
+        }
       }
       // The provider's own session belongs to ChatGPT; it cannot be signed out here.
-      return { state: { authenticated: false, hasPassword: false, chatgptLinked: false, chatgptAvailable: !!trustedChatGPTIdentity(request), emailVerified: false }, cookie: cookie(request, '', true), additionalCookies: [signedOutCookie(request, true)] };
+      return signedOutAuthResult(request);
     }
     default: throw new AuthError('Choose a valid account action.');
   }
