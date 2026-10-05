@@ -8,4 +8,4 @@ PR5 auth and PR6 scoped receipt/OAuth/ownership fixes are integrated. Earlier N1
 
 ## F6 and integrated follow-ups
 
-MCP recognition now agrees with native recognition: a blank price placeholder has an empty name, zero amount, no quantity and no source evidence. A meaningful untagged legacy zero retains its price/provenance; null unknown values remain fillable and explicit user confirmation stays protected. The other scoped-save, fingerprint, streaming, owner-CLI, identity and test-harness fixes are integrated. PR7 full verification passes1005 tests, types and lint (zero errors/four existing warnings), with no paid model call.
+MCP recognition now agrees with native recognition: a blank price placeholder has an empty name, zero amount, no quantity and no source evidence. A meaningful untagged legacy zero retains its price/provenance; null unknown values remain fillable and explicit user confirmation stays protected. The other scoped-save, fingerprint, streaming, owner-CLI, identity and test-harness fixes are integrated. PR7 full verification passes 1,010 tests, types and lint (zero errors/four existing warnings), with no paid model call.
