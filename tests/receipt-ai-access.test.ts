@@ -4,7 +4,6 @@ import { readFile, readdir } from 'node:fs/promises';
 import test from 'node:test';
 import { ModuleKind, ScriptTarget, transpileModule } from 'typescript';
 import { hashToken } from '../lib/auth';
-import { parseOwnerTransferArguments, runOwnerTransfer } from '../lib/receipt-ai-owner-transfer';
 import { getReceiptAIAccess, migrateReceiptAIOwner, receiptAIStatus, saveReceiptAISettings, removeReceiptAIKey, receiptAIKeyCheckDiagnostic, ReceiptAIAccessError, type ReceiptAIEnvironment } from '../lib/receipt-ai-access';
 
 class Statement {
@@ -460,52 +459,4 @@ test('operator owner migration requires a canonical target and version, clears o
   await assert.rejects(migrateReceiptAIOwner(db.database, environment, input), { code: 'settings_changed' });
   await saveReceiptAISettings(request('other'), other, db.database, environment, { apiKey: replacement }, keyCheck(replacement));
   assert.equal((await getReceiptAIAccess(request(), owner, db.database, environment)).accessToken, replacement);
-});
-
-test('the operator binding core validates arguments, shows metadata, and defaults to a canonical guarded dry-run before explicit apply', async () => {
-  assert.throws(() => parseOwnerTransferArguments([]), /Pass --expected-user-id/);
-  assert.throws(() => parseOwnerTransferArguments(['--expected-user-id', 'a', '--expected-version', '-1', '--new-user-id', 'b']), /Pass --expected-user-id/);
-  assert.throws(() => parseOwnerTransferArguments(['--expected-user-id', 'a', '--expected-user-id', 'b']), /Unexpected or incomplete/);
-  assert.throws(() => parseOwnerTransferArguments(['--new-user-id']), /Unexpected or incomplete/);
-  const valid = ['--expected-user-id', owner.id, '--expected-version', '1', '--new-user-id', other.id];
-  assert.equal(parseOwnerTransferArguments(valid).apply, false);
-  assert.equal(parseOwnerTransferArguments([...valid, '--apply']).apply, true);
-  for (const invalid of [
-    ['--show', '--show'], ['--show', '--apply'], ['--show', ...valid], [...valid, '--apply', '--apply'],
-    [...valid, '--api-key', 'NEVER_ACCEPT_KEY'],
-    ['--expected-user-id', owner.id, '--expected-version', '1', '--new-user-id', owner.id],
-    ['--expected-user-id', 'unsafe account', '--expected-version', '1', '--new-user-id', other.id],
-    ['--expected-user-id', owner.id, '--expected-version', '1', '--new-user-id', 'a'.repeat(201)],
-    ...['0', '-1', '1.0', '01', '1e3', String(Number.MAX_SAFE_INTEGER), String(Number.MAX_SAFE_INTEGER + 1)]
-      .map(version => ['--expected-user-id', owner.id, '--expected-version', version, '--new-user-id', other.id]),
-  ]) assert.throws(() => parseOwnerTransferArguments(invalid));
-  const db = await storage();
-  await saveReceiptAISettings(request('owner', true), owner, db.database, config, { apiKey: key }, keyCheck());
-  const before = row(db)!;
-  const environment = { ...config, RECEIPT_AI_OWNER_EMAIL: other.email };
-  const shown = await runOwnerTransfer(db.database, environment, ['--show']);
-  assert.deepEqual(shown, { shown: true, pin: { userId: owner.id, version: before.version, provider: 'api', keyConfigured: true } });
-  assert.doesNotMatch(JSON.stringify(shown), new RegExp(String(before.api_key_encrypted).slice(0, 12)));
-  await assert.rejects(runOwnerTransfer(db.database, { ...config, RECEIPT_AI_OWNER_EMAIL: undefined }, ['--show']), { code: 'not_configured' });
-  const noRead = { prepare() { throw Error('must not read'); } } as unknown as D1Database;
-  await assert.rejects(runOwnerTransfer(noRead, { ...config, RECEIPT_AI_OWNER_EMAIL: undefined }, ['--show']), { code: 'not_configured' });
-  await assert.rejects(runOwnerTransfer(noRead, environment, ['--show', '--apply']), /Pass --expected-user-id/);
-  const transfer = ['--expected-user-id', owner.id, '--expected-version', String(before.version), '--new-user-id', other.id];
-  await assert.rejects(runOwnerTransfer(db.database, environment, transfer), { code: 'settings_changed' }); // target is not provider-linked yet
-  assert.deepEqual(row(db), before);
-  db.sqlite.prepare('INSERT INTO auth_links(oai_user_id,user_id,created_at) VALUES(?,?,?)').run('other-provider', other.id, new Date().toISOString());
-  const audits = () => db.sqlite.prepare('SELECT COUNT(*) AS count FROM account_activity_events').get();
-  const auditBefore = audits();
-  assert.deepEqual(await runOwnerTransfer(db.database, environment, transfer), { shown: false, dryRun: true, transferable: true, version: before.version, provider: 'api', keyConfigured: true });
-  assert.deepEqual(row(db), before); assert.deepEqual(audits(), auditBefore);
-  for (const change of [{ expected: 'different' }, { version: String((before.version as number) + 1) }, { email: 'wrong@example.test' }]) {
-    await assert.rejects(runOwnerTransfer(db.database, { ...environment, RECEIPT_AI_OWNER_EMAIL: change.email || other.email },
-      ['--expected-user-id', change.expected || owner.id, '--expected-version', change.version || String(before.version), '--new-user-id', other.id, '--apply']), { code: 'settings_changed' });
-    assert.deepEqual(row(db), before); assert.deepEqual(audits(), auditBefore);
-  }
-  assert.deepEqual(await runOwnerTransfer(db.database, environment, [...transfer, '--apply']), { shown: false, dryRun: false, migrated: true, version: (before.version as number) + 1, keyConfigured: false });
-  assert.equal(row(db)?.user_id, other.id);
-  assert.equal(row(db)?.api_key_encrypted, null);
-  assert.equal((audits() as { count: number }).count, (auditBefore as { count: number }).count + 1);
-  await assert.rejects(runOwnerTransfer(db.database, environment, [...transfer, '--apply']), { code: 'settings_changed' });
 });

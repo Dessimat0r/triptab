@@ -120,15 +120,17 @@ async function authSnapshot(request: Request, database: D1Database, provider: Au
   // Session precedence, provider linking, profile and flags share one SQL
   // snapshot. A session with no profile cannot shadow a valid provider fallback.
   // Identity-only reads omit account flags; session-only reads omit provider joins.
+  // When a session resolves, provider link/credential lookups are skipped inside
+  // the same statement, so provider headers never widen a live session's read.
   const row = await database.prepare(`SELECT p.id,p.email,p.display_name,p.created_at,
     s.user_id AS session_user_id,${allowedProvider ? 'l.user_id' : 'NULL'} AS linked_user_id,
     ${accountFlags ? 'EXISTS (SELECT 1 FROM auth_credentials c WHERE c.user_id=p.id)' : '0'} AS has_password,
     ${accountFlags ? 'EXISTS (SELECT 1 FROM auth_links linked WHERE linked.user_id=p.id)' : '0'} AS chatgpt_linked,
-    ${allowedProvider ? 'EXISTS (SELECT 1 FROM auth_credentials c WHERE c.user_id=identity.provider_id)' : '0'} AS legacy_disconnected
+    ${allowedProvider ? 'CASE WHEN s.user_id IS NULL THEN EXISTS (SELECT 1 FROM auth_credentials c WHERE c.user_id=identity.provider_id) ELSE 0 END' : '0'} AS legacy_disconnected
     FROM (SELECT ? AS token_hash, ? AS provider_id) identity
     LEFT JOIN auth_sessions s ON s.token_hash=identity.token_hash AND s.expires_at>?
       AND EXISTS (SELECT 1 FROM profiles session_profile WHERE session_profile.id=s.user_id)
-    ${allowedProvider ? 'LEFT JOIN auth_links l ON l.oai_user_id=identity.provider_id' : ''}
+    ${allowedProvider ? 'LEFT JOIN auth_links l ON l.oai_user_id=identity.provider_id AND s.user_id IS NULL' : ''}
     LEFT JOIN profiles p ON p.id=${allowedProvider ? 'COALESCE(s.user_id,l.user_id,identity.provider_id)' : 's.user_id'}`)
     .bind(token ? await hashToken(token) : null, allowedProvider?.id ?? null, new Date().toISOString())
     .first<ProviderStateRow & { session_user_id: string | null }>();
