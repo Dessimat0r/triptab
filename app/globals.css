@@ -868,7 +868,8 @@ label > small {
   margin-top: 7px;
 }
 .editor {
-  max-width: 1060px;
+  min-width: 0;
+  max-width: min(1060px, 100%);
   padding: 0;
 }
 .editor form > .modalheading {
@@ -921,6 +922,11 @@ label > small {
 }
 .fieldpair > label {
   min-width: 0;
+}
+/* WebKit can count native option text as overflow outside the select's box.
+   Isolate each dropdown field's layout without clipping its native menu. */
+.editor label:has(> select) {
+  contain: layout;
 }
 input[type="date"],
 input[type="time"],
@@ -2210,13 +2216,17 @@ footer {
   font-size: 0.9rem;
   line-height: 1.6;
 }
-@media (max-width: 700px) {
+/* Keep native controls from zooming the viewport, including landscape phones. */
+@media (max-width: 700px), (any-pointer: coarse) {
   .overlay input,
   .overlay select,
   .overlay textarea,
-  .add-member input {
-    font-size: 1rem;
+  .add-member input,
+  .invite-link input {
+    font-size: max(16px, 1rem);
   }
+}
+@media (max-width: 700px) {
   .sidebar.visible {
     padding-top: calc(28px + env(safe-area-inset-top));
   }
