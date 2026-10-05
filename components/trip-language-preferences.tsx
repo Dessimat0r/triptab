@@ -56,10 +56,10 @@ export function PersonalLanguageSettings({settings}:{settings:LanguagePreference
     <h3 id="reading-language-heading">Your receipt language preferences</h3>
     <p className="footnote">Saved just for you in this holiday. Both item names stay visible and editable.</p>
     <div className="fieldpair">
-      <label>Reading language<select value={settings.preferences.readingLanguage} disabled={!settings.ready||settings.busy} onChange={event=>void settings.save({readingLanguage:event.target.value as TripLanguagePreferences['readingLanguage']})}>
+      <label>Reading language<select aria-label="Reading language" value={settings.preferences.readingLanguage} disabled={!settings.ready||settings.busy} onChange={event=>void settings.save({readingLanguage:event.target.value as TripLanguagePreferences['readingLanguage']})}>
         {RECEIPT_LANGUAGES.map(([code,label])=><option key={code} value={code}>{label}</option>)}
       </select></label>
-      <label>Show first<select value={settings.preferences.primaryVersion} disabled={!settings.ready||settings.busy} onChange={event=>void settings.save({primaryVersion:event.target.value as DisplayVersion})}>
+      <label>Show first<select aria-label="Default item name display" value={settings.preferences.primaryVersion} disabled={!settings.ready||settings.busy} onChange={event=>void settings.save({primaryVersion:event.target.value as DisplayVersion})}>
         <option value="reading">Reading language</option><option value="receipt">Receipt original</option>
       </select></label>
     </div>

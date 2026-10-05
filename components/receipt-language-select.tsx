@@ -8,7 +8,7 @@ export function TripReceiptLanguage({value,onChange,destination,busy=false,accou
   useLayoutEffect(()=>{current.current={value,destination,accountId,tripId};});
   useLayoutEffect(()=>()=>{token.current++;},[]);
   return <div className="trip-receipt-language">
-    <label>Receipt language<select name={name} value={value} disabled={busy} onChange={event=>{token.current++;setError('');onChange(event.target.value as ReceiptLanguage|'auto');}}>
+    <label>Receipt language<select aria-label="Holiday receipt language" name={name} value={value} disabled={busy} onChange={event=>{token.current++;setError('');onChange(event.target.value as ReceiptLanguage|'auto');}}>
       <option value="auto">Automatic detection</option><LanguageOptions />
     </select></label>
     <button type="button" className="quiet" disabled={busy||pending||!accountId} onClick={async()=>{
