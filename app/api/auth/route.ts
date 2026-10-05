@@ -1,4 +1,4 @@
-import { AuthError, authFailure, performAuthAction, readAuthState, resolveIdentity } from '@/lib/auth';
+import { AuthError, authFailure, performAuthAction, readAuthState, resolveIdentity, signedOutAuthResult } from '@/lib/auth';
 import { db, readBoundedBody, RequestError } from '@/lib/store';
 import { browserPushCookie, revokeBrowserPush } from '@/lib/notifications';
 
@@ -10,6 +10,7 @@ export async function GET(request: Request) {
   catch (error) { return authFailure(error); }
 }
 export async function POST(request: Request) {
+  let logoutRequest = false;
   try {
     if (request.headers.get('origin') !== new URL(request.url).origin) throw new AuthError('This account request must come from TripTab.', 403);
     if (request.headers.get('content-type')?.split(';', 1)[0].trim().toLowerCase() !== 'application/json') throw new AuthError('Send valid account details.', 415);
@@ -21,12 +22,18 @@ export async function POST(request: Request) {
     }
     if (!body || typeof body !== 'object' || Array.isArray(body)) throw new AuthError('Send valid account details.');
     const details = body as Record<string, unknown>;
+    logoutRequest = details.action === 'logout';
     let previousActor: string | undefined;
     if (['logout', 'login', 'register'].includes(String(details.action))) {
       try { previousActor = (await resolveIdentity(request, {}, db())).id; }
-      catch (error) { if (!(error instanceof Error) || error.message !== 'UNAUTHORIZED') throw error; }
+      catch (error) {
+        if (!logoutRequest && (!(error instanceof Error) || error.message !== 'UNAUTHORIZED')) throw error;
+      }
     }
-    if (details.action === 'logout' && previousActor) await revokeBrowserPush(request, previousActor);
+    if (logoutRequest && previousActor) {
+      try { await revokeBrowserPush(request, previousActor); }
+      catch { console.warn('TripTab could not revoke this browser’s notifications during logout.'); }
+    }
     const result = await performAuthAction(request, details, db());
     const nextActor = result.state.authenticated ? result.state.profile?.id : undefined;
     const switched = (details.action === 'login' || details.action === 'register') && previousActor && nextActor && previousActor !== nextActor;
@@ -38,5 +45,16 @@ export async function POST(request: Request) {
     for (const value of result.additionalCookies || []) headers.append('Set-Cookie', value);
     if (details.action === 'logout' || switched) headers.append('Set-Cookie', await browserPushCookie(request));
     return Response.json(result.state, { headers });
-  } catch (error) { return authFailure(error); }
+  } catch (error) {
+    const response = authFailure(error);
+    if (logoutRequest) {
+      // Preserve a failed revocation's error response while removing browser
+      // credentials and disabling provider fallback on this device.
+      const result = signedOutAuthResult(request);
+      response.headers.append('Set-Cookie', result.cookie);
+      for (const value of result.additionalCookies) response.headers.append('Set-Cookie', value);
+      response.headers.append('Set-Cookie', await browserPushCookie(request));
+    }
+    return response;
+  }
 }

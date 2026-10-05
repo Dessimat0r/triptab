@@ -358,7 +358,8 @@ export default function ActivityPanel({ tripId, expenseId, draftId, title, descr
             </>}
           </dl>
           <p className="footnote">Traveller references use current holiday names with stable IDs. Message authors retain their recorded names.</p>
-          <ActivityChanges fields={changes(event, currency, memberNames, actorMemberNames)} before={!!event.before} after={!!event.after} />
+    {event.snapshotOmitted ? <p className="footnote">The full before and after details are too large for this history page. They remain saved. <a href={event.snapshotDownload} download>Download full shared history entry</a> to inspect the original snapshots, including shared traveller contacts.</p>
+      : <ActivityChanges fields={changes(event, currency, memberNames, actorMemberNames)} before={!!event.before} after={!!event.after} />}
         </details>
         {onRestore && event.action === "delete" && event.before && ["expense", "payment"].includes(event.entityType) && <button type="button" className="quiet" disabled={busy} onClick={() => onRestore(event)}>Review {event.entityType} to restore</button>}
       </li>;
