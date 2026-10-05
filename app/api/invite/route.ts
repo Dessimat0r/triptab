@@ -1,3 +1,4 @@
+import { sha256Hex } from '@/lib/data-utils';
 import { activityStatements, db, ensureProfile, failure, MAX_STORED_TRIP_BYTES, readBoundedBody, RequestError, sameOrigin } from '@/lib/store';
 import { notifyMembers } from '@/lib/notifications';
 import { parseStoredTrip, travellerFinancialPreview, type Trip } from '@/lib/model';
@@ -29,8 +30,7 @@ function tokenValue(value: unknown): string {
 }
 
 async function tokenHash(token: string): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token));
-  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+  return await sha256Hex(token);
 }
 
 function targetEmail(value: unknown): string | null {

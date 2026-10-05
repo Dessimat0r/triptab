@@ -34,7 +34,7 @@ const impostor = { id: 'impostor', email: owner.email, displayName: 'Unverified'
 const other = { id: 'other', email: 'other@example.test', displayName: 'Other' };
 const key = 'sk-test-' + 'A'.repeat(60), replacement = 'sk-test-' + 'B'.repeat(60);
 const secret = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString('base64url');
-const config: ReceiptAIEnvironment = { RECEIPT_AI_TOKEN_KEY: secret };
+const config: ReceiptAIEnvironment = { RECEIPT_AI_OWNER_EMAIL: 'dessimat0r@gmail.com', RECEIPT_AI_TOKEN_KEY: secret };
 const provider = { 'oai-authenticated-user-id': 'owner-provider', 'oai-authenticated-user-email': owner.email };
 const sessionTokens = { owner: 'O'.repeat(43), impostor: 'I'.repeat(43), other: 'T'.repeat(43) };
 function request(account: keyof typeof sessionTokens = 'owner', linked = false) {
@@ -63,7 +63,7 @@ function row(db: D1) { return db.sqlite.prepare("SELECT * FROM receipt_ai_settin
 
 test('unconfigured server reports processing availability separately from owner-only key management', async () => {
   const db = await storage();
-  const state = await receiptAIStatus(request('owner', true), owner, db.database, {});
+  const state = await receiptAIStatus(request('owner', true), owner, db.database, {RECEIPT_AI_OWNER_EMAIL:'dessimat0r@gmail.com'});
   assert.equal(state.configured, false); assert.equal(state.connected, false);
   await assert.rejects(saveReceiptAISettings(request('owner', true), owner, db.database, {}, { apiKey: key }, forbiddenFetch), { code: 'not_configured' });
   const denied = await receiptAIStatus(request('other'), other, db.database, config);
@@ -184,7 +184,7 @@ test('API keys remain bound to their canonical account and encryption key', asyn
   db.sqlite.prepare("UPDATE receipt_ai_settings SET user_id=? WHERE id='shared'").run(impostor.id);
   await assert.rejects(getReceiptAIAccess(request('other'), other, db.database, config), { code: 'key_unavailable' });
   db.sqlite.prepare("UPDATE receipt_ai_settings SET user_id=? WHERE id='shared'").run(owner.id);
-  const changed = { RECEIPT_AI_TOKEN_KEY: Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString('base64url') };
+  const changed = { RECEIPT_AI_OWNER_EMAIL: 'dessimat0r@gmail.com', RECEIPT_AI_TOKEN_KEY: Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString('base64url') };
   assert.equal((await receiptAIStatus(request(), owner, db.database, changed)).connected, false);
   await assert.rejects(getReceiptAIAccess(request(), owner, db.database, changed), { code: 'key_unavailable' });
   await saveReceiptAISettings(request(), owner, db.database, changed, { apiKey: replacement }, keyCheck(replacement));
@@ -407,4 +407,13 @@ test('removal fences first-time and no-key setup requests still validating remot
     assert.equal(row(db)?.api_key_encrypted, null);
     assert.equal((await receiptAIStatus(request('owner', true), owner, db.database, config)).apiConnected, false);
   }
+});
+
+test('receipt AI owner is configured, normalized and missing or malformed owner configuration fails closed', async () => {
+  const db=await storage();
+  for(const email of [undefined,'','not-an-email']) await assert.rejects(receiptAIStatus(request('owner',true),owner,db.database,{...config,RECEIPT_AI_OWNER_EMAIL:email}),{code:'not_configured'});
+  const alternate = await receiptAIStatus(request('owner',true),owner,db.database,{...config,RECEIPT_AI_OWNER_EMAIL:'different@example.com'});
+  assert.equal(alternate.manageable,false);
+  const configured = await receiptAIStatus(request('owner',true),owner,db.database,{...config,RECEIPT_AI_OWNER_EMAIL:' DESSIMAT0R@GMAIL.COM '});
+  assert.equal(configured.manageable,true);
 });

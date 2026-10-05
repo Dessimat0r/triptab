@@ -1,3 +1,4 @@
+import { encodeBase64url as base64url, decodeBase64url, sha256Hex } from './data-utils';
 // Authentication is independent of ChatGPT. Provider headers are supplied by the
 // Sites gateway; browser sessions are opaque tokens and are stored only hashed.
 import { accountAuditStatement } from './audit';
@@ -35,16 +36,10 @@ type PasswordDigest = { hash: string; salt: string; iterations: number };
 function hex(bytes: Uint8Array) {
   return Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
 }
-function base64url(bytes: Uint8Array) {
-  return btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-}
-function decodeBase64url(value: string) {
-  return Uint8Array.from(atob(value.replace(/-/g, '+').replace(/_/g, '/')), character => character.charCodeAt(0));
-}
+
+
 function randomToken() { return base64url(crypto.getRandomValues(new Uint8Array(32))); }
-export async function hashToken(token: string) {
-  return hex(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token))));
-}
+export const hashToken = sha256Hex;
 export function normalizeEmail(value: unknown) {
   if (typeof value !== 'string') throw new AuthError('Enter a valid email address.');
   const email = value.trim().toLowerCase();
@@ -204,10 +199,10 @@ async function profileRow(identity: AuthIdentity, database: D1Database): Promise
   if (!row) throw new Error('UNAUTHORIZED');
   return row;
 }
-export async function readAuthState(request: Request, database: D1Database, options: { allowSession?: boolean; requireIdentityEmail?: boolean } = {}): Promise<AuthState> {
+export async function readAuthContext(request: Request, database: D1Database, options: { allowSession?: boolean; requireIdentityEmail?: boolean } = {}): Promise<{ state: AuthState; identity?: AuthIdentity }> {
   const provider = trustedChatGPTIdentity(request);
   let snapshot = await authSnapshot(request, database, provider, options);
-  if (!snapshot) return { authenticated: false, hasPassword: false, chatgptLinked: false, chatgptAvailable: !!provider, emailVerified: false };
+  if (!snapshot) return { state: { authenticated: false, hasPassword: false, chatgptLinked: false, chatgptAvailable: !!provider, emailVerified: false } };
   // ensureProfile historically requires an identity email even for an existing
   // unlinked provider profile. Auth status alone retains its existing behavior.
   if (options.requireIdentityEmail) {
@@ -222,18 +217,30 @@ export async function readAuthState(request: Request, database: D1Database, opti
     // linking, credential disconnection or session precedence changed mid-read.
     if (!snapshot?.row || snapshot.identity.id !== id) throw new Error('UNAUTHORIZED');
   }
-  const { identity, row } = snapshot;
+  let identity = snapshot.identity;
+  const { row } = snapshot;
+  // A provider fallback after a cookie lookup is multi-step. Recheck session
+  // precedence there; ordinary established session/provider reads use one query.
+  if (identity.kind === 'chatgpt' && options.allowSession !== false && sessionToken(request)) {
+    const current = await resolveIdentity(request, options, database);
+    if (current.id !== identity.id) throw new Error('UNAUTHORIZED');
+    identity = current;
+  }
   const hasPassword = !!row.has_password;
   const chatgptLinked = !!row.chatgpt_linked || identity.kind === 'chatgpt';
   const emailVerified = identity.kind === 'chatgpt' && !!identity.emailVerified && identity.email === row.email;
-  return {
+  return { identity, state: {
     authenticated: true, profile: {
       id: row.id, email: row.email, displayName: row.display_name, createdAt: row.created_at,
       authMethod: identity.kind === 'session' ? 'password' : 'chatgpt', hasPassword, chatgptConnected: chatgptLinked, emailVerified,
     },
     hasPassword, chatgptLinked, chatgptAvailable: !!provider, emailVerified,
-  };
+  } };
 }
+export async function readAuthState(request: Request, database: D1Database, options: { allowSession?: boolean; requireIdentityEmail?: boolean } = {}): Promise<AuthState> {
+  return (await readAuthContext(request, database, options)).state;
+}
+
 function cookie(request: Request, token: string, expired = false) {
   const url = new URL(request.url);
   const local = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) && url.protocol === 'http:';

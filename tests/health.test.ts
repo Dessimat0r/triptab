@@ -12,7 +12,7 @@ const binding = { db: () => ({ prepare: (sql: string) => {
 } }), bucket: () => { if (!receiptBinding) throw Error('Missing secret resource'); return { get() {}, put() {}, delete() {} }; } };
 Object.defineProperty(globalThis, Symbol.for('triptab.health-test'), { value: binding, configurable: true });
 const boundary = 'data:text/javascript;base64,' + Buffer.from("export const {db,bucket}=globalThis[Symbol.for('triptab.health-test')];").toString('base64');
-const compiled = transpileModule(await readFile(new URL('../app/healthz/route.ts', import.meta.url), 'utf8'), { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText.replace("'@/lib/store'", JSON.stringify(boundary));
+const compiled = transpileModule(await readFile(new URL('../app/healthz/route.ts', import.meta.url), 'utf8'), { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText.replaceAll("'./data-utils'", JSON.stringify(new URL('../lib/data-utils.ts', import.meta.url).href)).replaceAll("'./receipt-ai-config'", JSON.stringify(new URL('../lib/receipt-ai-config.ts', import.meta.url).href)).replaceAll("'@/lib/data-utils'", JSON.stringify(new URL('../lib/data-utils.ts', import.meta.url).href)).replaceAll("'@/lib/receipt-ai-config'", JSON.stringify(new URL('../lib/receipt-ai-config.ts', import.meta.url).href)).replace("'@/lib/store'", JSON.stringify(boundary));
 const { GET } = await import('data:text/javascript;base64,' + Buffer.from(compiled).toString('base64')) as typeof import('../app/healthz/route');
 
 test('readiness passes with the complete schema and receipt capability without exposing data', async () => {

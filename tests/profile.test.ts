@@ -43,7 +43,7 @@ const dataURL = (text: string) => 'data:text/javascript;base64,' + Buffer.from(t
 const envURL = dataURL("export const env=globalThis[Symbol.for('triptab.profile-test-env')];export const waitUntil=()=>{};");
 const notificationURL = dataURL('export const notifyMembers=async()=>{};export const activityNotification=()=>({});');
 const auditURL = new URL('../lib/audit.ts', import.meta.url).href;
-const compiledStore = transpileModule(await readFile(new URL('../lib/store.ts', import.meta.url), 'utf8'), { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
+const compiledStore = transpileModule(await readFile(new URL('../lib/store.ts', import.meta.url), 'utf8'), { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText.replaceAll("'./data-utils'", JSON.stringify(new URL('../lib/data-utils.ts', import.meta.url).href)).replaceAll("'./receipt-ai-config'", JSON.stringify(new URL('../lib/receipt-ai-config.ts', import.meta.url).href)).replaceAll("'@/lib/data-utils'", JSON.stringify(new URL('../lib/data-utils.ts', import.meta.url).href)).replaceAll("'@/lib/receipt-ai-config'", JSON.stringify(new URL('../lib/receipt-ai-config.ts', import.meta.url).href))
   .replace("'zod'", JSON.stringify(pathToFileURL(createRequire(import.meta.url).resolve('zod').replace(/\.cjs$/, '.js')).href))
   .replace("'cloudflare:workers'", JSON.stringify(envURL))
   .replace("'./model'", JSON.stringify(new URL('../lib/model.ts', import.meta.url).href))
@@ -55,10 +55,10 @@ const compiledStore = transpileModule(await readFile(new URL('../lib/store.ts', 
   .replace("'./receipt-memory-ownership'", JSON.stringify(new URL('../lib/receipt-memory-ownership.ts', import.meta.url).href))
   .replace("'./notifications'", JSON.stringify(notificationURL));
 const storeURL = dataURL(compiledStore);
-const routeSource = transpileModule(await readFile(new URL('../app/api/profile/route.ts', import.meta.url), 'utf8'), { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
+const routeSource = transpileModule(await readFile(new URL('../app/api/profile/route.ts', import.meta.url), 'utf8'), { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText.replaceAll("'./data-utils'", JSON.stringify(new URL('../lib/data-utils.ts', import.meta.url).href)).replaceAll("'./receipt-ai-config'", JSON.stringify(new URL('../lib/receipt-ai-config.ts', import.meta.url).href)).replaceAll("'@/lib/data-utils'", JSON.stringify(new URL('../lib/data-utils.ts', import.meta.url).href)).replaceAll("'@/lib/receipt-ai-config'", JSON.stringify(new URL('../lib/receipt-ai-config.ts', import.meta.url).href))
   .replace("'@/lib/store'", JSON.stringify(storeURL)).replace("'@/lib/audit'", JSON.stringify(auditURL));
 const route = await import(dataURL(routeSource)) as typeof import('../app/api/profile/route');
-const historySource = transpileModule(await readFile(new URL('../app/api/account-activity/route.ts', import.meta.url), 'utf8'), { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
+const historySource = transpileModule(await readFile(new URL('../app/api/account-activity/route.ts', import.meta.url), 'utf8'), { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText.replaceAll("'./data-utils'", JSON.stringify(new URL('../lib/data-utils.ts', import.meta.url).href)).replaceAll("'./receipt-ai-config'", JSON.stringify(new URL('../lib/receipt-ai-config.ts', import.meta.url).href)).replaceAll("'@/lib/data-utils'", JSON.stringify(new URL('../lib/data-utils.ts', import.meta.url).href)).replaceAll("'@/lib/receipt-ai-config'", JSON.stringify(new URL('../lib/receipt-ai-config.ts', import.meta.url).href))
   .replace("'@/lib/store'", JSON.stringify(storeURL)).replace("'@/lib/audit'", JSON.stringify(auditURL));
 const historyRoute = await import(dataURL(historySource)) as typeof import('../app/api/account-activity/route');
 const alice = 'profile-alice', bob = 'profile-bob';

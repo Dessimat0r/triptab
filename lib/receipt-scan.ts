@@ -1,3 +1,4 @@
+import { canonicalJson as canonical } from './data-utils';
 import { z } from 'zod';
 
 const amount = z.number().int().min(0).max(100000000);
@@ -227,15 +228,7 @@ export function reconcileReceiptScan(entry: ScannableReceipt): ReceiptScan | und
     status: incomplete ? 'incomplete' : unresolved.length ? 'needs-review' : 'matched' };
 }
 
-function canonical(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
-  if (value && typeof value === 'object') {
-    const record = value as Record<string, unknown>;
-    return `{${Object.keys(record).filter(key => record[key] !== undefined).sort()
-      .map(key => `${JSON.stringify(key)}:${canonical(record[key])}`).join(',')}}`;
-  }
-  return JSON.stringify(value) || 'null';
-}
+
 
 // Synchronous browser/Worker SHA-256 keeps the review fingerprint independent
 // of runtime-specific crypto imports. It is an invalidation marker, not auth.

@@ -149,7 +149,7 @@ const authUrl = 'data:text/javascript;base64,' + Buffer.from(`
 export const resolveIdentity = globalThis[Symbol.for('triptab.mcp-test-auth')].resolveIdentity;
 export { hashToken } from ${JSON.stringify(new URL('../lib/auth.ts', import.meta.url).href)};
 `).toString('base64');
-const compiled = transpileModule(source, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
+const compiled = transpileModule(source, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText.replaceAll("'./data-utils'", JSON.stringify(new URL('../lib/data-utils.ts', import.meta.url).href)).replaceAll("'./receipt-ai-config'", JSON.stringify(new URL('../lib/receipt-ai-config.ts', import.meta.url).href)).replaceAll("'@/lib/data-utils'", JSON.stringify(new URL('../lib/data-utils.ts', import.meta.url).href)).replaceAll("'@/lib/receipt-ai-config'", JSON.stringify(new URL('../lib/receipt-ai-config.ts', import.meta.url).href))
   .replace("'@/lib/store'", JSON.stringify(storeUrl))
   .replace("'@/lib/auth'", JSON.stringify(authUrl))
   .replace("'@/lib/model'", JSON.stringify(new URL('../lib/model.ts', import.meta.url).href))

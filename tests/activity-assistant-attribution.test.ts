@@ -8,7 +8,7 @@ import type { ActivityEvent } from '../lib/store';
 const source = await readFile(new URL('../components/activity-panel.tsx', import.meta.url), 'utf8');
 const compiled = transpileModule(source + '\nexport { changes };', {
   compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022, jsx: JsxEmit.ReactJSX },
-}).outputText
+}).outputText.replaceAll("'./data-utils'", JSON.stringify(new URL('../lib/data-utils.ts', import.meta.url).href)).replaceAll("'./receipt-ai-config'", JSON.stringify(new URL('../lib/receipt-ai-config.ts', import.meta.url).href)).replaceAll("'@/lib/data-utils'", JSON.stringify(new URL('../lib/data-utils.ts', import.meta.url).href)).replaceAll("'@/lib/receipt-ai-config'", JSON.stringify(new URL('../lib/receipt-ai-config.ts', import.meta.url).href))
   .replace('import "./activity-details.css";', '')
   .replace('from "@/lib/money-format"', `from ${JSON.stringify(import.meta.resolve('../lib/money-format.ts'))}`)
   .replaceAll('from "react"', `from ${JSON.stringify(import.meta.resolve('react'))}`)

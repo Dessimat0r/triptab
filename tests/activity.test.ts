@@ -44,7 +44,7 @@ Object.defineProperty(globalThis, Symbol.for('triptab.activity-test-env'), { val
 const dataUrl = (source: string) => 'data:text/javascript;base64,' + Buffer.from(source).toString('base64');
 const envUrl = dataUrl("export const env=globalThis[Symbol.for('triptab.activity-test-env')];");
 const notificationUrl = dataUrl('export const activityNotification=()=>null; export const notifyMembers=async()=>{};');
-const compile = (source: string) => transpileModule(source, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText;
+const compile = (source: string) => transpileModule(source, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText.replaceAll("'./data-utils'", JSON.stringify(new URL('../lib/data-utils.ts', import.meta.url).href)).replaceAll("'./receipt-ai-config'", JSON.stringify(new URL('../lib/receipt-ai-config.ts', import.meta.url).href)).replaceAll("'@/lib/data-utils'", JSON.stringify(new URL('../lib/data-utils.ts', import.meta.url).href)).replaceAll("'@/lib/receipt-ai-config'", JSON.stringify(new URL('../lib/receipt-ai-config.ts', import.meta.url).href));
 const storeUrl = dataUrl(compile(await readFile(new URL('../lib/store.ts', import.meta.url), 'utf8'))
   .replace("'cloudflare:workers'", JSON.stringify(envUrl))
   .replace("'zod'", JSON.stringify(import.meta.resolve('zod')))

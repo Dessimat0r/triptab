@@ -18,7 +18,7 @@ export const owner = globalThis[Symbol.for('triptab.fx-test-owner')];
 const source = await readFile(new URL('../app/api/fx/route.ts', import.meta.url), 'utf8');
 const compiled = transpileModule(source, {
   compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 },
-}).outputText
+}).outputText.replaceAll("'./data-utils'", JSON.stringify(new URL('../lib/data-utils.ts', import.meta.url).href)).replaceAll("'./receipt-ai-config'", JSON.stringify(new URL('../lib/receipt-ai-config.ts', import.meta.url).href)).replaceAll("'@/lib/data-utils'", JSON.stringify(new URL('../lib/data-utils.ts', import.meta.url).href)).replaceAll("'@/lib/receipt-ai-config'", JSON.stringify(new URL('../lib/receipt-ai-config.ts', import.meta.url).href))
   .replace("'@/lib/store'", JSON.stringify(ownerUrl))
   .replace("'@/lib/dates'", JSON.stringify(new URL('../lib/dates.ts', import.meta.url).href))
   .replace("'@/lib/model'", JSON.stringify(new URL('../lib/model.ts', import.meta.url).href));

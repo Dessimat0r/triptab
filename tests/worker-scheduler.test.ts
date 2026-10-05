@@ -48,7 +48,7 @@ function image(database: SQLiteD1, id: string, state = 'active', createdAt = '20
     .run(id, 'absent-owner', 'quiet-holiday', state, createdAt, 'image/jpeg', 100, 'a'.repeat(64));
 }
 function dataUrl(source: string) { return 'data:text/javascript;base64,' + Buffer.from(source).toString('base64'); }
-function compile(source: string) { return transpileModule(source, { compilerOptions: { target: ScriptTarget.ES2022, module: ModuleKind.ESNext } }).outputText; }
+function compile(source: string) { return transpileModule(source, { compilerOptions: { target: ScriptTarget.ES2022, module: ModuleKind.ESNext } }).outputText.replaceAll("'./data-utils'", JSON.stringify(new URL('../lib/data-utils.ts', import.meta.url).href)).replaceAll("'./receipt-ai-config'", JSON.stringify(new URL('../lib/receipt-ai-config.ts', import.meta.url).href)).replaceAll("'@/lib/data-utils'", JSON.stringify(new URL('../lib/data-utils.ts', import.meta.url).href)).replaceAll("'@/lib/receipt-ai-config'", JSON.stringify(new URL('../lib/receipt-ai-config.ts', import.meta.url).href)); }
 const boundary = { requests: 0, connectors: 0 };
 Object.defineProperty(globalThis, Symbol.for('triptab.scheduler-test'), { value: boundary, configurable: true });
 const handlerUrl = dataUrl("export default {fetch(){globalThis[Symbol.for('triptab.scheduler-test')].requests++;return new Response('TripTab');}};");

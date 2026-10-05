@@ -1,3 +1,4 @@
+import { encodeBase64url as base64url, decodeBase64url } from './data-utils';
 import { accountAuditStatement } from './audit';
 
 // This is a separately approved plan-usage client, not the Sites identity client.
@@ -30,15 +31,10 @@ const MAX_OAUTH_BODY = 100_000;
 export class ChatGPTPlanError extends Error {
   constructor(message: string, public readonly status = 400, public readonly code = 'chatgpt_plan_error') { super(message); }
 }
-function base64url(bytes: Uint8Array) {
-  let binary = '';
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-}
+
 function decode(value: string): Uint8Array<ArrayBuffer> {
-  if (!/^[A-Za-z0-9_-]+$/.test(value)) throw new ChatGPTPlanError('ChatGPT connection data is invalid.', 401);
-  const bytes = Uint8Array.from(atob(value.replace(/-/g, '+').replace(/_/g, '/')), character => character.charCodeAt(0));
-  return bytes;
+  try { return decodeBase64url(value); }
+  catch { throw new ChatGPTPlanError('ChatGPT connection data is invalid.', 401); }
 }
 const random = () => base64url(crypto.getRandomValues(new Uint8Array(32)));
 async function digest(value: string) { return base64url(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)))); }
@@ -96,7 +92,7 @@ export async function chatGPTPlanStatus(database: D1Database, userId: string, en
       ...(granted ? {} : { reason: 'permission_required' as const }) };
   } catch { return { configured: true, connected: false, reason: 'not_connected' as const }; }
 }
-function safeReturnTo(value: unknown) {
+export function safeReturnTo(value: unknown) {
   if (typeof value !== 'string' || value.length > 1500 || !value.startsWith('/') || value.startsWith('//') || value.includes('\\')) return '/receipts';
   const url = new URL(value, 'https://triptab.invalid');
   // Dot segments can turn an apparently local path into //host. Reject the

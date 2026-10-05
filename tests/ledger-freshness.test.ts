@@ -49,7 +49,7 @@ const boundary = {
 };
 Object.defineProperty(globalThis, Symbol.for('triptab.freshness-boundary'), { value: boundary, configurable: true });
 const boundaryUrl = 'data:text/javascript;base64,' + Buffer.from(`const boundary=globalThis[Symbol.for('triptab.freshness-boundary')]; export const {db,ensureProfile,readLedgerSnapshot,writeLedger,sameOrigin,readBoundedBody,failure}=boundary;`).toString('base64');
-const route = transpileModule(await readFile(new URL('../app/api/ledger/route.ts', import.meta.url), 'utf8'), { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
+const route = transpileModule(await readFile(new URL('../app/api/ledger/route.ts', import.meta.url), 'utf8'), { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText.replaceAll("'./data-utils'", JSON.stringify(new URL('../lib/data-utils.ts', import.meta.url).href)).replaceAll("'./receipt-ai-config'", JSON.stringify(new URL('../lib/receipt-ai-config.ts', import.meta.url).href)).replaceAll("'@/lib/data-utils'", JSON.stringify(new URL('../lib/data-utils.ts', import.meta.url).href)).replaceAll("'@/lib/receipt-ai-config'", JSON.stringify(new URL('../lib/receipt-ai-config.ts', import.meta.url).href))
   .replace("'@/lib/store'", JSON.stringify(boundaryUrl))
   .replace("'@/lib/ledger-freshness'", JSON.stringify(new URL('../lib/ledger-freshness.ts', import.meta.url).href));
 const { GET, HEAD, POST } = await import('data:text/javascript;base64,' + Buffer.from(route).toString('base64')) as typeof import('../app/api/ledger/route');

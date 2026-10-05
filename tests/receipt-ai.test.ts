@@ -1007,7 +1007,7 @@ Object.defineProperty(globalThis, Symbol.for('triptab.receipt-ai-route-access'),
 const storeUrl = dataUrl(`const store=globalThis[Symbol.for('triptab.receipt-ai-route-store')];\n${Object.keys(store).map(name => `export const ${name}=store.${name};`).join('\n')}`);
 const accessUrl = dataUrl(`const access=globalThis[Symbol.for('triptab.receipt-ai-route-access')];\n${Object.keys(credentialAccess).map(name => `export const ${name}=access.${name};`).join('\n')}`);
 const routeSource = await readFile(new URL('../app/api/receipt/process/route.ts', import.meta.url), 'utf8');
-const routeCode = transpileModule(routeSource, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
+const routeCode = transpileModule(routeSource, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText.replaceAll("'./data-utils'", JSON.stringify(new URL('../lib/data-utils.ts', import.meta.url).href)).replaceAll("'./receipt-ai-config'", JSON.stringify(new URL('../lib/receipt-ai-config.ts', import.meta.url).href)).replaceAll("'@/lib/data-utils'", JSON.stringify(new URL('../lib/data-utils.ts', import.meta.url).href)).replaceAll("'@/lib/receipt-ai-config'", JSON.stringify(new URL('../lib/receipt-ai-config.ts', import.meta.url).href))
   .replace("'cloudflare:workers'", JSON.stringify(dataUrl('export const env={};')))
   .replace("'@/lib/store'", JSON.stringify(storeUrl)).replace("'@/lib/receipt-ai-access'", JSON.stringify(accessUrl))
   .replace("'@/lib/receipt-ai'", JSON.stringify(new URL('../lib/receipt-ai.ts', import.meta.url).href))

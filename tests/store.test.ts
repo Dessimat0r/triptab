@@ -63,13 +63,13 @@ Object.defineProperty(globalThis, Symbol.for('triptab.store-test-env'), { value:
 Object.defineProperty(globalThis, Symbol.for('triptab.store-test-notifications'), { value: notifications, configurable: true });
 const envUrl = 'data:text/javascript;base64,' + Buffer.from("export const env=globalThis[Symbol.for('triptab.store-test-env')]; export const waitUntil=()=>{};").toString('base64');
 const notificationStoreUrl = 'data:text/javascript;base64,' + Buffer.from("export const db=()=>{throw new Error('Notification transport must be mocked');}; export class RequestError extends Error {}").toString('base64');
-const notificationSource = transpileModule(await readFile(new URL('../lib/notifications.ts', import.meta.url), 'utf8'), { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
+const notificationSource = transpileModule(await readFile(new URL('../lib/notifications.ts', import.meta.url), 'utf8'), { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText.replaceAll("'./data-utils'", JSON.stringify(new URL('../lib/data-utils.ts', import.meta.url).href)).replaceAll("'./receipt-ai-config'", JSON.stringify(new URL('../lib/receipt-ai-config.ts', import.meta.url).href)).replaceAll("'@/lib/data-utils'", JSON.stringify(new URL('../lib/data-utils.ts', import.meta.url).href)).replaceAll("'@/lib/receipt-ai-config'", JSON.stringify(new URL('../lib/receipt-ai-config.ts', import.meta.url).href))
   .replace("'cloudflare:workers'", JSON.stringify(envUrl)).replace("'./store'", JSON.stringify(notificationStoreUrl))
   .replaceAll("'./audit'", JSON.stringify(new URL('../lib/audit.ts', import.meta.url).href));
 const notificationFormatterUrl = 'data:text/javascript;base64,' + Buffer.from(notificationSource).toString('base64');
 const notificationUrl = 'data:text/javascript;base64,' + Buffer.from(`export {activityNotification} from ${JSON.stringify(notificationFormatterUrl)}; export const notifyMembers=async(...args)=>{globalThis[Symbol.for('triptab.store-test-notifications')].push(args);};`).toString('base64');
 const source = await readFile(new URL('../lib/store.ts', import.meta.url), 'utf8');
-const compiled = transpileModule(source, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
+const compiled = transpileModule(source, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText.replaceAll("'./data-utils'", JSON.stringify(new URL('../lib/data-utils.ts', import.meta.url).href)).replaceAll("'./receipt-ai-config'", JSON.stringify(new URL('../lib/receipt-ai-config.ts', import.meta.url).href)).replaceAll("'@/lib/data-utils'", JSON.stringify(new URL('../lib/data-utils.ts', import.meta.url).href)).replaceAll("'@/lib/receipt-ai-config'", JSON.stringify(new URL('../lib/receipt-ai-config.ts', import.meta.url).href))
   .replace("'zod'", JSON.stringify(pathToFileURL(createRequire(import.meta.url).resolve('zod').replace(/\.cjs$/, '.js')).href))
   .replace("'cloudflare:workers'", JSON.stringify(envUrl))
   .replace("'./model'", JSON.stringify(new URL('../lib/model.ts', import.meta.url).href))
@@ -132,7 +132,7 @@ async function history(user = actor, id = 'trip-1') { return (await store.readAc
 function lastEntity(events: ActivityEvent[], type: string, id: string) { return events.find(event => event.entityType === type && event.entityId === id)!; }
 async function ledgerRoute() {
   const routeSource = await readFile(new URL('../app/api/ledger/route.ts', import.meta.url), 'utf8');
-  const routeCompiled = transpileModule(routeSource, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
+  const routeCompiled = transpileModule(routeSource, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText.replaceAll("'./data-utils'", JSON.stringify(new URL('../lib/data-utils.ts', import.meta.url).href)).replaceAll("'./receipt-ai-config'", JSON.stringify(new URL('../lib/receipt-ai-config.ts', import.meta.url).href)).replaceAll("'@/lib/data-utils'", JSON.stringify(new URL('../lib/data-utils.ts', import.meta.url).href)).replaceAll("'@/lib/receipt-ai-config'", JSON.stringify(new URL('../lib/receipt-ai-config.ts', import.meta.url).href))
     .replace("'@/lib/store'", JSON.stringify(storeUrl))
     .replace("'@/lib/ledger-freshness'", JSON.stringify(new URL('../lib/ledger-freshness.ts', import.meta.url).href));
   return import('data:text/javascript;base64,' + Buffer.from(routeCompiled).toString('base64')) as Promise<{ GET(request: Request): Promise<Response>; HEAD(request: Request): Promise<Response>; POST(request: Request): Promise<Response> }>;
@@ -819,7 +819,7 @@ test('a provider link winning before profile creation leaves no orphan profile o
   assert.equal(database.sqlite.prepare('SELECT COUNT(*) AS count FROM account_activity_events').get()?.count, 0);
 });
 
-test('profile reads reject a raced provider link even when the previous provider profile already exists', async () => {
+test('profile reads use a single coherent provider snapshot and observe a link change on the next request', async () => {
   const database = await storage();
   database.sqlite.prepare('INSERT INTO profiles (id,email,display_name,created_at) VALUES (?,?,?,?)')
     .run('old-provider', 'old@example.com', 'Old Traveller', '2026-10-04T00:00:00Z');
@@ -834,13 +834,14 @@ test('profile reads reject a raced provider link even when the previous provider
     }
     return prepare(sql);
   };
-  await assert.rejects(store.ensureProfile(providerRequest), /UNAUTHORIZED/);
+  assert.equal((await store.ensureProfile(providerRequest)).id, 'old-provider');
+  assert.equal(reads, 1);
   assert.equal(database.sqlite.prepare('SELECT display_name FROM profiles WHERE id=?').get('old-provider')?.display_name, 'Old Traveller');
   assert.equal(database.sqlite.prepare('SELECT COUNT(*) AS count FROM account_activity_events').get()?.count, 0);
   assert.equal((await store.ensureProfile(providerRequest)).id, actor);
 });
 
-test('profile reads recheck the original provider when its existing canonical link changes', async () => {
+test('each profile read observes its current canonical link without mixing another snapshot', async () => {
   const database = await storage();
   database.sqlite.prepare('INSERT INTO auth_links (oai_user_id,user_id,created_at) VALUES (?,?,?)')
     .run('linked-provider', actor, '2026-10-04T00:00:00Z');
@@ -854,7 +855,8 @@ test('profile reads recheck the original provider when its existing canonical li
     }
     return prepare(sql);
   };
-  await assert.rejects(store.ensureProfile(providerRequest), /UNAUTHORIZED/);
+  assert.equal((await store.ensureProfile(providerRequest)).id, actor);
+  assert.equal(reads, 1);
   assert.equal(database.sqlite.prepare('SELECT COUNT(*) AS count FROM account_activity_events').get()?.count, 0);
   assert.equal((await store.ensureProfile(providerRequest)).id, member);
 });
@@ -864,7 +866,7 @@ test('activity endpoint requires auth/membership and validates bounded, unambigu
   const database = await storage();
   await create(database);
   const routeSource = await readFile(new URL('../app/api/activity/route.ts', import.meta.url), 'utf8');
-  const routeCompiled = transpileModule(routeSource, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText.replace("'@/lib/store'", JSON.stringify(storeUrl));
+  const routeCompiled = transpileModule(routeSource, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText.replaceAll("'./data-utils'", JSON.stringify(new URL('../lib/data-utils.ts', import.meta.url).href)).replaceAll("'./receipt-ai-config'", JSON.stringify(new URL('../lib/receipt-ai-config.ts', import.meta.url).href)).replaceAll("'@/lib/data-utils'", JSON.stringify(new URL('../lib/data-utils.ts', import.meta.url).href)).replaceAll("'@/lib/receipt-ai-config'", JSON.stringify(new URL('../lib/receipt-ai-config.ts', import.meta.url).href)).replace("'@/lib/store'", JSON.stringify(storeUrl));
   const route = await import('data:text/javascript;base64,' + Buffer.from(routeCompiled).toString('base64')) as { GET(request: Request): Promise<Response> };
   const headers = { 'oai-authenticated-user-id': actor, 'oai-authenticated-user-email': 'owner@example.com', 'oai-authenticated-user-full-name': 'Original%20Owner' };
   const request = (query: string, authenticated = true) => new Request(`https://triptab.test/api/activity?${query}`, { headers: authenticated ? headers : {} });
@@ -882,7 +884,7 @@ test('ledger HTTP saves log trusted actors and reject unauthenticated, cross-ori
   context.mock.method(console, 'error', () => {});
   const database = await storage();
   const routeSource = await readFile(new URL('../app/api/ledger/route.ts', import.meta.url), 'utf8');
-  const routeCompiled = transpileModule(routeSource, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
+  const routeCompiled = transpileModule(routeSource, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText.replaceAll("'./data-utils'", JSON.stringify(new URL('../lib/data-utils.ts', import.meta.url).href)).replaceAll("'./receipt-ai-config'", JSON.stringify(new URL('../lib/receipt-ai-config.ts', import.meta.url).href)).replaceAll("'@/lib/data-utils'", JSON.stringify(new URL('../lib/data-utils.ts', import.meta.url).href)).replaceAll("'@/lib/receipt-ai-config'", JSON.stringify(new URL('../lib/receipt-ai-config.ts', import.meta.url).href))
     .replace("'@/lib/store'", JSON.stringify(storeUrl))
     .replace("'@/lib/ledger-freshness'", JSON.stringify(new URL('../lib/ledger-freshness.ts', import.meta.url).href));
   const route = await import('data:text/javascript;base64,' + Buffer.from(routeCompiled).toString('base64')) as { POST(request: Request): Promise<Response> };

@@ -1,7 +1,8 @@
+import { sha256Hex } from './data-utils';
+import { DEFAULT_RECEIPT_MODEL } from './receipt-ai-config';
 import { z } from 'zod';
 import { CURRENCIES, MAX_AMOUNT, MAX_UNITS, draftSchema, receiptQuantitySchema, total, type Currency, type Draft, type Trip } from './model';
 import { mergeReceiptSourceLines, reconcileReceiptScan, type ReceiptScanWarning } from './receipt-scan';
-import { DEFAULT_RECEIPT_MODEL } from './receipt-ai-config';
 
 export class ReceiptAIError extends Error {
   constructor(message: string, public readonly status = 502, public readonly code = 'receipt_processing_failed') {
@@ -523,8 +524,7 @@ export async function consumeReceiptProcessBudget(database: D1Database, userId: 
   const now = options.now ?? Date.now();
   const window = Math.floor(now / 60_000) * 60_000;
   async function consume(namespace: string, retentionStamp: number) {
-    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(namespace));
-    const key = Array.from(new Uint8Array(digest), value => value.toString(16).padStart(2, '0')).join('');
+    const key = await sha256Hex(namespace);
     return database.prepare(`INSERT INTO auth_rate_limits (key_hash, window_start, attempts) VALUES (?, ?, 1)
       ON CONFLICT(key_hash) DO UPDATE SET attempts = attempts + 1 RETURNING attempts`).bind(key, retentionStamp).first<{ attempts: number }>();
   }

@@ -17,14 +17,14 @@ The [combined finding-by-finding record](pr-review-2026-10-05.json) covers every
 
 ## Intentional behavior and remaining scope
 
-The shared API owner’s verified email is the user’s explicit requirement. Final identity revalidation protects concurrent unlink/revocation; it is retained. Existing-draft id-only patches are intentional, while changed legacy metadata requires metadataPatch. Initial stale native requests fail before spending the API budget.
+The shared API owner’s verified email remains the configured deployment default. RECEIPT_AI_OWNER_EMAIL validates that policy at startup and runtime; missing or malformed runtime configuration fails closed, and the existing canonical account pin remains. Established auth/profile reads use one coherent identity/profile snapshot; guarded bootstrap and multi-step provider fallback retain identity revalidation. Existing-draft id-only patches are intentional, while changed legacy metadata requires metadataPatch. Initial stale native requests fail before spending the API budget.
 
-A broader crypto/codec/canonical-serialization refactor remains a maintenance suggestion, with no reproduced behavior defect. Existing canonical key ordering, synchronous review fingerprints and credential-validation semantics require compatibility preservation. Ordered multi-photo recognition and first-class signed/item-specific adjustments remain separate product scope. Unsupported negative evidence is retained and blocks silent application.
+SHA-256 hex, base64url and canonical JSON helpers are shared across callers. Receipt fingerprint key ordering and synchronous review fingerprints remain compatible; credential validation still rejects malformed encodings. Ordered multi-photo recognition and first-class signed/item-specific adjustments remain separate product scope. Unsupported negative evidence is retained and blocks silent application.
 
 Actual hosted ChatGPT/Codex tool exposure and live vision benchmarks remain unperformed; synthetic tests are not evidence for those external integrations. SIWC remains gated off.
 
 ## Validation and release boundary
 
-The combined source passes 966 regression tests, TypeScript, production build and lint (zero errors, four existing warnings), plus the recorded compiled mobile/native-route/export journeys. This PR retains two additional focused regressions for purchase-detail opt-out and snapshot-consistent save ETags; final exact-head CI is recorded in its description.
+The combined source passes 969 regression tests, TypeScript, production build and lint (zero errors, four existing warnings), plus the recorded compiled mobile/native-route/export journeys. This PR retains two additional focused regressions for purchase-detail opt-out and snapshot-consistent save ETags; final exact-head CI is recorded in its description.
 
 No private key was read, no paid model call was made and no production financial data was changed. No SQL migration was added or replayed. GitHub does not deploy the Site; successful publication and matching source provenance are recorded separately in PR #7’s description.

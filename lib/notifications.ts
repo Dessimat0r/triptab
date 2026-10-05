@@ -1,3 +1,4 @@
+import { sha256Hex } from './data-utils';
 import { env, waitUntil } from 'cloudflare:workers';
 import { db, RequestError } from './store';
 import { accountAuditStatement, type ActivityEntity } from './audit';
@@ -51,8 +52,7 @@ export async function subscriptionCount(user: string) {
 }
 
 async function endpointHash(endpoint: string) {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(endpoint));
-  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+  return await sha256Hex(endpoint);
 }
 
 export async function browserPushCookie(request: Request, endpoint?: string) {
