@@ -12,7 +12,7 @@
 .editor {
   overflow-wrap: anywhere;
 }
-.editor input,
+.editor input:not([type="checkbox"], [type="radio"], [type="file"]),
 .editor select,
 .editor textarea {
   min-width: 0;

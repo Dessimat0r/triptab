@@ -1483,9 +1483,6 @@ input[type="datetime-local"]::-webkit-date-and-time-value {
   .itemnumber {
     min-width: 10px;
   }
-  .moneyinput {
-    width: 80px;
-  }
   .item-top input {
     padding: 10px 8px;
     font-size: 0.875rem;
