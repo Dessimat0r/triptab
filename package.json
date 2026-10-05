@@ -13,6 +13,7 @@
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate",
     "test": "tsx --test tests/*.test.ts",
+    "test:layout": "playwright test --config tests/browser/playwright.config.ts",
     "receipt-owner": "node --import ./scripts/sites-env.mjs --import tsx scripts/transfer-receipt-ai-owner.ts"
   },
   "dependencies": {
@@ -44,6 +45,7 @@
   "devDependencies": {
     "@cloudflare/vite-plugin": "1.37.1",
     "@cloudflare/workers-types": "4.20260515.1",
+    "@playwright/test": "1.62.1",
     "@tailwindcss/postcss": "4.2.1",
     "@types/node": "22.19.19",
     "@types/react": "19.2.14",

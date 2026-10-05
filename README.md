@@ -65,6 +65,7 @@ npm start            # Preview the built Worker locally; use its printed URL
 npm run lint         # ESLint
 npx tsc --noEmit     # TypeScript check
 npm test             # Regression tests, including SQLite-backed storage checks
+npm run test:layout  # Chromium/WebKit layouts against the built local Worker
 npm run db:generate  # Generate migrations after changing db/schema.ts
 ```
 
@@ -75,6 +76,8 @@ Ledger saves allow 1,500,000 UTF-8 bytes of editable content and reserve space f
 The Worker implements bounded receipt cleanup with a 15-minute UTC Cron declaration. Confirm that Sites installs and runs this timer when deploying; a declaration in the generated Wrangler configuration does not establish an active production schedule. Historical images with unknown upload dates receive a 24-hour grace period from migration `0006`; referenced images and pending uploads remain protected.
 
 `npm test` runs `tests/*.test.ts` with the directly declared `tsx` dependency. It deliberately excludes the historical reproductions under `docs/audit/evidence-*`; those files describe the state reviewed in the original audit. GitHub Actions runs a clean locked install, regression tests, type checks, lint and a production build on pull requests and pushes to `main`, with read-only repository permissions. CI does not contact production or publish the app.
+
+For browser layout checks, run `npx --no-install playwright install --with-deps chromium webkit` once, build with the local `RECEIPT_AI_OWNER_EMAIL` setting above, then run `npm run test:layout`. The suite starts the built Worker on loopback and supplies synthetic account, ledger and image responses; it does not use a real account or database. It checks 320px phones, 844px landscape touch devices, tablets and desktops, long names, receipt images, split modes, enlarged text, amount-field contents and payment controls without hiding overflow. CI runs these checks against the production build. Browser emulation verifies layout and font sizes; real-device Safari focus zoom and swipe-back behavior still need a manual check.
 
 ## Accounts and optional services
 

@@ -39,3 +39,7 @@ jobs:
         run: npm run lint
       - name: Build
         run: npm run build
+      - name: Install layout-test browsers
+        run: npx --no-install playwright install --with-deps chromium webkit
+      - name: Check production browser layouts
+        run: npm run test:layout
