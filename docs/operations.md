@@ -6,6 +6,8 @@ This is an operator procedure, not a record of a production backup or restore. N
 
 GitHub is the source mirror. ChatGPT Sites owns the production source repository, environment and deployment. A passing GitHub workflow or a merge into `main` does not publish the Site.
 
+Receipt releases additionally use the [receipt release and recognition evaluation runbook](receipt-release-runbook.md) and [71-point receipt review checklist](receipt-review-checklist.md). The public site's shared API reader and an external ChatGPT/Codex MCP client have separate acceptance gates. A deployed `/mcp` endpoint or successful local fixture does not prove that a fresh hosted conversation exposes its tools. Deterministic CI must not make paid model requests.
+
 For each release, record the GitHub commit, Sites source commit/version, deployment ID, environment revision, release time in UTC, migration filenames and hashes, backup location and recovery bookmark. Keep the record outside application data so it remains available during an incident. Compare these commits before publishing to detect source drift.
 
 1. Run `npm run install:ci`, `npm test`, `npx --no-install tsc --noEmit`, `npm run lint` and `npm run build` from a clean checkout.
@@ -18,6 +20,8 @@ For each release, record the GitHub commit, Sites source commit/version, deploym
 Code using activity history, receipt lifecycle and private account history requires migrations through `0009_receipt_link_projections.sql` in order before it serves traffic. Migration `0005` adds invitation/image audit metadata and browser-subscription generations; `0006` gives active historical images with unknown dates a fixed 24-hour cleanup grace without inventing an upload date. Migration `0007` backfills an immutable receipt-message lookup from historical and live conversations, then updates it atomically as new activity is recorded. Measure this one-time backfill on a production-sized copy before release; ordinary new questions use bounded indexed lookups. The registry trigger uses `iif` expressions tested with Wrangler’s statement splitter before native D1 application. Migration `0008` adds receipt-family entity/expression indexes; test index-build duration on that copy as well. Migration `0009` adds indexed current and historical receipt-link metadata, maintained atomically by trip/activity triggers, and a per-trip receipt-link version. Its one-time backfill extracts link IDs and leaves financial documents and immutable event snapshots unchanged. Measure that backfill and its additional write cost on the same production-sized copy. Scoped pages resolve bounded typed IDs through indexed reads instead of reparsing the whole current trip or historical receipt contents. A captured version guards discovery, candidates and snapshot fetch; concurrent changes retry at most three times before returning a refresh error. Conservative legacy photo matching requires an unlinked draft throughout its history and unambiguous ownership. Receipt-family compounds stay within D1’s five-SELECT limit; test with the actual Wrangler statement splitter and native Miniflare D1, including trigger rollback and interrupted reads. A local migration or a generated SQL journal does not establish production readiness. Apply the migrations through Sites' release path and retain its applied-migration evidence.
 
 Installations that applied the standalone `0007` receipt-message registry backport must still apply `0005` and `0006` by their explicit filenames through the recorded migration lifecycle. A timestamp-only migrator can skip these earlier entries; do not replay the already applied `0007` SQL.
+
+Shared API receipt reading additionally requires `0010_receipt_ai_access.sql` for encrypted provider settings and access state. Keep the existing encryption secret stable across deployments. Receipt evidence and source provenance stored as optional ledger JSON fields do not require a relational backfill; never reconstruct historical printed totals or warnings from old financial rows. Confirm migration application from the actual release record instead of this document.
 
 Redeploying a previous Sites version rolls back code, not necessarily D1 data or schema. Confirm that the previous code is compatible with the current schema before using it. A financial-data problem may require a data restore and reconciliation as well as a code rollback.
 
@@ -128,7 +132,7 @@ First run the following procedure on isolated resources. Record the recovery poi
 
 - Confirm with Sites that the production gateway strips user-supplied `oai-authenticated-*` headers and that the Worker cannot be reached through a route bypassing that gateway. Local tests cannot establish this production trust boundary.
 - Configure and exercise encrypted D1/R2 backups and a restore drill; choose retention and incident ownership.
-- Add production monitoring, structured request/error logs without receipt contents or credentials, and scheduled financial/receipt reconciliation. CI regression tests do not monitor live data.
+- Configure production monitoring, broader structured request/error correlation and scheduled financial/receipt reconciliation. Receipt API/MCP stage logs already record bounded safe operation IDs/categories without receipt text, images or credentials; they are diagnostics, not a configured uptime monitor or a real visual-model benchmark. CI regression tests do not monitor live data.
 - Implement email verification and recovery delivery before describing an email as verified or offering email-based account recovery. Current email/password accounts do not require ChatGPT, and matching email addresses do not establish identity or merge accounts.
 - Decide the migration tracking and promotion policy with Sites. Historical generated SQL files and build artifacts alone are not a production migration ledger.
 
@@ -137,3 +141,58 @@ First run the following procedure on isolated resources. Record the recovery poi
 Signout revokes the exact browser token even if its profile cannot be resolved. The normal trusted signout and account audit commit together. If audit storage fails, TripTab independently revokes the token and retries the trusted audit once; an ongoing audit outage returns a generic failure with cleared browser cookies. This narrow security exception prevents a copied token from remaining usable and does not claim that unavailable audit storage recorded the event.
 
 Push delivery is best effort. Every intended traveller receives their stored inbox entry; at most 40 device sends are attempted per event with bounded concurrency and a 24-second dispatch budget. Selection rotates travellers and devices rather than repeatedly starving older subscriptions. The legacy `push_subscriptions.created_at` field now tracks registration or dispatch recency, while immutable account audit events retain the actual preference-change history. Re-enabling an unchanged subscription refreshes recency without manufacturing a new preference-change event.
+
+## Receipt AI owner configuration and transfer
+
+Set `RECEIPT_AI_OWNER_EMAIL` explicitly in the build/preview environment to the intended verified bootstrap owner's email. For local builds, export it before `npm run build`, as shown in the [README](../README.md#local-development), and keep it available for preview startup. For hosted releases, configure it in the Sites build environment before building the version and retain it in the preview/runtime configuration; a local shell export does not configure Sites. Missing, empty or malformed values fail startup; CI uses an explicit synthetic address. There is no personal-address fallback. The selected email does not merge accounts and cannot claim an existing canonical owner pin. If a runtime variable is absent or malformed, existing participant access and pinned-owner management continue; initial setup remains unavailable.
+
+Changing this email alone deliberately does not transfer an existing key. The old pinned owner can still replace/remove it, and participants retain access. An intentional transfer uses `npm run receipt-owner`, the sole runnable operator command, which invokes `scripts/transfer-receipt-ai-owner.ts` and the guarded `migrateReceiptAIOwner` helper. It has no public HTTP or MCP endpoint. The commands below are templates for a separately authorized operator transfer; deploying this code or documenting the procedure does not authorize a production transfer.
+
+First verify the target account through its trusted provider: it must already have a matching canonical TripTab profile and provider link. Obtain the actual Cloudflare account and D1 database identifiers through the authorized operator/Sites resource records, and the current `receipt_ai_settings.user_id` and positive integer `version` through an authorized database read. Read only the owner/version fields when identifying the pin; do not export key material. Use approved Wrangler authentication, such as `wrangler login` on the operator's machine, with read access for inspection and D1 write permissions for applying the transfer. Sites-managed databases may require an operator-provided configuration or supported Sites maintenance path before direct access is possible. Do not guess identifiers or use generated local placeholder bindings for production.
+
+Create a separate, minimal JSON Wrangler configuration at an absolute path, for example `/secure/path/receipt-owner-transfer.json`. Place it in a dedicated directory containing no `.env*` or `.dev.vars*` files; the CLI rejects those adjacent files to prevent loading application credentials. Replace every example identifier and database name below with the actual target resource. The CLI accepts only `name`, `compatibility_date`, optional `compatibility_flags`/`account_id`, and a single `d1_databases` entry bound as `DB`. Do not include `vars`, `env`, `main`, secrets or other bindings. A deployment-generated configuration with additional bindings is not an input to this operator command.
+
+```json
+{
+  "name": "triptab-owner-transfer",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "account_id": "00000000000000000000000000000000",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "OPERATOR_PROVIDED_DATABASE_NAME",
+      "database_id": "00000000-0000-4000-8000-000000000000",
+      "remote": true
+    }
+  ]
+}
+```
+
+Inspect the current pin's metadata using that explicit remote configuration:
+
+```sh
+node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB \
+  --remote --config /secure/path/receipt-owner-transfer.json \
+  --command "SELECT user_id,version,provider,api_key_encrypted IS NOT NULL AS key_configured FROM receipt_ai_settings WHERE id='shared';"
+```
+
+This query returns the owner/version, selected provider and whether a key is configured, never the ciphertext. Record the owner/version as the expected values for the transfer.
+
+Run the dry-run from the repository checkout after installing its locked dependencies. Use exactly one of `--remote` or `--local`. Remote execution requires the 32-hex-digit `--account-id` to match the configuration's `account_id`, the UUID `--database-id` to match its D1 entry, and that entry's `remote` value to be `true`. Replace the expected/current and new owner IDs with their canonical profile IDs, and replace `7` with the current positive settings version:
+
+```sh
+npm run receipt-owner -- \
+  --config /secure/path/receipt-owner-transfer.json \
+  --remote \
+  --account-id 00000000000000000000000000000000 \
+  --database-id 00000000-0000-4000-8000-000000000000 \
+  --expected-owner OLD_CANONICAL_PROFILE_ID \
+  --expected-version 7 \
+  --new-owner NEW_CANONICAL_PROFILE_ID \
+  --owner-email 'new-owner@example.test'
+```
+
+Without `--apply`, the CLI verifies the selected database, existing owner/version and canonical target without changing settings. For local state, use an equivalent minimal configuration for the actual local database with `remote: false`; replace `--remote --account-id …` with `--local --persist-to /absolute/path/to/.wrangler/state`. Local execution requires `--persist-to`; remote execution must not use it.
+
+After reviewing a successful dry-run and authorizing the key-replacement interruption, rerun the same command with `--apply` appended. The helper performs a version-guarded D1 transaction: it switches the pin, clears the old ciphertext (its encryption binds the old account), selects API mode, advances the settings version and appends a private system audit event. A changed pin/version, unlinked target, email mismatch or audit failure leaves settings unchanged. After transfer, the new owner must save a fresh API key; participant reading is unavailable during this explicit key replacement. Do not copy or expose the old key. Record the operation and the new settings version in the release record, and update the Sites build/preview/runtime configuration to the intended email through its environment workflow.

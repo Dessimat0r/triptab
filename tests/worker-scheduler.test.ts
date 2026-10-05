@@ -1,8 +1,9 @@
+import { transpileWithSharedImports } from './helpers/transpile';
 import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 import test from 'node:test';
-import { ModuleKind, ScriptTarget, transpileModule } from 'typescript';
+import { ModuleKind, ScriptTarget } from 'typescript';
 
 class SQLiteStatement {
   private values: SQLInputValue[] = [];
@@ -48,7 +49,7 @@ function image(database: SQLiteD1, id: string, state = 'active', createdAt = '20
     .run(id, 'absent-owner', 'quiet-holiday', state, createdAt, 'image/jpeg', 100, 'a'.repeat(64));
 }
 function dataUrl(source: string) { return 'data:text/javascript;base64,' + Buffer.from(source).toString('base64'); }
-function compile(source: string) { return transpileModule(source, { compilerOptions: { target: ScriptTarget.ES2022, module: ModuleKind.ESNext } }).outputText; }
+function compile(source: string) { return transpileWithSharedImports(source, { compilerOptions: { target: ScriptTarget.ES2022, module: ModuleKind.ESNext } }).outputText; }
 const boundary = { requests: 0, connectors: 0 };
 Object.defineProperty(globalThis, Symbol.for('triptab.scheduler-test'), { value: boundary, configurable: true });
 const handlerUrl = dataUrl("export default {fetch(){globalThis[Symbol.for('triptab.scheduler-test')].requests++;return new Response('TripTab');}};");
@@ -144,7 +145,7 @@ test('portable and managed Worker configurations retain a real 15-minute UTC Cro
   const viteUrl = dataUrl('export const defineConfig=config=>config;');
   const cloudflareUrl = dataUrl('export function cloudflare(options){return {name:"cloudflare-fixture",options};}');
   const hostingUrl = dataUrl('export default {d1:"DB",r2:"RECEIPTS"};');
-  const flags = ['CLOUDFLARE_CF_FETCH_ENABLED', 'WRANGLER_SEND_METRICS', 'WRANGLER_WRITE_LOGS', 'WRANGLER_LOG_PATH', 'WRANGLER_REGISTRY_PATH', 'MINIFLARE_REGISTRY_PATH'];
+  const flags = ['RECEIPT_AI_OWNER_EMAIL', 'CLOUDFLARE_CF_FETCH_ENABLED', 'WRANGLER_SEND_METRICS', 'WRANGLER_WRITE_LOGS', 'WRANGLER_LOG_PATH', 'WRANGLER_REGISTRY_PATH', 'MINIFLARE_REGISTRY_PATH'];
   const previous = flags.map(name => [name, process.env[name]] as const);
   try {
     for (const profile of ['portable', 'managed-linux']) {
@@ -156,11 +157,17 @@ test('portable and managed Worker configurations retain a real 15-minute UTC Cro
         .replace('"./build/sites-vite-plugin"', JSON.stringify(pluginUrl))
         .replace('"./build/connector-preview-plugin.mjs"', JSON.stringify(pluginUrl))
         .replace('"@cloudflare/vite-plugin"', JSON.stringify(cloudflareUrl));
+      for (const email of [undefined, '', 'not-an-email']) {
+        if (email === undefined) delete process.env.RECEIPT_AI_OWNER_EMAIL; else process.env.RECEIPT_AI_OWNER_EMAIL = email;
+        await assert.rejects(import(dataUrl(compiled + `\n// invalid ${profile}:${String(email)}`)), /Set RECEIPT_AI_OWNER_EMAIL/);
+      }
+      process.env.RECEIPT_AI_OWNER_EMAIL = ' CI-OWNER@EXAMPLE.INVALID ';
       const configure = (await import(dataUrl(compiled)) as { default: (context: { command: string }) => Promise<{ plugins: { name: string; options?: { config?: Record<string, unknown> } }[] }> }).default;
       for (const command of ['serve', 'build']) {
         const config = (await configure({ command })).plugins.find(plugin => plugin.name === 'cloudflare-fixture')!.options!.config!;
         assert.deepEqual(config.triggers, { crons: ['*/15 * * * *'] });
         assert.equal(config.main, './build/sites-worker.ts');
+        assert.deepEqual(config.vars, { RECEIPT_AI_OWNER_EMAIL: 'ci-owner@example.invalid' });
         assert.deepEqual(config.d1_databases, [{ binding: 'DB', database_name: 'site-creator-d1', database_id: '00000000-0000-4000-8000-000000000000' }]);
         assert.deepEqual(config.r2_buckets, [{ binding: 'RECEIPTS', bucket_name: 'site-creator-r2' }]);
         assert.equal(Boolean(config.services), command === 'serve');

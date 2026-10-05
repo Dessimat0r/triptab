@@ -57,8 +57,8 @@ test('ending one account export format never clears the other format cursor', as
 });
 
 test('each mounted account export is keyed to the authenticated profile so switching accounts resets private cursors and aborts pending downloads', async () => {
-  for (const filename of ['../components/account-panel.tsx', '../app/page.tsx']) {
-    const text = await readFile(new URL(filename, import.meta.url), 'utf8');
+  for (const filename of ['account-panel.tsx', 'trip-app.tsx']) {
+    const text = await readFile(new URL('../components/' + filename, import.meta.url), 'utf8');
     const ast = createSourceFile(filename, text, ScriptTarget.Latest, true, ScriptKind.TSX);
     const keys: string[] = [];
     function visit(node: import('typescript').Node) {

@@ -1,3 +1,4 @@
+import { sha256Hex } from './data-utils';
 import { activityStatements, type ActivityChange, type ActivitySource } from './audit';
 
 /** D1 owns receipt lifecycle; R2 object deletion is idempotent and retriable. */
@@ -222,8 +223,7 @@ async function abandonUpload(database: D1Database, bucket: R2Bucket, user: strin
 
 export async function storeReceipt(database: D1Database, bucket: R2Bucket, user: string, tripId: string, id: string, bytes: Uint8Array<ArrayBuffer>, contentType: string) {
   const now = new Date().toISOString();
-  const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
-  const image = { contentType, sizeBytes: bytes.byteLength, sha256: Array.from(hash, value => value.toString(16).padStart(2, '0')).join('') };
+  const image = { contentType, sizeBytes: bytes.byteLength, sha256: await sha256Hex(bytes) };
   await reserveReceipt(database, user, tripId, id, now, image);
   try {
     await bucket.put(key(user, id), bytes, { httpMetadata: { contentType } });

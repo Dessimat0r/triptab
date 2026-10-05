@@ -1,16 +1,22 @@
 # Receipt quantities, conversations and memory
 
-TripTab stores item quantities, receipt discussions and remembered context with the receipt in D1. All travellers with access to the holiday can read its shared receipt context. AI assistance is optional and runs in the user's connected ChatGPT/Codex using TripTab's authenticated MCP tools.
+TripTab stores item quantities, receipt discussions and remembered context with the receipt in D1. All travellers with access to the holiday can read its shared receipt context. Automatic image transcription is optional and uses the owner's server-encrypted OpenAI API key for all signed-in app users. Tool-capable questions, remembered aliases and share changes remain available through the user's connected ChatGPT/Codex and TripTab's authenticated MCP tools.
 
 ## Quantities divide the full line price
 
 An item's amount is the full receipt line total. Equal shares, percentages or labelled quantities determine who owes that cost. Quantities can be fractional and need not be an integer total: 2.5 and 0.5 blocks can divide a total of 3; allocations can also divide a total of 7.5.
+
+Purchased quantity is stored separately in optional `item.quantity`, with a positive `total`, an optional `label` and optional original `sourceText`. For example, `2 x Stck` can establish two pieces; a pizza-slice description or established receipt context can give the clearer label “slices”. A generic pizza description alone does not establish that the purchase was slices. The reader interprets multilingual count terminology and decimals in context and leaves an unclear quantity absent rather than guessing.
+
+On a newly scanned line, the automatic API reader retains the purchased quantity and context-supported label independently of cost shares. It leaves the line unassigned until a person chooses who owes its cost. Switching to Units starts with the detected total and label, while allocation remains a human decision. Existing percentages, quantity allocations and user-entered purchased quantities survive recognition-only corrections. Purchased quantity remains available independently when the user chooses another cost split.
 
 For a £10.01 line containing 3 blocks, Alice's 2.5 blocks cost £8.34 and Bob's 0.5 cost £1.67. The line stays £10.01; the quantity does not multiply its price. Allocations must add exactly to the entered total and match the selected travellers. Money shares use exact rounding, including when tax, tip, discount, foreign-currency conversion or an actual bank charge applies. A whole-receipt percentage split takes priority over individual-item shares while retaining the saved quantities for review.
 
 Incomplete quantity entries stay in the form. A receipt question can include their intended counts for clarification while preserving valid saved receipt details. The proposed correction still needs review before it becomes a posted expense.
 
 AI corrections that omit a split retain its saved participant order and allocation, including penny rounding. When a correction supplies new quantity counts but omits the label, an existing label such as “bars” is retained; an explicit new label replaces it.
+
+Connected-tool corrections that omit `quantity` retain its saved purchase evidence even when the selected travellers change. An explicit purchased-count correction retains an omitted label; original source text is retained only if the count still agrees with it. Purchased quantity never multiplies the line amount or authorizes a consumption assignment. JSON downloads, the CSV item-detail field and receipt history preserve it; history displays the purchased count separately from cost allocations.
 
 Connected-tool schemas accept ordinary decimal quantities such as `0.1` and `1.1` without floating-point divisibility checks. The server still enforces at most six decimal places, the quantity bounds and exact allocation totals before saving a proposal.
 
@@ -38,12 +44,28 @@ New aliases must point to an active item or traveller; a new speaker scope must 
 
 ## Connected AI workflow and human review
 
+Once the verified owner saves the shared API key in **Profile & app settings → Receipt AI**, scanning or uploading starts native image transcription for any signed-in participant after both image and draft are saved. Only the owner can manage the shared key; other users see the service's availability without key controls. The reader receives the actual stored image and shared receipt context, and returns typed item names, integer line totals, purchased quantities, currency and legible purchase details. It preserves existing assignments, quantities, whole-receipt percentages, payer, conversations and memory. New scanned lines remain unassigned. Additional tax, tip and discount are recorded once; inclusive tax is not added again. This is one image-processing request, with reconciliation and review performed deterministically in TripTab.
+
+Review drafts may retain an unknown item price (`amount: null`), an empty cost assignment and unresolved currency. Posted expenses remain strict. Optional `receiptScan` stores independently observed printed subtotal/grand total, original-currency evidence, bounded source lines, warnings and processing provenance. TripTab derives calculated totals and matched/needs-review/incomplete status from exact integer hundredths; it does not accept a model's matched claim. Missing printed total remains incomplete, rather than being filled from the item sum. An authenticated browser user may explicitly review an unavailable printed total with `missingTotalAcknowledgement`; this permits Save only when all item prices, descriptions, currency, allocations and other material warnings are resolved. The total stays null and recognition stays incomplete, including in history and exports.
+
+The review summary separates recognition from allocation: a receipt may match exactly while several lines still need people assigned. A valid whole-receipt percentage choice allocates the entire cost without inventing who consumed individual quantities; if that override is removed, the individual item shares must be completed. Unknown financial values, unresolved material warnings and invalid active splits prevent Save. Users can correct the printed evidence after reading the image, resolve a checked warning or explicitly acknowledge a remaining total difference. That acknowledgement is recorded and invalidated by relevant subsequent edits. UI and server compute its fingerprint from the same reconciled evidence. Reconciliation and review use application code; matched/no-acknowledgement Save checks do not run SHA-256, and the review UI memoizes its derived scan/fingerprint. AI tool inputs cannot manufacture warning resolutions or human acknowledgements. Unsupported item-specific discounts/refunds remain source evidence with an unmapped-adjustment warning; a separate financial-model change is needed for first-class signed item adjustments.
+
+Field provenance distinguishes browser defaults (`default`), receipt observations (`receipt`), connected-assistant proposals (`ai`) and browser-entered or explicitly confirmed values (`user`). AI edits dictated in conversation remain proposals and cannot manufacture browser confirmation or clear uncertain-description/low-confidence warnings as a human review action. Merely focusing and leaving an unchanged price does not change provenance. The API reader may replace placeholder purchase metadata with legible receipt facts, but preserves user-confirmed values and never infers a payer from an image. Ambiguous symbols such as bare `$` remain unresolved. A changed original currency clears incompatible FX/bank-charge information. Explicitly confirming the already selected currency preserves its existing FX and bank charge.
+
+Reading succeeds only after a valid completed response. Errors, timeouts, changed images, revoked access and stale revisions do not post or overwrite an expense. A new untouched blank editor fills with the returned items; an edited or posted receipt requires **Review proposed changes**. Changes made while reading remain in the editor. Saving the reviewed expense records its action in the ordinary receipt history.
+
+For questions and requested share changes, use the connected-tool workflow:
+
 1. Enter a receipt manually or attach a photo. Ask a receipt/item question, or copy the receipt-reading prompt.
-2. Paste and run that prompt in the connected ChatGPT/Codex client. The client reads TripTab context/image tools and can save a reply or a proposed receipt draft through MCP.
-3. Use **Check for replies** to retrieve saved replies and proposals. Inspect the proposed details in TripTab's review interface.
+2. Open a supported ChatGPT or Codex conversation with the TripTab plugin/MCP tools enabled, then paste and run the prompt. The client reads TripTab context/image tools and can save a reply or a proposed receipt draft through MCP. Account identity linking does not establish that tools are available in that conversation; the website cannot verify external conversation tooling.
+3. Replies and matching proposals refresh automatically while the receipt is open and when returning to TripTab. **Check for replies** is also available. Inspect the proposed details in TripTab's review interface.
 4. **Save** separately to post or update the expense. A reply, remembered context or proposed draft alone does not approve a financial change.
 
-The copy/check/review flow does not invoke a model directly from the web app. The user's connected client performs AI processing; email/password accounts and manual receipts work independently of that connection.
+Each write advances the ledger revision. After saving memory or a reply, the assistant must use that tool's returned revision for a subsequent draft update rather than reuse the revision from its earlier context read. Expense targets remain server-controlled: preserve the draft ID and do not send an `expenseId` in draft-update inputs.
+
+Connected corrections use `upsertItems` for changed stable item IDs and `removeItemIds` only for intentional deletion of known active lines. The compatible `items` field also upserts: omission never deletes another line. Omitted fields retain saved values; purchase metadata changes use an explicit `metadataPatch`. A changed legacy top-level metadata value on an existing draft is rejected with that instruction rather than silently ignored. Only explicitly default receipt metadata may be filled by a recognition proposal. The published schema accepts partial existing-draft patches (`id` required); a new draft also needs an existing trip member as payer. Nullable currency, percentages, FX and bank amounts match server inputs. New lines can remain unreadable or unassigned. Historical chats and aliases stay readable after an explicit item removal, and source order remains the comparison order. Receipt source evidence merges by observed text, kind and amount; an unstable ordinal cannot erase earlier coupon/refund evidence, and repeated identical observations do not accumulate duplicates.
+
+The connected-tool prompt requires a real request in ChatGPT/Codex; copying or opening it is not a completed model request. The API image reader does not silently replace this workflow with a transcription-only answer to a share-changing question. Email/password accounts and manual receipts remain independent of AI. The future SIWC plan provider is retained but disabled until its separately approved hosted plan permission is configured.
 
 ## Limits and existing receipts
 
@@ -54,15 +76,16 @@ The copy/check/review flow does not invoke a model directly from the web app. Th
 | Quantity total | Greater than zero, at most 1,000,000; at most six decimal places |
 | Each quantity allocation | Zero to 1,000,000; at most six decimal places |
 | Optional quantity label | 1–40 characters |
+| Optional original purchased-quantity text | 1–200 characters |
 | Receipt conversation | 100 messages across all item threads |
 | Each message | 4,000 characters, including unfinished-entry context |
 | New or restored message IDs in one update to an existing holiday | 100; save one receipt at a time |
 | Remembered notes | 6,000 characters |
 | Aliases | 50 per receipt; names 1–60 characters |
 
-Quantity labels, memory and message context/author fields are optional. Existing receipts without quantities retain their equal/percentage split; this feature does not silently recalculate old expenses or invent authors. Saved memory and threads survive closing/reopening and receipt review. Account/holiday JSON retains them; financial CSV appends `item_details_json` with full line amounts in stored hundredths and the item allocations, while history records readable context changes.
+Purchased quantities, quantity labels, memory and message context/author fields are optional. Existing receipts without quantities retain their equal/percentage split; this feature does not silently recalculate old expenses or invent authors. Saved memory and threads survive closing/reopening and receipt review. Account/holiday JSON retains them; financial CSV appends `item_details_json` with full line amounts in stored hundredths, purchased quantities and item allocations, while history records readable context changes.
 
-## Feature validation
+## Earlier quantity/context validation
 
 Validated on 4 October 2026:
 
@@ -75,4 +98,4 @@ Validated on 4 October 2026:
 - Review regressions validate the published tool schemas with Ajv for decimal quantities, reject overprecision on the server, protect active speakers' scoped aliases through full replacements, free the full alias cap by removing retired scopes, preserve verified transfer context, and retain shared editing with trusted ChatGPT write attribution.
 - Connected-tool read regressions omit legacy assistant attribution while retaining human speakers and leaving stored messages and financial data unchanged.
 
-These checks use local authenticated/provider fixtures and native D1/Worker execution. They do not invoke an external model or establish production gateway behavior. No live Site deployment is included in this feature change.
+The historical checks above describe that earlier source state using local authenticated/provider fixtures and native D1/Worker execution. They do not establish current deployment or actual hosted client availability. Current receipt release verification uses the [71-point review checklist](receipt-review-checklist.md), [recognition corpus and release runbook](receipt-release-runbook.md), and actual Sites release/migration record. The user has confirmed a working public-site shared-API upload; hosted ChatGPT/Codex tool exposure and real visual-model corpus scores require separate acceptance evidence.
