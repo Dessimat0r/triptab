@@ -105,15 +105,21 @@ async function boundedText(response: Response, limit = 1_000_000) {
 }
 
 async function requestProvider(url: string, init: RequestInit, fetcher: typeof fetch) {
-  try { return await fetcher(url, init); }
+  let response: Response;
+  try { response = await fetcher(url, init); }
   catch {
     throw new ReceiptAIError(init.signal?.aborted ? 'Receipt processing was cancelled or timed out. Your saved receipt is unchanged.'
       : 'OpenAI is temporarily unavailable. Your receipt is saved; try again later.', init.signal?.aborted ? 408 : 503);
   }
+  if (response.status >= 300 && response.status < 400) {
+    await response.body?.cancel().catch(() => {});
+    throw new ReceiptAIError('OpenAI returned an unexpected redirect. Your receipt is saved; try again later.', 502, 'openai_redirect_rejected');
+  }
+  return response;
 }
 
 export async function getChatGPTPlanModel(accessToken: string, preferred?: string, signal?: AbortSignal, fetcher: typeof fetch = fetch) {
-  const response = await requestProvider('https://api.openai.com/v1/models', { headers: { Authorization: `Bearer ${accessToken}` }, signal, redirect: 'error' }, fetcher);
+  const response = await requestProvider('https://api.openai.com/v1/models', { headers: { Authorization: `Bearer ${accessToken}` }, signal, redirect: 'manual' }, fetcher);
   let body: unknown;
   try { body = JSON.parse(await boundedText(response)); }
   catch (error) { if (!response.ok) throw providerError(response.status); throw error instanceof ReceiptAIError ? error : new ReceiptAIError('ChatGPT returned an invalid model list.'); }
@@ -219,7 +225,7 @@ export async function processReceiptImage(input: {
   let binary = '';
   for (let offset = 0; offset < bytes.length; offset += 8192) binary += String.fromCharCode(...bytes.slice(offset, offset + 8192));
   const response = await requestProvider('https://api.openai.com/v1/responses', {
-    method: 'POST', signal: options.signal, redirect: 'error',
+    method: 'POST', signal: options.signal, redirect: 'manual',
     headers: { Authorization: `Bearer ${input.accessToken}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
       model, store: false, stream: true, ...(input.provider === 'api' ? { max_output_tokens: 16000, ...(model === 'gpt-6.1-sol' ? { reasoning: { effort: 'medium' } } : {}) } : {}), instructions: INSTRUCTIONS,

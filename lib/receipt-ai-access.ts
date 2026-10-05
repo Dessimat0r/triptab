@@ -69,7 +69,9 @@ async function verifyAPIKey(request: Request, key: string, fetcher: typeof fetch
   try {
     timeout = AbortSignal.timeout(15_000);
     signal = AbortSignal.any([request.signal, timeout]);
-    response = await fetcher('https://api.openai.com/v1/models', { headers: { Authorization: `Bearer ${key}` }, redirect: 'error', signal });
+    // Workers supports manual/follow, but rejects redirect:'error' before making
+    // a request. Manual lets us refuse redirects without forwarding the key.
+    response = await fetcher('https://api.openai.com/v1/models', { headers: { Authorization: `Bearer ${key}` }, redirect: 'manual', signal });
   } catch (error) {
     const name = error instanceof Error || error instanceof DOMException ? error.name : undefined;
     const timedOut = timeout?.aborted === true || name === 'TimeoutError';
@@ -78,6 +80,11 @@ async function verifyAPIKey(request: Request, key: string, fetcher: typeof fetch
       { timedOut, ...(name && NETWORK_NAMES.has(name) ? { networkErrorName: name } : {}) });
   }
   if (response.ok) { await response.body?.cancel().catch(() => {}); return; }
+  if (response.status >= 300 && response.status < 400) {
+    await response.body?.cancel().catch(() => {});
+    throw new ReceiptAIAccessError('OpenAI returned an unexpected redirect while checking the key. Try again shortly.', 400,
+      'key_check_request_rejected', { providerStatus: response.status, timedOut: timeout.aborted });
+  }
   const diagnostic = { providerStatus: response.status, providerCode: await providerKeyCheckCode(response, signal), timedOut: timeout.aborted };
   if (response.status === 401) throw new ReceiptAIAccessError('OpenAI rejected that API key. Check the key and try again.', 400, 'key_rejected', diagnostic);
   if (response.status === 403) throw new ReceiptAIAccessError('OpenAI denied this key permission to verify models. Check the key and project permissions.', 403, 'key_permission_denied', diagnostic);

@@ -239,6 +239,29 @@ test('provider expiry records a private system removal while stale expiry preser
   } finally { globalThis.fetch = originalFetch; environment.VAPID_PRIVATE_KEY = originalKey; }
 });
 
+test('push redirects are not followed and do not expire the browser subscription', async context => {
+  const database = await storage();
+  database.sqlite.prepare('INSERT INTO trips (id,owner,data) VALUES (?,?,?)').run('push-trip', 'bob', '{}');
+  database.sqlite.prepare('INSERT INTO memberships (trip_id,user_id,member_id) VALUES (?,?,?)').run('push-trip', 'alice', 'traveller-a');
+  await notifications.subscribe('alice', endpoint('redirect'));
+  const originalKey = environment.VAPID_PRIVATE_KEY;
+  const key = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+  environment.VAPID_PRIVATE_KEY = JSON.stringify(await crypto.subtle.exportKey('jwk', key.privateKey));
+  let calls = 0, cancelled = false;
+  context.mock.method(console, 'warn', () => {});
+  context.mock.method(globalThis, 'fetch', async (url: string | URL | Request, init?: RequestInit) => {
+    calls++; assert.equal(String(url), endpoint('redirect')); assert.equal(init?.redirect, 'manual');
+    return new Response(new ReadableStream({ cancel() { cancelled = true; } }), { status: 307, headers: { Location: 'https://attacker.invalid' } });
+  });
+  try {
+    await notifications.notifyMembers('push-trip', 'bob', 'TripTab activity', 'Bob updated an expense.');
+    await Promise.all(environment.pending);
+    assert.equal(calls, 1); assert.equal(cancelled, true);
+    assert.equal(await notifications.ownsSubscription('alice', endpoint('redirect')), true);
+    assert.equal((await deviceEvents(database, 'alice')).length, 1, 'only the original opt-in is recorded');
+  } finally { environment.VAPID_PRIVATE_KEY = originalKey; }
+});
+
 test('push ownership stays account-scoped and subscription cookies contain a hash, not an endpoint', async () => {
   const database = await storage();
   const subscribed = await pushRoute.POST(pushRequest('alice', 'subscribe'));

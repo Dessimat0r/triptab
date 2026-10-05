@@ -178,8 +178,8 @@ export async function verifyChatGPTPlanIdentity(idToken: string, clientId: strin
     if (parts.length !== 3) throw Error();
     const header = JSON.parse(new TextDecoder().decode(decode(parts[0]))) as { alg?: string; kid?: string; crit?: unknown };
     if (header.alg !== 'RS256' || !header.kid || header.crit !== undefined) throw Error();
-    const response = await fetcher(JWKS, { signal: requestSignal(signal), redirect: 'error' });
-    if (!response.ok) throw Error();
+    const response = await fetcher(JWKS, { signal: requestSignal(signal), redirect: 'manual' });
+    if (!response.ok) { await response.body?.cancel().catch(() => {}); throw Error(); }
     const jwks = await boundedJson(response);
     if (!Array.isArray(jwks.keys)) throw Error();
     const key = jwks.keys.find(value => value && value.kid === header.kid && value.kty === 'RSA' && (!value.alg || value.alg === 'RS256') && (!value.use || value.use === 'sig')) as JsonWebKey | undefined;
@@ -218,8 +218,13 @@ export async function finishChatGPTPlanAuthorization(database: D1Database, user:
   if (url.searchParams.has('error')) return { returnTo: pending.returnTo, result: 'cancelled' as const };
   const code = url.searchParams.get('code');
   if (!code || code.length > 4096 || url.searchParams.getAll('code').length !== 1) throw new ChatGPTPlanError('ChatGPT did not return a valid authorization code.', 400);
-  const response = await fetcher(TOKEN, { method: 'POST', redirect: 'error', signal: requestSignal(request.signal), headers: authorizationHeader(config),
+  // workerd supports manual redirects. Never follow a redirect with OAuth credentials.
+  const response = await fetcher(TOKEN, { method: 'POST', redirect: 'manual', signal: requestSignal(request.signal), headers: authorizationHeader(config),
     body: new URLSearchParams({ grant_type: 'authorization_code', client_id: config.clientId, code, code_verifier: pending.verifier, redirect_uri: pending.redirectUri, resource: RESOURCE }) });
+  if (response.status >= 300 && response.status < 400) {
+    await response.body?.cancel().catch(() => {});
+    throw new ChatGPTPlanError('ChatGPT authorization could not be completed. Please reconnect.', 401, 'authorization_failed');
+  }
   const body = await boundedJson(response);
   if (!response.ok || typeof body.id_token !== 'string') throw new ChatGPTPlanError('ChatGPT authorization could not be completed. Please reconnect.', 401, 'authorization_failed');
   const identity = await verifyChatGPTPlanIdentity(body.id_token, config.clientId, pending.nonce, fetcher, request.signal);
@@ -248,8 +253,12 @@ export async function chatGPTPlanAccessToken(database: D1Database, userId: strin
   if (!locked) throw new ChatGPTPlanError('ChatGPT is renewing this connection. Try again shortly.', 409, 'refresh_in_progress');
   try {
     const fetcher = options.fetcher || fetch;
-    const response = await fetcher(TOKEN, { method: 'POST', redirect: 'error', signal: requestSignal(options.signal), headers: authorizationHeader(config),
+    const response = await fetcher(TOKEN, { method: 'POST', redirect: 'manual', signal: requestSignal(options.signal), headers: authorizationHeader(config),
       body: new URLSearchParams({ grant_type: 'refresh_token', client_id: config.clientId, refresh_token: saved.refreshToken, resource: RESOURCE }) });
+    if (response.status >= 300 && response.status < 400) {
+      await response.body?.cancel().catch(() => {});
+      throw new ChatGPTPlanError('ChatGPT could not renew the connection. Try again shortly.', 503, 'refresh_unavailable');
+    }
     const body = await boundedJson(response);
     if (!response.ok) {
       const terminal = ['invalid_grant', 'invalid_refresh_token', 'token_expired', 'refresh_token_expired', 'refresh_token_invalidated', 'refresh_token_reused'].includes(String(body.error));
@@ -280,9 +289,10 @@ export async function disconnectChatGPTPlan(database: D1Database, user: { id: st
     try {
       const saved = await unseal<Credentials>(row.credentials, user.id, 'tokens', config.key);
       if (saved.refreshToken) {
-        const response = await fetcher(REVOKE, { method: 'POST', redirect: 'error', signal: requestSignal(), headers: authorizationHeader(config),
+        const response = await fetcher(REVOKE, { method: 'POST', redirect: 'manual', signal: requestSignal(), headers: authorizationHeader(config),
           body: new URLSearchParams({ token: saved.refreshToken, token_type_hint: 'refresh_token', client_id: config.clientId }) });
         revoked = response.ok;
+        await response.body?.cancel().catch(() => {});
       }
     } catch { revoked = false; }
   } else if (row) revoked = false;

@@ -210,9 +210,13 @@ async function sendPush(subscription: Subscription) {
       method: 'POST',
       headers: { Authorization: await vapidAuthorization(endpoint), TTL: '3600', Urgency: 'normal' },
       body: '',
-      redirect: 'error',
+      redirect: 'manual',
       signal: AbortSignal.timeout(sendTimeoutMs),
     });
+    if (response.status >= 300 && response.status < 400) {
+      await response.body?.cancel().catch(() => {});
+      throw new Error('Push service returned a redirect.');
+    }
     if (response.status === 404 || response.status === 410) {
       await removeSubscription(subscription.user_id, endpoint, 'provider_expired', subscription.generation);
     }

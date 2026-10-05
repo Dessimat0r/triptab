@@ -49,7 +49,7 @@ test('API native vision sends the actual image and a private nonpersistent stric
   assert.equal(requests.length, 1);
   assert.equal(requests[0].url, 'https://api.openai.com/v1/responses');
   assert.equal(requests[0].init.method, 'POST');
-  assert.equal(requests[0].init.redirect, 'error');
+  assert.equal(requests[0].init.redirect, 'manual');
   assert.equal(new Headers(requests[0].init.headers).get('authorization'), 'Bearer test-credential');
   const body = JSON.parse(requests[0].init.body as string);
   assert.equal(body.model, 'gpt-6.1-sol');
@@ -97,7 +97,7 @@ test('plan models use account-visible server ordering and an explicit preference
   const fetcher: typeof fetch = async (url, init) => {
     assert.equal(String(url), 'https://api.openai.com/v1/models');
     assert.equal(new Headers(init?.headers).get('authorization'), 'Bearer plan-token');
-    assert.equal(init?.redirect, 'error');
+    assert.equal(init?.redirect, 'manual');
     return Response.json(catalog);
   };
   assert.equal(await getChatGPTPlanModel('plan-token', undefined, undefined, fetcher), 'preferred-first');
@@ -115,6 +115,31 @@ test('plan models use account-visible server ordering and an explicit preference
     return streamResponse([completed()]);
   } });
   assert.deepEqual(requests, ['https://api.openai.com/v1/models', 'https://api.openai.com/v1/responses']);
+});
+
+test('model catalogues and receipt image processing refuse redirects without forwarding keys, images or saved context', async () => {
+  for (const status of [301, 302, 303, 307, 308]) for (const mode of ['catalogue', 'receipt'] as const) {
+    let calls = 0, cancelled = false;
+    const fetcher: typeof fetch = async (url, init) => {
+      calls++;
+      assert.equal(String(url), mode === 'catalogue' ? 'https://api.openai.com/v1/models' : 'https://api.openai.com/v1/responses');
+      assert.equal(init?.redirect, 'manual');
+      return new Response(new ReadableStream({ cancel() { cancelled = true; } }), {
+        status, headers: { location: 'https://unexpected.example/private' },
+      });
+    };
+    await assert.rejects(mode === 'catalogue'
+      ? getChatGPTPlanModel(input.accessToken, undefined, undefined, fetcher)
+      : processReceiptImage(input, { fetcher }), error => {
+      assert(error instanceof ReceiptAIError);
+      assert.equal(error.status, 502);
+      assert.equal(error.code, 'openai_redirect_rejected');
+      assert.doesNotMatch(JSON.stringify(error), /unexpected\.example|private|test-credential|Shared context|data:image/);
+      return true;
+    });
+    assert.equal(calls, 1);
+    assert.equal(cancelled, true);
+  }
 });
 
 test('native vision accepts split UTF-8 SSE, CRLF and a completed event at EOF without using output deltas', async () => {

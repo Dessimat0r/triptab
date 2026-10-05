@@ -54,7 +54,7 @@ function keyCheck(expected = key, status = 200): typeof fetch {
   return (async (input: RequestInfo | URL, init?: RequestInit) => {
     assert.equal(String(input), 'https://api.openai.com/v1/models');
     assert.equal(new Headers(init?.headers).get('authorization'), `Bearer ${expected}`);
-    assert.equal(init?.redirect, 'error');
+    assert.equal(init?.redirect, 'manual');
     return Response.json(status === 200 ? { data: [] } : { error: { code: 'invalid_api_key' } }, { status });
   }) as typeof fetch;
 }
@@ -210,6 +210,33 @@ test('invalid provider keys and transient verification failures preserve the sav
   await assert.rejects(saveReceiptAISettings(request(), owner, db.database, config, { apiKey: replacement }, (async () => { throw Error('network'); }) as typeof fetch), { code: 'key_check_unavailable' });
   assert.deepEqual(row(db), before);
   assert.equal((await getReceiptAIAccess(request(), owner, db.database, config)).accessToken, key);
+});
+
+test('key verification refuses every redirect without forwarding credentials or changing the saved key and history', async () => {
+  const db = await storage();
+  await saveReceiptAISettings(request('owner', true), owner, db.database, config, { apiKey: key }, keyCheck());
+  const before = row(db), history = db.sqlite.prepare('SELECT * FROM account_activity_events').all();
+  for (const status of [301, 302, 303, 307, 308]) {
+    let calls = 0, cancelled = false;
+    await assert.rejects(saveReceiptAISettings(request(), owner, db.database, config, { apiKey: replacement }, async (url, init) => {
+      calls++;
+      assert.equal(String(url), 'https://api.openai.com/v1/models');
+      assert.equal(init?.redirect, 'manual');
+      return new Response(new ReadableStream({ cancel() { cancelled = true; } }), {
+        status, headers: { location: 'https://unexpected.example/private' },
+      });
+    }), error => {
+      assert(error instanceof ReceiptAIAccessError);
+      assert.equal(error.code, 'key_check_request_rejected');
+      assert.deepEqual(receiptAIKeyCheckDiagnostic(error), { code: 'key_check_request_rejected', providerStatus: status, timedOut: false });
+      assert.doesNotMatch(JSON.stringify(error), /unexpected\.example|private|sk-test-/);
+      return true;
+    });
+    assert.equal(calls, 1);
+    assert.equal(cancelled, true);
+    assert.deepEqual(row(db), before);
+    assert.deepEqual(db.sqlite.prepare('SELECT * FROM account_activity_events').all(), history);
+  }
 });
 
 test('key checks classify provider rejection, permission, rate limits and outages without saving or revealing provider text', async () => {

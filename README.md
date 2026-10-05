@@ -78,6 +78,8 @@ Automatic receipt reading uses OpenAI's native image input through the Responses
 
 Create a project-scoped key in the intended OpenAI project, such as **TripTab**. A `sk-proj-…` key identifies its project automatically; no project name or additional project header is required.
 
+Server requests use the Workers-supported `redirect: 'manual'` setting and reject redirect responses. This keeps API keys, plan tokens and notification credentials on their original destination; the browser never sends the OpenAI request or receives the shared key.
+
 Scanning or uploading saves the image and draft before reading begins. A completed, validated transcription creates a review draft; an untouched initial editor displays its items immediately. Existing or locally edited receipt details show an explicit proposal review instead. **Save expense** remains a separate approval step. Reading never posts an expense, invents exchange rates or assigns personal consumption. Failed, incomplete or stale results leave the saved receipt and manual edits available.
 
 Receipt and item questions retain the full connected ChatGPT/Codex MCP workflow, including aliases, memory and requested cost-share changes. **Ask ChatGPT / Codex** saves the question and prepares a prompt for that client; model processing takes place there. Returned replies and proposals refresh automatically while the receipt is open, and **Check for replies** remains available. The web app's automatic image reader is limited to transcription; it does not silently replace those tool-capable discussions. See [receipt quantities, conversations and memory](docs/receipt-context.md).

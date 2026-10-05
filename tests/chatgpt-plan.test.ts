@@ -83,8 +83,8 @@ async function grant(database: SQLiteD1, options: { expiresIn?: number; scope?: 
   const calls: string[] = [];
   const fetcher: typeof fetch = async (url, init) => {
     calls.push(String(url));
-    if (String(url) === jwksEndpoint) return jwks();
-    assert.equal(String(url), tokenEndpoint); assert.equal(init?.redirect, 'error');
+    if (String(url) === jwksEndpoint) { assert.equal(init?.redirect, 'manual'); return jwks(); }
+    assert.equal(String(url), tokenEndpoint); assert.equal(init?.redirect, 'manual');
     const form = new URLSearchParams(String(init?.body));
     assert.equal(form.get('grant_type'), 'authorization_code'); assert.equal(form.get('code'), 'synthetic-code');
     assert.equal(form.get('redirect_uri'), callback);
@@ -258,6 +258,46 @@ test('failed remote revocation still removes local tokens and does not put crede
   await assert.rejects(finishChatGPTPlanAuthorization(database.asD1(), owner, returned(pending), environment), code('state_invalid'));
   const audit = JSON.stringify(database.sqlite.prepare('SELECT * FROM account_activity_events').all());
   assert(!audit.includes('fixture-secret')); assert(!audit.includes('synthetic-code'));
+});
+
+test('identity keys and OAuth grants reject redirects without following or reading their bodies', async () => {
+  let calls = 0, cancelled = 0;
+  const redirect: typeof fetch = async (_url, init) => {
+    calls++;
+    assert.equal(init?.redirect, 'manual');
+    return new Response(new ReadableStream({ cancel() { cancelled++; } }), {
+      status: 307, headers: { Location: 'https://attacker.invalid/collect-credentials' },
+    });
+  };
+  await assert.rejects(verifyChatGPTPlanIdentity(await signed(identity()), clientId, 'test-nonce', redirect), code('identity_invalid'));
+  assert.equal(calls, 1); assert.equal(cancelled, 1);
+  const database = await storage(), start = await begin(database);
+  await assert.rejects(finishChatGPTPlanAuthorization(database.asD1(), owner, returned(start), environment, redirect), code('authorization_failed'));
+  assert.equal(calls, 2); assert.equal(cancelled, 2);
+  assert.equal(database.sqlite.prepare('SELECT COUNT(*) AS n FROM chatgpt_plan_connections').get()?.n, 0);
+});
+
+test('redirected renewal cannot invalidate credentials through an untrusted error body', async () => {
+  const database = await storage(); await grant(database, { expiresIn: 1 });
+  const before = database.sqlite.prepare('SELECT credentials,version FROM chatgpt_plan_connections').get();
+  let calls = 0;
+  await assert.rejects(chatGPTPlanAccessToken(database.asD1(), owner.id, environment, { fetcher: async (url, init) => {
+    calls++; assert.equal(String(url), tokenEndpoint); assert.equal(init?.redirect, 'manual');
+    return Response.json({ error: 'invalid_grant' }, { status: 302, headers: { Location: 'https://attacker.invalid' } });
+  } }), code('refresh_unavailable'));
+  const after = database.sqlite.prepare('SELECT credentials,version,refresh_until FROM chatgpt_plan_connections').get()!;
+  assert.equal(calls, 1); assert.equal(after.credentials, before?.credentials); assert.equal(after.version, before?.version); assert.equal(after.refresh_until, 0);
+});
+
+test('redirected remote revocation is unconfirmed and still clears the local connection', async () => {
+  const database = await storage(); await grant(database);
+  let calls = 0, cancelled = false;
+  const result = await disconnectChatGPTPlan(database.asD1(), owner, environment, async (url, init) => {
+    calls++; assert.equal(String(url), revokeEndpoint); assert.equal(init?.redirect, 'manual');
+    return new Response(new ReadableStream({ cancel() { cancelled = true; } }), { status: 308, headers: { Location: 'https://attacker.invalid' } });
+  });
+  assert.equal(calls, 1); assert.equal(cancelled, true); assert.equal(result.revoked, false); assert.equal(result.connected, false);
+  assert.equal(database.sqlite.prepare('SELECT COUNT(*) AS n FROM chatgpt_plan_connections').get()?.n, 0);
 });
 
 test('an explicitly requested reconnect can recover an unreadable old plan credential record', async () => {
