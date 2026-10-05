@@ -1,4 +1,4 @@
-import { sha256Hex } from '@/lib/data-utils';
+import { encodeBase64url, sha256Hex } from '@/lib/data-utils';
 import { activityStatements, db, ensureProfile, failure, MAX_STORED_TRIP_BYTES, readBoundedBody, RequestError, sameOrigin } from '@/lib/store';
 import { notifyMembers } from '@/lib/notifications';
 import { parseStoredTrip, travellerFinancialPreview, type Trip } from '@/lib/model';
@@ -190,8 +190,7 @@ async function createInvite(request: Request, profile: Profile, body: Record<str
   const email = targetEmail(body.email);
   const database = db();
   const member = await ownerTraveller(tripId, memberId, profile);
-  const token = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))))
-    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  const token = encodeBase64url(crypto.getRandomValues(new Uint8Array(32)));
   const hash = await sha256Hex(token);
   const auditId = crypto.randomUUID();
   const expiresAt = new Date(Date.now() + INVITE_LIFETIME).toISOString();

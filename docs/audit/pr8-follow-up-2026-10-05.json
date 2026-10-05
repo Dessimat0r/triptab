@@ -1,0 +1,173 @@
+{
+  "review": {
+    "id": 5414851502,
+    "url": "https://github.com/Dessimat0r/triptab/pull/8#pullrequestreview-5414851502",
+    "submittedAt": "2026-10-05T13:00:53Z",
+    "reviewedHead": "685824922324a7b81aa9df1a10f1e1d26bc715cd"
+  },
+  "findings": [
+    {
+      "id": "F1",
+      "disposition": "fixed",
+      "change": "Ledger reads and scoped receipt CAS compare the same visible raw stored-trip projection; parsed validation remains separate. Legacy assistant author fields, unlinked account IDs and untrimmed text cannot discard unchanged receipt inference. Exact data/owner/member guards remain.",
+      "evidence": [
+        "tests/store.test.ts: scoped receipt saves compare the same visible legacy snapshot as ledger reads",
+        "tests/store.test.ts: native D1 scoped receipt saves accept legacy display repairs and preserve current unrelated trips"
+      ],
+      "backportedTo": [
+        6,
+        7
+      ]
+    },
+    {
+      "id": "F2",
+      "disposition": "fixed",
+      "change": "Bounded geometrically grown byte buffer scans only new chunks and decodes each complete SSE line once.",
+      "evidence": [
+        "tests/receipt-ai.test.ts: large single-line events process fragmented bytes with linear encoding work"
+      ],
+      "backportedTo": [
+        6,
+        7
+      ]
+    },
+    {
+      "id": "F3",
+      "disposition": "fixed",
+      "change": "Decoded result cap remains1000000 bytes, event cap6016384 bytes, total transport cap36098304 bytes, supporting worst-case escaping and repeated Responses output events.",
+      "evidence": [
+        "tests/receipt-ai.test.ts: escaped delta, done, content-part, output-item and completed copies fit the bounded transport budget",
+        "Separate result/event/multi-line/stream over-limit refusals retained"
+      ],
+      "backportedTo": [
+        6,
+        7
+      ]
+    },
+    {
+      "id": "F4",
+      "disposition": "fixed",
+      "change": "Required canonical source-draft SHA256 checked before credential lookup, budget consumption or inference. Removed obsolete revision field from request/server/client; cached payloads receive reload guidance.",
+      "evidence": [
+        "tests/receipt-ai.test.ts: HTTP missing or malformed fingerprints and cached revision-only contracts require a reload before spending",
+        "tests/receipt-editor.test.ts: processing payload hash/no revision assertions"
+      ],
+      "backportedTo": [
+        6,
+        7
+      ]
+    },
+    {
+      "id": "F5",
+      "disposition": "fixed",
+      "change": "README configures explicit owner email before build. Runnable operator-only CLI uses authenticated Wrangler D1 with explicit expected resource/account/owner/version, canonical target, read-only dry-run and explicit apply. No ciphertext selected; atomic key-clear/repin/audit.",
+      "evidence": [
+        "tests/receipt-ai-owner-cli.test.ts: actual subprocess CLI with local getPlatformProxy persistence",
+        "Native D1 canonical/version refusal and audit rollback",
+        "docs/operations.md: Receipt AI owner configuration and transfer"
+      ],
+      "backportedTo": [
+        6,
+        7
+      ],
+      "limitations": "Remote operator transport not exercised; no production ownership transfer."
+    },
+    {
+      "id": "F6",
+      "disposition": "fixed",
+      "change": "MCP/native recognition agree that only empty-name,zero-amount,no-quantity,no-source is a blank price placeholder; meaningful legacy zeros remain protected.",
+      "evidence": [
+        "tests/mcp.test.ts: MCP recognition aligns native placeholder rules for legacy zero prices with quantities or source evidence",
+        "tests/mcp.test.ts: MCP recognition still fills true blank placeholders and unknown prices even when quantity evidence exists"
+      ],
+      "backportedTo": [
+        7
+      ]
+    },
+    {
+      "id": "F7",
+      "disposition": "fixed",
+      "change": "Invitation token generation uses shared encodeBase64url for32 cryptographically random bytes, preserving the URL token format.",
+      "evidence": [
+        "64 invitation regressions passed"
+      ]
+    },
+    {
+      "id": "F8",
+      "disposition": "fixed",
+      "change": "Identity-only and session-only consumers reuse one atomic auth snapshot. Orphan session profile is excluded from precedence, legitimate provider fallback works, and identity reads never create a profile. Optional flags/provider joins omitted when unnecessary.",
+      "evidence": [
+        "tests/auth-read.test.ts: stale/expired/orphan/duplicate session and canonical provider identity cases",
+        "104 targeted auth/API/native access tests passed",
+        "No request-level auth cache or weakened mutation guards"
+      ],
+      "backportedTo": [
+        5,
+        6,
+        7
+      ]
+    },
+    {
+      "id": "F9",
+      "disposition": "fixed",
+      "change": "Shared test transpiler resolves only actual static/re-export/dynamic import nodes and supports explicit overrides; default audit/React rewrites and redundant blank lines removed from affected callers.",
+      "evidence": [
+        "tests/transpile.test.ts: shared imports honor explicit mocks in static, re-exported and dynamic imports without rewriting ordinary text"
+      ],
+      "backportedTo": [
+        5,
+        6,
+        7
+      ]
+    }
+  ],
+  "validation": {
+    "combinedRegressionTests": {
+      "passed": 1006,
+      "failed": 0,
+      "skipped": 0
+    },
+    "typeScript": "passed",
+    "productionBuild": "passed with explicit owner configuration",
+    "lint": {
+      "errors": 0,
+      "existingWarnings": 4
+    },
+    "sourceData": "synthetic isolated SQLite/D1/R2 and mocked provider responses",
+    "paidModelCalls": 0,
+    "backportTests": {
+      "PR5": 652,
+      "PR6": 862,
+      "PR7": 1005
+    },
+    "compiledMobile": {
+      "nativeReceiptWorkflows": 10,
+      "nativeViewportChecks": 24,
+      "receiptIntegrityWorkflows": 9,
+      "receiptIntegrityViewportChecks": 54,
+      "widths": [
+        320,
+        390,
+        768
+      ],
+      "colorModes": [
+        "light",
+        "dark"
+      ],
+      "browserErrors": 0,
+      "horizontalOverflow": 0,
+      "apiModelDestinations": "intercepted with synthetic responses"
+    }
+  },
+  "releaseBoundary": {
+    "githubPRs": "Open; no merge into main",
+    "publication": "Exact GitHub/Sites source trees and deployment identifiers are recorded in PR8 description after publication",
+    "productionOwnerTransfer": false,
+    "productionFinancialMutation": false,
+    "sqlMigrationsAddedOrReplayed": false
+  },
+  "limitations": [
+    "Hosted ChatGPT/Codex tools and live vision quality are separate unperformed acceptance gates.",
+    "No paid model benchmark or real receipt rescan performed."
+  ]
+}

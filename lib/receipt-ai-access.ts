@@ -182,7 +182,9 @@ async function settingsAuthorization(request: Request, profile: Account, princip
 export async function migrateReceiptAIOwner(database: D1Database, environment: ReceiptAIEnvironment,
   input: { expectedUserId: string; expectedVersion: number; newUserId: string }) {
   const email = receiptAIOwnerEmail(environment);
-  const before = await settings(database);
+  // Operators need only presence, never the encrypted credential itself.
+  const before = await database.prepare("SELECT user_id,provider,version,api_key_encrypted IS NOT NULL AS key_configured FROM receipt_ai_settings WHERE id='shared'")
+    .first<{ user_id: string; provider: 'api' | 'siwc'; version: number; key_configured: number }>();
   if (!before || before.user_id !== input.expectedUserId || before.version !== input.expectedVersion || input.newUserId === input.expectedUserId) {
     throw new ReceiptAIAccessError('The shared receipt owner changed. Read the current owner/version before migration.', 409, 'settings_changed');
   }
@@ -194,7 +196,7 @@ export async function migrateReceiptAIOwner(database: D1Database, environment: R
         JOIN auth_links l ON l.user_id=p.id WHERE p.id=? AND lower(p.email)=?)`)
       .bind(input.newUserId, input.expectedUserId, input.expectedVersion, input.newUserId, email),
     accountAuditStatement(database, { userId: input.newUserId, actorName: 'Site operator', entityType: 'chatgpt', entityId: 'receipt-processing', action: 'update',
-      before: { keyConfigured: !!before.api_key_encrypted, provider: before.provider }, after: { keyConfigured: false, provider: 'api', ownerChanged: true }, source: 'system' }),
+      before: { keyConfigured: !!before.key_configured, provider: before.provider }, after: { keyConfigured: false, provider: 'api', ownerChanged: true }, source: 'system' }),
   ]);
   if (!results[0].meta.changes) throw new ReceiptAIAccessError('The target owner is not canonically verified or the settings changed.', 409, 'settings_changed');
   return { migrated: true, version: before.version + 1, keyConfigured: false };

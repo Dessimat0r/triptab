@@ -6,13 +6,18 @@ import test from 'node:test';
 import { Log, LogLevel, Miniflare } from 'miniflare';
 import { ModuleKind, ScriptTarget } from 'typescript';
 import { unstable_splitSqlQuery } from 'wrangler';
-import { hashToken, readAuthState, sessionIdentity } from '../lib/auth';
+import { hashToken, readAuthContext, readAuthState, resolveIdentity, sessionIdentity } from '../lib/auth';
 
 class SQLiteStatement {
   values: (string | number | null)[] = [];
   constructor(readonly database: SQLiteD1, readonly sql: string) {}
   bind(...values: (string | number | null)[]) { this.values = values; return this; }
-  async first<T>() { await this.database.read(this.sql, this.values); return (this.database.sqlite.prepare(this.sql).get(...this.values) ?? null) as T | null; }
+  async first<T>() {
+    await this.database.read(this.sql, this.values);
+    const row = (this.database.sqlite.prepare(this.sql).get(...this.values) ?? null) as T | null;
+    this.database.afterRead?.(this.sql);
+    return row;
+  }
   async all<T>() { await this.database.read(this.sql, this.values); return { results: this.database.sqlite.prepare(this.sql).all(...this.values) as T[] }; }
   runSync() {
     const statement = this.database.sqlite.prepare(this.sql);
@@ -25,6 +30,7 @@ class SQLiteD1 {
   readonly sqlite = new DatabaseSync(':memory:');
   readonly calls: { kind: 'read' | 'batch'; sql: string[]; values: (string | number | null)[][] }[] = [];
   beforeRead?: (sql: string) => void;
+  afterRead?: (sql: string) => void;
   beforeBatch?: (statements: SQLiteStatement[]) => void;
   latency = 0;
   private pending = Promise.resolve();
@@ -57,7 +63,7 @@ const compile = (value: string) => transpileWithSharedImports(value, { compilerO
 let source = compile(await readFile(new URL('../lib/store.ts', import.meta.url), 'utf8'))
   .replace("'cloudflare:workers'", JSON.stringify(envUrl)).replace("'zod'", JSON.stringify(import.meta.resolve('zod')))
   .replace("'./notifications'", JSON.stringify(notificationsUrl));
-for (const name of ['model', 'auth', 'activity-scope', 'receipt-lifecycle', 'audit', 'receipt-context', 'receipt-memory-ownership']) {
+for (const name of ['model', 'auth', 'activity-scope', 'receipt-lifecycle', 'receipt-context', 'receipt-memory-ownership']) {
   source = source.replaceAll(`'./${name}'`, JSON.stringify(new URL(`../lib/${name}.ts`, import.meta.url).href));
 }
 const store = await import(dataUrl(source)) as typeof import('../lib/store');
@@ -285,6 +291,89 @@ test('stale and expired cookie provider fallbacks use one coherent indexed auth 
     assert.equal(profile.id, 'legacy'); assert.equal(profile.authMethod, 'chatgpt');
     assert.equal(database.calls.length, 1); assert.equal(database.calls[0].kind, 'read');
   }
+});
+
+test('identity and profile readers agree on linked and unlinked provider fallback after unavailable sessions', async context => {
+  for (const variant of ['missing', 'expired', 'orphaned', 'duplicate']) for (const linked of [false, true]) await context.test(`${variant}-${linked ? 'linked' : 'unlinked'}`, async () => {
+    const database = await storage();
+    let cookie = 'tt_session=' + token;
+    if (variant === 'missing') cookie = 'tt_session=' + 'c'.repeat(43);
+    if (variant === 'expired') database.sqlite.prepare('UPDATE auth_sessions SET expires_at=? WHERE user_id=?').run('2000-01-01T00:00:00Z', 'local-a');
+    if (variant === 'orphaned') {
+      database.sqlite.exec('PRAGMA foreign_keys=OFF');
+      database.sqlite.prepare('UPDATE auth_sessions SET user_id=? WHERE user_id=?').run('missing-session-profile', 'local-a');
+      database.sqlite.exec('PRAGMA foreign_keys=ON');
+    }
+    if (variant === 'duplicate') cookie += '; tt_session=' + tokenB;
+    const headers = linked ? providerHeaders('linked-provider', 'a@example.com') : providerHeaders('legacy', 'legacy@example.com');
+    const input = request({ cookie, ...headers });
+    const expectedId = linked ? 'local-a' : 'legacy';
+    const identity = await resolveIdentity(input, {}, database.asD1());
+    assert.equal(identity.id, expectedId); assert.equal(identity.kind, 'chatgpt');
+    assert.equal(database.calls.length, 1, 'identity precedence and canonical linking share one statement');
+    assert.equal(database.calls[0].kind, 'read');
+    database.calls.length = 0;
+    const context = await readAuthContext(input, database.asD1());
+    assert.deepEqual(context.identity, identity); assert.equal(context.state.profile?.id, expectedId);
+    assert.equal(database.calls.length, 1, 'profile reads use the same fallback policy');
+    database.calls.length = 0;
+    assert.equal(await sessionIdentity(input, database.asD1()), null, 'session-only authorization never accepts provider fallback');
+    assert.equal(database.calls.length, variant === 'duplicate' ? 0 : 1);
+    assert.equal(database.sqlite.prepare('SELECT COUNT(*) AS count FROM account_activity_events').get()!.count, 0);
+  });
+});
+
+test('identity-only snapshots preserve signed-out suppression and explicit provider-only access', async () => {
+  const database = await storage();
+  const headers = providerHeaders('legacy', 'legacy@example.com');
+  const mixed = request({ cookie: 'tt_session=' + token + '; tt_signed_out=1', ...headers });
+  assert.equal((await resolveIdentity(mixed, {}, database.asD1())).id, 'local-a');
+  assert.equal((await sessionIdentity(mixed, database.asD1()))?.id, 'local-a');
+  assert.equal((await resolveIdentity(mixed, { allowSession: false }, database.asD1())).id, 'legacy');
+  database.sqlite.exec('PRAGMA foreign_keys=OFF');
+  database.sqlite.prepare('UPDATE auth_sessions SET user_id=? WHERE user_id=?').run('missing-session-profile', 'local-a');
+  database.sqlite.exec('PRAGMA foreign_keys=ON');
+  await assert.rejects(resolveIdentity(mixed, {}, database.asD1()), /UNAUTHORIZED/);
+  assert.equal((await readAuthContext(mixed, database.asD1())).state.authenticated, false);
+  assert.equal(await sessionIdentity(mixed, database.asD1()), null);
+  assert.equal((await resolveIdentity(mixed, { allowSession: false }, database.asD1())).id, 'legacy');
+});
+
+test('identity-only provider bootstrap is read-only but broken canonical links and legacy disconnection fail closed', async () => {
+  const database = await storage();
+  const fresh = request({ ...providerHeaders('fresh-provider', 'fresh@example.com'), 'oai-authenticated-user-full-name': 'Fresh%20Traveller' });
+  assert.deepEqual(await resolveIdentity(fresh, {}, database.asD1()), { id: 'fresh-provider', email: 'fresh@example.com', displayName: 'Fresh Traveller', kind: 'chatgpt', chatgptId: 'fresh-provider', emailVerified: true });
+  assert.equal(database.calls.length, 1);
+  assert.equal(database.sqlite.prepare('SELECT id FROM profiles WHERE id=?').get('fresh-provider'), undefined);
+  database.sqlite.exec('PRAGMA foreign_keys=OFF');
+  database.sqlite.prepare('INSERT INTO auth_credentials(user_id,email,password_hash,password_salt,iterations,created_at) VALUES(?,?,?,?,?,?)')
+    .run('fresh-provider', 'fresh@example.com', '0'.repeat(64), 'x'.repeat(43), 100_000, '2026-10-04T12:00:00Z');
+  database.sqlite.prepare('INSERT INTO auth_links(oai_user_id,user_id,created_at) VALUES(?,?,?)').run('legacy', 'missing-canonical-profile', '2026-10-04T12:00:00Z');
+  database.sqlite.exec('PRAGMA foreign_keys=ON');
+  await assert.rejects(resolveIdentity(fresh, {}, database.asD1()), /UNAUTHORIZED/, 'orphaned legacy credentials still mean disconnected');
+  await assert.rejects(resolveIdentity(request(providerHeaders('legacy', 'legacy@example.com')), {}, database.asD1()), /UNAUTHORIZED/, 'a broken explicit link cannot resurrect the raw provider profile');
+  assert.equal(database.sqlite.prepare('SELECT COUNT(*) AS count FROM account_activity_events').get()!.count, 0);
+});
+
+test('each identity check observes a fresh atomic principal without switching halfway through fallback', async context => {
+  for (const change of ['session', 'provider-link']) await context.test(change, async () => {
+    const database = await storage();
+    const freshToken = 'c'.repeat(43), freshHash = await hashToken(freshToken);
+    const input = request({ cookie: 'tt_session=' + freshToken, ...providerHeaders('linked-provider', 'a@example.com') });
+    database.afterRead = () => {
+      database.afterRead = undefined;
+      if (change === 'session') database.sqlite.prepare('INSERT INTO auth_sessions(token_hash,user_id,expires_at,created_at) VALUES(?,?,?,?)')
+        .run(freshHash, 'local-b', '2099-01-01T00:00:00Z', '2026-10-04T12:00:00Z');
+      else database.sqlite.prepare('UPDATE auth_links SET user_id=? WHERE oai_user_id=?').run('local-b', 'linked-provider');
+    };
+    const initial = await resolveIdentity(input, {}, database.asD1());
+    assert.equal(initial.id, 'local-a'); assert.equal(initial.email, 'a@example.com'); assert.equal(initial.kind, 'chatgpt');
+    assert.equal(database.calls.length, 1);
+    const current = await resolveIdentity(input, {}, database.asD1());
+    assert.equal(current.id, 'local-b'); assert.equal(current.email, 'b@example.com'); assert.equal(current.kind, change === 'session' ? 'session' : 'chatgpt');
+    assert.notEqual(current.emailVerified, true, 'a changed principal cannot inherit verification from the earlier account');
+    assert.equal(database.calls.length, 2, 'same-request checks do not reuse cached authorization');
+  });
 });
 
 test('a provider link or session winning before the atomic snapshot cannot expose a stale canonical profile', async () => {

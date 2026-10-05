@@ -673,8 +673,11 @@ export async function POST(request: Request) {
             // Receipt observations cannot rewrite confirmed text/prices or
             // reinterpret a traveller's personal cost decisions. Unknown
             // provenance on a saved legacy row is protected as manual input.
+            const blankPlaceholder = !!previous && !previous.name.trim() && previous.amount === 0
+              && previous.quantity === undefined && previous.scanSource === undefined;
             const protectName = !!previous && (previous.fieldSources?.name === 'user' || (previous.fieldSources?.name === undefined && !!previous.name.trim()));
-            const protectAmount = !!previous && (previous.fieldSources?.amount === 'user' || (previous.fieldSources?.amount === undefined && previous.amount !== null && (!!previous.name.trim() || previous.amount !== 0)));
+            const protectAmount = !!previous && (previous.fieldSources?.amount === 'user'
+              || (previous.fieldSources?.amount === undefined && previous.amount !== null && !blankPlaceholder));
             const protectQuantity = !!previous && (previous.fieldSources?.quantity === 'user'
               || (previous.quantity !== undefined && previous.fieldSources?.quantity === undefined));
             if (protectName) next.name = previous!.name;

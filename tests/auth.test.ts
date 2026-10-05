@@ -192,7 +192,7 @@ test('logout still revokes its cookie when the optional identity read fails and 
   const local = await register(database);
   const originalPrepare = database.prepare.bind(database);
   database.prepare = (sql: string) => {
-    if (sql.includes('FROM auth_sessions s JOIN profiles')) throw new Error('PRIVATE_DATABASE_ID and profile contents');
+    if (sql.includes('LEFT JOIN auth_sessions s')) throw new Error('PRIVATE_DATABASE_ID and profile contents');
     return originalPrepare(sql);
   };
   const warnings: unknown[][] = [], originalWarn = console.warn;
