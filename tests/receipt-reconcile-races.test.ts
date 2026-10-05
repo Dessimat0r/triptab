@@ -100,6 +100,23 @@ test('an initial itemisation is confirmed only after its accepted values render'
   assert.equal(editor.editing.items[0].amount, 1400, 'later local edits cannot trigger another automatic fill');
 });
 
+test('queued initial itemisation retains a newer icon choice without delaying transcription', () => {
+  const editor = controller(); editor.initialise(); editor.reconcile();
+  const icon = {symbol:'Palmtree',background:'pink'} as const;
+  editor.change({icon}); editor.flush(); editor.reconcile(); editor.flush();
+  assert.deepEqual(editor.editing.icon,icon);
+  assert.equal(editor.editing.items[0].amount,1200);
+  assert.equal(editor.itemized,true);
+});
+
+test('queued initial itemisation retains a reset to automatic icons', () => {
+  const editor = controller({...blankEditor(),icon:{symbol:'Palmtree',background:'pink'}});
+  editor.initialise(); editor.reconcile(); editor.change({icon:undefined}); editor.flush(); editor.reconcile(); editor.flush();
+  assert.equal(editor.editing.icon,undefined);
+  assert.equal(editor.editing.items[0].amount,1200);
+  assert.equal(editor.itemized,true);
+});
+
 test('detected purchase quantity and its default units populate an untouched editor without overwriting newer local allocations', () => {
   const trip = proposedTrip();
   const quantity = { total: 2, label: 'slices', sourceText: '2 × Stck Pizza' };

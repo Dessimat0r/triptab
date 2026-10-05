@@ -5,6 +5,7 @@ import type { Currency } from "@/lib/model";
 import type { ActivityEvent } from "@/lib/store";
 import { formatMoney } from "@/lib/money-format";
 import { receiptWarningLabel } from "@/lib/receipt-scan";
+import { expenseIconSchema, iconLabel } from "@/lib/expense-icons";
 import "./activity-details.css";
 
 export type ActivityPanelProps = {
@@ -278,6 +279,10 @@ function changes(event: ActivityEvent, currency: Currency | undefined, names: Re
   };
   for (const [key, label] of Object.entries({ name: "Name", title: "Title", currency: "Currency", date: "Transaction date", startDate: "Start date", endDate: "End date", time: "Transaction time", timezone: "Transaction timezone", method: "Payment method", note: "Note", email: "Traveller email" })) add(key, label);
   add("source", "Entry source", value => value === "ai" ? "AI assisted" : value === "manual" ? "Entered manually" : readable(value));
+  add("icon", "Icon & background", value => {
+    const icon = expenseIconSchema.safeParse(value);
+    return icon.success ? iconLabel(icon.data) : value === undefined ? "Automatic suggestion" : readable(value);
+  });
   add("fieldSources", "Receipt field origins");
   add("receiptScan", "Receipt scan review", (value, snapshot) => scanDescription(value, auditText(snapshot.currency) || currency));
   add("status", String(event.entityType) === "invite" ? "Invitation status" : "Review status", value => String(event.entityType) === "invite" && value === "pending" ? "Waiting for the traveller to join" : STATES[auditText(value)] || readable(value));

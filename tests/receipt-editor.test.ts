@@ -395,6 +395,30 @@ test('native reading starts only after image and canonical draft save, and fills
   assert.equal(editor.updates.length,1,'only the waiting draft was saved by the browser');
 });
 
+test('choosing an icon before upload preserves it through the saved draft and initial itemisation', async () => {
+  const editor=controller(blankTrip());editor.newExpense();editor.aiConnected();
+  const icon={symbol:'Palmtree',background:'pink'} as const;editor.edit({icon});
+  editor.network(async url => url.startsWith('/api/receipt?') ? response({receiptId:'new-photo'})
+    : response({data:{trips:[itemizedTrip(editor.trip)]},revision:2}));
+  await editor.captureEditorReceipt(receiptFile());editor.reconcileEditorReceipt(editor.trip);editor.reconcileEditorReceipt(editor.trip);
+  assert.deepEqual(editor.trip.drafts[0].icon,icon);
+  assert.deepEqual(editor.editing?.icon,icon);
+  assert.equal(editor.itemized,true);
+  assert.equal(editor.editing?.items[0].name,'Dinner from image');
+});
+
+test('retaining an incoming proposal for chat keeps the current icon or an explicit automatic reset', async () => {
+  for (const icon of [{symbol:'Palmtree',background:'pink'} as const,undefined]) {
+    const initial=fixture(pending('review'));initial.drafts[0].icon={symbol:'Coffee',background:'gold'};
+    const editor=controller(initial);editor.openExpense(initial.expenses[0]);editor.edit({icon});
+    await editor.checkEditorReceipt();
+    const saved=await editor.storeEditorReceipt(editor.editing!,editor.editing!.receiptId,true);
+    assert.deepEqual(saved?.icon,icon);
+    editor.reviewProcessedReceipt();
+    assert.deepEqual(editor.editing?.icon,icon);
+  }
+});
+
 test('metadata selected before uploading requires review rather than automatic replacement', async () => {
   const editor=controller(blankTrip());editor.newExpense();editor.edit({payer:'b',date:'2026-09-03'});editor.aiConnected();
   editor.network(async url=>url.startsWith('/api/receipt?')?response({receiptId:'new-photo'}):response({data:{trips:[itemizedTrip(editor.trip)]},revision:2}));
