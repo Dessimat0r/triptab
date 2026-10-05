@@ -879,7 +879,6 @@ label > small {
 }
 .editor-body {
   padding: 26px 28px;
-  max-height: calc(100dvh - 265px);
   overflow: auto;
 }
 .editor-body.with-receipt {
@@ -1431,6 +1430,7 @@ input[type="datetime-local"]::-webkit-date-and-time-value {
     align-items: stretch;
   }
   .editor {
+    height: 100dvh;
     max-height: 100dvh;
     border-radius: 0;
     padding: 0;
@@ -1440,7 +1440,6 @@ input[type="datetime-local"]::-webkit-date-and-time-value {
   }
   .editor-body {
     padding: 20px 18px;
-    max-height: calc(100dvh - 185px);
   }
   .editor-body.with-receipt {
     display: block;

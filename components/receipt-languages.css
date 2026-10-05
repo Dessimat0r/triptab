@@ -1,6 +1,10 @@
-.item-bilingual-names { min-width: 0; max-width: 100%; flex: 1 1 0; display: grid; gap: 4px; }
-.item-name-row { display: flex; gap: 6px; min-width: 0; align-items: flex-end; }
-.item-name-field { flex: 1 1 0; min-width: 0; }
+/* Both name rows share one action column, so the name inputs and the display
+   select line up at the same width whichever row shows a Translate label. */
+.item-bilingual-names { min-width: 0; max-width: 100%; flex: 1 1 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 6px; align-items: end; }
+.item-bilingual-names > :not(.item-name-row) { grid-column: 1 / -1; }
+.item-bilingual-names > .item-language-actions { grid-column: 1; }
+.item-name-row { display: contents; }
+.item-name-field { min-width: 0; }
 .item-name-field input { width: 100%; min-width: 0; margin: 0; }
 .item-name-field .item-name-caption { display: block; color: var(--muted); font-size: 0.875rem; font-weight: 400; line-height: 1.4; overflow-wrap: anywhere; }
 .editor .item-name-row--alternate input { font-size: 0.875rem; padding: 7px 9px; }
@@ -8,7 +12,7 @@
 .editor .translation-refresh { display: inline-flex; align-items: center; justify-content: center; gap: 6px; flex: 0 0 auto; width: auto; min-width: 44px; min-height: 44px; padding: 8px; font-size: 0.875rem; }
 .item-language-actions { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; min-width: 0; }
 .editor .item-language-actions { contain: layout; }
-.item-language-actions select { width: auto; max-width: 100%; margin: 0; padding: 4px 24px 4px 6px; font-size: 0.875rem; min-height: 44px; color: var(--muted); background-color: transparent; }
+.item-language-actions select { flex: 1 1 100%; width: 100%; max-width: 100%; margin: 0; padding: 4px 24px 4px 6px; font-size: 0.875rem; min-height: 44px; color: var(--muted); background-color: transparent; }
 .editor .translation-undo { min-height: 44px; padding: 4px 6px; font-size: 0.875rem; display: inline-flex; align-items: center; gap: 4px; }
 .translation-stale { color: var(--muted); }
 .translation-spinner { animation: translation-spin 1s linear infinite; }
@@ -31,6 +35,10 @@
   .editor .item-top { align-items: start; }
   .editor .item-top > .moneyinput { grid-column: 2; grid-row: 2; }
   .editor .item-top > .iconbutton { grid-column: 3; grid-row: 2; }
+  /* Icon-only refresh keeps the name fields level with the amount field. */
+  .editor .item-bilingual-names { column-gap: 8px; }
+  .editor .item-bilingual-names .translation-refresh { width: 44px; padding: 8px 0; }
+  .editor .item-bilingual-names .translation-refresh > span { display: none; }
   .personal-language-settings .fieldpair { grid-template-columns: minmax(0,1fr); }
 }
 @media (prefers-reduced-motion: reduce) { .translation-spinner { animation: none; } }

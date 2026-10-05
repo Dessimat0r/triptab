@@ -90,3 +90,42 @@
 @media (max-width: 480px) {
   .receipt-photo-dialog { max-height: calc(100dvh - 20px); padding: 16px; }
 }
+/* The dialog is a column: heading, view switch and footer keep their size and
+   the body takes exactly the remaining height, so there is one scroll area and
+   no fixed height guesses that leave the dialog itself scrolling. Positioning
+   the scroll containers keeps visually hidden (absolute) labels inside them;
+   otherwise they resolve against the fixed overlay and stretch its scroll area
+   far below the dialog. */
+.editor {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+.editor form,
+.receipt-details-view:not([hidden]) {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.editor form > *,
+.receipt-details-view > * {
+  flex-shrink: 0;
+}
+.editor .editor-body,
+.editor .receipt-history-view {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+}
+/* Too short for a useful inner scroll area (landscape phones): scroll the
+   whole dialog instead, keeping the footer pinned. */
+@media (max-height: 560px) {
+  .editor .editor-body,
+  .editor .receipt-history-view {
+    flex: none;
+    overflow: visible;
+  }
+}

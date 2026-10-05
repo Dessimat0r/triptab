@@ -6,7 +6,14 @@ const translatedName = 'An English receipt item description '.repeat(5);
 const trip = {
   id: 'layout-trip', ownerId: 'layout-owner', name: 'Layout fixture', currency: 'GBP', receiptLanguage: 'de',
   members: [{ id: 'layout-alex', name: memberName, userId: 'layout-owner' }, { id: 'layout-sam', name: 'Sam' }],
-  expenses: [], payments: [], drafts: [{
+  expenses: [{
+    id: 'layout-expense', title: 'Dinner by the harbour', date: '2026-10-05', time: '20:00', timezone: 'America/Argentina/Buenos_Aires',
+    currency: 'EUR', payer: 'layout-alex', tax: 0, tip: 0, discount: 0,
+    items: [
+      { id: 'layout-expense-item', name: originalName, amount: 1250, members: ['layout-alex', 'layout-sam'] },
+      { id: 'layout-expense-wine', name: 'Wein', amount: 2000, members: ['layout-alex'] },
+    ],
+  }], payments: [], drafts: [{
     id: 'layout-draft', receiptId: 'layout-photo', title: 'Receipt fixture', status: 'review',
     currency: 'EUR', date: '2026-10-05', time: '23:59', timezone: 'America/Argentina/Buenos_Aires',
     payer: 'layout-alex', tax: 0, tip: 0, discount: 0, detectedLanguage: 'de',
@@ -40,7 +47,14 @@ async function fits(page: Page) {
     const body = editor.querySelector<HTMLElement>('.editor-body')!;
     const bounds = body.getBoundingClientRect();
     const dialogBounds = editor.getBoundingClientRect();
-    const containers = [editor.closest('.editor-overlay')!, editor, body];
+    const overlay = editor.closest('.editor-overlay')!;
+    const containers = [overlay, editor, body];
+    const fields = Array.from(editor.querySelectorAll<HTMLElement>('.item-top input, .item-top select'))
+      .filter(element => element.getClientRects().length);
+    const itemRows = Array.from(editor.querySelectorAll<HTMLElement>('.item-top')).map(row =>
+      new Set(Array.from(row.querySelectorAll<HTMLElement>('input, select'))
+        .filter(element => element.getClientRects().length && fields.includes(element))
+        .map(element => Math.round(element.getBoundingClientRect().right))).size);
     const outside = Array.from(body.querySelectorAll<HTMLElement>('input, select, textarea, button, img')).filter(element => {
       const rect = element.getBoundingClientRect();
       return rect.width > 0 && (rect.left < bounds.left - 1 || rect.right > bounds.right + 1);
@@ -54,6 +68,9 @@ async function fits(page: Page) {
       right: dialogBounds.right,
       viewport: innerWidth,
       pageOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      overlayScroll: overlay.scrollHeight - overlay.clientHeight,
+      overlayScrollX: overlay.scrollWidth - overlay.clientWidth,
+      itemRows,
       clipping: containers.map(element => getComputedStyle(element).overflowX),
       swipePolicy: containers.map(element => getComputedStyle(element).overscrollBehaviorX),
     };
@@ -65,6 +82,11 @@ async function fits(page: Page) {
   expect(result.left).toBeGreaterThanOrEqual(-1);
   expect(result.right).toBeLessThanOrEqual(result.viewport + 1);
   expect(result.pageOverflow).toBeLessThanOrEqual(1);
+  // Hidden labels must not stretch the overlay into blank space below the dialog.
+  expect(result.overlayScroll).toBeLessThanOrEqual(1);
+  expect(result.overlayScrollX).toBeLessThanOrEqual(1);
+  // Each item's name, display and amount fields share one right edge on phones.
+  if (result.viewport <= 480) for (const edges of result.itemRows) expect(edges).toBe(1);
   for (const overflow of result.clipping) expect(overflow).not.toMatch(/hidden|clip/);
   expect(result.swipePolicy).toEqual(['auto', 'auto', 'auto']);
 }
@@ -83,11 +105,16 @@ const viewports = [
 for (const { width, height, touch } of viewports) {
   test.describe(`${width}×${height}${touch ? ' touch' : ''}`, () => {
     test.use({ viewport: { width, height }, hasTouch: touch, isMobile: touch });
-    for (const receipt of [false, true]) {
-      test(`${receipt ? 'receipt' : 'manual expense'} fits without clipping`, async ({ page }) => {
+    for (const mode of ['manual', 'edit', 'receipt'] as const) {
+      const receipt = mode === 'receipt';
+      test(`${receipt ? 'receipt' : mode === 'edit' ? 'edited expense' : 'manual expense'} fits without clipping`, async ({ page }) => {
         await fixtures(page);
         await page.goto(receipt ? '/expenses?receiptDraft=layout-draft&receiptTrip=layout-trip' : '/expenses');
-        if (!receipt) await page.getByRole('button', { name: 'Add expense', exact: true }).click();
+        if (mode === 'manual') await page.getByRole('button', { name: 'Add expense', exact: true }).click();
+        if (mode === 'edit') {
+          await page.locator('.expense-open').first().click();
+          await expect(page.getByRole('heading', { name: 'Edit expense', exact: true })).toBeVisible();
+        }
         await expect(page.locator('.editor')).toBeVisible();
         await expect(page.getByRole('combobox', { name: 'Show first for item 1', exact: true })).toBeEnabled();
         if (receipt) {
