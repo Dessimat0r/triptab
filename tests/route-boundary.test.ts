@@ -49,7 +49,7 @@ test('the production framework routes unknown URLs outside the persistent ledger
   const root = fileURLToPath(new URL('../app/layout.tsx', import.meta.url));
   const ledger = fileURLToPath(new URL('../app/(ledger)/layout.tsx', import.meta.url));
   const missing = fileURLToPath(new URL('../app/[...missing]/page.tsx', import.meta.url));
-  for (const url of ['/unknown', '/unknown/nested', '/api/unknown']) {
+  for (const url of ['/unknown', '/unknown/nested']) {
     const match = matchAppRoute(url, routes);
     assert(match);
     assert.equal(match.route.pagePath, missing);
@@ -60,5 +60,22 @@ test('the production framework routes unknown URLs outside the persistent ledger
     assert(match);
     assert.notEqual(match.route.pagePath, missing, 'the catch-all must not replace a real section route');
     assert.deepEqual(match.route.layouts, [root, ledger]);
+  }
+});
+
+
+test('unknown API paths return a JSON 404 without loading holiday state', async () => {
+  const routes = await appRouter(fileURLToPath(new URL('../app', import.meta.url)));
+  const route = fileURLToPath(new URL('../app/api/[...missing]/route.ts', import.meta.url));
+  for (const url of ['/api/unknown', '/api/unknown/nested']) {
+    const match = matchAppRoute(url, routes); assert(match);
+    assert.equal(match.route.routePath, route);
+  }
+  const handlers = await import('../app/api/[...missing]/route');
+  for (const handler of [handlers.GET, handlers.POST, handlers.PATCH, handlers.DELETE]) {
+    const response = handler(); assert.equal(response.status, 404);
+    assert.equal(response.headers.get('Cache-Control'), 'no-store');
+    assert.match(response.headers.get('Content-Type') || '', /application\/json/);
+    assert.deepEqual(await response.json(), {error:'This API endpoint does not exist.'});
   }
 });

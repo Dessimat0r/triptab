@@ -135,6 +135,7 @@ export default function Home({ children }: { children: ReactNode }) {
     [loading, setLoading] = useState(true),
     [saving, setSaving] = useState(false),
     [error, setError] = useState(""),
+    [refreshError, setRefreshError] = useState(""),
     [auth, setAuth] = useState(false),
     [authMode, setAuthMode] = useState<"register" | "login">("register"),
     [linkRequested, setLinkRequested] = useState(false),
@@ -175,17 +176,17 @@ export default function Home({ children }: { children: ReactNode }) {
     latestSnapshot.current = snapshot;
     savedEtag.current = etag;
     setActivityRefreshKey(etag || snapshot.revision);
-    setLedger(snapshot.data); setRevision(snapshot.revision); setLastRefreshed(new Date());
+    setLedger(snapshot.data); setRevision(snapshot.revision); setLastRefreshed(new Date()); setRefreshError("");
     if (invalidateRefresh) { loadRequest.current++; setLoading(false); }
     return true;
   }, []);
   const trip = ledger.trips.find((t) => t.id === selected) || ledger.trips[0];
   const { confirm, dialog: confirmationDialog, confirming } = useConfirmation(`${trip?.id || ""}:${profile?.id || ""}`);
-  const load = useCallback(async (options?: { background?: boolean }) => {
+  const load = useCallback(async (options?: { background?: boolean; fresh?: boolean }) => {
     const pending = inFlightLoad.current;
     // Background refreshes share the active request. A foreground action starts
     // a fresh read if the pending request began before it in the background.
-    if (pending?.requestId === loadRequest.current && (!pending.background || options?.background)) {
+    if (!options?.fresh && pending?.requestId === loadRequest.current && (!pending.background || options?.background)) {
       if (!options?.background) setLoading(true);
       return pending.promise;
     }
@@ -207,6 +208,7 @@ export default function Home({ children }: { children: ReactNode }) {
             setRevision(unchangedRevision);
           }
           setLastRefreshed(new Date());
+          setRefreshError("");
           return latestSnapshot.current;
         }
         if (r.status === 401) {
@@ -217,6 +219,7 @@ export default function Home({ children }: { children: ReactNode }) {
           setRevision(0);
           setActivityRefreshKey(0);
           setProfile(null);
+          setRefreshError("");
           return;
         }
         const b = (await r.json()) as { data: Ledger; revision: number; error: string };
@@ -233,7 +236,10 @@ export default function Home({ children }: { children: ReactNode }) {
       } catch (e) {
         // Silent refreshes must preserve local validation and editor messages.
         // A foreground refresh still reports a failed user-requested operation.
-        if (requestId === loadRequest.current && !options?.background) setError(e instanceof Error ? e.message : "Unable to load your ledger");
+        if (requestId === loadRequest.current) {
+          if (options?.background) setRefreshError("Refresh failed. Showing the last loaded amounts.");
+          else setError(e instanceof Error ? e.message : "Unable to load your ledger");
+        }
       } finally {
         if (requestId === loadRequest.current) setLoading(false);
       }
@@ -925,7 +931,7 @@ export default function Home({ children }: { children: ReactNode }) {
   async function reviewRestore(event: ActivityEvent) {
     setReceiptHistoryOpen(false);
     if (!trip || !event.before || event.tripId !== trip.id) return;
-    const fresh = await load();
+    const fresh = await load({ fresh: true });
     const current = fresh?.data.trips.find(value => value.id === trip.id);
     if (!current) return;
     if (event.entityType === "payment") {
@@ -1294,7 +1300,7 @@ export default function Home({ children }: { children: ReactNode }) {
                       </div>
                       <TripSharing key={`${trip.id}:${profile?.id || "anonymous"}`} trip={trip} profile={profile} onChanged={load} />
                       <TripDetails key={trip.id} trip={trip} busy={saving || loading} error={error} onSave={updateTrip} />
-                      <DataExport tripId={trip.id} compact />
+                      <DataExport key={`${profile?.id || "anonymous"}:${trip.id}`} tripId={trip.id} compact />
                     </>
                   );
     }
@@ -1421,7 +1427,7 @@ export default function Home({ children }: { children: ReactNode }) {
                 setInvite("");
                 replaceEntryUrl("/expenses");
                 setSelected(id);
-                await load();
+                await load({ fresh: true });
                 fetch("/api/profile")
                   .then((r) => r.json())
                   .then((b: unknown) => {
@@ -1442,6 +1448,7 @@ export default function Home({ children }: { children: ReactNode }) {
                   : "Create a holiday, add your people, and keep the tabs fair."}
               </p>
               {trip && lastRefreshed && <small className="muted">Refreshed {lastRefreshed.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}</small>}
+              {trip && refreshError && <small className="error" role="status">{refreshError} <button className="quiet" disabled={loading} onClick={() => void load({ background: true, fresh: true })}>Retry refresh</button></small>}
             </div>
             {trip && (
               <button
