@@ -43,3 +43,10 @@ test('unfinished adjustment decimal retains its earlier finite value on blur', (
   assert.equal(amount.value, 250); assert.equal(amount.text, '2.50');
   assert(amount.changes.every(value => value === null || Number.isSafeInteger(value)));
 });
+
+test('focus, blur and equivalent decimal formatting never manufacture human confirmation', () => {
+  const amount=control(1200,true); amount.blur(); amount.change('12.0'); amount.blur();
+  assert.deepEqual(amount.changes,[]);
+  amount.change('12.01'); amount.blur();
+  assert.deepEqual(amount.changes,[1201]);
+});

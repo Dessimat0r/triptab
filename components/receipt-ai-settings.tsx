@@ -67,9 +67,6 @@ async function settingsResponseError(response: Response, operation: SettingsOper
     if (body && typeof body === "object") code = (body as Record<string, unknown>).code;
   } catch { /* A proxy can return HTML or an empty response. Use status only. */ }
   if (typeof code === "string" && Object.prototype.hasOwnProperty.call(requestErrorText, code)) return new SettingsRequestError(requestErrorText[code]);
-  if (code === "key_check_failed") return new SettingsRequestError(response.status === 400
-    ? "OpenAI did not accept this key. Check the key and its project permissions, then try again."
-    : "OpenAI could not verify the key right now. Try again shortly.");
   if (code === "receipt_ai_error" && response.status === 400 && operation === "save-key") return new SettingsRequestError(requestErrorText.key_invalid_format);
   if (response.status === 401) return new SettingsRequestError("Your sign-in has expired. Sign in again and reopen Your account.");
   if (response.status === 403) return new SettingsRequestError("This change was not permitted. Reopen Your account and try again.");
@@ -177,6 +174,7 @@ export default function ReceiptAISettings({
       });
       if (!response.ok) throw await settingsResponseError(response, operation);
       if (controller.signal.aborted || request.current !== controller) return;
+      if (operation === "save-key") setApiKey("");
       updated = true;
       changed();
       setNotice(success);
@@ -252,14 +250,13 @@ export default function ReceiptAISettings({
           event.preventDefault();
           if (active.current || !apiKey.trim()) return;
           const submittedKey = apiKey.trim();
-          setApiKey("");
           void update({ apiKey: submittedKey }, "POST", "API key saved.");
         }}>
           <label htmlFor={`${id}-api-key`}>{settings.apiConnected ? "Replace OpenAI API key" : "OpenAI API key"}
             <input id={`${id}-api-key`} name="receipt-ai-api-key" type="password" value={apiKey} autoComplete="off" autoCapitalize="none" autoCorrect="off" spellCheck={false}
               required maxLength={512} disabled={busy} aria-describedby={`${id}-key-hint`} onChange={event => setApiKey(event.target.value)} />
           </label>
-          <small id={`${id}-key-hint`} className="muted">Use a key created in your TripTab OpenAI project. The shared key is encrypted on the server and never shown again. This field clears after submission.</small>
+          <small id={`${id}-key-hint`} className="muted">Use a key created in your TripTab OpenAI project. The shared key is encrypted on the server and never shown again. This field clears after the key is saved.</small>
           <button type="submit" className="quiet" disabled={busy || !apiKey.trim()}>{busy ? "Saving…" : (settings.apiConnected ? "Replace API key" : "Save API key")}</button>
         </form>}
         {settings.apiConnected && <button type="button" className="quiet danger" disabled={busy} onClick={() => void update(undefined, "DELETE", "API key removed.")}><Trash2 size={17} aria-hidden="true" />Remove API key</button>}

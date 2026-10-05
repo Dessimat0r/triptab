@@ -8,10 +8,14 @@ type PushEnvironment = {
   VAPID_SUBJECT?: string;
 };
 type Subscription = { endpoint: string; user_id: string; generation: string };
+type ScheduledSubscription = Subscription & { created_at: string; latest_recency: string };
 type NotificationRow = { id: string; title: string; body: string; url: string; created_at: string };
 
 const subscriptionsPerUser = 5;
-const sendTimeoutMs = 5000;
+const sendTimeoutMs = 3000;
+const pushAttemptsPerUpdate = 40;
+const pushConcurrency = 6;
+const deliveryBudgetMs = 24000;
 const PUSH_COOKIE = 'tt_push';
 let importedKey: { secret: string; key: Promise<CryptoKey> } | undefined;
 
@@ -97,12 +101,25 @@ export async function subscribe(user: string, rawEndpoint: unknown) {
   ]);
   if (!results[1].meta.changes) {
     // A concurrent identical enable may already have committed its own event.
-    const current = await database.prepare('SELECT user_id FROM push_subscriptions WHERE endpoint = ?').bind(endpoint).first<{ user_id: string }>();
-    if (current?.user_id === user) return;
+    const current = await database.prepare('SELECT user_id, generation, created_at FROM push_subscriptions WHERE endpoint = ?').bind(endpoint).first<{ user_id: string; generation: string; created_at: string }>();
+    if (current?.user_id === user) {
+      // This is delivery housekeeping, not another opt-in or a new binding.
+      // Keep this binding's generation; the guard protects any replacement.
+      const refreshed = await database.prepare('UPDATE push_subscriptions SET created_at = MAX(created_at, ?) WHERE endpoint = ? AND user_id = ? AND generation = ?')
+        .bind(dispatchRecency([current.created_at]), endpoint, user, current.generation).run();
+      if (refreshed.meta.changes || await ownsSubscription(user, endpoint)) return;
+      throw new RequestError('Notification settings changed. Refresh and try again.', 409);
+    }
     if (current) throw new RequestError('This browser subscription belongs to another account. Reset browser notifications before enabling them here.', 409);
     if (await subscriptionCount(user) >= subscriptionsPerUser) throw new RequestError('Notifications are already enabled on five browsers. Disable one before adding another.');
     throw new RequestError('Unable to register this browser subscription.', 409);
   }
+}
+
+/** created_at tracks registration/dispatch recency; it is not an audit timestamp. */
+function dispatchRecency(previous: readonly string[]) {
+  const times = previous.map(value => Date.parse(value)).filter(Number.isFinite);
+  return new Date(Math.max(Date.now(), ...times.map(value => value + 1))).toISOString();
 }
 
 export async function unsubscribe(user: string, rawEndpoint: unknown) {
@@ -203,7 +220,7 @@ async function vapidAuthorization(endpoint: string) {
   return `vapid t=${unsigned}.${base64url(signature)},k=${config.VAPID_PUBLIC_KEY}`;
 }
 
-async function sendPush(subscription: Subscription) {
+async function sendPush(subscription: Subscription, timeoutMs = sendTimeoutMs) {
   try {
     const endpoint = validatePushEndpoint(subscription.endpoint);
     const response = await fetch(endpoint, {
@@ -211,7 +228,7 @@ async function sendPush(subscription: Subscription) {
       headers: { Authorization: await vapidAuthorization(endpoint), TTL: '3600', Urgency: 'normal' },
       body: '',
       redirect: 'manual',
-      signal: AbortSignal.timeout(sendTimeoutMs),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     if (response.status >= 300 && response.status < 400) {
       await response.body?.cancel().catch(() => {});
@@ -228,6 +245,7 @@ async function sendPush(subscription: Subscription) {
 }
 
 async function deliverNotifications(tripId: string, actor: string, title: string, body: string) {
+  const deadline = Date.now() + deliveryBudgetMs;
   try {
     const memberResult = await db().prepare('SELECT user_id FROM memberships WHERE trip_id = ? AND user_id <> ? LIMIT 50').bind(tripId, actor).all<{ user_id: string }>();
     const users = [...new Set((memberResult.results ?? []).map(member => member.user_id))];
@@ -247,12 +265,32 @@ async function deliverNotifications(tripId: string, actor: string, title: string
     if (!pushConfiguration().enabled) return;
     const recipients = users.filter(user => !throttled.has(user));
     if (!recipients.length) return;
-    const result = await db().prepare(`SELECT endpoint, user_id, generation FROM push_subscriptions WHERE user_id IN (${recipients.map(() => '?').join(',')}) ORDER BY created_at DESC LIMIT 40`).bind(...recipients).all<Subscription>();
+    const result = await db().prepare(`SELECT endpoint, user_id, generation, created_at, latest_recency FROM (
+      SELECT endpoint, user_id, generation, created_at,
+        ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY created_at, endpoint) AS device_rank,
+        MAX(created_at) OVER (PARTITION BY user_id) AS user_recency,
+        MAX(created_at) OVER () AS latest_recency
+      FROM push_subscriptions WHERE user_id IN (${recipients.map(() => '?').join(',')})
+    ) ORDER BY device_rank, user_recency, user_id, created_at, endpoint LIMIT ?`).bind(...recipients, pushAttemptsPerUpdate).all<ScheduledSubscription>();
     const subscriptions = result.results ?? [];
-    // Eight concurrent requests and five-second deadlines fit within the
-    // Workers background lifetime. Every member still receives an inbox entry.
-    for (let index = 0; index < subscriptions.length; index += 8) {
-      await Promise.all(subscriptions.slice(index, index + 8).map(sendPush));
+    if (!subscriptions.length || Date.now() >= deadline) return;
+    // Persist reservations so large groups rotate across updates, rather than
+    // repeatedly selecting the newest forty devices. Prefer one per traveller
+    // before extra devices. Re-registration/replacement defeats stale reservations.
+    const recency = Date.parse(dispatchRecency(subscriptions.map(subscription => subscription.latest_recency)));
+    const reservations = await db().batch(subscriptions.map((subscription, index) =>
+      db().prepare('UPDATE push_subscriptions SET created_at = ? WHERE endpoint = ? AND user_id = ? AND generation = ? AND created_at = ?')
+        // Distinct ordered timestamps prevent user-ID ties from repeatedly
+        // favouring the same travellers when more than forty are eligible.
+        .bind(new Date(recency + index).toISOString(), subscription.endpoint, subscription.user_id, subscription.generation, subscription.created_at)));
+    const scheduled = subscriptions.filter((_, index) => reservations[index].meta.changes);
+    // Push is best effort: at most forty requests, six at once, within the
+    // Workers background lifetime. Every traveller still receives an inbox entry;
+    // remaining devices are prioritised on subsequent unthrottled updates.
+    for (let index = 0; index < scheduled.length; index += pushConcurrency) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) break;
+      await Promise.all(scheduled.slice(index, index + pushConcurrency).map(subscription => sendPush(subscription, Math.min(sendTimeoutMs, remaining))));
     }
   } catch {
     console.warn('TripTab could not send a holiday update notification.');

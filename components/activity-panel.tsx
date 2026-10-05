@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { Currency } from "@/lib/model";
 import type { ActivityEvent } from "@/lib/store";
 import { formatMoney } from "@/lib/money-format";
+import { receiptWarningLabel } from "@/lib/receipt-scan";
 import "./activity-details.css";
 
 export type ActivityPanelProps = {
@@ -202,7 +203,7 @@ function scanDescription(value: unknown, currency: string | undefined): string {
   const scan = auditRecord(value);
   if (!scan) return "No recorded scan evidence";
   const labels: Record<string, string> = { matched: "Matches printed total", "needs-review": "Needs review", incomplete: "Incomplete receipt evidence" };
-  const warnings = entries(scan.warnings).map(warning => `${warning.resolved ? "Reviewed" : "Needs review"}: ${auditText(warning.message) || auditText(warning.code)}${warning.itemId ? ` (item ${auditText(warning.itemId)})` : ""}`);
+  const warnings = entries(scan.warnings).map(warning => `${warning.resolved ? "Reviewed" : "Needs review"}: ${auditText(warning.message) || receiptWarningLabel(auditText(warning.code))}${warning.itemId ? ` (item ${auditText(warning.itemId)})` : ""}`);
   const lines = entries(scan.sourceLines).map(line => `${typeof line.lineIndex === "number" ? `Line ${line.lineIndex + 1}: ` : ""}${auditText(line.observedText) || auditText(line.kind)}${typeof line.amount === "number" ? ` · ${money(line.amount, currency)}` : ""}${line.mappedTo ? ` · ${auditText(line.mappedTo)}` : ""}`);
   return [labels[auditText(scan.status)] || "Status not recorded",
     `Printed subtotal: ${money(scan.printedSubtotal, currency)}`,
@@ -212,6 +213,7 @@ function scanDescription(value: unknown, currency: string | undefined): string {
     ...(warnings.length ? ["Warnings:", ...warnings] : []),
     ...(lines.length ? ["Source lines:", ...lines] : []),
     ...(scan.acknowledgement ? ["Participant explicitly accepted this total difference"] : []),
+    ...(scan.missingTotalAcknowledgement ? ["Participant reviewed every line because the printed total was unavailable"] : []),
     ...(scan.processor ? [`Processed by: ${auditText(scan.processor)}`] : []),
     ...(scan.processedAt ? [`Processed at: ${auditTimestamp(scan.processedAt, true)}`] : []),
     ...(Array.isArray(scan.imageIds) ? [`Source images: ${scan.imageIds.map(auditText).join(", ")}`] : []),
@@ -374,7 +376,8 @@ function ActivityDetailBody({ event, currency, memberNames, actorMemberNames }: 
       </>}
     </dl>
     <p className="footnote">Traveller references use current holiday names with stable IDs. Message authors retain their recorded names.</p>
-    <ActivityChanges fields={fields} before={!!event.before} after={!!event.after} />
+    {event.snapshotOmitted ? <p className="footnote">The full before and after details are too large for this history page. They remain saved. <a href={event.snapshotDownload} download>Download full shared history entry</a> to inspect the original snapshots, including shared traveller contacts.</p>
+      : <ActivityChanges fields={fields} before={!!event.before} after={!!event.after} />}
   </>;
 }
 

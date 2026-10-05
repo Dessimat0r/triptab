@@ -3,7 +3,7 @@ import { z } from 'zod';
 const amount = z.number().int().min(0).max(100000000);
 const identifier = z.string().min(1).max(100);
 const confidence = z.enum(['high', 'medium', 'low']);
-const source = z.enum(['default', 'receipt', 'user']);
+const source = z.enum(['default', 'receipt', 'ai', 'user']);
 export const scanSourceSchema = z.object({
   lineIndex: z.number().int().min(0).max(1000).optional(),
   observedText: z.string().max(1000).optional(),
@@ -19,7 +19,7 @@ export const itemFieldSourcesSchema = z.object({
 }).strict();
 export const fieldSourcesSchema = z.object({
   title: source.optional(), currency: source.optional(), date: source.optional(), time: source.optional(),
-  timezone: z.enum(['default', 'user']).optional(), payer: z.enum(['default', 'user']).optional(),
+  timezone: z.enum(['default', 'ai', 'user']).optional(), payer: z.enum(['default', 'ai', 'user']).optional(),
   tax: source.optional(), tip: source.optional(), discount: source.optional(),
 }).strict();
 export const RECEIPT_SCAN_WARNING_CODES = [
@@ -56,11 +56,44 @@ export const receiptScanSchema = z.object({
   processor: z.string().min(1).max(80).optional(),
   attemptId: identifier.optional(), imageIds: z.array(identifier).max(6).optional(),
   acknowledgement: z.object({ fingerprint: z.string().regex(/^scan-v1:[a-f0-9]{64}$/) }).strict().optional(),
+  // A human may review a receipt whose printed total is absent/unreadable.
+  // Keep the unknown evidence and incomplete status rather than inventing it.
+  missingTotalAcknowledgement: z.object({ fingerprint: z.string().regex(/^scan-v1:[a-f0-9]{64}$/) }).strict().optional(),
 }).strict();
 export type ReceiptScan = z.infer<typeof receiptScanSchema>;
 export type ReceiptScanWarning = z.infer<typeof receiptScanWarningSchema>;
 export type ScanSource = z.infer<typeof scanSourceSchema>;
 export type FieldSources = z.infer<typeof fieldSourcesSchema>;
+export type ReceiptSourceLine = z.infer<typeof sourceLineSchema>;
+
+/** Source ordinals are observations, not stable identities across rescans. */
+export function mergeReceiptSourceLines(previous: ReceiptSourceLine[] = [], incoming: ReceiptSourceLine[] = []): ReceiptSourceLine[] {
+  const identity = (line: ReceiptSourceLine) => canonical({ observedText: line.observedText, kind: line.kind,
+    amount: line.amount, ...(!line.observedText && line.amount === undefined ? { lineIndex: line.lineIndex } : {}) });
+  const lines = [...previous];
+  const used = new Set<number>();
+  for (const line of incoming) {
+    // Match occurrences one-to-one against the previous scan only. Two
+    // identical coupons/tax lines on one photo are two physical observations.
+    const index = previous.findIndex((value, position) => !used.has(position) && identity(value) === identity(line));
+    if (index < 0) lines.push(line);
+    else { used.add(index); lines[index] = { ...previous[index], ...line }; }
+  }
+  return lines;
+}
+
+const warningLabels: Record<ReceiptScanWarning['code'], string> = {
+  'missing-printed-total': 'Printed total is unavailable', 'unreadable-amount': 'Item price is unreadable',
+  'uncertain-description': 'Item description needs checking', 'ambiguous-currency': 'Original currency needs confirmation',
+  'subtotal-mismatch': 'Item prices differ from the printed subtotal', 'total-mismatch': 'Itemised total differs from the printed total',
+  'possible-duplicate': 'Possible duplicate receipt lines', 'unmapped-adjustment': 'Unresolved discount, refund or charge',
+  'included-tax-ambiguous': 'Tax may already be included', 'image-may-be-incomplete': 'Receipt image may be incomplete',
+  'low-confidence': 'Receipt detail needs checking', 'unassigned-item': 'Item needs people assigned',
+  'currency-mismatch': 'Original currency differs from the printed currency',
+};
+export function receiptWarningLabel(code: string): string {
+  return warningLabels[code as ReceiptScanWarning['code']] || 'Receipt detail needs checking';
+}
 
 export type ScannableReceipt = {
   currency: string | null;
@@ -107,8 +140,9 @@ export function reconcileReceiptScan(entry: ScannableReceipt): ReceiptScan | und
     if (warning.code === 'possible-duplicate' && warning.lineIndex !== undefined
       && (sourceGroups.get(warning.lineIndex)?.length || 0) < 2) continue;
     if (warning.code === 'unmapped-adjustment' && warning.lineIndex !== undefined) {
-      const line = scan.sourceLines?.find(candidate => candidate.lineIndex === warning.lineIndex);
-      if (line?.mappedTo && line.mappedTo !== 'unmapped') continue;
+      const lines = scan.sourceLines?.filter(candidate => warning.observedText
+        ? candidate.observedText === warning.observedText : candidate.lineIndex === warning.lineIndex) || [];
+      if (lines.length && lines.every(line => line.mappedTo && line.mappedTo !== 'unmapped')) continue;
     }
     if (warning.code === 'ambiguous-currency' && !entry.currency) continue;
     if (warning.code === 'ambiguous-currency' && entry.currency && entry.fieldSources?.currency === 'user') continue;
@@ -243,10 +277,14 @@ function sha256(value: string): string {
 }
 
 export function receiptScanFingerprint(entry: ScannableReceipt): string {
-  const scan = entry.receiptScan;
+  // UI acknowledgement and server validation hash the same derived evidence,
+  // even after an edit has removed a stale warning from the stored scan.
+  const scan = reconcileReceiptScan(entry);
+  const financialSources = Object.fromEntries(Object.entries(entry.fieldSources || {})
+    .filter(([field]) => ['currency', 'tax', 'tip', 'discount'].includes(field)));
   return `scan-v1:${sha256(canonical({ currency: entry.currency, items: entry.items,
     tax: entry.tax, tip: entry.tip, discount: entry.discount, percentages: entry.percentages,
-    fieldSources: entry.fieldSources,
+    fieldSources: Object.keys(financialSources).length ? financialSources : undefined,
     receiptScan: scan && { version: scan.version, printedCurrency: scan.printedCurrency, printedSubtotal: scan.printedSubtotal,
       printedTotal: scan.printedTotal, sourceLines: scan.sourceLines, fieldSources: scan.fieldSources,
       warnings: scan.warnings.filter(warning => !generatedCodes.has(warning.code) && warning.code !== 'unassigned-item'),
@@ -259,15 +297,27 @@ export function receiptScanSaveError(entry: ScannableReceipt, options: {
 } = {}): string | null {
   const scan = reconcileReceiptScan(entry);
   if (!scan) return null;
-  if (scan.status === 'incomplete') return 'Complete unreadable receipt values, confirm the currency and enter the printed receipt total before saving.';
-  const unresolved = scan.warnings.filter(warning => !warning.resolved && warning.code !== 'unassigned-item');
+  if (!entry.items.length || !entry.currency || entry.items.some(item => item.amount === null || !item.name.trim())) {
+    return 'Complete unreadable receipt values and confirm the currency before saving.';
+  }
+  let fingerprint: string | undefined;
+  const trustedAcknowledgement = (value: string | undefined, previous: string | undefined) => {
+    if (!value) return false;
+    fingerprint ??= receiptScanFingerprint(entry);
+    return value === fingerprint && (options.allowAcknowledgement !== false || previous === fingerprint);
+  };
+  const missingTotal = scan.printedTotal === undefined || scan.printedTotal === null;
+  if (missingTotal && !trustedAcknowledgement(scan.missingTotalAcknowledgement?.fingerprint,
+    options.previous?.receiptScan?.missingTotalAcknowledgement?.fingerprint)) {
+    return 'Enter the printed receipt total or explicitly confirm that it is unavailable and you reviewed the itemised amount before saving.';
+  }
+  const unresolved = scan.warnings.filter(warning => !warning.resolved && warning.code !== 'unassigned-item'
+    && !(missingTotal && warning.code === 'missing-printed-total'));
   const uncertainties = unresolved.filter(warning => warning.code !== 'subtotal-mismatch' && warning.code !== 'total-mismatch');
   if (uncertainties.length) return 'Review and resolve the receipt scan warnings before saving.';
   if (!unresolved.length) return null;
-  const fingerprint = receiptScanFingerprint({ ...entry, receiptScan: scan });
   const acknowledgement = scan.acknowledgement?.fingerprint;
-  if (acknowledgement === fingerprint && (options.allowAcknowledgement !== false
-    || options.previous?.receiptScan?.acknowledgement?.fingerprint === fingerprint)) return null;
+  if (trustedAcknowledgement(acknowledgement, options.previous?.receiptScan?.acknowledgement?.fingerprint)) return null;
   return 'The itemised amounts do not match the printed receipt. Correct them or explicitly confirm that you reviewed this difference before saving.';
 }
 
@@ -275,6 +325,8 @@ export function receiptScanSaveError(entry: ScannableReceipt, options: {
 export function receiptScanHumanReviewChanged(entry: ScannableReceipt, previous?: ScannableReceipt): boolean {
   if (!entry.receiptScan) return false;
   if (entry.receiptScan.acknowledgement && canonical(entry.receiptScan.acknowledgement) !== canonical(previous?.receiptScan?.acknowledgement)) return true;
+  if (entry.receiptScan.missingTotalAcknowledgement && canonical(entry.receiptScan.missingTotalAcknowledgement)
+    !== canonical(previous?.receiptScan?.missingTotalAcknowledgement)) return true;
   const oldResolutions = new Set((previous?.receiptScan?.warnings || []).filter(warning => warning.resolved).map(warningKey));
   const resolved = entry.receiptScan.warnings.filter(warning => warning.resolved);
   if (resolved.length && previous && receiptScanFingerprint(entry) !== receiptScanFingerprint(previous)) return true;

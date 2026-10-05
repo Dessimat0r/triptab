@@ -1,4 +1,4 @@
-import { db, failure, owner, RequestError, tripAccess } from '@/lib/store';
+import { db, failure, owner, readActivity, RequestError } from '@/lib/store';
 import { expenseShares, expenseTotal, parseStoredTrip, total, type Trip } from '@/lib/model';
 import { readAccountActivity } from '@/lib/audit';
 
@@ -10,7 +10,6 @@ const PRIVATE_HEADERS = { 'Cache-Control': 'private, no-store', Pragma: 'no-cach
 const ACCESS = '(t.owner = ? OR EXISTS (SELECT 1 FROM memberships m WHERE m.trip_id = t.id AND m.user_id = ?))';
 type ProfileRow = { id: string; email: string; display_name: string; created_at: string };
 type TripRow = { id: string; owner: string; data: string };
-type EventRow = { id: string; sequence: number; trip_id: string; actor_id: string; actor_name: string; created_at: string; entity_type: string; entity_id: string; action: string; before_data: string | null; after_data: string | null; revision: number; source: string };
 
 function csvCell(value: unknown): string {
   let text = value === null || value === undefined ? '' : String(value);
@@ -24,16 +23,17 @@ function decimal(amount: number | undefined): string | undefined { return amount
 function utc(value: string): string { return new Date(value).toISOString(); }
 
 // Downloads may be forwarded outside a holiday. Copy structured contact
-// fields only for the account explicitly linked in that particular snapshot;
+// fields only for the account explicitly linked in that particular snapshot,
+// plus unlinked traveller contacts entered on the organiser's own holiday;
 // historical names, current membership and matching email text cannot prove
 // ownership. Ordinary strings (including notes and receipt chat) stay intact.
-function exportContacts<T>(value: T, actor: string): T {
-  if (Array.isArray(value)) return value.map(entry => exportContacts(entry, actor)) as T;
+function exportContacts<T>(value: T, actor: string, organiser = false): T {
+  if (Array.isArray(value)) return value.map(entry => exportContacts(entry, actor, organiser)) as T;
   if (!value || typeof value !== 'object') return value;
   const record = value as Record<string, unknown>;
   return Object.fromEntries(Object.entries(record)
-    .filter(([key]) => key !== 'email' || record.userId === actor)
-    .map(([key, entry]) => [key, exportContacts(entry, actor)])) as T;
+    .filter(([key]) => key !== 'email' || record.userId === actor || (organiser && !record.userId && typeof record.id === 'string' && typeof record.name === 'string'))
+    .map(([key, entry]) => [key, exportContacts(entry, actor, organiser)])) as T;
 }
 
 function financialCsv(trip: Trip): string {
@@ -89,31 +89,19 @@ async function snapshots(actor: string, tripId?: string): Promise<Trip[]> {
   const size = sizes.results[0] as { count: number; bytes: number } | undefined;
   if (!size || size.bytes > MAX_SNAPSHOT_BYTES) throw new RequestError('This account export is too large. Download one holiday at a time.', 413);
   if (tripId !== undefined && !size.count) throw new RequestError('You do not have access to this holiday.', 403);
-  return (rows.results as TripRow[]).map(row => exportContacts({ ...parseStoredTrip(JSON.parse(row.data)), ownerId: row.owner }, actor));
+  return (rows.results as TripRow[]).map(row => exportContacts({ ...parseStoredTrip(JSON.parse(row.data)), ownerId: row.owner }, actor, row.owner === actor));
 }
 
 async function activity(actor: string, tripId: string, before = Number.MAX_SAFE_INTEGER) {
-  if (!await tripAccess(actor, tripId)) throw new RequestError('You do not have access to this holiday.', 403);
-  // Bound both the row count and cumulative snapshot bytes before materializing
-  // JSON. A page may contain fewer than 50 particularly large changes.
-  const result = await db().prepare(`
-    WITH candidates AS (
-      SELECT e.* FROM activity_events e JOIN trips t ON t.id = e.trip_id
-      WHERE e.trip_id = ? AND e.sequence < ? AND ${ACCESS}
-      ORDER BY e.sequence DESC LIMIT 50
-    ), sized AS (
-      SELECT *, SUM(length(CAST(COALESCE(before_data, '') AS BLOB)) + length(CAST(COALESCE(after_data, '') AS BLOB)) + 2048)
-        OVER (ORDER BY sequence DESC ROWS UNBOUNDED PRECEDING) AS export_bytes FROM candidates
-    )
-    SELECT * FROM sized WHERE export_bytes <= ? ORDER BY sequence DESC
-  `).bind(tripId, before, actor, actor, MAX_SNAPSHOT_BYTES).all<EventRow>();
-  const rows = result.results;
-  const last = rows.at(-1)?.sequence ?? before;
-  const remaining = await db().prepare(`SELECT e.sequence FROM activity_events e JOIN trips t ON t.id = e.trip_id WHERE e.trip_id = ? AND e.sequence < ? AND ${ACCESS} LIMIT 1`).bind(tripId, last, actor, actor).first<{ sequence: number }>();
-  if (!rows.length && remaining) throw new RequestError('This history entry is too large to download as a page.', 413);
+  const page = await readActivity(actor, tripId, { before, limit: 50 });
+  const trip = await db().prepare(`SELECT t.owner FROM trips t WHERE t.id = ? AND ${ACCESS}`).bind(tripId, actor, actor).first<{ owner: string }>();
+  if (!trip) throw new RequestError('You do not have access to this holiday.', 403);
   return {
-    events: rows.map(row => ({ id: row.id, sequence: row.sequence, tripId: row.trip_id, actorId: row.actor_id, actorName: row.actor_name, createdAt: utc(row.created_at), entityType: row.entity_type, entityId: row.entity_id, action: row.action, before: row.before_data ? exportContacts(JSON.parse(row.before_data), actor) : null, after: row.after_data ? exportContacts(JSON.parse(row.after_data), actor) : null, revision: row.revision, source: row.source })),
-    nextCursor: remaining ? last : null,
+    events: page.events.map(event => ({ ...event, createdAt: utc(event.createdAt),
+      before: event.before ? exportContacts(event.before, actor, trip.owner === actor) : null,
+      after: event.after ? exportContacts(event.after, actor, trip.owner === actor) : null,
+    })),
+    nextCursor: page.nextCursor,
   };
 }
 
@@ -158,8 +146,8 @@ export async function GET(request: Request) {
       const page = await activity(actor, tripId!, cursor === null ? undefined : Number(cursor));
       nextCursor = page.nextCursor;
       body = format === 'json' ? JSON.stringify({ schemaVersion: 1, exportedAt, tripId, ...page }) : csv([
-        ['event_id', 'sequence', 'trip_id', 'actor_id', 'actor_name', 'created_at_utc', 'entity_type', 'entity_id', 'action', 'revision', 'source', 'before_json', 'after_json'],
-        ...page.events.map(event => [event.id, event.sequence, event.tripId, event.actorId, event.actorName, event.createdAt, event.entityType, event.entityId, event.action, event.revision, event.source, event.before ? JSON.stringify(event.before) : '', event.after ? JSON.stringify(event.after) : '']),
+        ['event_id', 'sequence', 'trip_id', 'actor_id', 'actor_name', 'created_at_utc', 'entity_type', 'entity_id', 'action', 'revision', 'source', 'before_json', 'after_json', 'snapshots_omitted', 'shared_entry_download'],
+        ...page.events.map(event => [event.id, event.sequence, event.tripId, event.actorId, event.actorName, event.createdAt, event.entityType, event.entityId, event.action, event.revision, event.source, event.before ? JSON.stringify(event.before) : '', event.after ? JSON.stringify(event.after) : '', event.snapshotOmitted ? 'true' : '', event.snapshotDownload || '']),
       ]);
     } else {
       const trips = await snapshots(actor, tripId);

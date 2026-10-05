@@ -2,10 +2,10 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
-import { createSourceFile, isFunctionDeclaration, ModuleKind, ScriptKind, ScriptTarget, transpileModule } from 'typescript';
+import { createSourceFile, isFunctionDeclaration, isJsxElement, isJsxAttribute, isJsxExpression, ModuleKind, ScriptKind, ScriptTarget, transpileModule } from 'typescript';
 import { equalFinancialValue, equalSavedValue } from '../lib/client-ledger';
 import { buildReceiptPrompt } from '../lib/receipt-chatgpt';
-import { isBlankReceipt, isUnchangedInitialReceipt, matchingReceiptProposal, mayFillInitialReceipt, receiptEditableValue, receiptProposalEditor, receiptEditorTotal, type ReceiptEditor } from '../lib/receipt-processing';
+import { isBlankReceipt, isUnchangedInitialReceipt, matchingReceiptProposal, mayFillInitialReceipt, receiptEditableValue, receiptProposalEditor, receiptEditorTotal, userReceiptField, type ReceiptEditor } from '../lib/receipt-processing';
 import { receiptScanSaveError, receiptScanFingerprint } from '../lib/receipt-scan';
 import { itemSchema, draftItemSchema, expenseSchema, itemSplitError, ledgerSchema, receiptSplitError, total, validateLedger, type Draft, type Expense, type ReceiptMessage, type Trip } from '../lib/model';
 
@@ -27,7 +27,7 @@ const controllerSource = `return function createController(initial, boundary) {
   let trip = structuredClone(initial), editing = null, processedReceipt = null, error = '', editorConflict = null;
   let receiptPending = false, receiptCopied = false, receiptPrompt = '', receiptHistoryOpen = false, restoration = null;
   let paste = '', fxError = '', referenceRate = null;
-  let receiptChecking = false, uploading = false, receiptProcessing = false, receiptItemized = false, receiptHandoffError = '', receiptHandoffOpened = false;
+  let receiptChecking = false, uploading = false, receiptProcessing = false, receiptItemized = false, receiptHandoffError = '', receiptHandoffOpened = false, receiptAIConnecting = false;
   const saving = false, profile = {id:'owner'};
   let receiptAI = null, clipboardFailure = false, failSave = false, network, statusNetwork;
   let commitAIState = true;
@@ -38,7 +38,7 @@ const controllerSource = `return function createController(initial, boundary) {
   const editorDraftBinding={current:null};
   const activeReceiptEditor={current:null};
   const receiptProcessRequest={current:0},receiptProcessInFlight={current:false};
-  const receiptAIStatusRequest={current:0};
+  const receiptAIStatusRequest={current:0},receiptAIStatusInFlight={current:null};
   const updates = [], editorBaseline = {current:null};
   const latestSnapshot = {current:{data:{trips:[trip]},revision:0}};
   const {itemSchema,draftItemSchema,expenseSchema,receiptScanSaveError,receiptEditorTotal,itemSplitError,receiptSplitError,total,equalFinancialValue,equalSavedValue,buildReceiptPrompt,isBlankReceipt,isUnchangedInitialReceipt,matchingReceiptProposal,mayFillInitialReceipt,receiptEditableValue,receiptProposalEditor} = boundary;
@@ -67,6 +67,7 @@ const controllerSource = `return function createController(initial, boundary) {
   const setReceiptProcessing = next => {receiptProcessing=next};
   const setReceiptItemized = next => {receiptItemized=next};
   const setUploading = next => {uploading=next};
+  const setReceiptAIConnecting = next => {receiptAIConnecting=next};
   const setView = next => {view=next}, setHelp = next => {help=next}, prepareReceiptImage = async file => file;
   const setReceiptHistoryOpen = next => {receiptHistoryOpen=next};
   const setRestoration = next => {restoration=next};
@@ -84,7 +85,7 @@ const controllerSource = `return function createController(initial, boundary) {
   ${handlers}
   return {${names.join(',')},get editing(){return editing},get trip(){return trip},get error(){return error},get updates(){return updates},get baseline(){return editorBaseline.current},get processed(){return processedReceipt},
     edit(next){editing={...editing,...next};activeReceiptEditor.current=editing},remote(next,revision=updates.length){trip=structuredClone(next);latestSnapshot.current={data:{trips:[trip]},revision}},
-    get prompt(){return receiptPrompt},get handoffError(){return receiptHandoffError},get clipboard(){return clipboard},get requests(){return requests},get processing(){return receiptProcessing},get itemized(){return receiptItemized},get pending(){return receiptPending},
+    get prompt(){return receiptPrompt},get handoffError(){return receiptHandoffError},get clipboard(){return clipboard},get requests(){return requests},get processing(){return receiptProcessing},get itemized(){return receiptItemized},get pending(){return receiptPending},get uploading(){return uploading},get connecting(){return receiptAIConnecting},
     network(next){network=next},clipboardUnavailable(){clipboardFailure=true},persistenceFailure(){failSave=true},
     aiConnected(){receiptAI={accountId:profile.id,configured:true,connected:true,provider:'api',eligible:true,manageable:true,siwcAvailable:false}},
     participantAccount(connected=true){profile.id='participant';receiptSessionScope.current.accountId='participant';receiptAI={accountId:'participant',configured:connected,connected,provider:'api',eligible:true,manageable:false,siwcAvailable:false}},
@@ -108,7 +109,7 @@ type Controller = {
   reviewRestore(event: {tripId:string;entityType:string;entityId:string;actorName:string;createdAt:string;before:Expense}):Promise<void>;
   editing: Editing | null; trip: Trip; error: string; updates: Trip[]; baseline: { tripId: string; expense?: Expense } | null;
   processed: Draft | null; edit(next: Partial<Editing>): void; remote(next: Trip,revision?:number): void; conflict(next: Expense | null): void;
-  prompt:string;handoffError:string;clipboard:string[];requests:{url:string;options?:RequestInit}[];processing:boolean;itemized:boolean;pending:boolean;
+  uploading:boolean;connecting:boolean;refreshReceiptAIStatus(accountId:string,fresh?:boolean):Promise<unknown>;prompt:string;handoffError:string;clipboard:string[];requests:{url:string;options?:RequestInit}[];processing:boolean;itemized:boolean;pending:boolean;
   network(next:(url:string,options?:RequestInit)=>Promise<unknown>):void;clipboardUnavailable():void;persistenceFailure():void;aiConnected():void;accountSwitch():void;
   participantAccount(connected?:boolean):void;statusNetwork(next:()=>Promise<unknown>):void;deferAIState():void;ai:{connected:boolean;accountId:string}|null;
   restoring(): void; restoration: unknown;
@@ -613,4 +614,61 @@ test('opening a legacy populated draft does not relabel saved metadata as replac
   assert.equal(editor.editing?.fieldSources?.date, undefined);
   assert.equal(editor.editing?.fieldSources?.time, undefined);
   assert.equal(editor.editing?.fieldSources?.tax, undefined);
+});
+
+test('closing an editor during upload clears busy controls without letting the old upload mutate a new receipt', async () => {
+  const editor = controller(fixture()); editor.newExpense();
+  let finish!: (response: unknown) => void;
+  editor.network(() => new Promise(resolve => {finish=resolve}));
+  const upload = editor.captureEditorReceipt({type:'image/png',size:100} as File);
+  assert.equal(editor.uploading,true);
+  editor.closeReceiptEditor(); assert.equal(editor.uploading,false); assert.equal(editor.connecting,false);
+  editor.newExpense(); const freshId=editor.editing!.id;
+  finish({ok:true,json:async()=>({receiptId:'old-upload-photo'})}); await upload;
+  assert.equal(editor.editing?.id,freshId); assert.equal(editor.editing?.receiptId,undefined);
+  assert.equal(editor.uploading,false);
+});
+
+test('a half-typed item name and quantity can be saved for chat without a parsing crash', async () => {
+  const editor=controller(fixture()); editor.openExpense(editor.trip.expenses[0]);
+  const item=editor.editing!.items[0];
+  editor.edit({items:[{...item,name:'',units:{total:3,allocations:{a:NaN},label:'pieces'}}]});
+  const saved=await editor.storeEditorReceipt(editor.editing!,editor.editing!.receiptId);
+  assert(saved); assert.equal(saved.items[0].name,'');
+  assert.deepEqual(saved.items[0].units,item.units);
+  assert.equal(editor.editing?.items[0].name,'','live text remains available to finish');
+});
+
+test('concurrent AI status requests share one read, but a settings change requests a fresh status', async () => {
+  const editor=controller(fixture()); editor.newExpense();
+  const replies:((response:unknown)=>void)[]=[];
+  editor.statusNetwork(()=>new Promise(resolve=>replies.push(resolve)));
+  const first=editor.refreshReceiptAIStatus('owner');
+  const focus=editor.refreshReceiptAIStatus('owner');
+  assert.equal(replies.length,1);
+  const changed=editor.refreshReceiptAIStatus('owner',true); assert.equal(replies.length,2);
+  const state=(connected:boolean)=>({ok:true,json:async()=>({configured:connected,connected,provider:'api',eligible:true,manageable:true,siwcAvailable:false})});
+  replies[0](state(false)); await Promise.all([first,focus]);
+  replies[1](state(true)); await changed;
+  assert.equal(editor.ai?.connected,true);
+});
+
+test('explicit confirmation of the same original currency keeps bank amount and exchange-rate details', () => {
+  let callback='';
+  function visit(node:import('typescript').Node) {
+    if (isJsxElement(node) && node.openingElement.tagName.getText(syntax)==='button' && node.children.some(child=>child.getText(syntax).includes('I checked the currency:'))) {
+      const attr=node.openingElement.attributes.properties.find(prop=>isJsxAttribute(prop)&&prop.name.getText(syntax)==='onClick');
+      assert(attr&&isJsxAttribute(attr)&&attr.initializer&&isJsxExpression(attr.initializer)&&attr.initializer.expression);
+      callback=attr.initializer.expression.getText(syntax);
+    }
+    node.forEachChild(visit);
+  }
+  visit(syntax); assert(callback);
+  const editing={...pending(),id:'edited',draftId:'replacement-draft',date:'2026-10-05',time:'12:00',timezone:'Europe/Paris',fieldSources:{currency:'default' as const}} as ReceiptEditor;
+  const original=structuredClone(editing); let next:ReceiptEditor|undefined;
+  const run=new Function('editing','setEditing','userReceiptField',transpileModule(`(${callback})();`,{compilerOptions:{target:ScriptTarget.ES2022}}).outputText);
+  run(editing,(value:ReceiptEditor)=>{next=value},userReceiptField);
+  assert(next); assert.equal(next.currency,original.currency);
+  assert.equal(next.bankAmount,original.bankAmount); assert.deepEqual(next.fx,original.fx);
+  assert.equal(next.fieldSources?.currency,'user');
 });

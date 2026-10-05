@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { CURRENCIES } from "@/lib/model";
 import type { ReceiptEditor } from "@/lib/receipt-processing";
 import { receiptEditorTotal } from "@/lib/receipt-processing";
@@ -22,7 +22,7 @@ const warningNames: Record<string, string> = {
   "included-tax-ambiguous": "Check whether this tax is already included. Only extra tax should be added.",
   "image-may-be-incomplete": "The image may not contain the whole receipt. Check every line and the printed total.",
   "low-confidence": "This receipt detail is uncertain. Check it against the image.",
-  "missing-printed-total": "The printed total has not been independently verified. Read it from the image and enter it below.",
+  "missing-printed-total": "The printed total is unavailable. Enter it only if you can read it, or explicitly review the itemised prices below.",
   "unassigned-item": "Choose who owes this item's cost.",
 };
 const resolvable = new Set(["uncertain-description", "possible-duplicate", "unmapped-adjustment", "included-tax-ambiguous", "image-may-be-incomplete", "low-confidence"]);
@@ -41,20 +41,24 @@ function PrintedAmount({ label, value, onChange }: { label: string; value?: numb
     if (!/^\d*(?:\.\d{0,2})?$/.test(next)) return;
     setText(next);
     const amount = Math.round(Number(next) * 100);
-    onChange(!next || next === "." || !Number.isSafeInteger(amount) || amount > 100000000 ? null : amount);
+    const parsed = !next || next === "." || !Number.isSafeInteger(amount) || amount > 100000000 ? null : amount;
+    if (parsed !== (value ?? null)) onChange(parsed);
   }} /></label>;
 }
 
 export default function ReceiptScanReview({ entry, onChange }: { entry: ReceiptEditor; onChange: (entry: ReceiptEditor) => void }) {
   const titleId = useId();
+  const scan = useMemo(() => entry.receiptScan && reconcileReceiptScan(entry), [entry]);
+  const fingerprint = useMemo(() => scan && (scan.acknowledgement || scan.missingTotalAcknowledgement) ? receiptScanFingerprint(entry) : "", [entry, scan]);
   if (!entry.receiptId && !entry.receiptScan) return null;
-  const scan = entry.receiptScan && reconcileReceiptScan(entry);
   const calculated = receiptEditorTotal(entry);
   const unassigned = entry.percentages === undefined ? entry.items.filter(item => !item.members.length).length : 0;
   const unknown = entry.items.filter(item => item.amount === null).length;
   const warnings = scan?.warnings.filter(warning => !warning.resolved) || [];
   const mismatches = warnings.filter(warning => warning.code === "subtotal-mismatch" || warning.code === "total-mismatch");
-  const acknowledged = !!scan?.acknowledgement && scan.acknowledgement.fingerprint === receiptScanFingerprint(entry);
+  const acknowledged = !!scan?.acknowledgement && scan.acknowledgement.fingerprint === fingerprint;
+  const missingTotal = scan?.printedTotal === null || (!!scan && scan.printedTotal === undefined);
+  const missingTotalAcknowledged = !!scan?.missingTotalAcknowledgement && scan.missingTotalAcknowledgement.fingerprint === fingerprint;
   const name = (itemId?: string) => entry.items.find(item => item.id === itemId)?.name || "Item needing review";
   return <section className="receipt-scan-review" aria-labelledby={titleId}>
     <h3 id={titleId}>{!scan ? "Receipt not processed yet" : scan.status === "matched" ? "Receipt totals match exactly" : "Receipt needs review"}</h3>
@@ -82,7 +86,9 @@ export default function ReceiptScanReview({ entry, onChange }: { entry: ReceiptE
         onChange({ ...entry, receiptScan: { ...scan, [field]: value, fieldSources: { ...scan.fieldSources, [field]: "user" }, acknowledgement: undefined } });
       }} />)}</div>
     </details>}
-    {scan && mismatches.length > 0 && <label className="checklabel receipt-total-ack"><input type="checkbox" checked={acknowledged} onChange={event => onChange({ ...entry, receiptScan: { ...scan, acknowledgement: event.target.checked ? { fingerprint: receiptScanFingerprint(entry) } : undefined } })} />I checked the photo and item prices. Save the reviewed itemised amount despite this difference.</label>}
+    {scan && mismatches.length > 0 && <label className="checklabel receipt-total-ack"><input type="checkbox" checked={acknowledged} onChange={event => onChange({ ...entry, receiptScan: { ...scan, acknowledgement: event.target.checked ? { fingerprint: fingerprint || receiptScanFingerprint(entry) } : undefined } })} />I checked the photo and item prices. Save the reviewed itemised amount despite this difference.</label>}
+    {scan && missingTotal && <label className="checklabel receipt-total-ack"><input type="checkbox" checked={missingTotalAcknowledged} onChange={event => onChange({ ...entry, receiptScan: { ...scan, missingTotalAcknowledgement: event.target.checked ? { fingerprint: fingerprint || receiptScanFingerprint(entry) } : undefined } })} />The printed total is unavailable. I checked all item prices and adjustments against the photo. Save the reviewed itemised amount.</label>}
     {acknowledged && <p>Difference acknowledged. Any further changes require a new check.</p>}
+    {missingTotalAcknowledged && <p>Itemised prices reviewed. The printed total remains unavailable; further changes require a new check.</p>}
   </section>;
 }

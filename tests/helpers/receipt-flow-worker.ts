@@ -29,13 +29,14 @@ export async function createReceiptFlowWorker(options: { seedTrip?: boolean } = 
       import * as mcp from './app/mcp/route.ts';
       import * as profile from './app/api/profile/route.ts';
       import * as activity from './app/api/activity/route.ts';
+      import * as activityEntry from './app/api/activity-entry/route.ts';
       import * as accountActivity from './app/api/account-activity/route.ts';
       import * as aiStatus from './app/api/receipt/ai-status/route.ts';
       import * as notifications from './app/api/notifications/route.ts';
       import * as push from './app/api/push/route.ts';
       import * as exports from './app/api/export/route.ts';
       const routes = { '/api/ledger': ledger, '/api/receipt': receipt, '/mcp': mcp,
-        '/api/profile': profile, '/api/activity': activity, '/api/account-activity': accountActivity,
+        '/api/profile': profile, '/api/activity': activity, '/api/activity-entry': activityEntry, '/api/account-activity': accountActivity,
         '/api/receipt/ai-status': aiStatus, '/api/notifications': notifications, '/api/push': push,
         '/api/export': exports };
       export default { async fetch(request) {
