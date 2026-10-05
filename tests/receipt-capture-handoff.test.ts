@@ -3,6 +3,7 @@ import test from 'node:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import ReceiptCapture, { type ReceiptCaptureProps } from '../components/receipt-capture';
+import { chatgptReceiptUrl } from '../lib/receipt-chatgpt';
 
 const request = 'Read the stored receipt “Dinner & drinks”. Keep existing shares and ask about unclear prices.';
 const chatgptUrl = 'https://chatgpt.com/?q=' + encodeURIComponent(request);
@@ -27,6 +28,20 @@ test('the saved receipt offers a native ChatGPT link and an immediately accessib
   assert.match(html, /Read the stored receipt “Dinner &amp; drinks”\. Keep existing shares and ask about unclear prices\./);
   assert.match(visibleText(html), /open[s]? without the request.*copy this text.*send it with TripTab enabled/i);
   assert.match(visibleText(html), /You can also enter items yourself/);
+});
+
+test('long and non-ASCII handoff requests open a bounded URL and retain the full copyable prompt', () => {
+  for (const prompt of ['x'.repeat(2500), '🍕'.repeat(180)]) {
+    const url = chatgptReceiptUrl(prompt);
+    assert.equal(url, 'https://chatgpt.com/');
+    const html = render({ prompt, chatgptUrl: url });
+    assert.match(html, /href="https:\/\/chatgpt\.com\/"/);
+    assert.match(visibleText(html), /too long to prefill reliably.*Copy the complete text below.*paste and send it/);
+    assert(html.includes(prompt), 'copyable prompt is never truncated');
+  }
+  const short = new URL(chatgptReceiptUrl(request));
+  assert.equal(short.searchParams.get('q'), request);
+  assert(short.toString().length <= 2000);
 });
 
 test('opening or copying a request does not claim ChatGPT received or processed the receipt', () => {

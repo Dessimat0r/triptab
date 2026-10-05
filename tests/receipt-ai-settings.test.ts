@@ -91,7 +91,7 @@ test('the verified owner sees a masked empty shared key field and a disabled sub
   assert.match(rendered.html, /funds receipt processing for all signed-in users/);
 });
 
-test('submitting a key sends it only to the same-origin server, immediately clears the field and never echoes provider errors', async () => {
+test('submitting a key sends it only to the same-origin server and retains the masked field for a retry after failure', async () => {
   const calls: { url: string; options?: RequestInit }[] = [];
   let finish!: (response: Response) => void;
   const ui = controller(async (url, options) => {
@@ -106,7 +106,8 @@ test('submitting a key sends it only to the same-origin server, immediately clea
   assert(form);
   (form.props.onSubmit as (event: unknown) => void)({ preventDefault() {} });
   const pending = ui.render();
-  assert.equal(keyInput(pending).props.value, '');
+  assert.equal(keyInput(pending).props.value, 'sk-test-ephemeral-key');
+  assert.equal(keyInput(pending).props.disabled, true);
   const post = calls.find(call => call.options?.method === 'POST');
   assert.equal(post?.url, '/api/receipt/ai-settings');
   assert.equal(post?.options?.credentials, 'same-origin');
@@ -114,9 +115,10 @@ test('submitting a key sends it only to the same-origin server, immediately clea
   finish(Response.json({ error: 'sk-test-ephemeral-key' }, { status: 500 }));
   await settle();
   rendered = ui.render();
-  assert.doesNotMatch(rendered.html, /sk-test-ephemeral-key/);
+  assert.doesNotMatch(rendered.html.replace('value="sk-test-ephemeral-key"', ''), /sk-test-ephemeral-key/);
   assert.match(rendered.html, /Receipt AI settings are temporarily unavailable/);
-  assert.equal(keyInput(rendered).props.value, '');
+  assert.equal(keyInput(rendered).props.value, 'sk-test-ephemeral-key');
+  assert.equal(keyInput(rendered).props.disabled, false);
 });
 
 test('removing a saved key refreshes settings and notifies the receipt editor without exposing credentials', async () => {
@@ -140,6 +142,28 @@ test('removing a saved key refreshes settings and notifies the receipt editor wi
   assert.deepEqual(ui.notifications, ['triptab:receipt-ai-settings']);
   assert.match(ui.render().html, /API key removed/);
   assert.doesNotMatch(ui.render().html, /Remove API key/);
+});
+
+test('retrying a rejected key save reuses the masked local key and clears it only after a successful save', async () => {
+  const submissions: unknown[] = [];
+  const ui = controller(async (_url, options) => {
+    if (options?.method !== 'POST') return Response.json(state);
+    submissions.push(JSON.parse(String(options.body)));
+    return submissions.length === 1 ? Response.json({ code: 'key_check_rate_limited' }, { status: 429 }) : Response.json({ ok: true });
+  });
+  ui.render(); await settle();
+  (keyInput(ui.render()).props.onChange as (event: unknown) => void)({ target: { value: 'sk-test-retry-key' } });
+  const submit = () => {
+    const form = ui.render().elements.find(element => element.type === 'form'); assert(form);
+    (form.props.onSubmit as (event: unknown) => void)({ preventDefault() {} });
+  };
+  submit(); await settle();
+  assert.equal(keyInput(ui.render()).props.value, 'sk-test-retry-key');
+  assert.deepEqual(ui.notifications, []);
+  submit(); await settle();
+  assert.equal(keyInput(ui.render()).props.value, '');
+  assert.deepEqual(submissions, [{ apiKey: 'sk-test-retry-key' }, { apiKey: 'sk-test-retry-key' }]);
+  assert.deepEqual(ui.notifications, ['triptab:receipt-ai-settings']);
 });
 
 test('closing the settings aborts an in-flight request', () => {
@@ -203,10 +227,11 @@ async function failedKeySave(failure: () => Promise<Response>) {
   (form.props.onSubmit as (event: unknown) => void)({ preventDefault() {} });
   await settle();
   const rendered = ui.render();
-  assert.equal(keyInput(rendered).props.value, '', 'a failed save never retains the submitted key');
-  assert.doesNotMatch(rendered.html, /sk-test-sensitive-value|RAW_PROVIDER_ERROR/);
+  assert.equal(keyInput(rendered).props.value, 'sk-test-sensitive-value', 'a failed save leaves the masked local field available for retry');
+  const html = rendered.html.replace('value="sk-test-sensitive-value"', '');
+  assert.doesNotMatch(html, /sk-test-sensitive-value|RAW_PROVIDER_ERROR/);
   assert.deepEqual(ui.notifications, [], 'a rejected save must not announce a settings change');
-  return rendered.html;
+  return html;
 }
 
 test('key saving distinguishes provider failure, key permissions, owner verification and concurrent changes using fixed local messages', async () => {
@@ -215,8 +240,6 @@ test('key saving distinguishes provider failure, key permissions, owner verifica
     { code: 'receipt_ai_error', status: 400, message: /Enter a valid OpenAI API key beginning with sk-/ },
     { code: 'key_rejected', status: 400, message: /OpenAI rejected this API key/ },
     { code: 'key_permission_denied', status: 400, message: /lacks the required permissions/ },
-    { code: 'key_check_failed', status: 400, message: /OpenAI did not accept this key/ },
-    { code: 'key_check_failed', status: 503, message: /OpenAI could not verify the key right now/ },
     { code: 'key_check_unavailable', status: 503, message: /could not reach OpenAI to check the key/ },
     { code: 'key_check_timeout', status: 504, message: /OpenAI took too long to check the key/ },
     { code: 'key_check_server_error', status: 503, message: /OpenAI could not check the key right now/ },

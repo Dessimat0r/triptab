@@ -44,22 +44,38 @@ export async function POST(request: Request) {
       ...connection, trip, draft, callerMemberId: trip.members.find(member => member.userId === profile.id)?.id ?? null,
       questionId: values.questionId, image: { bytes: image, mimeType },
     }, { signal });
-    // Model latency must not turn an old photo, account or revision into a write.
-    if (signal.aborted) throw new RequestError('Receipt processing was cancelled or timed out. Your saved receipt is unchanged.', 408);
-    if ((await ensureProfile(request)).id !== profile.id) throw new RequestError('Your signed-in account changed. Open this receipt again.', 409);
-    const latest = await readLedger(profile.id);
-    const currentTrip = latest.data.trips.find(value => value.id === trip.id);
-    const currentDraft = currentTrip?.drafts.find(value => value.id === draft.id);
-    const currentAccess = await receiptAccess(profile.id, values.receiptId);
-    if (latest.revision !== values.revision || !currentTrip || !currentDraft || JSON.stringify(currentDraft) !== JSON.stringify(draft)
-      || !currentAccess || currentAccess.tripId !== trip.id || currentAccess.owner !== access.owner) {
-      throw new RequestError('This receipt changed during processing. Refresh before trying again.', 409);
+    // An unrelated ledger edit does not invalidate a paid transcription. Rebase
+    // only onto an unchanged source draft and member context, always retaining
+    // the latest other entries. Every CAS retry repeats the access checks;
+    // inference itself runs once.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (signal.aborted) throw new RequestError('Receipt processing was cancelled or timed out. Your saved receipt is unchanged.', 408);
+      if ((await ensureProfile(request)).id !== profile.id) throw new RequestError('Your signed-in account changed. Open this receipt again.', 409);
+      const latest = await readLedger(profile.id);
+      const currentTrip = latest.data.trips.find(value => value.id === trip.id);
+      const currentDraft = currentTrip?.drafts.find(value => value.id === draft.id);
+      const currentAccess = await receiptAccess(profile.id, values.receiptId);
+      if (!currentTrip || !currentDraft || JSON.stringify(currentDraft) !== JSON.stringify(draft)
+        || currentTrip.ownerId !== trip.ownerId || JSON.stringify(currentTrip.members) !== JSON.stringify(trip.members)
+        || !currentAccess || currentAccess.tripId !== trip.id || currentAccess.owner !== access.owner) {
+        throw new RequestError('This receipt changed during processing. Refresh before trying again.', 409);
+      }
+      const currentImage = await bucket().head(receiptKey(access.owner, values.receiptId));
+      if (!currentImage || currentImage.version !== object.version || currentImage.size !== object.size
+        || currentImage.httpMetadata?.contentType !== mimeType) {
+        throw new RequestError('This receipt image changed during processing. Refresh before trying again.', 409);
+      }
+      const proposal = applyReceiptTranscription(currentTrip, currentDraft, transcription, undefined, { readPurchaseDetails: values.readPurchaseDetails });
+      currentTrip.drafts[currentTrip.drafts.findIndex(value => value.id === proposal.id)] = proposal;
+      try {
+        const saved = await writeLedger(profile.id, latest.data, latest.revision, { source: 'web' });
+        const savedDraft = saved.data.trips.find(value => value.id === trip.id)?.drafts.find(value => value.id === draft.id);
+        return Response.json({ ...saved, draft: savedDraft }, { headers: { 'Cache-Control': 'private, no-store' } });
+      } catch (error) {
+        if (!(error instanceof Error) || error.message !== 'CONFLICT') throw error;
+      }
     }
-    const proposal = applyReceiptTranscription(currentTrip, currentDraft, transcription, undefined, { readPurchaseDetails: values.readPurchaseDetails });
-    currentTrip.drafts[currentTrip.drafts.findIndex(value => value.id === proposal.id)] = proposal;
-    const saved = await writeLedger(profile.id, latest.data, latest.revision, { source: 'web' });
-    const savedDraft = saved.data.trips.find(value => value.id === trip.id)?.drafts.find(value => value.id === draft.id);
-    return Response.json({ ...saved, draft: savedDraft }, { headers: { 'Cache-Control': 'private, no-store' } });
+    throw new RequestError('Your ledger kept changing during processing. Refresh before trying again.', 409);
   } catch (error) {
     if (error instanceof ReceiptAIError || error instanceof ReceiptAIAccessError) {
       return Response.json({ error: error.message, code: error.code }, { status: error.status, headers: { 'Cache-Control': 'private, no-store' } });

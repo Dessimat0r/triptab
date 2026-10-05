@@ -16,5 +16,7 @@ export function buildReceiptPrompt(draft: Draft, tripId: string, question?: Rece
 export function chatgptReceiptUrl(prompt: string): string {
   const url = new URL('https://chatgpt.com/');
   url.searchParams.set('q', prompt);
-  return url.toString();
+  // Keep cross-browser links within the conservative URL limit. Never truncate
+  // a question or its tool context: the complete prompt remains copyable.
+  return url.toString().length <= 2000 ? url.toString() : 'https://chatgpt.com/';
 }

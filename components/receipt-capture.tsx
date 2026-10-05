@@ -154,6 +154,7 @@ export default function ReceiptCapture({
     ? "/api/receipt?id=" + encodeURIComponent(receiptId)
     : undefined;
   const automaticAvailable = aiConfigured && aiEligible && (aiProvider === "api" || aiSiwcAvailable);
+  const handoffNeedsPaste = Boolean(prompt && chatgptUrl === "https://chatgpt.com/");
   const readingText = aiProvider === "api" ? "Reading receipt with AI…" : "Reading receipt with ChatGPT…";
   const handoffStatus = "Send the prepared request in ChatGPT with TripTab enabled. Return here after it saves the receipt details; TripTab checks for items automatically.";
   let assistanceStatus: string;
@@ -318,7 +319,9 @@ export default function ReceiptCapture({
       )}
       {prompt && <details className="receipt-capture-prompt" open>
         <summary>Request to send in ChatGPT</summary>
-        <p>If ChatGPT opens without the request, copy this text into the conversation and send it with TripTab enabled.</p>
+        <p>{handoffNeedsPaste
+          ? "This request is too long to prefill reliably. Copy the complete text below, open ChatGPT, then paste and send it with TripTab enabled."
+          : "If ChatGPT opens without the request, copy this text into the conversation and send it with TripTab enabled."}</p>
         <textarea id={promptId} aria-label="Receipt assistant prompt" value={prompt} readOnly onFocus={event => event.currentTarget.select()} />
       </details>}
     </section>

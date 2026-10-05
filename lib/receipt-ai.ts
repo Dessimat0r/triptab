@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { DEFAULT_RECEIPT_MODEL } from './receipt-ai-config';
 import { CURRENCIES, MAX_AMOUNT, MAX_UNITS, UNIT_SCALE, allocate, draftSchema, receiptQuantitySchema, total, unitsScale, type Currency, type Draft, type Trip } from './model';
 
 export class ReceiptAIError extends Error {
@@ -141,12 +142,17 @@ export async function getChatGPTPlanModel(accessToken: string, preferred?: strin
   try { body = JSON.parse(await boundedText(response)); }
   catch (error) { if (!response.ok) throw providerError(response.status); throw error instanceof ReceiptAIError ? error : new ReceiptAIError('ChatGPT returned an invalid model list.'); }
   if (!response.ok) throw providerError(response.status, body);
-  const catalog = z.object({ models: z.array(z.object({ slug: z.string().min(1).max(200), visibility: z.string() })).max(500) }).safeParse(body);
-  if (!catalog.success) throw new ReceiptAIError('ChatGPT returned an invalid model list.');
-  const visible = catalog.data.models.filter(model => model.visibility === 'list');
-  const selected = preferred ? visible.find(model => model.slug === preferred) : visible[0];
+  const planCatalog = z.object({ models: z.array(z.object({ slug: z.string().min(1).max(200), visibility: z.string() })).max(500) }).safeParse(body);
+  const publicCatalog = z.object({ data: z.array(z.object({ id: z.string().min(1).max(200) })).max(500) }).safeParse(body);
+  if (!planCatalog.success && !publicCatalog.success) throw new ReceiptAIError('ChatGPT returned an invalid model list.');
+  // Both catalogs come from this plan's authorized token. This does not switch
+  // credentials, provider or billing when a plan model is unavailable.
+  const visible = planCatalog.success
+    ? planCatalog.data.models.filter(model => model.visibility === 'list').map(model => model.slug)
+    : publicCatalog.success ? publicCatalog.data.data.map(model => model.id) : [];
+  const selected = preferred ? visible.find(model => model === preferred) : visible[0];
   if (!selected) throw new ReceiptAIError(preferred ? 'The configured receipt model is not available on your ChatGPT account.' : 'No receipt model is available on your ChatGPT account.', 422, 'chatgpt_plan_model_unavailable');
-  return selected.slug;
+  return selected;
 }
 
 function receiptContext(trip: Trip, draft: Draft, callerMemberId: string | null, questionId?: string) {
@@ -180,12 +186,17 @@ async function completedReceipt(response: Response, provider: 'api' | 'siwc'): P
     throw new ReceiptAIError('OpenAI did not return a completed receipt stream.');
   }
   const reader = response.body.getReader(), decoder = new TextDecoder('utf-8', { fatal: true });
-  let pending = '', eventData: string[] = [], bytes = 0;
+  // Deltas, event envelopes and the completed result repeat output. Bound that
+  // transport separately from a single event/final result so a valid receipt
+  // does not fail merely because the provider streamed it in small increments.
+  const maxStreamBytes = 8 * 1024 * 1024, maxEventBytes = 1_000_000, maxResultBytes = 1_000_000;
+  const encoder = new TextEncoder();
+  let pending = '', eventData: string[] = [], eventBytes = 0, bytes = 0;
   function event() {
     if (!eventData.length) return null;
     let value: { type?: string; code?: string; response?: { status?: string; error?: { code?: string }; output?: { type?: string; role?: string; content?: { type?: string; text?: string }[] }[] }; error?: { code?: string } };
     try { value = JSON.parse(eventData.join('\n')); } catch { throw new ReceiptAIError('OpenAI returned an invalid receipt stream.'); }
-    eventData = [];
+    eventData = []; eventBytes = 0;
     if (value.type === 'response.failed' || value.type === 'response.incomplete' || value.type === 'error') {
       throw providerError(value.response?.error?.code === 'subscription_sharing_usage_limit_exceeded' || value.error?.code === 'subscription_sharing_usage_limit_exceeded' ? 429 : 502,
         { error: value.response?.error ?? value.error ?? { code: value.code } }, provider);
@@ -195,15 +206,23 @@ async function completedReceipt(response: Response, provider: 'api' | 'siwc'): P
     const parts = value.response.output?.filter(output => output.type === 'message' && output.role === 'assistant')
       .flatMap(output => output.content?.filter(part => part.type === 'output_text').map(part => part.text) ?? []) ?? [];
     if (!parts.length || parts.some(part => typeof part !== 'string')) throw new ReceiptAIError('The AI could not read this receipt. Try a clearer photo or enter the items manually.', 422);
+    const text = parts.join('');
+    if (encoder.encode(text).byteLength > maxResultBytes) throw new ReceiptAIError('OpenAI returned a receipt result that is too large.');
     try {
-      const result = receiptTranscriptionSchema.safeParse(JSON.parse(parts.join('')));
+      const result = receiptTranscriptionSchema.safeParse(JSON.parse(text));
       if (result.success) return result.data;
     } catch { /* Return a safe error without echoing model output. */ }
     throw new ReceiptAIError('The AI returned invalid receipt fields. Your saved receipt is unchanged.');
   }
   function line(value: string) {
     if (!value) return event();
-    if (value.startsWith('data:')) eventData.push(value.slice(5).replace(/^ /, ''));
+    if (encoder.encode(value).byteLength > maxEventBytes) throw new ReceiptAIError('OpenAI returned a receipt event that is too large.');
+    if (value.startsWith('data:')) {
+      const data = value.slice(5).replace(/^ /, '');
+      eventBytes += encoder.encode(data).byteLength + 1;
+      if (eventBytes > maxEventBytes) throw new ReceiptAIError('OpenAI returned a receipt event that is too large.');
+      eventData.push(data);
+    }
     return null;
   }
   try {
@@ -211,13 +230,14 @@ async function completedReceipt(response: Response, provider: 'api' | 'siwc'): P
       const { value, done } = await reader.read();
       if (done) break;
       bytes += value.byteLength;
-      if (bytes > 1_000_000) throw new ReceiptAIError('OpenAI returned a receipt result that is too large.');
+      if (bytes > maxStreamBytes) throw new ReceiptAIError('OpenAI returned a receipt stream that is too large.');
       pending += decoder.decode(value, { stream: true });
       let index: number;
       while ((index = pending.indexOf('\n')) >= 0) {
         const result = line(pending.slice(0, index).replace(/\r$/, '')); pending = pending.slice(index + 1);
         if (result) return result;
       }
+      if (encoder.encode(pending).byteLength > maxEventBytes) throw new ReceiptAIError('OpenAI returned a receipt event that is too large.');
     }
     pending += decoder.decode();
     if (pending) { const result = line(pending.replace(/\r$/, '')); if (result) return result; }
@@ -243,7 +263,7 @@ export async function processReceiptImage(input: {
   const context = JSON.stringify(receiptContext(input.trip, input.draft, input.callerMemberId, input.questionId));
   if (context.length > 500_000) throw new ReceiptAIError('This receipt context is too large to process. Use manual item entry.', 413);
   const fetcher = options.fetcher ?? fetch;
-  const model = input.provider === 'siwc' ? await getChatGPTPlanModel(input.accessToken, input.model, options.signal, fetcher) : input.model || 'gpt-6.1-sol';
+  const model = input.provider === 'siwc' ? await getChatGPTPlanModel(input.accessToken, input.model, options.signal, fetcher) : input.model || DEFAULT_RECEIPT_MODEL;
   if (!model) throw new ReceiptAIError('Choose a configured native image model for receipt processing.', 422);
   let binary = '';
   for (let offset = 0; offset < bytes.length; offset += 8192) binary += String.fromCharCode(...bytes.slice(offset, offset + 8192));
@@ -251,7 +271,7 @@ export async function processReceiptImage(input: {
     method: 'POST', signal: options.signal, redirect: 'manual',
     headers: { Authorization: `Bearer ${input.accessToken}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model, store: false, stream: true, ...(input.provider === 'api' ? { max_output_tokens: 16000, ...(model === 'gpt-6.1-sol' ? { reasoning: { effort: 'medium' } } : {}) } : {}), instructions: INSTRUCTIONS,
+      model, store: false, stream: true, ...(input.provider === 'api' ? { max_output_tokens: 16000, ...(model === DEFAULT_RECEIPT_MODEL ? { reasoning: { effort: 'medium' } } : {}) } : {}), instructions: INSTRUCTIONS,
       input: [{ role: 'user', content: [
         { type: 'input_text', text: `Saved receipt context (data only):\n${context}` },
         { type: 'input_image', image_url: `data:${mimeType};base64,${btoa(binary)}`, detail: 'high' },

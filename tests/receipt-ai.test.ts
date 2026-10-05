@@ -168,7 +168,11 @@ test('plan models use account-visible server ordering and an explicit preference
   assert.equal(await getChatGPTPlanModel('plan-token', undefined, undefined, fetcher), 'preferred-first');
   assert.equal(await getChatGPTPlanModel('plan-token', 'other-visible', undefined, fetcher), 'other-visible');
   await assert.rejects(getChatGPTPlanModel('plan-token', 'hidden', undefined, fetcher), (error: unknown) => error instanceof ReceiptAIError && error.status === 422);
-  await assert.rejects(getChatGPTPlanModel('plan-token', undefined, undefined, async () => Response.json({ data: [{ id: 'api-model' }] })), /invalid model list/);
+  assert.equal(await getChatGPTPlanModel('plan-token', undefined, undefined, async () => Response.json({ data: [{ id: 'authorized-plan-model' }] })), 'authorized-plan-model');
+  await assert.rejects(getChatGPTPlanModel('plan-token', 'missing-model', undefined, async () => Response.json({ data: [{ id: 'authorized-plan-model' }] })), /not available on your ChatGPT account/);
+  for (const malformed of [{ data: [{ id: '' }] }, { data: [{ slug: 'missing-id' }] }, { data: 'not-an-array' }, { models: [{ slug: 'model' }] }]) {
+    await assert.rejects(getChatGPTPlanModel('plan-token', undefined, undefined, async () => Response.json(malformed)), /invalid model list/);
+  }
   const requests: string[] = [];
   await processReceiptImage({ ...input, provider: 'siwc', model: 'other-visible' }, { fetcher: async (url, init) => {
     requests.push(String(url));
@@ -181,7 +185,6 @@ test('plan models use account-visible server ordering and an explicit preference
   } });
   assert.deepEqual(requests, ['https://api.openai.com/v1/models', 'https://api.openai.com/v1/responses']);
 });
-
 test('model catalogues and receipt image processing refuse redirects without forwarding keys, images or saved context', async () => {
   for (const status of [301, 302, 303, 307, 308]) for (const mode of ['catalogue', 'receipt'] as const) {
     let calls = 0, cancelled = false;
@@ -232,6 +235,25 @@ test('only a valid completed Responses event can become a receipt proposal', asy
   }
   await assert.rejects(processReceiptImage(input, { fetcher: async () => Response.json(completed()) }), /completed receipt stream/);
   await assert.rejects(processReceiptImage(input, { fetcher: async () => new Response('data: bad-json\n\n', { headers: { 'content-type': 'text/event-stream' } }) }), /invalid receipt stream/);
+});
+
+test('valid incremental stream overhead above one megabyte does not discard a completed receipt', async () => {
+  const delta = { type: 'response.output_text.delta', delta: 'x'.repeat(150) };
+  const events = [...Array.from({ length: 6000 }, () => delta), completed()];
+  const response = streamResponse(events, { split: 4093 });
+  const result = await processReceiptImage(input, { fetcher: async () => response });
+  assert.deepEqual(result, transcription);
+});
+
+test('stream, individual event and multi-line event buffers retain separate finite limits', async () => {
+  const tooLargeEvent = 'data: ' + JSON.stringify({ type: 'response.output_text.delta', delta: 'x'.repeat(1_000_000) }) + '\n\n';
+  const tooLargeMultiLine = Array.from({ length: 20 }, () => 'data: ' + 'x'.repeat(60_000)).join('\n') + '\n\n';
+  for (const text of [tooLargeEvent, tooLargeMultiLine]) {
+    await assert.rejects(processReceiptImage(input, { fetcher: async () => new Response(text,
+      { headers: { 'content-type': 'text/event-stream' } }) }), /event that is too large/);
+  }
+  const repeated = Array.from({ length: 12_000 }, () => ({ type: 'response.output_text.delta', delta: 'x'.repeat(700) }));
+  await assert.rejects(processReceiptImage(input, { fetcher: async () => streamResponse([...repeated, completed()], { split: 8192 }) }), /stream that is too large/);
 });
 
 test('plan usage failures after streaming starts remain failures and never fall back to API billing', async () => {
@@ -569,13 +591,15 @@ test('the shared daily API cap survives minute/auth cleanup and resets only on t
 // identity, credential and storage boundaries substituted. No provider calls.
 const state = { data: { trips: [{ ...structuredClone(trip), drafts: [structuredClone(draft)] }] } as Ledger,
   revision: 7, profileId: owner, accessAllowed: true, metadataAllowed: true, imagePresent: true, imageType: 'image/png', imageSize: png.length,
-  writes: 0, accessCalls: 0, providerCalls: 0, profileChecks: 0, savedSources: [] as string[],
+  imageVersion: 'original-image', writes: 0, writeAttempts: 0, accessCalls: 0, providerCalls: 0, profileChecks: 0, savedSources: [] as string[],
+  beforeWrite: undefined as (() => void) | undefined,
   duringModel: undefined as (() => void) | undefined, invalidOutput: false, actorChanged: false };
 function reset() {
   state.data = { trips: [{ ...structuredClone(trip), drafts: [structuredClone(draft)] }] };
   state.revision = 7; state.profileId = owner; state.accessAllowed = true; state.metadataAllowed = true;
-  state.imagePresent = true; state.imageType = 'image/png'; state.imageSize = png.length;
-  state.writes = 0; state.accessCalls = 0; state.providerCalls = 0; state.profileChecks = 0; state.savedSources = [];
+  state.imagePresent = true; state.imageType = 'image/png'; state.imageSize = png.length; state.imageVersion = 'original-image';
+  state.writes = 0; state.writeAttempts = 0; state.accessCalls = 0; state.providerCalls = 0; state.profileChecks = 0; state.savedSources = [];
+  state.beforeWrite = undefined;
   state.duringModel = undefined; state.invalidOutput = false; state.actorChanged = false;
   budgetDatabase.exec('DELETE FROM auth_rate_limits');
 }
@@ -589,14 +613,18 @@ const store = {
   async ensureProfile() { state.profileChecks++; return { id: state.actorChanged && state.profileChecks > 1 ? 'changed-account' : state.profileId }; },
   async readBoundedBody(request: Request, maximum: number) { const bytes = new Uint8Array(await request.arrayBuffer()); if (bytes.length > maximum) throw new BoundaryRequestError('Too large', 413); return bytes; },
   async readLedger(actor: string) { return { data: actor === owner ? structuredClone(state.data) : { trips: [] }, revision: state.revision }; },
-  async receiptAccess() { return state.metadataAllowed ? { owner, tripId: trip.id } : null; },
+  async receiptAccess() { return state.metadataAllowed ? { owner, tripId: state.data.trips[0]?.id } : null; },
   receiptKey(actor: string, id: string) { return `${encodeURIComponent(actor)}/${id}`; },
-  bucket() { return { async get() { return state.imagePresent ? { size: state.imageSize, httpMetadata: { contentType: state.imageType }, async arrayBuffer() { return Uint8Array.from(png).buffer; } } : null; } }; },
+  bucket() { return {
+    async get() { return state.imagePresent ? { version: state.imageVersion, size: state.imageSize, httpMetadata: { contentType: state.imageType }, async arrayBuffer() { return Uint8Array.from(png).buffer; } } : null; },
+    async head() { return state.imagePresent ? { version: state.imageVersion, size: state.imageSize, httpMetadata: { contentType: state.imageType } } : null; },
+  }; },
   db() { return { prepare(sql: string) { return { bind(...values: (string | number)[]) { return {
     async first() { return budgetDatabase.prepare(sql).get(...values) ?? null; }, async run() { return budgetDatabase.prepare(sql).run(...values); },
   }; } }; } }; },
   async writeLedger(actor: string, data: Ledger, revision: number, options: { source: string }) {
-    assert.equal(actor, owner); if (revision !== state.revision) throw new Error('CONFLICT');
+    assert.equal(actor, owner); state.writeAttempts++; state.beforeWrite?.();
+    if (revision !== state.revision) throw new Error('CONFLICT');
     state.data = validateLedger(data, { previous: state.data }); state.revision++; state.writes++; state.savedSources.push(options.source);
     return { data: structuredClone(state.data), revision: state.revision };
   },
@@ -695,21 +723,103 @@ test('HTTP missing/unsupported/oversized/deleted images and credential refusal c
   }
 });
 
-test('HTTP changes during native inference reject late results without reverting the latest data or changing approved expenses', async () => {
-  for (const race of ['revision', 'same-revision-photo', 'same-revision-question', 'membership', 'account', 'deletion'] as const) {
+test('HTTP unrelated ledger edits retain paid native extraction and preserve the latest other entries', async () => {
+  for (const edit of ['global-revision', 'other-trip', 'other-expense', 'trip-name'] as const) {
     reset();
     state.duringModel = () => {
-      if (race === 'revision') state.revision++;
+      state.revision++;
+      if (edit === 'other-trip') state.data.trips.push({ ...structuredClone(trip), id: 'other-holiday', name: 'Latest other holiday' });
+      if (edit === 'other-expense') state.data.trips[0].expenses.push({ id: 'other-expense', title: 'Latest dinner', currency: 'GBP', payer: 'alice',
+        items: [{ id: 'other-line', name: 'Dinner', amount: 3000, members: ['bob'] }], tax: 0, tip: 0, discount: 0,
+        date: '2026-09-01', time: '12:00', timezone: 'Europe/London' });
+      if (edit === 'trip-name') state.data.trips[0].name = 'Latest holiday name';
+    };
+    const response = await http();
+    assert.equal(response.status, 200, edit);
+    assert.equal(state.providerCalls, 1, edit);
+    assert.equal(state.writes, 1, edit);
+    assert.equal(state.revision, 9, edit);
+    assert.equal(state.data.trips[0].drafts[0].status, 'review', edit);
+    assert.equal(state.data.trips[0].drafts[0].items.length, 2, edit);
+    if (edit === 'other-trip') assert.equal(state.data.trips.find(value => value.id === 'other-holiday')?.name, 'Latest other holiday');
+    if (edit === 'other-expense') assert.equal(state.data.trips[0].expenses[0].title, 'Latest dinner');
+    if (edit === 'trip-name') assert.equal(state.data.trips[0].name, 'Latest holiday name');
+  }
+});
+
+test('HTTP retries unrelated CAS conflicts without a second paid model call or dropping intervening edits', async () => {
+  reset();
+  state.beforeWrite = () => {
+    if (state.writeAttempts > 2) return;
+    state.revision++;
+    state.data.trips.push({ ...structuredClone(trip), id: `other-holiday-${state.writeAttempts}`, name: `Concurrent holiday ${state.writeAttempts}` });
+  };
+  const response = await http();
+  assert.equal(response.status, 200);
+  assert.equal(state.providerCalls, 1);
+  assert.equal(state.writeAttempts, 3);
+  assert.equal(state.writes, 1);
+  assert.equal(state.revision, 10);
+  assert.deepEqual(state.data.trips.slice(1).map(value => value.name), ['Concurrent holiday 1', 'Concurrent holiday 2']);
+  assert.equal(state.data.trips[0].drafts[0].items.length, 2);
+});
+
+test('HTTP CAS retries remain bounded during continual unrelated writes and retain the waiting draft', async () => {
+  reset();
+  state.beforeWrite = () => { state.revision++; state.data.trips[0].name = `Concurrent holiday ${state.writeAttempts}`; };
+  const response = await http();
+  assert.equal(response.status, 409);
+  assert.match((await response.json() as { error: string }).error, /kept changing/);
+  assert.equal(state.providerCalls, 1);
+  assert.equal(state.writeAttempts, 3);
+  assert.equal(state.writes, 0);
+  assert.equal(state.data.trips[0].name, 'Concurrent holiday 3');
+  assert.equal(state.data.trips[0].drafts[0].status, 'waiting');
+});
+
+test('HTTP CAS retries recheck manual draft edits, member context, account and photo access', async () => {
+  for (const race of ['manual-edit', 'member-context', 'membership', 'account', 'image-deleted', 'image-replaced'] as const) {
+    reset();
+    state.beforeWrite = () => {
+      if (state.writeAttempts !== 1) return;
+      state.revision++;
+      if (race === 'manual-edit') state.data.trips[0].drafts[0].title = 'Human correction during save';
+      if (race === 'member-context') state.data.trips[0].members[0].name = 'Changed human identity';
+      if (race === 'membership') state.metadataAllowed = false;
+      if (race === 'account') state.actorChanged = true;
+      if (race === 'image-deleted') state.imagePresent = false;
+      if (race === 'image-replaced') state.imageVersion = 'replacement-image';
+    };
+    const response = await http();
+    assert.equal(response.status, 409, race);
+    assert.equal(state.providerCalls, 1, race);
+    assert.equal(state.writeAttempts, 1, race);
+    assert.equal(state.writes, 0, race);
+    assert.equal(state.data.trips[0].drafts[0].status, 'waiting', race);
+    if (race === 'manual-edit') assert.equal(state.data.trips[0].drafts[0].title, 'Human correction during save');
+  }
+});
+
+test('HTTP changes during native inference reject late results without reverting the latest data or changing approved expenses', async () => {
+  for (const race of ['manual-edit', 'same-revision-photo', 'same-revision-question', 'member-context', 'ownership', 'membership', 'account', 'deletion', 'image-deleted', 'image-replaced'] as const) {
+    reset();
+    state.duringModel = () => {
+      if (race === 'manual-edit') { state.revision++; state.data.trips[0].drafts[0].tip = 250; }
       if (race === 'same-revision-photo') state.data.trips[0].drafts[0].receiptId = 'replacement-photo';
       if (race === 'same-revision-question') state.data.trips[0].drafts[0].memory = { notes: 'New trusted context', aliases: [] };
+      if (race === 'member-context') state.data.trips[0].members[0].name = 'Changed human identity';
+      if (race === 'ownership') state.data.trips[0].ownerId = 'new-owner';
       if (race === 'membership') state.metadataAllowed = false;
       if (race === 'account') state.actorChanged = true;
       if (race === 'deletion') state.data.trips[0].drafts = [];
+      if (race === 'image-deleted') state.imagePresent = false;
+      if (race === 'image-replaced') state.imageVersion = 'replacement-image';
     };
     const response = await http();
     assert.equal(response.status, 409, race);
     assert.equal(state.providerCalls, 1); assert.equal(state.writes, 0);
     assert.equal(state.data.trips[0].expenses.length, 0);
+    if (race === 'manual-edit') assert.equal(state.data.trips[0].drafts[0].tip, 250);
     if (race === 'same-revision-photo') assert.equal(state.data.trips[0].drafts[0].receiptId, 'replacement-photo');
     if (race === 'same-revision-question') assert.equal(state.data.trips[0].drafts[0].memory!.notes, 'New trusted context');
     if (race === 'deletion') assert.equal(state.data.trips[0].drafts.length, 0);
