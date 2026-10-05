@@ -37,7 +37,8 @@
       "change": "Decoded result cap remains1000000 bytes, event cap6016384 bytes, total transport cap36098304 bytes, supporting worst-case escaping and repeated Responses output events.",
       "evidence": [
         "tests/receipt-ai.test.ts: escaped delta, done, content-part, output-item and completed copies fit the bounded transport budget",
-        "Separate result/event/multi-line/stream over-limit refusals retained"
+        "Separate result/event/multi-line/stream over-limit refusals retained",
+        "tests/receipt-ai.test.ts: a maximal valid result with 16,000 token-sized delta envelopes fits the bounded transport budget"
       ],
       "backportedTo": [
         6,
@@ -50,7 +51,8 @@
       "change": "Required canonical source-draft SHA256 checked before credential lookup, budget consumption or inference. Browser no longer sends revision; server accepts an optional ignored legacy revision only alongside the required fingerprint. Missing/malformed hash receives reload guidance.",
       "evidence": [
         "tests/receipt-ai.test.ts: HTTP missing or malformed fingerprints and cached revision-only contracts require a reload before spending",
-        "tests/receipt-editor.test.ts: processing payload hash/no revision assertions"
+        "tests/receipt-editor.test.ts: processing payload hash/no revision assertions",
+        "tests/receipt-ai.test.ts: legacy revision values remain compatible while the draft fingerprint alone fences inference"
       ],
       "backportedTo": [
         6,
@@ -131,9 +133,9 @@
     "sourceData": "synthetic isolated SQLite/D1/R2 and mocked provider responses",
     "paidModelCalls": 0,
     "backportTests": {
-      "PR5": 652,
-      "PR6": 862,
-      "PR7": 1005
+      "PR5": 653,
+      "PR6": 866,
+      "PR7": 1010
     },
     "compiledMobile": {
       "nativeReceiptWorkflows": 10,
@@ -157,7 +159,13 @@
       "passed": 1006,
       "failed": 0,
       "skipped": 0
-    }
+    },
+    "combinedRegressionTests": {
+      "passed": 1012,
+      "failed": 0,
+      "skipped": 0
+    },
+    "operatorNpmAlias": "Actual isolated local Wrangler D1 dry-run/apply/audit verified; no production transfer."
   },
   "releaseBoundary": {
     "githubPRs": "Open; no merge into main",

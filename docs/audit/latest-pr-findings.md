@@ -25,7 +25,7 @@ Actual hosted ChatGPT/Codex tool exposure and live vision benchmarks remain unpe
 
 ## Validation and release boundary
 
-The latest combined source passes 1,006 regression tests, TypeScript, production build and lint (zero errors, four existing warnings). Earlier compiled mobile/native-route/export journeys remain recorded separately; the follow-up record identifies checks rerun for this change. Final exact-head CI is recorded in the PR description.
+The latest combined source passes 1,012 regression tests, TypeScript, production build and lint (zero errors, four existing warnings). Earlier compiled mobile/native-route/export journeys remain recorded separately; the follow-up record identifies checks rerun for this change. Final exact-head CI is recorded in the PR description.
 
 No private key was read, no paid model call was made and no production financial data was changed. No SQL migration was added or replayed. GitHub does not deploy the Site; successful publication and matching source provenance are recorded separately in PR #8's description.
 
