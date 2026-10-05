@@ -4,7 +4,7 @@ import { hashToken, resolveIdentity } from '@/lib/auth';
 import { draftSchema, tripSchema, draftUnitsSchema, receiptQuantitySchema, CURRENCIES, type Currency, type Trip, type Ledger, type Draft, type Expense } from '@/lib/model';
 import { receiptMemorySchema, type ReceiptMemory } from '@/lib/receipt-context';
 import { validateReceiptMemoryOwnership } from '@/lib/receipt-memory-ownership';
-import { reconcileReceiptScan, receiptScanFingerprint, mergeReceiptSourceLines, scanSourceSchema, sourceLineSchema, receiptScanWarningSchema, RECEIPT_SCAN_WARNING_CODES } from '@/lib/receipt-scan';
+import { mayRecognizeUnknownProvenance, reconcileReceiptScan, receiptScanFingerprint, mergeReceiptSourceLines, scanSourceSchema, sourceLineSchema, receiptScanWarningSchema, RECEIPT_SCAN_WARNING_CODES } from '@/lib/receipt-scan';
 
 export const dynamic = 'force-dynamic';
 
@@ -673,11 +673,8 @@ export async function POST(request: Request) {
             // Receipt observations cannot rewrite confirmed text/prices or
             // reinterpret a traveller's personal cost decisions. Unknown
             // provenance on a saved legacy row is protected as manual input.
-            const blankPlaceholder = !!previous && !previous.name.trim() && previous.amount === 0
-              && previous.quantity === undefined && previous.scanSource === undefined;
-            const protectName = !!previous && (previous.fieldSources?.name === 'user' || (previous.fieldSources?.name === undefined && !!previous.name.trim()));
-            const protectAmount = !!previous && (previous.fieldSources?.amount === 'user'
-              || (previous.fieldSources?.amount === undefined && previous.amount !== null && !blankPlaceholder));
+            const protectName = !!previous && (previous.fieldSources?.name === 'user' || (previous.fieldSources?.name === undefined && !mayRecognizeUnknownProvenance('name', previous)));
+            const protectAmount = !!previous && (previous.fieldSources?.amount === 'user' || (previous.fieldSources?.amount === undefined && !mayRecognizeUnknownProvenance('amount', previous)));
             const protectQuantity = !!previous && (previous.fieldSources?.quantity === 'user'
               || (previous.quantity !== undefined && previous.fieldSources?.quantity === undefined));
             if (protectName) next.name = previous!.name;

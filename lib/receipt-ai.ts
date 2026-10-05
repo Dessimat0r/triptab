@@ -2,7 +2,7 @@ import { sha256Hex } from './data-utils';
 import { DEFAULT_RECEIPT_MODEL } from './receipt-ai-config';
 import { z } from 'zod';
 import { CURRENCIES, MAX_AMOUNT, MAX_UNITS, draftSchema, receiptQuantitySchema, total, type Currency, type Draft, type Trip } from './model';
-import { mergeReceiptSourceLines, reconcileReceiptScan, type ReceiptScanWarning } from './receipt-scan';
+import { blankReceiptItem, mayRecognizeUnknownProvenance, mergeReceiptSourceLines, reconcileReceiptScan, type ReceiptScanWarning } from './receipt-scan';
 
 export class ReceiptAIError extends Error {
   constructor(message: string, public readonly status = 502, public readonly code = 'receipt_processing_failed') {
@@ -375,7 +375,7 @@ export function applyReceiptTranscription(_trip: Trip, draft: Draft, transcripti
   const result = receiptTranscriptionSchema.safeParse(transcription);
   if (!result.success) throw new ReceiptAIError('The AI returned invalid receipt fields. Your saved receipt is unchanged.');
   const value = result.data;
-  const blank = (item: Draft['items'][number]) => !item.name.trim() && item.amount === 0 && item.quantity === undefined && item.scanSource === undefined;
+  const blank = blankReceiptItem;
   const untouched = !draft.expenseId && draft.status === 'waiting' && draft.items.every(blank)
     && !draft.tax && !draft.tip && !draft.discount && !draft.fx && !draft.bankAmount;
   const previousItems = untouched ? draft.items.filter(item => !blank(item)) : draft.items;
@@ -405,10 +405,9 @@ export function applyReceiptTranscription(_trip: Trip, draft: Draft, transcripti
     } : previous?.scanSource;
     const canObserve = (field: 'name' | 'amount') => {
       const source = previous?.fieldSources?.[field];
-      // A legacy saved value may have been entered or corrected by a person.
-      // Only the untouched, empty initial placeholder is safe to infer from
-      // shape; current recognized/default fields carry explicit provenance.
-      return !previous || (source === undefined ? (field === 'name' ? !previous.name.trim() : previous.amount === null || blank(previous)) : source !== 'user');
+      // Legacy populated fields may have been entered or corrected by a person.
+      // Native and connected-assistant recognition share the missing-field rule.
+      return !previous || (source === undefined ? mayRecognizeUnknownProvenance(field, previous) : source !== 'user');
     };
     const readName = canObserve('name'), readAmount = canObserve('amount');
     const nextQuantity = previous ? (quantity && previous.fieldSources?.quantity !== 'user'

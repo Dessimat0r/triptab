@@ -7,7 +7,11 @@ import { applyReceiptTranscription, consumeReceiptProcessBudget, processReceiptI
 
 export const dynamic = 'force-dynamic';
 const id = z.string().min(1).max(100);
-const requestSchema = z.object({ tripId: id, draftId: id, receiptId: id.regex(/^[-a-z0-9]+$/i), draftHash: z.string().regex(/^[a-f0-9]{64}$/), questionId: id.optional(), readPurchaseDetails: z.boolean().optional() }).strict();
+const requestSchema = z.object({ tripId: id, draftId: id, receiptId: id.regex(/^[-a-z0-9]+$/i),
+  // Cached clients may still send this global counter. Only the required draft
+  // fingerprint fences inference; this compatibility value never decides it.
+  revision: z.number().int().min(0).optional(), draftHash: z.string().regex(/^[a-f0-9]{64}$/),
+  questionId: id.optional(), readPurchaseDetails: z.boolean().optional() }).strict();
 type Operation = { attemptId: string; tripId: string; draftId: string; receiptId: string };
 function logOperation(event: string, operation: Operation, details: Record<string, string | number | undefined> = {}) {
   // Legacy/imported IDs can contain user text. Keep operational tokens only;

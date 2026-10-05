@@ -47,7 +47,7 @@
     {
       "id": "F4",
       "disposition": "fixed",
-      "change": "Required canonical source-draft SHA256 checked before credential lookup, budget consumption or inference. Removed obsolete revision field from request/server/client; cached payloads receive reload guidance.",
+      "change": "Required canonical source-draft SHA256 checked before credential lookup, budget consumption or inference. Browser no longer sends revision; server accepts an optional ignored legacy revision only alongside the required fingerprint. Missing/malformed hash receives reload guidance.",
       "evidence": [
         "tests/receipt-ai.test.ts: HTTP missing or malformed fingerprints and cached revision-only contracts require a reload before spending",
         "tests/receipt-editor.test.ts: processing payload hash/no revision assertions"
@@ -75,7 +75,7 @@
     {
       "id": "F6",
       "disposition": "fixed",
-      "change": "MCP/native recognition agree that only empty-name,zero-amount,no-quantity,no-source is a blank price placeholder; meaningful legacy zeros remain protected.",
+      "change": "MCP/native recognition agree that only empty-name,zero-amount,no-quantity,no-source is a blank price placeholder; meaningful legacy zeros remain protected. npm run receipt-owner points to this sole runnable transport; the preserved internal binding API also defaults to dry-run.",
       "evidence": [
         "tests/mcp.test.ts: MCP recognition aligns native placeholder rules for legacy zero prices with quantities or source evidence",
         "tests/mcp.test.ts: MCP recognition still fills true blank placeholders and unknown prices even when quantity evidence exists"
@@ -87,7 +87,7 @@
     {
       "id": "F7",
       "disposition": "fixed",
-      "change": "Invitation token generation uses shared encodeBase64url for32 cryptographically random bytes, preserving the URL token format.",
+      "change": "Invitation and push token generation use shared base64url encoding, preserving token/signature bytes and URL format.",
       "evidence": [
         "64 invitation regressions passed"
       ]
@@ -122,11 +122,6 @@
     }
   ],
   "validation": {
-    "combinedRegressionTests": {
-      "passed": 1006,
-      "failed": 0,
-      "skipped": 0
-    },
     "typeScript": "passed",
     "productionBuild": "passed with explicit owner configuration",
     "lint": {
@@ -157,6 +152,11 @@
       "browserErrors": 0,
       "horizontalOverflow": 0,
       "apiModelDestinations": "intercepted with synthetic responses"
+    },
+    "preConcurrentIntegrationRegressionTests": {
+      "passed": 1006,
+      "failed": 0,
+      "skipped": 0
     }
   },
   "releaseBoundary": {
@@ -169,5 +169,11 @@
   "limitations": [
     "Hosted ChatGPT/Codex tools and live vision quality are separate unperformed acceptance gates.",
     "No paid model benchmark or real receipt rescan performed."
-  ]
+  ],
+  "concurrentIntegration": {
+    "remoteHead": "e5c004385697ceb1df99d7006020be5d2a58bd94",
+    "ancestry": "Preserved by merge; useful shared receipt predicates, push encoding, CLI alias and distinct regressions retained.",
+    "receiptContract": "Required hash; optional legacy revision accepted and ignored. Browser no longer sends revision.",
+    "ownerTransport": "One guarded .ts CLI; generated-app-config immediate-transfer .mts path replaced by explicit resource/account selection and dry-run."
+  }
 }

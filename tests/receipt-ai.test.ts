@@ -338,6 +338,16 @@ test('escaped delta, done, content-part, output-item and completed copies fit th
   assert.deepEqual(await processReceiptImage(input, { fetcher: async () => response }), transcription);
 });
 
+test('a maximal valid result with 16,000 token-sized delta envelopes fits the bounded transport budget', async () => {
+  const text = JSON.stringify(transcription) + '\n'.repeat(900_000);
+  assert.ok(new TextEncoder().encode(text).byteLength <= 1_000_000);
+  const deltas = Array.from({ length: 16_000 }, () => ({ type: 'response.output_text.delta', item_id: 'msg_0', output_index: 0, content_index: 0, delta: 'abcd' }));
+  const events = [...deltas, { type: 'response.output_text.done', text },
+    { type: 'response.completed', response: { status: 'completed', error: null,
+      output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] }] } }];
+  assert.deepEqual(await processReceiptImage(input, { fetcher: async () => streamResponse(events, { split: 8192 }) }), transcription);
+});
+
 test('stream, individual event and multi-line event buffers retain separate finite limits', async () => {
   const tooLargeEvent = 'data: ' + JSON.stringify({ type: 'response.output_text.delta', delta: 'x'.repeat(6_020_000) }) + '\n\n';
   const tooLargeMultiLine = Array.from({ length: 110 }, () => 'data: ' + 'x'.repeat(60_000)).join('\n') + '\n\n';
@@ -1171,7 +1181,6 @@ test('HTTP missing or malformed fingerprints and cached revision-only contracts 
     { ...requestBody, draftHash: undefined },
     { ...requestBody, draftHash: undefined, revision: 7 },
     { ...requestBody, draftHash: 'not-a-fingerprint' },
-    { ...requestBody, draftHash: await sha256Hex(canonicalJson(draft)), revision: 7 },
   ]) {
     reset(); const before = structuredClone(state.data), response = await http(legacy);
     assert.equal(response.status, 400);
@@ -1180,6 +1189,22 @@ test('HTTP missing or malformed fingerprints and cached revision-only contracts 
     assert.equal(budgetDatabase.prepare('SELECT COUNT(*) AS count FROM auth_rate_limits').get()!.count, 0);
     assert.deepEqual(state.data, before);
   }
+});
+
+test('legacy revision values remain compatible while the draft fingerprint alone fences inference', async () => {
+  for (const revision of [0, 999]) {
+    reset(); state.revision = 500;
+    assert.equal((await http({ ...requestBody, revision })).status, 200);
+    assert.equal(state.providerCalls, 1); assert.equal(state.writes, 1);
+  }
+  reset(); const draftHash = await sha256Hex(canonicalJson(state.data.trips[0].drafts[0]));
+  state.data.trips[0].drafts[0].title = 'Manual change after the cached client read';
+  assert.equal((await http({ ...requestBody, draftHash, revision: 500 })).status, 409);
+  assert.equal(state.providerCalls, 0); assert.equal(state.accessCalls, 0); assert.equal(state.writes, 0);
+  reset(); state.duringModel = () => { state.revision += 500; state.data.trips[0].name = 'Latest unrelated holiday title'; };
+  assert.equal((await http({ ...requestBody, revision: 0 })).status, 200);
+  assert.equal(state.providerCalls, 1); assert.equal(state.writes, 1);
+  assert.equal(state.data.trips[0].name, 'Latest unrelated holiday title');
 });
 
 test('HTTP missing/unsupported/oversized/deleted images and credential refusal cannot start inference or save a draft', async () => {
@@ -1354,6 +1379,15 @@ test('native recognition fills unknown-provenance null prices and blank names wh
   assert.equal(proposal.items[0].name, 'Readable coffee'); assert.equal(proposal.items[0].amount, 250);
   assert.equal(proposal.items[0].fieldSources?.amount, 'receipt');
   assert.equal(proposal.items[1].amount, 123); assert.equal(proposal.items[1].name, 'Human price');
+});
+
+test('native recognition treats a blank-named zero-price item with a quantity or scan source as saved manual input', () => {
+  for (const extra of [{ quantity: { total: 2 } }, { scanSource: { lineIndex: 4 } }]) {
+    const old: Draft = { ...draft, status: 'review', items: [{ id: 'legacy', name: '', amount: 0, members: ['alice'], ...extra }] };
+    const proposal = applyReceiptTranscription(trip, old, { ...transcription, items: [{ id: 'legacy', name: 'Read dinner', amount: 1200 }] });
+    assert.equal(proposal.items[0].amount, 0, JSON.stringify(extra));
+    assert.equal(proposal.items[0].fieldSources?.amount, undefined);
+  }
 });
 
 test('draft fingerprint rejects a changed receipt before spending and ignores unrelated revisions', async () => {
