@@ -151,6 +151,25 @@ for (const { width, height, touch } of viewports) {
   });
 }
 
+test.describe('same-language receipt item', () => {
+  test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+  test('uses one canonical name field when the detected and reading languages match', async ({ page }) => {
+    const sameLanguageTrip = structuredClone(trip);
+    sameLanguageTrip.drafts[0].detectedLanguage = 'en';
+    sameLanguageTrip.drafts[0].items[0].nameLanguage = 'en';
+    sameLanguageTrip.drafts[0].items[0].translations.en = {
+      text: originalName, sourceText: originalName, pairedText: originalName, sourceLanguage: 'en', provenance: 'ai',
+    };
+    await fixtures(page, () => sameLanguageTrip);
+    await page.goto('/expenses?receiptDraft=layout-draft&receiptTrip=layout-trip');
+    const firstItem = page.locator('.item').first();
+    await expect(firstItem.getByRole('textbox', { name: 'Item 1 name', exact: true })).toHaveValue(originalName);
+    await expect(firstItem.locator('.item-bilingual-names input')).toHaveCount(1);
+    await expect(page.getByRole('combobox', { name: 'Show first for item 1', exact: true })).toHaveCount(0);
+    await fits(page);
+  });
+});
+
 // Conflict and error notices sit between the body and footer; they must share
 // the dialog's single scroll area instead of squeezing the body.
 for (const { width, height } of [{ width: 390, height: 844 }, { width: 320, height: 740 }]) {

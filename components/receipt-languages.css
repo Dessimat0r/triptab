@@ -1,6 +1,7 @@
 /* Both name rows share one action column, so the name inputs and the display
    select line up at the same width whichever row shows a Translate label. */
 .item-bilingual-names { min-width: 0; max-width: 100%; flex: 1 1 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 6px; align-items: end; }
+.item-bilingual-names--single { grid-template-columns: minmax(0, 1fr); }
 .item-bilingual-names > :not(.item-name-row) { grid-column: 1 / -1; }
 .item-bilingual-names > .item-language-actions { grid-column: 1; }
 .item-name-row { display: contents; }
@@ -32,6 +33,7 @@
   .editor .item-top { display: grid; grid-template-columns: 16px minmax(0,1fr) 44px; }
   .editor .item-top > .itemnumber { grid-column: 1; grid-row: 1; }
   .editor .item-top > .item-bilingual-names { grid-column: 2 / -1; grid-row: 1; }
+  .editor .item-top > .item-bilingual-names--single { grid-column: 2; }
   .editor .item-top { align-items: start; }
   .editor .item-top > .moneyinput { grid-column: 2; grid-row: 2; }
   .editor .item-top > .iconbutton { grid-column: 3; grid-row: 2; }
