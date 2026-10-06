@@ -56,6 +56,20 @@ for (const width of [320, 390]) {
       expect(uploads).toBe(0); expect(reads).toBe(0);
       await dialog.getByRole('textbox', { name: /Who bought what/ }).fill('Gaz had a decaf, I had a cappuccino.');
       await dialog.locator('summary').click();
+      const locationLabelLayout = await dialog.locator('.receipt-place-fields > label').evaluate(label => {
+        const text = label.firstChild;
+        const optional = label.querySelector('small')!;
+        if (!text) throw new Error('Receipt location label text is missing.');
+        const range = document.createRange();
+        range.selectNode(text);
+        const heading = range.getBoundingClientRect();
+        const helper = optional.getBoundingClientRect();
+        return {
+          overlaps: heading.left < helper.right && heading.right > helper.left && heading.top < helper.bottom && heading.bottom > helper.top,
+          helperMarginTop: getComputedStyle(optional).marginTop,
+        };
+      });
+      expect(locationLabelLayout).toEqual({ overlaps: false, helperMarginTop: '0px' });
       await dialog.getByRole('button', { name: 'Use current location', exact: true }).click();
       await expect(dialog.getByRole('status').last()).toContainText('Location was not shared');
       await dialog.getByRole('textbox', { name: /Receipt location/ }).fill('Bratislava');
