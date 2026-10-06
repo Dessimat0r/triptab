@@ -13,12 +13,13 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  RECEIPT_AI_OWNER_EMAIL: ci-owner@example.invalid
+
 jobs:
-  verify:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    env:
-      RECEIPT_AI_OWNER_EMAIL: ci-owner@example.invalid
+  regression:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - name: Check out source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -33,13 +34,86 @@ jobs:
         run: npm run install:ci
       - name: Run regression tests
         run: npm test
+
+  quality:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm run install:ci
       - name: Check types
         run: npx --no-install tsc --noEmit
       - name: Lint
         run: npm run lint
+
+  browser:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      # A failing engine must not cancel the other engine's coverage.
+      fail-fast: false
+      matrix:
+        browser: [chromium, webkit]
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm run install:ci
       - name: Build
         run: npm run build
+      - name: Cache layout-test browser
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ~/.cache/ms-playwright
+          # Browser revisions and OS libraries must match; no fallback keys.
+          key: playwright-${{ runner.os }}-${{ runner.arch }}-ubuntu-24.04-${{ matrix.browser }}-${{ hashFiles('node_modules/playwright-core/browsers.json') }}
       - name: Install layout-test browsers
-        run: npx --no-install playwright install --with-deps chromium webkit
+        timeout-minutes: 5
+        # Check/install OS dependencies even on a browser-cache hit. Chromium
+        # uses the headless shell, so its unused full-browser download is omitted.
+        run: npx --no-install playwright install --with-deps --only-shell ${{ matrix.browser }}
       - name: Check production browser layouts
-        run: npm run test:layout
+        # Retain the measured two-worker default for each complete engine suite.
+        run: npm run test:layout -- --project=${{ matrix.browser }}
+      - name: Upload failed browser traces
+        if: failure()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: browser-failure-${{ matrix.browser }}
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # Preserve the existing required check name. A failed, cancelled or skipped
+  # dependency (including either browser engine) must never produce a green gate.
+  verify:
+    needs: [regression, quality, browser]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Require every check to pass
+        env:
+          REGRESSION_RESULT: ${{ needs.regression.result }}
+          QUALITY_RESULT: ${{ needs.quality.result }}
+          BROWSER_RESULT: ${{ needs.browser.result }}
+        run: |
+          test "$REGRESSION_RESULT" = success
+          test "$QUALITY_RESULT" = success
+          test "$BROWSER_RESULT" = success
