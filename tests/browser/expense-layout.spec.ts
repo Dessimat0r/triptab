@@ -105,7 +105,7 @@ async function hasComfortableMobileItemSpacing(page: Page) {
       .filter(element => element.getClientRects().length)
       .map(element => element.getBoundingClientRect())
       .sort((left, right) => left.top - right.top);
-    return controls.slice(1).map((control, index) => control.top - controls[index].bottom);
+    return controls.slice(1).map((control, index) => control.top - controls[index]!.bottom);
   });
   expect(gaps.length).toBeGreaterThan(0);
   expect(Math.min(...gaps)).toBeGreaterThanOrEqual(10);
@@ -170,9 +170,9 @@ test.describe('same-language receipt item', () => {
     const sameLanguageTrip = structuredClone(trip);
     sameLanguageTrip.drafts[0].detectedLanguage = 'en';
     sameLanguageTrip.drafts[0].items[0].nameLanguage = 'en';
-    sameLanguageTrip.drafts[0].items[0].translations.en = {
+    sameLanguageTrip.drafts[0].items[0].translations = { en: {
       text: originalName, sourceText: originalName, pairedText: originalName, sourceLanguage: 'en', provenance: 'ai',
-    };
+    } };
     await fixtures(page, () => sameLanguageTrip);
     await page.goto('/expenses?receiptDraft=layout-draft&receiptTrip=layout-trip');
     const firstItem = page.locator('.item').first();
