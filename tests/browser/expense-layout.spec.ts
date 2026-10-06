@@ -25,14 +25,15 @@ const trip = {
   }],
 };
 
-async function fixtures(page: Page) {
+async function fixtures(page: Page, ledger: () => unknown = () => trip) {
   await page.route('**/api/**', route => {
     const path = new URL(route.request().url()).pathname;
+    if (path === '/api/ledger' && route.request().method() === 'POST') return route.fulfill({ status: 409, json: { error: 'Revision changed' } });
     if (path === '/api/receipt') return route.fulfill({
       contentType: 'image/svg+xml',
       body: '<svg xmlns="http://www.w3.org/2000/svg" width="4000" height="900"><rect width="4000" height="900" fill="white"/></svg>',
     });
-    const json = path === '/api/ledger' ? { data: { trips: [trip] }, revision: 1 }
+    const json = path === '/api/ledger' ? { data: { trips: [ledger()] }, revision: 1 }
       : path === '/api/profile' ? { id: 'layout-owner', displayName: 'Alex', email: 'layout@example.invalid', authMethod: 'password' }
       : path === '/api/trip-language' ? { accountId: 'layout-owner', tripId: 'layout-trip', revision: 1,
         preferences: { readingLanguage: 'en', primaryVersion: 'reading', itemVersions: {} } }
@@ -68,6 +69,9 @@ async function fits(page: Page) {
       right: dialogBounds.right,
       viewport: innerWidth,
       pageOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      // Only one of the overlay, dialog and body may scroll vertically.
+      scrollers: [overlay, editor, body].filter(element =>
+        /auto|scroll/.test(getComputedStyle(element).overflowY) && element.scrollHeight > element.clientHeight + 1).length,
       overlayScroll: overlay.scrollHeight - overlay.clientHeight,
       overlayScrollX: overlay.scrollWidth - overlay.clientWidth,
       itemRows,
@@ -84,6 +88,7 @@ async function fits(page: Page) {
   expect(result.pageOverflow).toBeLessThanOrEqual(1);
   // Hidden labels must not stretch the overlay into blank space below the dialog.
   expect(result.overlayScroll).toBeLessThanOrEqual(1);
+  expect(result.scrollers).toBeLessThanOrEqual(1);
   expect(result.overlayScrollX).toBeLessThanOrEqual(1);
   // Each item's name, display and amount fields share one right edge on phones.
   if (result.viewport <= 480) for (const edges of result.itemRows) expect(edges).toBe(1);
@@ -140,6 +145,30 @@ for (const { width, height, touch } of viewports) {
         await fits(page);
       });
     }
+  });
+}
+
+// Conflict and error notices sit between the body and footer; they must share
+// the dialog's single scroll area instead of squeezing the body.
+for (const { width, height } of [{ width: 390, height: 844 }, { width: 320, height: 740 }]) {
+  test.describe(`${width}×${height} conflict`, () => {
+    test.use({ viewport: { width, height }, hasTouch: true, isMobile: true });
+    test('edited expense conflict keeps one scroll area', async ({ page }) => {
+      // A holiday-currency expense needs no exchange rate before saving.
+      const base = { ...trip, expenses: trip.expenses.map(expense => ({ ...expense, currency: 'GBP' })) };
+      let current = base;
+      await fixtures(page, () => current);
+      await page.goto('/expenses');
+      await page.locator('.expense-open').first().click();
+      await expect(page.getByRole('heading', { name: 'Edit expense', exact: true })).toBeVisible();
+      current = { ...base, expenses: base.expenses.map(expense => ({ ...expense, title: 'Harbour dinner', items: expense.items.map(item => ({ ...item, amount: item.amount + 100 })) })) };
+      await page.getByRole('textbox', { name: 'Expense name', exact: true }).fill('Dinner by the harbour, changed');
+      await page.getByRole('button', { name: 'Save expense', exact: true }).click();
+      await expect(page.locator('.conflict-review')).toBeVisible();
+      await fits(page);
+      await page.evaluate(() => { document.documentElement.style.fontSize = '32px'; });
+      await fits(page);
+    });
   });
 }
 
