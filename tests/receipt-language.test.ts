@@ -3,7 +3,7 @@ import test from 'node:test';
 import { defaultLanguagePreferences,editReadingName,itemDisplayKey,mergeScannedNames,observedItemLanguage,originalItemLanguage,receiptLanguageHint,setPairedTranslation } from '../lib/receipt-languages';
 import { draftSchema,expenseSchema,shares,type Draft,type Trip,type Item } from '../lib/model';
 import { applyReceiptTranscription,processReceiptImage,type ReceiptTranscription } from '../lib/receipt-ai';
-import { processLanguageRequest } from '../lib/receipt-language-ai';
+import { languageRequestSchema, processLanguageRequest } from '../lib/receipt-language-ai';
 import { receiptScanFingerprint,blankReceiptItem } from '../lib/receipt-scan';
 import { createReceiptFlowWorker } from './helpers/receipt-flow-worker';
 const trip:Trip={id:'holiday',name:'Austria',currency:'EUR',receiptLanguage:'de',members:[{id:'alice',name:'Alice'}],expenses:[],drafts:[],payments:[]};
@@ -118,4 +118,28 @@ test('connected ChatGPT reads private reading preferences and preserves user tra
     assert.equal(recognized.result?.isError,undefined,recognized.result?.content?.[0]?.text);
     const after=(await flow.readLedger()).data.trips[0].drafts[0];assert.equal(after.detectedLanguage,'it');assert.equal(after.items[0].translations?.fr?.text,'Eau corrigée');assert.equal(after.items[0].translations?.fr?.provenance,'user');
   }finally{await flow.dispose();}
+});
+
+
+test('item translation receives saved purchase place and optional device hint without another request', async () => {
+  const place = { label: 'Italian restaurant in Bratislava', source: 'chat' as const };
+  const hint = { latitude: 48.1486, longitude: 17.1077, accuracy: 50, capturedAt: '2026-10-06T10:00:00Z' };
+  const request = languageRequestSchema.parse({ purpose: 'items', tripId: trip.id, receiptLocation: place, receiptLocationHint: hint,
+    rows: [{ id: 'line', sourceText: 'Acqua frizzante', targetLanguage: 'en' }] });
+  let calls = 0;
+  const result = await processLanguageRequest(request, { accessToken: 'synthetic', provider: 'api' }, { tripLanguage: 'sk', fetcher: async (_url, init) => {
+    calls++;
+    const body = JSON.parse(init!.body as string);
+    const context = JSON.parse(body.input[0].content[0].text);
+    assert.deepEqual(context.receiptLocation, place);
+    assert.deepEqual(context.receiptLocationHint, hint);
+    assert.equal(context.tripLanguageHint, 'sk');
+    assert.equal(body.input[0].content.length, 1, 'translation remains text-only');
+    assert.match(body.instructions, /detect outliers independently/);
+    return completed({ rows: [{ id: 'line', text: 'Sparkling water', sourceLanguage: 'it' }] });
+  } });
+  assert.equal(calls, 1);
+  assert.ok('rows' in result);
+  assert.equal(result.rows[0].sourceLanguage, 'it');
+  assert.equal(languageRequestSchema.safeParse({ ...request, receiptLocationHint: { ...hint, latitude: 91 } }).success, false);
 });

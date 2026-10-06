@@ -199,10 +199,11 @@ test('participants without a configured shared key receive a fallback without ke
   assert.doesNotMatch(visibleText(html), /Set up receipt AI|Read receipt with AI|Verify receipt AI setup/);
 });
 
-test('identity linking explicitly leaves external tool availability unknown', () => {
-  const text = visibleText(render({connected: true, aiProvider: 'api', aiConfigured: true, aiConnected: true, onProcess() {}}));
-  assert.match(text, /ChatGPT identity: linked/);
-  assert.match(text, /External TripTab tools: availability unknown/);
-  assert.match(text, /linking an identity does not enable those tools/);
-  assert.match(text, /Read receipt with AI/, 'direct API readiness is independent of the external conversation');
+test('direct receipt AI stays primary while external connected tools are a compact optional fallback', () => {
+  const html=render({connected:true,aiProvider:'api',aiConfigured:true,aiConnected:true,onProcess(){}}),text=visibleText(html);
+  assert.match(text,/Receipt AI is provided by TripTab/);
+  assert.match(text,/Read receipt with AI/,'direct API readiness is independent of the external conversation');
+  assert.match(html,/<details class="receipt-capture-tools">/);
+  assert.match(text,/Connected ChatGPT tools/);assert.match(text,/send it.*TripTab enabled/);
+  assert.doesNotMatch(text,/external tools are enabled|identity.*enables.*tools/i);
 });

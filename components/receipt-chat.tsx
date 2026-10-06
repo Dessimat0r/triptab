@@ -19,6 +19,8 @@ export type ReceiptChatProps = {
   error?: string;
   refreshError?: string;
   offline?: boolean;
+  nativeAvailable?: boolean;
+  onRetry?: (questionId: string) => Promise<boolean>;
   onSend: (text: string, itemId?: string) => Promise<boolean> | boolean;
   onRefresh: () => void;
 };
@@ -35,7 +37,7 @@ function messageTime(createdAt: string) {
       });
 }
 
-export default function ReceiptChat({ messages, busy, itemId, scopeLabel, contextTitle, itemNames, memberNames, currentMemberId, memory, error, refreshError, offline, onSend, onRefresh }: ReceiptChatProps) {
+export default function ReceiptChat({ messages, busy, itemId, scopeLabel, contextTitle, itemNames, memberNames, currentMemberId, memory, error, refreshError, offline, nativeAvailable = false, onRetry, onSend, onRefresh }: ReceiptChatProps) {
   const titleId = useId();
   const questionId = useId();
   const hintId = useId();
@@ -57,7 +59,7 @@ export default function ReceiptChat({ messages, busy, itemId, scopeLabel, contex
   const questionLabel = itemId ? `Question about ${itemLabel}` : "Receipt question";
   const visibleError = sendError || error;
   const authorLabel = (message: ReceiptMessage) => {
-    if (message.role === "assistant") return "ChatGPT or Codex";
+    if (message.role === "assistant") return "Assistant";
     if (message.authorMemberId) {
       if (message.authorMemberId === currentMemberId) return "You";
       return message.authorName || memberNames?.[message.authorMemberId] || "Earlier traveller";
@@ -83,16 +85,24 @@ export default function ReceiptChat({ messages, busy, itemId, scopeLabel, contex
     }
   }
 
+  async function retryQuestion(id: string) {
+    if (!onRetry || working || sendingRef.current) return;
+    sendingRef.current = true; setSending(true); setSendError("");
+    try { await onRetry(id); }
+    catch { setSendError("Unable to get a reply. Your saved question is still here."); }
+    finally { sendingRef.current = false; setSending(false); }
+  }
+
   return (
     <section className="receipt-chat" aria-labelledby={titleId} aria-busy={working} data-item-id={itemId}>
       <h3 id={titleId}>{heading}</h3>
       <p id={hintId} className="receipt-chat-hint">
-        Questions are saved here and a prompt is prepared. Open a ChatGPT or Codex conversation with the TripTab tools enabled and use that prompt. Replies appear here automatically. TripTab cannot verify which tools are available in an external conversation. You can also edit the receipt yourself.
+        {nativeAvailable ? "Ask about who bought what, quantities, names or location. The assistant remembers this receipt and proposes changes for review." : "Questions are saved here and a prompt is prepared. Use it in a ChatGPT or Codex conversation with TripTab tools enabled. Replies appear here automatically."}
       </p>
       {itemId && <p className="receipt-chat-scope">“This” refers to {itemLabel}. You can also ask about other items or the whole receipt.</p>}
       {memory && <details className="receipt-chat-memory">
         <summary>Remembered receipt context</summary>
-        <p className="receipt-chat-hint">Saved with this receipt so your connected ChatGPT or Codex can read these notes and names each time it loads the receipt. All item discussions share this context.</p>
+        <p className="receipt-chat-hint">Saved with this receipt for the assistant. All item discussions share these notes and names.</p>
         {memory.notes && <p className="receipt-chat-memory-notes">{memory.notes}</p>}
         {memory.aliases.length > 0 && <ul className="receipt-chat-aliases">
           {memory.aliases.map((alias, index) => <li key={`${alias.name}:${index}`}>
@@ -115,7 +125,7 @@ export default function ReceiptChat({ messages, busy, itemId, scopeLabel, contex
                 {messageItem(message) && <span className="receipt-chat-context">{itemNames?.[messageItem(message)!] || (messageItem(message) === itemId && scopeLabel) || "Earlier item"}</span>}
                 <p className="receipt-chat-text">{message.text}</p>
                 {message.role === "user" && !answered.has(message.id) && (
-                  <span className="receipt-chat-pending">Question saved · external processing needed</span>
+                  <div className="receipt-chat-pending-row"><span className="receipt-chat-pending">{nativeAvailable ? "Question saved · awaiting reply" : "Question saved · external processing needed"}</span>{nativeAvailable && onRetry && <button type="button" className="textbutton" disabled={working || offline} onClick={() => void retryQuestion(message.id)}><RefreshCw size={14} aria-hidden="true" />Retry reply</button>}</div>
                 )}
               </li>
             ))}
@@ -127,7 +137,7 @@ export default function ReceiptChat({ messages, busy, itemId, scopeLabel, contex
         </p>
       )}
       <div className="receipt-chat-announcement" role="status" aria-live="polite" aria-atomic="true">
-        {replies.length > 0 ? `${replies.length} ${replies.length === 1 ? "reply is" : "replies are"} available from ChatGPT or Codex${itemId ? ` about ${itemLabel}` : ""}.` : ""}
+        {replies.length > 0 ? `${replies.length} ${replies.length === 1 ? "reply is" : "replies are"} available from the assistant${itemId ? ` about ${itemLabel}` : ""}.` : ""}
       </div>
       <label htmlFor={questionId}>{questionLabel}</label>
       <textarea
@@ -145,7 +155,7 @@ export default function ReceiptChat({ messages, busy, itemId, scopeLabel, contex
       <div className="receipt-chat-actions">
         <button type="button" className="primary" disabled={working || !question.trim()} onClick={() => void sendQuestion()}>
           <MessageCircle size={17} aria-hidden="true" />
-          Save question & prepare prompt
+          {nativeAvailable ? "Ask assistant" : "Save question & prepare prompt"}
         </button>
         {refreshError && !offline && <button type="button" className="quiet" disabled={working} onClick={onRefresh}>
           <RefreshCw size={17} aria-hidden="true" />

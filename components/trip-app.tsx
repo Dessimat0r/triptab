@@ -12,6 +12,8 @@ import { TripSharing, JoinTrip } from "@/components/trip-sharing";
 import ShareSplit, { equalPercentages } from "@/components/share-split";
 import ReceiptCapture, { prepareReceiptImage } from "@/components/receipt-capture";
 import ReceiptChat from "@/components/receipt-chat";
+import ReceiptUploadDialog, { type ReceiptUploadContext } from "@/components/receipt-upload-dialog";
+import ReceiptLocationFields, { type ReceiptPlace } from "@/components/receipt-location-fields";
 import ReceiptPhotoViewer from "@/components/receipt-photo-viewer";
 import ExpenseIconPicker from "@/components/expense-icon";
 import ReceiptScanReview, { receiptMoney } from "@/components/receipt-scan-review";
@@ -31,6 +33,7 @@ import type { ReceiptLanguage } from "@/lib/receipt-languages";
 import DataExport from "@/components/data-export";
 import { PwaUpdates } from "@/components/pwa-controls";
 import { dispatchLiveRefresh, useLiveRefresh } from "@/components/use-live-refresh";
+import { sampleTrip } from "@/lib/sample-trip";
 import { localDate, localTime } from "@/lib/dates";
 import { equalFinancialValue, equalSavedValue, hasNewMatchingPayment, rebaseLedger } from "@/lib/client-ledger";
 import { buildReceiptPrompt, chatgptReceiptUrl } from "@/lib/receipt-chatgpt";
@@ -176,6 +179,8 @@ export default function Home({ children }: { children: ReactNode }) {
     ),
     [paste, setPaste] = useState(""),
     [uploading, setUploading] = useState(false),
+    [uploadOpen, setUploadOpen] = useState(false),
+    [captureNotes, setCaptureNotes] = useState(""),
     [receiptPending, setReceiptPending] = useState(false),
     [receiptCopied, setReceiptCopied] = useState(false),
     [receiptPrompt, setReceiptPrompt] = useState(""),
@@ -434,7 +439,7 @@ export default function Home({ children }: { children: ReactNode }) {
     });
   }
   async function accountAuthenticated(p: Profile) {
-    resetReceiptReview(); setEditing(null); setReceiptAI(null);
+    resetReceiptReview(); setEditing(null); setReceiptAI(null); setUploadOpen(false); setCaptureNotes("");
     setPaymentEditor(null);
     profileReadRequest.current++;
     loadRequest.current++;
@@ -566,6 +571,7 @@ export default function Home({ children }: { children: ReactNode }) {
     return true;
   }
   function openExpense(expense: Expense, resumeDraft = true) {
+    setCaptureNotes("");
     setReceiptHistoryOpen(false);
     setRestoration(null);
     if (!trip) return;
@@ -600,6 +606,7 @@ export default function Home({ children }: { children: ReactNode }) {
   }
   function newExpense() {
     setReceiptHistoryOpen(false);
+    setCaptureNotes("");
     setRestoration(null);
     if (!trip) return;
     resetReceiptReview();
@@ -636,6 +643,7 @@ export default function Home({ children }: { children: ReactNode }) {
   }
   function openDraft(d: Draft) {
     if (!trip) return;
+    setCaptureNotes("");
     setReceiptHistoryOpen(false);
     setRestoration(null);
     resetReceiptReview();
@@ -700,6 +708,7 @@ export default function Home({ children }: { children: ReactNode }) {
     setProcessedReceipt(null);
   }
   function closeReceiptEditor() {
+    setCaptureNotes("");
     resetReceiptReview(); setEditing(null);
   }
   function isReceiptSessionCurrent(session: number, tripId: string, accountId: string, requireEditor = true) {
@@ -775,7 +784,9 @@ export default function Home({ children }: { children: ReactNode }) {
       expenseId: target?.id,
       title: source.title.trim() || "Receipt",
       icon: entry.icon,
-      receiptLanguage: entry.receiptLanguage,
+      receiptLanguage: source.receiptLanguage,
+      location: source.location,
+      locationHint: source.locationHint,
       detectedLanguage: source.detectedLanguage,
       languageViewId: entry.languageViewId || entry.expenseId || entry.id,
       receiptId,
@@ -849,7 +860,10 @@ export default function Home({ children }: { children: ReactNode }) {
     const entry = editing, tripId = trip.id, accountId = profile?.id || "";
     const blank = isBlankReceipt(entry) && blankReceiptEditor.current?.editorId === entry.id
       && blankReceiptEditor.current.tripId === tripId && equalSavedValue(blankReceiptEditor.current.financial, receiptEditableValue(entry));
-    const receiptEntry = blank ? { ...entry, items: [] } : entry;
+    const notes = captureNotes.trim();
+    if (notes && (entry.conversation?.length || 0) >= 100) { setError("This receipt conversation has reached its message limit."); return; }
+    const receiptEntry = { ...entry, ...(blank ? { items: [] } : {}),
+      ...(notes ? { conversation: [...entry.conversation || [], { id: uid(), role: "user" as const, text: notes, createdAt: new Date().toISOString() }] } : {}) };
     resetReceiptReview();
     const session = receiptSession.current;
     setUploading(true); setError("");
@@ -866,6 +880,7 @@ export default function Home({ children }: { children: ReactNode }) {
       const draft = await storeEditorReceipt(receiptEntry, body.receiptId);
       if (!isReceiptSessionCurrent(session, tripId, accountId)) return;
       if (!draft) { setReceiptHandoffError("The photo uploaded, but its receipt draft could not be saved. Retry preparing it before asking ChatGPT to read it."); return; }
+      setCaptureNotes("");
       if (blank) initialReceiptReview.current = { accountId, tripId, editorId: entry.id, draftId: draft.id,
         receiptId: body.receiptId, financial: structuredClone(receiptEditableValue(receiptEntry)) };
       stageEditorReceiptPrompt(draft);
@@ -924,7 +939,7 @@ export default function Home({ children }: { children: ReactNode }) {
       if (isReceiptSessionCurrent(session, tripId, accountId)) setReceiptHandoffError(cause instanceof Error ? cause.message : "Unable to connect your ChatGPT plan.");
     } finally { if (session === receiptSession.current) setReceiptAIConnecting(false); }
   }
-  async function processEditorReceipt(savedDraft?: Draft, currentService?: ReceiptAIState) {
+  async function processEditorReceipt(savedDraft?: Draft, currentService?: ReceiptAIState, questionId?: string) {
     if (!trip || (!editing && !savedDraft) || receiptProcessInFlight.current) return false;
     const accountId = profile?.id || "", tripId = trip.id, session = receiptSession.current;
     const service = currentService || receiptAI;
@@ -937,22 +952,22 @@ export default function Home({ children }: { children: ReactNode }) {
     }
     const draft = savedDraft || latestSnapshot.current.data.trips.find(value => value.id === tripId)?.drafts.find(value => value.id === editing?.draftId
       && value.receiptId === editing?.receiptId && value.expenseId === editing?.expenseId);
-    if (!draft?.receiptId) { setReceiptHandoffError("Save a receipt image and draft before asking ChatGPT to read it."); return false; }
+    if (!draft || (!questionId && !draft.receiptId)) { setReceiptHandoffError(questionId ? "Save the receipt question before asking the assistant." : "Save a receipt image and draft before asking ChatGPT to read it."); return false; }
     const requestId = ++receiptProcessRequest.current;
     receiptProcessInFlight.current = true; setReceiptProcessing(true); setReceiptHandoffError("");
     const active = activeReceiptEditor.current;
     // React may not yet have committed the just-saved draft IDs. Those IDs
     // come from the canonical save; compare the latest editable values.
-    const readPurchaseDetails = !!active && isUnchangedInitialReceipt(initialReceiptReview.current, accountId, trip,
+    const readPurchaseDetails = !questionId && !!active && isUnchangedInitialReceipt(initialReceiptReview.current, accountId, trip,
       { ...active, draftId: draft.id, receiptId: draft.receiptId }, draft);
     try {
       const response = await fetch("/api/receipt/process", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tripId, draftId: draft.id, receiptId: draft.receiptId, draftHash: await sha256Hex(canonicalJson(draft)), readPurchaseDetails }) });
+        body: JSON.stringify({ tripId, draftId: draft.id, receiptId: draft.receiptId, draftHash: await sha256Hex(canonicalJson(draft)), readPurchaseDetails, ...(questionId ? { questionId } : {}) }) });
       const snapshot = await response.json() as { data: Ledger; revision: number; error?: string };
       if (requestId !== receiptProcessRequest.current || !isReceiptSessionCurrent(session, tripId, accountId)) return false;
       const current = latestSnapshot.current.data.trips.find(value => value.id === tripId)?.drafts.find(value => value.id === draft.id);
       if (!current || current.receiptId !== draft.receiptId || current.expenseId !== draft.expenseId) return false;
-      if (!response.ok) throw Error(snapshot.error || "ChatGPT could not read this receipt. Your saved photo and edits are still here.");
+      if (!response.ok) throw Error(snapshot.error || (questionId ? "The assistant could not answer. Your saved question and edits are still here." : "ChatGPT could not read this receipt. Your saved photo and edits are still here."));
       applySnapshot(snapshot, "", true);
       return true;
     } catch (cause) {
@@ -998,11 +1013,36 @@ export default function Home({ children }: { children: ReactNode }) {
     const entry = { ...editing, conversation: [...editing.conversation || [], question] };
     const draft = await storeEditorReceipt(entry, editing.receiptId, true);
     if (!draft || !isReceiptSessionCurrent(session, tripId, accountId)) return false;
-    // Item/receipt questions can change quantities, shares and remembered
-    // context. The reading endpoint only transcribes a photo; keep the
-    // full-capability connected-tool request for these discussions.
-    await copyEditorReceiptPrompt(draft, question);
+    const service = receiptAI?.accountId === accountId ? receiptAI : await refreshReceiptAIStatus(accountId);
+    if (!isReceiptSessionCurrent(session, tripId, accountId)) return true;
+    if (service?.connected && service.eligible) await processEditorReceipt(draft, service, question.id);
+    else await copyEditorReceiptPrompt(draft, question);
     return true;
+  }
+  async function retryReceiptQuestion(questionId: string) {
+    if (!trip || !editing || saving || uploading || receiptProcessInFlight.current) return false;
+    const accountId = profile?.id || "", tripId = trip.id, session = receiptSession.current;
+    const draft = latestSnapshot.current.data.trips.find(value => value.id === tripId)?.drafts.find(value => value.id === editing.draftId
+      && value.receiptId === editing.receiptId && value.expenseId === editing.expenseId);
+    if (!draft?.conversation?.some(message => message.id === questionId && message.role === "user")) return false;
+    if (draft.conversation.some(message => message.role === "assistant" && message.replyTo === questionId)) return true;
+    const service = receiptAI?.accountId === accountId ? receiptAI : await refreshReceiptAIStatus(accountId);
+    if (!isReceiptSessionCurrent(session, tripId, accountId)) return false;
+    return processEditorReceipt(draft, service || undefined, questionId);
+  }
+  function setEditorPlace(place: ReceiptPlace) {
+    setEditing(previous => {
+      if (!previous) return previous;
+      const locationChanged = !equalSavedValue(previous.location, place.location);
+      const next = { ...previous, location: place.location, locationHint: place.locationHint,
+        fieldSources: locationChanged ? { ...previous.fieldSources, location: "user" as const } : previous.fieldSources };
+      // A place hint is compatible with an otherwise untouched blank editor.
+      const baseline = blankReceiptEditor.current;
+      if (baseline?.editorId === previous.id && equalSavedValue(baseline.financial, receiptEditableValue(previous))) {
+        baseline.financial = structuredClone(receiptEditableValue(next));
+      }
+      return next;
+    });
   }
   function reviewProcessedReceipt() {
     if (!trip || !editing || !processedReceipt) return;
@@ -1012,38 +1052,42 @@ export default function Home({ children }: { children: ReactNode }) {
       setError("Check for the latest processed receipt before reviewing it.");
       return;
     }
-    openDraft({ ...latest, icon: editing.icon, receiptLanguage: editing.receiptLanguage, languageViewId: editing.languageViewId || editing.expenseId || editing.id, conversation: mergeReceiptConversation(latest.conversation, editing.conversation) });
+    openDraft({ ...latest, icon: editing.icon, languageViewId: editing.languageViewId || editing.expenseId || editing.id, conversation: mergeReceiptConversation(latest.conversation, editing.conversation) });
   }
-  async function upload(file: File) {
-    if (!trip) return;
+  async function upload(file: File, context: ReceiptUploadContext = {}): Promise<boolean> {
+    if (!trip) return false;
     resetReceiptReview();
     const session = receiptSession.current, tripId = trip.id, accountId = profile?.id || "";
     setUploading(true); setError("");
     try {
       file = await prepareReceiptImage(file);
-      if (!isReceiptSessionCurrent(session, tripId, accountId, false)) return;
+      if (!isReceiptSessionCurrent(session, tripId, accountId, false)) return false;
       if (!["image/jpeg", "image/png", "image/webp"].includes(file.type) || file.size > 5 * 1024 * 1024) throw Error("Choose a JPEG, PNG or WebP image under 5 MB.");
       const response = await fetch("/api/receipt?tripId=" + encodeURIComponent(tripId), {
         method: "POST", headers: { "Content-Type": file.type }, body: file,
       });
       const body = await response.json() as { error?: string; receiptId: string };
-      if (!isReceiptSessionCurrent(session, tripId, accountId, false)) return;
+      if (!isReceiptSessionCurrent(session, tripId, accountId, false)) return false;
       if (!response.ok) throw Error(body.error || "Unable to upload this receipt.");
       const draft: Draft = { id: uid(), currency: trip.currency, title: file.name, source: "manual", receiptId: body.receiptId,
         items: [], tax: 0, tip: 0, discount: 0,
-        fieldSources: { title: "default", currency: "default", date: "default", time: "default", timezone: "default", payer: "default", tax: "default", tip: "default", discount: "default" },
+        location: context.location, locationHint: context.locationHint,
+        ...(context.notes?.trim() ? { conversation: [{ id: uid(), role: "user" as const, text: context.notes.trim(), createdAt: new Date().toISOString() }] } : {}),
+        fieldSources: { title: "default", currency: "default", date: "default", time: "default", timezone: "default", payer: "default", tax: "default", tip: "default", discount: "default", ...(context.location ? { location: "user" as const } : {}) },
         payer: trip.members.find(member => member.userId === accountId)?.id || trip.members[0].id, status: "waiting" };
-      if (!await updateTrip({ ...trip, drafts: [...trip.drafts, draft] })) return;
-      if (!isReceiptSessionCurrent(session, tripId, accountId, false)) return;
+      if (!await updateTrip({ ...trip, drafts: [...trip.drafts, draft] })) return false;
+      if (!isReceiptSessionCurrent(session, tripId, accountId, false)) return false;
       const canonical = latestSnapshot.current.data.trips.find(value => value.id === tripId)?.drafts.find(value => value.id === draft.id);
       if (!canonical) throw Error("The photo uploaded, but its receipt draft is unavailable. Refresh and try again.");
-      setView("receipts"); setHelp(false); openDraft(canonical); setUploading(false);
+      setUploadOpen(false); setView("receipts"); setHelp(false); openDraft(canonical); setUploading(false);
       const openedSession = receiptSession.current;
       const service = await refreshReceiptAIStatus(accountId);
-      if (!isReceiptSessionCurrent(openedSession, tripId, accountId)) return;
+      if (!isReceiptSessionCurrent(openedSession, tripId, accountId)) return true;
       if (service?.connected && service.eligible) await processEditorReceipt(canonical, service);
+      return true;
     } catch (cause) {
       if (isReceiptSessionCurrent(session, tripId, accountId, false)) setError(cause instanceof Error ? cause.message : "Upload failed");
+      return false;
     } finally { if (session === receiptSession.current) setUploading(false); }
   }
   async function copyPrompt() {
@@ -1272,6 +1316,7 @@ export default function Home({ children }: { children: ReactNode }) {
       adjustments.push("This earlier receipt shared tax and tip across all travellers. Restoring it uses the current rule: share these adjustments between the people selected on receipt items. Review those shares before saving.");
     }
     setRestoration({ actorName: event.actorName, createdAt: event.createdAt, adjustments });
+    setCaptureNotes("");
     setEditing({ ...expense, adjustmentAllocation: "selected-participants", expenseId: undefined });
   }
   // Saved balances do not depend on form keystrokes or which panel is open.
@@ -1462,21 +1507,9 @@ export default function Home({ children }: { children: ReactNode }) {
                     <>
                       <div className="sectionheading">
                         <h2>Receipt inbox</h2>
-                        <label className="quiet upload-label">
-                          <Upload size={16} />
-                          {uploading ? "Uploading…" : "Add receipt"}
-                          <input
-                            type="file"
-                            accept="image/*,.heic,.heif"
-                            capture="environment"
-                            disabled={uploading || saving}
-                            onChange={(e) => {
-                              const f = e.target.files?.[0];
-                              if (f) upload(f);
-                              e.target.value = "";
-                            }}
-                          />
-                        </label>
+                        <button type="button" className="quiet" disabled={uploading || saving} onClick={() => { setError(""); setUploadOpen(true); }}>
+                          <Upload size={16} aria-hidden="true" />{uploading ? "Uploading…" : "Add receipt"}
+                        </button>
                       </div>
                       <div className="panel">
                         {trip.drafts.length ? (
@@ -1641,7 +1674,7 @@ export default function Home({ children }: { children: ReactNode }) {
               className={trip?.id === t.id ? "active" : ""}
               key={t.id}
               onClick={() => {
-                closeReceiptEditor(); setSelected(t.id);
+                closeReceiptEditor(); setUploadOpen(false); setSelected(t.id);
                 setMenu(false);
                 setView("expenses");
               }}
@@ -1720,6 +1753,13 @@ export default function Home({ children }: { children: ReactNode }) {
           <small className="muted">Updates automatically</small>
         </header>
         <main>
+          {process.env.NEXT_PUBLIC_TRIPTAB_ENVIRONMENT === "staging" && <p className="connection-banner" role="status">
+            Testing site · Trips and receipt photos here are separate from the live app.
+            {profile?.id && <button type="button" className="quiet" disabled={loading || saving || !!editing || !!paymentEditor} onClick={async () => {
+              const sample = sampleTrip(profile);
+              if (await save({ trips: [...ledger.trips, sample] })) { setSelected(sample.id); setView("expenses"); }
+            }}>Create sample holiday</button>}
+          </p>}
           {(editing && editorBaseline.current?.tripId !== trip?.id || paymentEditor && paymentEditor.tripId !== trip?.id) && <p className="connection-banner" role="status">
             This holiday is no longer available in this view. Its open form has been kept separate from other holidays.
             <button type="button" className="quiet" onClick={() => { closeReceiptEditor(); setPaymentEditor(null); }}>Close unavailable form</button>
@@ -1740,7 +1780,7 @@ export default function Home({ children }: { children: ReactNode }) {
               onJoined={async (id) => {
                 setInvite("");
                 replaceEntryUrl("/expenses");
-                closeReceiptEditor(); setSelected(id);
+                closeReceiptEditor(); setUploadOpen(false); setSelected(id);
                 await load({ background: true, fresh: true });
                 await refreshProfile(profile?.id || "");
               }}
@@ -1918,21 +1958,9 @@ export default function Home({ children }: { children: ReactNode }) {
                       Check it. Split it.
                     </h3>
                     <p>A shared dinner doesn’t have to mean an equal bill.</p>
-                    <label className="primary upload-label">
-                      <Upload size={17} />
-                      {uploading ? "Uploading…" : "Upload receipt"}
-                      <input
-                        type="file"
-                        accept="image/jpeg,image/png,image/webp"
-                        capture="environment"
-                        disabled={uploading || saving}
-                        onChange={(e) => {
-                          const f = e.target.files?.[0];
-                          if (f) upload(f);
-                          e.target.value = "";
-                        }}
-                      />
-                    </label>
+                    <button type="button" className="primary" disabled={uploading || saving} onClick={() => { setError(""); setUploadOpen(true); }}>
+                      <Upload size={17} aria-hidden="true" />{uploading ? "Uploading…" : "Upload receipt"}
+                    </button>
                     <button
                       className="textbutton"
                       onClick={() => setHelp(true)}
@@ -2011,7 +2039,7 @@ export default function Home({ children }: { children: ReactNode }) {
                   payments: [],
                 };
                 if (await save({ trips: [...ledger.trips, t] })) {
-                  closeReceiptEditor(); setSelected(t.id);
+                  closeReceiptEditor(); setUploadOpen(false); setSelected(t.id);
                   setView("expenses");
                   setCreate(false); setNewTripLanguage("auto");
                 }
@@ -2131,6 +2159,9 @@ export default function Home({ children }: { children: ReactNode }) {
           </section>
         </ModalA11y>
       )}
+      {uploadOpen && trip && <ReceiptUploadDialog key={`${profile?.id}:${trip.id}`} busy={uploading || saving}
+        nativeAvailable={!!receiptAI && receiptAI.accountId === profile?.id && receiptAI.connected && receiptAI.eligible}
+        error={error} onClose={() => setUploadOpen(false)} onUpload={upload} />}
       {editing && trip && editorBaseline.current?.tripId === trip.id && (
         <ModalA11y
           className="overlay editor-overlay"
@@ -2171,6 +2202,10 @@ export default function Home({ children }: { children: ReactNode }) {
               <div id="receipt-details-view" className="receipt-details-view" hidden={receiptHistoryOpen} inert={receiptHistoryOpen}>
               <div className={"editor-body " + (editing.receiptId ? "with-receipt" : "")}>
                 <ReceiptCapture
+                  contextFields={<div className="receipt-capture-context">
+                    {!editing.receiptId && <><label htmlFor="receipt-upload-notes">Who bought what? <small>optional</small></label><textarea id="receipt-upload-notes" rows={3} maxLength={4000} value={captureNotes} disabled={uploading || saving || receiptProcessing} placeholder="Gary had a decaf, I had a cappuccino. We each had 2 croissants." onChange={event => setCaptureNotes(event.target.value)} /></>}
+                    <ReceiptLocationFields key={`${profile?.id}:${trip.id}:${editing.id}:${receiptSession.current}`} value={{ location: editing.location, locationHint: editing.locationHint }} onChange={setEditorPlace} disabled={uploading || saving || receiptProcessing} />
+                  </div>}
                   receiptId={editing.receiptId}
                   busy={uploading || saving || receiptAIConnecting}
                   stored={!receiptPending}
@@ -2409,7 +2444,9 @@ export default function Home({ children }: { children: ReactNode }) {
                           scopeLabel={item.name.trim() || `item ${i + 1}`}
                           itemNames={itemNames} memberNames={memberNames}
                           currentMemberId={trip.members[currentMemberIndex]?.id}
-                          memory={editing.memory} error={error} busy={uploading || saving || receiptProcessing}
+                          memory={editing.memory} error={receiptHandoffError || error} busy={uploading || saving || receiptProcessing}
+                          nativeAvailable={!!receiptAI && receiptAI.accountId === profile?.id && receiptAI.connected && receiptAI.eligible}
+                          onRetry={retryReceiptQuestion}
                           refreshError={refreshError} offline={offline}
                           onSend={sendReceiptQuestion} onRefresh={() => void load({ background: true, fresh: true })} />
                       </div>
@@ -2487,7 +2524,9 @@ export default function Home({ children }: { children: ReactNode }) {
                     memberNames={memberNames}
                     currentMemberId={trip.members[currentMemberIndex]?.id}
                     memory={editing.memory}
-                    error={error}
+                    error={receiptHandoffError || error}
+                    nativeAvailable={!!receiptAI && receiptAI.accountId === profile?.id && receiptAI.connected && receiptAI.eligible}
+                    onRetry={retryReceiptQuestion}
                     refreshError={refreshError}
                     offline={offline}
                     busy={uploading || saving || receiptProcessing}

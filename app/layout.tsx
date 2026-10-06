@@ -1,7 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
 export const metadata: Metadata = {
-  title: "TripTab · Holiday expenses",
+  title: process.env.NEXT_PUBLIC_TRIPTAB_ENVIRONMENT === "staging" ? "TripTab Staging · Test expenses" : "TripTab · Holiday expenses",
   description: "Split the holiday, item by item.",
   manifest: "/manifest.webmanifest",
   appleWebApp: { capable: true, statusBarStyle: "default", title: "TripTab" },

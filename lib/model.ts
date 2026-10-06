@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { validCalendarDate } from './dates';
 import { receiptMemorySchema } from './receipt-context';
+import { receiptLocationSchema, receiptLocationHintSchema } from './receipt-location';
 import { expenseIconSchema } from './expense-icons';
 import { languageSchema, receiptLanguageSchema, itemTranslationsSchema } from './receipt-languages';
 import { fieldSourcesSchema, itemFieldSourcesSchema, scanSourceSchema, receiptScanSchema,
@@ -241,6 +242,7 @@ const expenseItemSchema = rawItemSchema.extend({
   members: z.array(id).max(50), units: draftUnitsSchema.optional(),
 });
 const expenseBaseSchema = z.object({
+  location: receiptLocationSchema.optional(), locationHint: receiptLocationHintSchema.optional(),
   id, title: z.string().min(1).max(200), date: dateSchema,
   icon: expenseIconSchema.optional(),
   receiptLanguage:receiptLanguageSchema.optional(), detectedLanguage:languageSchema.optional(),
@@ -272,6 +274,7 @@ function expenseItemAllocationValidation(expense: { items: Item[]; percentages?:
 }
 export const expenseSchema = expenseBaseSchema.superRefine(expenseItemAllocationValidation);
 export const draftSchema = z.object({
+  location: receiptLocationSchema.optional(), locationHint: receiptLocationHintSchema.optional(),
   id, title: z.string().max(200), receiptId: id.optional(), expenseId: id.optional(),
   icon: expenseIconSchema.optional(),
   receiptLanguage:receiptLanguageSchema.optional(), detectedLanguage:languageSchema.optional(),

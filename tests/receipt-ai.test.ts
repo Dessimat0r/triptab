@@ -6,6 +6,7 @@ import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { ModuleKind, ScriptTarget } from 'typescript';
 import { applyReceiptTranscription, consumeReceiptProcessBudget, getChatGPTPlanModel, processReceiptImage, ReceiptAIError, type ReceiptTranscription } from '../lib/receipt-ai';
+import { type ReceiptChanges } from '../lib/receipt-proposals';
 import { draftSchema, shares, total, validateLedger, type Draft, type Ledger, type Trip } from '../lib/model';
 
 const owner = 'receipt-ai-owner';
@@ -148,8 +149,8 @@ test('receipt context retains quantity terminology, memory and speakers without 
     const text = JSON.parse(init!.body as string).input[0].content[0].text;
     const context = JSON.parse(text.slice(text.indexOf('\n') + 1));
     assert.deepEqual(context.receipt.items, [
-      { id: 'line', name: 'Pizza', amount: 1001, quantity: existing.items[0].quantity, units: { total: 2, label: 'portions' } },
-      { id: 'drink', name: 'Drink', amount: 250 },
+      { id: 'line', itemIndex: 0, name: 'Pizza', amount: 1001, quantity: existing.items[0].quantity, units: { total: 2, label: 'portions' } },
+      { id: 'drink', itemIndex: 1, name: 'Drink', amount: 250 },
     ]);
     assert.doesNotMatch(text, /allocations|percentages/);
     assert.deepEqual(context.receipt.memory, existing.memory);
@@ -1012,14 +1013,14 @@ test('the shared daily API cap survives minute/auth cleanup and resets only on t
 // identity, credential and storage boundaries substituted. No provider calls.
 const state = { data: { trips: [{ ...structuredClone(trip), drafts: [structuredClone(draft)] }] } as Ledger,
   revision: 7, profileId: owner, accessAllowed: true, metadataAllowed: true, imagePresent: true, imageType: 'image/png', imageSize: png.length,
-  imageVersion: 'original-image', writes: 0, writeAttempts: 0, accessCalls: 0, providerCalls: 0, profileChecks: 0, savedSources: [] as string[],
+  imageVersion: 'original-image', writes: 0, writeAttempts: 0, accessCalls: 0, providerCalls: 0, imageReads: 0, providerBodies: [] as unknown[], profileChecks: 0, savedSources: [] as string[],
   beforeWrite: undefined as (() => void) | undefined,
-  duringModel: undefined as (() => void) | undefined, output: undefined as ReceiptTranscription | undefined, invalidOutput: false, actorChanged: false };
+  duringModel: undefined as (() => void) | undefined, output: undefined as ReceiptTranscription | { summary: string; changes: ReceiptChanges } | undefined, invalidOutput: false, actorChanged: false };
 function reset() {
   state.data = { trips: [{ ...structuredClone(trip), drafts: [structuredClone(draft)] }] };
   state.revision = 7; state.profileId = owner; state.accessAllowed = true; state.metadataAllowed = true;
   state.imagePresent = true; state.imageType = 'image/png'; state.imageSize = png.length; state.imageVersion = 'original-image';
-  state.writes = 0; state.writeAttempts = 0; state.accessCalls = 0; state.providerCalls = 0; state.profileChecks = 0; state.savedSources = [];
+  state.writes = 0; state.writeAttempts = 0; state.accessCalls = 0; state.providerCalls = 0; state.imageReads = 0; state.providerBodies=[]; state.profileChecks = 0; state.savedSources = [];
   state.beforeWrite = undefined;
   state.duringModel = undefined; state.output = undefined; state.invalidOutput = false; state.actorChanged = false;
   budgetDatabase.exec('DELETE FROM auth_rate_limits');
@@ -1037,8 +1038,8 @@ const store = {
   async receiptAccess() { return state.metadataAllowed ? { owner, tripId: state.data.trips[0]?.id } : null; },
   receiptKey(actor: string, id: string) { return `${encodeURIComponent(actor)}/${id}`; },
   bucket() { return {
-    async get() { return state.imagePresent ? { version: state.imageVersion, size: state.imageSize, httpMetadata: { contentType: state.imageType }, async arrayBuffer() { return Uint8Array.from(png).buffer; } } : null; },
-    async head() { return state.imagePresent ? { version: state.imageVersion, size: state.imageSize, httpMetadata: { contentType: state.imageType } } : null; },
+    async get() { state.imageReads++; return state.imagePresent ? { version: state.imageVersion, size: state.imageSize, httpMetadata: { contentType: state.imageType }, async arrayBuffer() { return Uint8Array.from(png).buffer; } } : null; },
+    async head() { state.imageReads++; return state.imagePresent ? { version: state.imageVersion, size: state.imageSize, httpMetadata: { contentType: state.imageType } } : null; },
   }; },
   db() { return { prepare(sql: string) { return { bind(...values: (string | number)[]) { return {
     async first() { return budgetDatabase.prepare(sql).get(...values) ?? null; }, async run() { return budgetDatabase.prepare(sql).run(...values); },
@@ -1069,6 +1070,7 @@ const routeCode = transpileWithSharedImports(routeSource, { compilerOptions: { m
   .replace("'cloudflare:workers'", JSON.stringify(dataUrl('export const env={};')))
   .replace("'@/lib/store'", JSON.stringify(storeUrl)).replace("'@/lib/receipt-ai-access'", JSON.stringify(accessUrl))
   .replace("'@/lib/receipt-ai'", JSON.stringify(new URL('../lib/receipt-ai.ts', import.meta.url).href))
+  .replace("'@/lib/receipt-assistant'", JSON.stringify(new URL('../lib/receipt-assistant.ts', import.meta.url).href))
   .replace("'@/lib/trip-language-preferences'", JSON.stringify(dataUrl('export const readTripLanguagePreferences=async()=>({preferences:{readingLanguage:"en"},revision:0});')))
   .replace("'zod'", JSON.stringify(import.meta.resolve('zod')));
 const route = await import(dataUrl(routeCode)) as { POST(request: Request): Promise<Response> };
@@ -1079,8 +1081,8 @@ async function http(body: unknown = requestBody, headers: Record<string, string>
     body = { ...body, draftHash: await sha256Hex(canonicalJson(state.data.trips[0]?.drafts[0] ?? draft)) };
   }
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async () => {
-    state.providerCalls++; state.duringModel?.();
+  globalThis.fetch = async (_url, init) => {
+    state.providerBodies.push(JSON.parse(init!.body as string)); state.providerCalls++; state.duringModel?.();
     return streamResponse([completed(state.invalidOutput ? { ...transcription, payer: 'forged' } : state.output ?? transcription)]);
   };
   try { return await route.POST(new Request('https://triptab.test/api/receipt/process', {
@@ -1336,15 +1338,20 @@ test('HTTP invalid completed model output leaves the original waiting draft inta
   assert.equal(draftSchema.parse(state.data.trips[0].drafts[0]).status, 'waiting');
 });
 
-test('HTTP does not reinterpret a saved natural-language share question as initial image transcription', async () => {
+test('HTTP saved natural-language questions use text-only processing and stable review proposals without R2 access', async () => {
   reset();
-  state.data.trips[0].drafts[0].conversation = [{ id: 'share-question', role: 'user', text: 'Give Bob two bars and me one.', createdAt: '2026-10-04T10:00:00Z' }];
-  const response = await http({ ...requestBody, questionId: 'share-question' });
-  assert.equal(response.status, 400);
-  assert.match((await response.json() as { error: string }).error, /connected ChatGPT tools.*change item shares/);
-  assert.equal(state.accessCalls, 0);
-  assert.equal(state.providerCalls, 0);
-  assert.equal(state.writes, 0);
+  const receipt=state.data.trips[0].drafts[0]; delete receipt.receiptId;
+  receipt.items=[{id:'coffee',name:'Coffee',amount:250,members:[]}];
+  receipt.conversation=[{id:'share-question',role:'user',text:'Bob had the coffee.',authorMemberId:'alice',createdAt:'2026-10-04T10:00:00Z'}];
+  state.output={summary:'Propose Bob owing the coffee.',changes:{metadata:null,items:[{id:'coffee',itemIndex:null,name:null,amount:null,members:['bob'],units:null,percentages:null}],removeItemIds:[],clear:[],remember:null,aliases:[]}};
+  const response=await http({tripId:trip.id,draftId:draft.id,questionId:'share-question'});
+  assert.equal(response.status,200); const saved=await response.json() as {draft:Draft};
+  assert.equal(state.providerCalls,1); assert.equal(state.writes,1); assert.equal(state.imageReads,0); assert.equal(saved.draft.receiptId,undefined);
+  assert.doesNotMatch(JSON.stringify(state.providerBodies),/input_image|image_url/);
+  assert.equal(saved.draft.items[0].id,'coffee'); assert.equal(saved.draft.items[0].amount,250); assert.deepEqual(saved.draft.items[0].members,['bob']);
+  assert.equal(saved.draft.status,'review'); assert.equal(saved.draft.conversation!.at(-1)!.replyTo,'share-question');
+  const second=await http({tripId:trip.id,draftId:draft.id,questionId:'share-question'});
+  assert.equal(second.status,200); assert.equal(state.providerCalls,1); assert.equal(state.accessCalls,1); assert.equal(state.writes,1);
 });
 
 test('opting out of purchase detail reading protects existing date/time even with receipt provenance', () => {

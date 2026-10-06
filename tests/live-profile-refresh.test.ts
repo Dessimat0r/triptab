@@ -34,9 +34,11 @@ const compiled = transpileModule(`return function controller(fetch, initialProfi
   const load=async options=>{loadCalls.push(options);};
   const resetReceiptReview=()=>{receiptResets++;},setEditing=next=>{editing=next;},setReceiptAI=next=>{receiptAI=next;},setPaymentEditor=next=>{paymentEditor=next;};
   const setLedger=next=>{ledger=next;},setRevision=()=>{},setActivityRefreshKey=()=>{},setAuth=next=>{auth=next;},setError=()=>{},setAccount=next=>{account=next;};
+  let captureNotes='Private upload guidance',uploadOpen=true;
+  const setCaptureNotes=next=>{captureNotes=next},setUploadOpen=next=>{uploadOpen=next};
   ${handlers}
   const saveProfile=${onSaved};
-  return {refreshProfile,accountAuthenticated,saveProfile,loadCalls,get profile(){return profile;},get editing(){return editing;},get receiptAI(){return receiptAI;},get paymentEditor(){return paymentEditor;},get ledger(){return ledger;},get receiptResets(){return receiptResets;},get account(){return account;},get auth(){return auth;}};
+  return {refreshProfile,accountAuthenticated,saveProfile,loadCalls,get profile(){return profile;},get editing(){return editing;},get receiptAI(){return receiptAI;},get paymentEditor(){return paymentEditor;},get ledger(){return ledger;},get receiptResets(){return receiptResets;},get captureNotes(){return captureNotes;},get uploadOpen(){return uploadOpen;},get account(){return account;},get auth(){return auth;}};
 }`, { compilerOptions: { module: ModuleKind.CommonJS, target: ScriptTarget.ES2022 } }).outputText;
 type Controller = {
   refreshProfile(accountId: string): Promise<void>;
@@ -49,6 +51,7 @@ type Controller = {
   paymentEditor: object | null;
   ledger: { trips: { id: string }[] };
   receiptResets: number;
+  captureNotes:string;uploadOpen:boolean;
   account: boolean;
 };
 const controller = new Function(compiled)() as (fetcher: (url: string, options?: RequestInit) => Promise<Response>, profile: Profile | null) => Controller;
@@ -109,6 +112,7 @@ test('automatic account detection safely clears the previous account editors and
   assert.equal(app.receiptAI, null);
   assert.deepEqual(app.ledger, { trips: [] });
   assert.equal(app.receiptResets, 1);
+  assert.equal(app.captureNotes,'');assert.equal(app.uploadOpen,false);
 });
 
 test('an old account response arriving after authentication cannot replace the new account', async () => {
@@ -122,6 +126,7 @@ test('an old account response arriving after authentication cannot replace the n
   finish(Response.json(owner)); await reading;
   assert.equal(app.profile?.id, second.id);
   assert.equal(app.receiptResets, 1);
+  assert.equal(app.captureNotes,'');assert.equal(app.uploadOpen,false);
 });
 
 test('the post-authentication profile read cannot overwrite a newer account-form save', async () => {

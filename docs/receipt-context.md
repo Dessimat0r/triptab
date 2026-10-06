@@ -54,7 +54,15 @@ Field provenance distinguishes browser defaults (`default`), receipt observation
 
 Reading succeeds only after a valid completed response. Errors, timeouts, changed images, revoked access and stale revisions do not post or overwrite an expense. A new untouched blank editor fills with the returned items; an edited or posted receipt requires **Review proposed changes**. Changes made while reading remain in the editor. Saving the reviewed expense records its action in the ordinary receipt history.
 
-For questions and requested share changes, use the connected-tool workflow:
+## Upload guidance and native receipt chat
+
+Before uploading, add optional “Who bought what?” guidance and a city or venue. The initial image request includes this saved human message, traveller names, previous conversation, remembered aliases, language hints and optional device coordinates. The model handles nicknames, spelling variations and informal item names; there is no application nickname parser. Saved speakers identify “I”, and multiple plausible matches need clarification. TripTab validates the returned member IDs, quantities and percentages before presenting financial proposals. Printed line amounts remain full line totals. Guidance may fill new unassigned scan rows; existing item and global shares survive rescanning.
+
+Receipt location and optional current-device hint are separate persisted fields. Browser location is requested only after pressing **Use current location**. A manual or discussed place takes precedence over scan observations; current coordinates never prove a historical purchase venue. Location supplies language/translation context, without overriding mixed-language evidence. Location changes appear in history and exports.
+
+With shared native AI configured, receipt and item questions are processed as text through the same model provider. Saved context includes the selected item, allocations, receipt metadata and trusted human authors. Explicit requests can propose item, location, language or purchase-detail changes while preserving untouched fields. Replies arrive inline; financial edits still require review and **Save**. Retrying an already answered saved question returns its existing result without another model call. Chat does not resend the photo, and upload guidance is consumed in the initial image request without a second request.
+
+When native AI is unavailable, use the connected-tool fallback:
 
 1. Enter a receipt manually or attach a photo. Ask a receipt/item question, or copy the receipt-reading prompt.
 2. Open a supported ChatGPT or Codex conversation with the TripTab plugin/MCP tools enabled, then paste and run the prompt. The client reads TripTab context/image tools and can save a reply or a proposed receipt draft through MCP. Account identity linking does not establish that tools are available in that conversation; the website cannot verify external conversation tooling.
@@ -65,7 +73,7 @@ Each write advances the ledger revision. After saving memory or a reply, the ass
 
 Connected corrections use `upsertItems` for changed stable item IDs and `removeItemIds` only for intentional deletion of known active lines. The compatible `items` field also upserts: omission never deletes another line. Omitted fields retain saved values; purchase metadata changes use an explicit `metadataPatch`. A changed legacy top-level metadata value on an existing draft is rejected with that instruction rather than silently ignored. Only explicitly default receipt metadata may be filled by a recognition proposal. The published schema accepts partial existing-draft patches (`id` required); a new draft also needs an existing trip member as payer. Nullable currency, percentages, FX and bank amounts match server inputs. New lines can remain unreadable or unassigned. Historical chats and aliases stay readable after an explicit item removal, and source order remains the comparison order. Receipt source evidence merges by observed text, kind and amount; an unstable ordinal cannot erase earlier coupon/refund evidence, and repeated identical observations do not accumulate duplicates.
 
-The connected-tool prompt requires a real request in ChatGPT/Codex; copying or opening it is not a completed model request. The API image reader does not silently replace this workflow with a transcription-only answer to a share-changing question. Email/password accounts and manual receipts remain independent of AI. The future SIWC plan provider is retained but disabled until its separately approved hosted plan permission is configured.
+The connected-tool prompt requires a real request in ChatGPT/Codex; copying or opening it is not a completed model request. Native text chat and image recognition are separate validated operations; a share-changing question is never answered by rescanning the photo. Email/password accounts and manual receipts remain independent of AI. The future SIWC plan provider is retained but disabled until its separately approved hosted plan permission is configured.
 
 ## Limits and existing receipts
 

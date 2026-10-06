@@ -16,8 +16,8 @@ export type InitialReceiptReview = {
 // and draft bookkeeping. Cosmetic icon choices are merged separately so they
 // do not prevent initial itemisation. An incoming proposal must not erase them.
 export function receiptEditableValue(entry: ReceiptEditor) {
-  const { title, date, time, timezone, currency, payer, items, tax, tip, discount, percentages, fx, bankAmount, receiptScan, fieldSources, receiptLanguage, detectedLanguage } = entry;
-  return { title, date, time, timezone, currency, payer, items, tax, tip, discount, percentages, fx, bankAmount, receiptScan, fieldSources, receiptLanguage, detectedLanguage };
+  const { title, date, time, timezone, currency, payer, items, tax, tip, discount, percentages, fx, bankAmount, receiptScan, fieldSources, receiptLanguage, detectedLanguage, location, locationHint } = entry;
+  return { title, date, time, timezone, currency, payer, items, tax, tip, discount, percentages, fx, bankAmount, receiptScan, fieldSources, receiptLanguage, detectedLanguage, location, locationHint };
 }
 
 export function isBlankReceipt(entry: ReceiptEditor) {
@@ -50,7 +50,7 @@ export function receiptProposalEditor(editor: ReceiptEditor, draft: Draft): Rece
     date: draft.date || editor.date, time: draft.time || editor.time, timezone: draft.timezone || editor.timezone };
   // A proposal may replace defaults, but user-confirmed purchase details stay
   // authoritative even when a later external client carries older metadata.
-  for (const field of ['title', 'currency', 'date', 'time', 'timezone', 'payer', 'tax', 'tip', 'discount'] as const) {
+  for (const field of ['title', 'currency', 'date', 'time', 'timezone', 'payer', 'tax', 'tip', 'discount', 'location'] as const) {
     if (editor.fieldSources?.[field] !== 'user') continue;
     Object.assign(next, { [field]: editor[field], fieldSources: { ...next.fieldSources, [field]: 'user' } });
   }

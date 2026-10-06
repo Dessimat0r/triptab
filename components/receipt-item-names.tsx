@@ -23,7 +23,7 @@ export default function ReceiptItemNames(props:Props){
   const latest=useRef(props),requestToken=useRef(0),controller=useRef<AbortController|null>(null);
   useLayoutEffect(()=>{latest.current=props;});
   useLayoutEffect(()=>()=>{requestToken.current++;controller.current?.abort();},[]);
-  const context=canonicalJson([accountId,trip.id,receipt.id,receipt.languageViewId,receipt.title,receipt.receiptLanguage,receipt.detectedLanguage,trip.receiptLanguage,language,originalLanguage]);
+  const context=canonicalJson([accountId,trip.id,receipt.id,receipt.languageViewId,receipt.title,receipt.location,receipt.locationHint,receipt.receiptLanguage,receipt.detectedLanguage,trip.receiptLanguage,language,originalLanguage]);
   async function refresh(target:DisplayVersion){
     if(pending||!settings.ready)return;
     const sourceText=target==='reading'?item.name:reading?.text,sourceLanguage=target==='reading'?observedItemLanguage(item,receipt):language,targetLanguage=target==='reading'?language:originalLanguage;
@@ -31,12 +31,12 @@ export default function ReceiptItemNames(props:Props){
     const before=structuredClone(item),snapshot=itemNameSnapshot(item,language),token=++requestToken.current;
     const abort=new AbortController();controller.current=abort;setPending(target);setError('');setUndo(null);
     try{
-      const response=await fetch('/api/receipt/translate',{method:'POST',signal:abort.signal,headers:{'Content-Type':'application/json'},body:JSON.stringify({purpose:'items',accountId,tripId:trip.id,receiptTitle:receipt.title,
+      const response=await fetch('/api/receipt/translate',{method:'POST',signal:abort.signal,headers:{'Content-Type':'application/json'},body:JSON.stringify({purpose:'items',accountId,tripId:trip.id,receiptTitle:receipt.title,receiptLocation:receipt.location,receiptLocationHint:receipt.locationHint,
         rows:[{id:item.id,sourceText,...(sourceLanguage?{sourceLanguage}:{}),targetLanguage}]})});
       const result=await response.json() as {accountId:string;tripId:string;rows:{id:string;text:string;sourceLanguage:ReceiptLanguage|null}[];error?:string};
       if(!response.ok)throw Error(result.error||'Unable to translate this name.');
       const now=latest.current,nowLanguage=now.settings.preferences.readingLanguage;
-      const nowContext=canonicalJson([now.accountId,now.trip.id,now.receipt.id,now.receipt.languageViewId,now.receipt.title,now.receipt.receiptLanguage,now.receipt.detectedLanguage,now.trip.receiptLanguage,nowLanguage,originalItemLanguage(now.item,now.trip,now.receipt)]);
+      const nowContext=canonicalJson([now.accountId,now.trip.id,now.receipt.id,now.receipt.languageViewId,now.receipt.title,now.receipt.location,now.receipt.locationHint,now.receipt.receiptLanguage,now.receipt.detectedLanguage,now.trip.receiptLanguage,nowLanguage,originalItemLanguage(now.item,now.trip,now.receipt)]);
       if(token!==requestToken.current)return;
       if(context!==nowContext||itemNameSnapshot(now.item,language)!==snapshot){setError('The item changed while translating. Your edits were kept; refresh again.');return;}
       const row=result.rows?.[0];
@@ -93,15 +93,15 @@ export function TranslateMissingNames({accountId,trip,receipt,settings,onUpdate}
   const language=settings.preferences.readingLanguage,missing=receipt.items.filter(item=>item.name.trim()&&!item.translations?.[language]?.text.trim());
   if(!missing.length)return null;
   return <div className="missing-name-translations"><button type="button" className="quiet" disabled={pending||!settings.ready} onClick={async()=>{
-    const before=new Map(missing.map(item=>[item.id,itemNameSnapshot(item,language)])),context=canonicalJson([accountId,trip.id,receipt.id,receipt.languageViewId,receipt.title,receipt.receiptLanguage,receipt.detectedLanguage,trip.receiptLanguage,language]);
+    const before=new Map(missing.map(item=>[item.id,itemNameSnapshot(item,language)])),context=canonicalJson([accountId,trip.id,receipt.id,receipt.languageViewId,receipt.title,receipt.location,receipt.locationHint,receipt.receiptLanguage,receipt.detectedLanguage,trip.receiptLanguage,language]);
     const request=++token.current,abort=new AbortController();controller.current=abort;setPending(true);setError('');
     try{
-      const response=await fetch('/api/receipt/translate',{method:'POST',signal:abort.signal,headers:{'Content-Type':'application/json'},body:JSON.stringify({purpose:'items',accountId,tripId:trip.id,receiptTitle:receipt.title,rows:missing.map(item=>({id:item.id,sourceText:item.name,sourceLanguage:observedItemLanguage(item,receipt),targetLanguage:language}))})});
+      const response=await fetch('/api/receipt/translate',{method:'POST',signal:abort.signal,headers:{'Content-Type':'application/json'},body:JSON.stringify({purpose:'items',accountId,tripId:trip.id,receiptTitle:receipt.title,receiptLocation:receipt.location,receiptLocationHint:receipt.locationHint,rows:missing.map(item=>({id:item.id,sourceText:item.name,sourceLanguage:observedItemLanguage(item,receipt),targetLanguage:language}))})});
       const result=await response.json() as {accountId:string;tripId:string;rows:{id:string;text:string;sourceLanguage:ReceiptLanguage|null}[];error?:string};
       if(!response.ok)throw Error(result.error||'Unable to translate these names.');
       if(token.current!==request)return;
       const now=latest.current;
-      if(context!==canonicalJson([now.accountId,now.trip.id,now.receipt.id,now.receipt.languageViewId,now.receipt.title,now.receipt.receiptLanguage,now.receipt.detectedLanguage,now.trip.receiptLanguage,now.settings.preferences.readingLanguage]))throw Error('Language settings changed. Your edits were kept; translate again.');
+      if(context!==canonicalJson([now.accountId,now.trip.id,now.receipt.id,now.receipt.languageViewId,now.receipt.title,now.receipt.location,now.receipt.locationHint,now.receipt.receiptLanguage,now.receipt.detectedLanguage,now.trip.receiptLanguage,now.settings.preferences.readingLanguage]))throw Error('Receipt context changed. Your edits were kept; translate again.');
       if(result.accountId!==accountId||result.tripId!==trip.id||!Array.isArray(result.rows)||result.rows.length!==before.size||new Set(result.rows.map(row=>row.id)).size!==before.size||result.rows.some(row=>!before.has(row.id)||typeof row.text!=='string'||!row.text.trim()||row.text.length>200))throw Error('Invalid translation response. Try again.');
       let skipped=0;
       for(const row of result.rows){const current=now.receipt.items.find(item=>item.id===row.id);if(!current||itemNameSnapshot(current,language)!==before.get(row.id)){skipped++;continue;}

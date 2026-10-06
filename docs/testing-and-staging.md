@@ -1,0 +1,9 @@
+# Testing and staging
+
+Changes are developed on separate pull-request branches against `main`. CI checks the complete source with isolated fixture accounts and databases, mocked OpenAI responses, TypeScript, lint, a production build and Chromium/WebKit layouts. It does not call the paid OpenAI API or modify production data. Native D1/Worker tests cover saved authors, receipt access and ledger/audit persistence; browser fixtures cover responsive interactions.
+
+TripTab Staging is a separate private Site. It uses independent D1 and R2 resources; production accounts, receipt photos, AI settings and keys are not copied. Sign in or create a staging account, then choose **Create sample holiday** to add fictional multilingual receipt data owned by that staging account. Repeated sample creation generates new IDs. The testing banner and button are enabled only in a build with `NEXT_PUBLIC_TRIPTAB_ENVIRONMENT=staging`.
+
+For future release testing, deploy the candidate PR head to the staging Site, preserving that Site's own `.openai/hosting.json` identity and storage bindings. Record the candidate GitHub SHA in the release record. Once checks and acceptance pass, merge the PR and deploy the verified `main` head to the public Site. Never merge a staging Site's project identity into `main`; the repository's hosting identity continues to identify the production Site. The existing hourly main deployment task continues to target production; staging deployment is manual unless a separate automation is requested.
+
+Shared AI must be configured separately on staging. Upload/chat regression tests use mocked model responses; successful tests prove the integration and financial safeguards, not the model's accuracy on arbitrary real receipts. Real-model acceptance is deliberate and may incur API charges.
