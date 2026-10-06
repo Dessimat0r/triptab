@@ -46,12 +46,21 @@ function reactErrors(page: Page) {
 }
 
 test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+// In CI these can be the first pages a freshly launched WebKit opens in each
+// worker; give that cold start room instead of failing at the 30s default.
+test.slow(({ browserName }) => browserName === 'webkit', 'Cold WebKit start in CI');
+
+// The tests need the editor, not the page's load event, which a slow first
+// WebKit page could hold back indefinitely.
+async function openDraft(page: Page) {
+  await page.goto('/expenses?receiptDraft=flow-draft&receiptTrip=flow-trip', { waitUntil: 'domcontentloaded' });
+  await expect(page.locator('.editor')).toBeVisible({ timeout: 30_000 });
+}
 
 test('a scanned foreign receipt fetches its rate, splits in one tap and stays tidy', async ({ page }) => {
   const errors = reactErrors(page);
   await fixtures(page);
-  await page.goto('/expenses?receiptDraft=flow-draft&receiptTrip=flow-trip');
-  await expect(page.locator('.editor')).toBeVisible();
+  await openDraft(page);
   await expect(page.locator('.rate-result')).toContainText('Daily reference rate');
   await expect(page.locator('.expense-more-options')).not.toHaveAttribute('open', '');
   await expect(page.locator('.purchase-details')).toHaveCount(1);
@@ -70,8 +79,7 @@ test('a rate typed while the automatic lookup is pending is kept', async ({ page
   const rateRequested = new Promise<void>(resolve => { requested = resolve; });
   const released = new Promise<void>(resolve => { release = resolve; });
   await fixtures(page, () => { requested(); return released; });
-  await page.goto('/expenses?receiptDraft=flow-draft&receiptTrip=flow-trip');
-  await expect(page.locator('.editor')).toBeVisible();
+  await openDraft(page);
   await rateRequested;
   const lookupButton = page.locator('.fx-panel > button.wide');
   await expect(lookupButton).toHaveText(/Finding rate/);
