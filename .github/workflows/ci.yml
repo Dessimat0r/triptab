@@ -62,11 +62,7 @@ jobs:
       # A failing engine must not cancel the other engine's coverage.
       fail-fast: false
       matrix:
-        include:
-          - browser: chromium
-            workers: 4
-          - browser: webkit
-            workers: 2
+        browser: [chromium, webkit]
     steps:
       - name: Check out source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -93,9 +89,8 @@ jobs:
         # uses the headless shell, so its unused full-browser download is omitted.
         run: npx --no-install playwright install --with-deps --only-shell ${{ matrix.browser }}
       - name: Check production browser layouts
-        # Chromium benefits from four workers; measured WebKit runs are faster
-        # with two. Every engine still runs its complete suite.
-        run: npm run test:layout -- --project=${{ matrix.browser }} --workers=${{ matrix.workers }}
+        # Retain the measured two-worker default for each complete engine suite.
+        run: npm run test:layout -- --project=${{ matrix.browser }}
       - name: Upload failed browser traces
         if: failure()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
