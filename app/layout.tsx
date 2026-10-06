@@ -5,7 +5,7 @@ export const metadata: Metadata = {
   description: "Split the holiday, item by item.",
   manifest: "/manifest.webmanifest",
   appleWebApp: { capable: true, statusBarStyle: "default", title: "TripTab" },
-  icons: { icon: "/favicon.svg", apple: "/icons/icon-192.png" },
+  icons: { icon: "/favicon.svg", apple: "/icons/apple-touch-icon.png" },
 };
 export const viewport: Viewport = {
   width: "device-width",

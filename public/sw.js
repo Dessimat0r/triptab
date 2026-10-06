@@ -1,4 +1,4 @@
-const CACHE_NAME = 'triptab-public-v2';
+const CACHE_NAME = 'triptab-public-v3';
 const OFFLINE_URL = '/offline.html';
 const PUBLIC_ASSETS = [
   OFFLINE_URL,
@@ -6,6 +6,7 @@ const PUBLIC_ASSETS = [
   '/icons/icon-512.png',
   '/icons/maskable-192.png',
   '/icons/maskable-512.png',
+  '/icons/apple-touch-icon.png',
 ];
 
 self.addEventListener('install', (event) => {
