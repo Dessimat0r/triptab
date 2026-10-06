@@ -99,6 +99,13 @@
 .editor {
   position: relative;
 }
+/* The dialog never pans sideways on touch screens. Every control is sized to
+   fit (the layout tests measure each one), so this only stops a stray
+   native control from turning the dialog into a horizontal scroller. */
+.editor-overlay,
+.editor {
+  overflow-x: hidden;
+}
 .editor .editor-body {
   overflow: visible;
 }

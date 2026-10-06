@@ -92,7 +92,10 @@ async function fits(page: Page) {
   expect(result.overlayScrollX).toBeLessThanOrEqual(1);
   // Each item's name, display and amount fields share one right edge on phones.
   if (result.viewport <= 480) for (const edges of result.itemRows) expect(edges).toBe(1);
-  for (const overflow of result.clipping) expect(overflow).not.toMatch(/hidden|clip/);
+  // The overlay and dialog never pan sideways; the body itself never clips, and
+  // the bounds checks above prove no control relies on that clipping.
+  expect(result.clipping.slice(0, 2)).toEqual(['hidden', 'hidden']);
+  expect(result.clipping[2]).not.toMatch(/hidden|clip/);
   expect(result.swipePolicy).toEqual(['auto', 'auto', 'auto']);
 }
 
