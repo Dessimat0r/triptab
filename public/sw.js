@@ -1,4 +1,4 @@
-const CACHE_NAME = 'triptab-public-v3';
+const CACHE_NAME = 'triptab-public-v4';
 const OFFLINE_URL = '/offline.html';
 const PUBLIC_ASSETS = [
   OFFLINE_URL,
