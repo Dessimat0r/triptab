@@ -12,7 +12,7 @@ test('the unchanged registry migration runs on PR2 alone in native D1 with trans
     const database = await worker.getD1Database('DB');
     const prefix = (await readdir(new URL('../drizzle/', import.meta.url))).filter(file => file.endsWith('.sql') && file < '0005').sort();
     assert.equal(prefix.length, 5, 'this regression must not depend on the later audit or cleanup migrations');
-    for (const file of prefix) for (const sql of unstable_splitSqlQuery(await readFile(new URL('../drizzle/' + file, import.meta.url), 'utf8'))) await database.prepare(sql).run();
+    for (const file of prefix) await database.batch(unstable_splitSqlQuery(await readFile(new URL('../drizzle/' + file, import.meta.url), 'utf8')).map(sql => database.prepare(sql)));
     const legacy = {id: 'legacy', role: 'user', text: 'My earlier meal', createdAt: '2026-10-01T12:00:00Z'};
     const old = {id: 'historical', role: 'user', text: 'Earlier words', createdAt: '2026-10-01T12:00:00Z', authorMemberId: 'bob', authorName: 'Bob'};
     const latest = {...old, text: 'Latest trusted words'};

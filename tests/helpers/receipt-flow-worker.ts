@@ -66,9 +66,8 @@ export async function createReceiptFlowWorker(options: { seedTrip?: boolean } = 
   try {
     const database = await worker.getD1Database('DB');
     for (const name of (await readdir(new URL('../../drizzle/', import.meta.url))).filter(file => file.endsWith('.sql')).sort()) {
-      for (const sql of unstable_splitSqlQuery(await readFile(new URL('../../drizzle/' + name, import.meta.url), 'utf8'))) {
-        await database.prepare(sql).run();
-      }
+      const statements = unstable_splitSqlQuery(await readFile(new URL('../../drizzle/' + name, import.meta.url), 'utf8'));
+      await database.batch(statements.map(statement => database.prepare(statement)));
     }
     const now = new Date().toISOString();
     await database.batch([

@@ -16,7 +16,7 @@ async function createOwnerTransferDatabase() {
   try {
     const db = await worker.getD1Database('DB');
     for (const name of (await readdir(new URL('../drizzle/', import.meta.url))).filter(file => file.endsWith('.sql')).sort()) {
-      for (const sql of unstable_splitSqlQuery(await readFile(new URL('../drizzle/' + name, import.meta.url), 'utf8'))) await db.prepare(sql).run();
+      await db.batch(unstable_splitSqlQuery(await readFile(new URL('../drizzle/' + name, import.meta.url), 'utf8')).map(sql => db.prepare(sql)));
     }
     await db.prepare('INSERT INTO profiles(id,email,display_name,created_at) VALUES(?,?,?,?)').bind('flow-owner', 'old-owner@example.test', 'Old Owner', new Date().toISOString()).run();
     return { db, owner: { id: 'flow-owner' }, dispose: () => worker.dispose() };
