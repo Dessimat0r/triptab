@@ -1,4 +1,4 @@
-import { itemSplitError, receiptSplitError, total, type Trip } from './model';
+import { itemSplitError, receiptSplitError, total, type ReceiptMessage, type Trip } from './model';
 import type { ReceiptEditor } from './receipt-processing';
 import { carryReviewAcknowledgements, pendingReviewActions, reconcileReceiptScan, receiptScanSaveError } from './receipt-scan';
 
@@ -71,4 +71,14 @@ export function expenseSaveBlockers(entry: ReceiptEditor, trip: Pick<Trip, 'curr
     if (scanError) add('scan', scanError, EXPENSE_TARGETS.review);
   }
   return blockers;
+}
+
+/**
+ * Whether the receipt conversation holds a real discussion: a traveller has
+ * written about the receipt (an upload note or a question), so they see the
+ * reply to it. A scan adds a summary every time; on its own that is routine.
+ * Item discussions are shown with their items.
+ */
+export function hasReceiptDiscussion(messages: ReceiptMessage[] = []): boolean {
+  return messages.some(message => message.role === 'user' && !message.itemId);
 }

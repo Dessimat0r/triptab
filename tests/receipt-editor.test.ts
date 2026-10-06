@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { createSourceFile, isFunctionDeclaration, isJsxElement, isJsxAttribute, isJsxExpression, ModuleKind, ScriptKind, ScriptTarget, transpileModule } from 'typescript';
+import * as ts from 'typescript';
 import { equalFinancialValue, equalSavedValue } from '../lib/client-ledger';
 import { buildReceiptPrompt } from '../lib/receipt-chatgpt';
 import { isBlankReceipt, isUnchangedInitialReceipt, matchingReceiptProposal, mayFillInitialReceipt, receiptEditableValue, receiptProposalEditor, receiptEditorTotal, userReceiptField, type ReceiptEditor } from '../lib/receipt-processing';
@@ -17,7 +18,7 @@ const pageSource = await readFile(new URL('../components/trip-app.tsx', import.m
 const syntax = createSourceFile('page.tsx', pageSource, ScriptTarget.Latest, true, ScriptKind.TSX);
 const home = syntax.statements.find(statement => isFunctionDeclaration(statement) && statement.name?.text === 'Home');
 assert(home && isFunctionDeclaration(home) && home.body);
-const names = ['openExpense', 'openDraft', 'newExpense', 'keepExpenseEdits', 'editorIsCurrent', 'resetReceiptReview', 'closeReceiptEditor', 'isReceiptSessionCurrent', 'stageEditorReceiptPrompt', 'refreshReceiptAIStatus', 'prepareEditorReceipt', 'copyEditorReceiptPrompt', 'captureEditorReceipt', 'upload', 'processEditorReceipt', 'readEditorReceipt', 'sendReceiptQuestion', 'retryReceiptQuestion', 'setEditorPlace', 'reconcileEditorReceipt', 'storeEditorReceipt', 'submitExpense', 'reviewProcessedReceipt', 'reviewRestore'];
+const names = ['openExpense', 'openDraft', 'newExpense', 'keepExpenseEdits', 'editorIsCurrent', 'resetReceiptReview', 'closeReceiptEditor', 'isReceiptSessionCurrent', 'stageEditorReceiptPrompt', 'refreshReceiptAIStatus', 'prepareEditorReceipt', 'copyEditorReceiptPrompt', 'captureEditorReceipt', 'upload', 'processEditorReceipt', 'readEditorReceipt', 'sendReceiptQuestion', 'retryReceiptQuestion', 'setEditorPlace', 'reconcileEditorReceipt', 'storeEditorReceipt', 'submitExpense', 'reviewProcessedReceipt', 'reviewRestore', 'lookupFx'];
 const declarations = [...syntax.statements, ...home.body.statements].filter(isFunctionDeclaration);
 const handlers = ['mergeReceiptConversation', 'hasPendingReceiptQuestions', ...names].map(name => {
   const declaration = declarations.find(statement => statement.name?.text === name);
@@ -38,6 +39,7 @@ const controllerSource = `return function createController(initial, boundary) {
   const navigator = {clipboard:{writeText:async value=>{if(clipboardFailure)throw Error('Blocked clipboard');clipboard.push(value)}}};
   const receiptSession={current:0}, receiptSessionScope={current:{accountId:'owner',tripId:trip.id}}, initialReceiptReview={current:null}, reviewedReceipt={current:null}, blankReceiptEditor={current:null};
   const editorDraftBinding={current:null};
+  let fxLoading=false;const fxRequest={current:0};const setFxLoading=next=>{fxLoading=next};
   const activeReceiptEditor={current:null};
   const receiptProcessRequest={current:0},receiptProcessInFlight={current:false};
   const receiptAIStatusRequest={current:0},receiptAIStatusInFlight={current:null};
@@ -84,7 +86,7 @@ const controllerSource = `return function createController(initial, boundary) {
     updates.push(structuredClone(trip)); return true;
   }
   ${handlers}
-  return {${names.join(',')},get editing(){return editing},get trip(){return trip},get error(){return error},get updates(){return updates},get baseline(){return editorBaseline.current},get processed(){return processedReceipt},
+  return {${names.join(',')},get editing(){return editing},get trip(){return trip},get error(){return error},get fxError(){return fxError},get fxLoading(){return fxLoading},get referenceRate(){return referenceRate},get updates(){return updates},get baseline(){return editorBaseline.current},get processed(){return processedReceipt},
     edit(next){editing={...editing,...next};activeReceiptEditor.current=editing},remote(next,revision=updates.length){trip=structuredClone(next);latestSnapshot.current={data:{trips:[trip]},revision}},
     get prompt(){return receiptPrompt},get handoffError(){return receiptHandoffError},get clipboard(){return clipboard},get requests(){return requests},get processing(){return receiptProcessing},get itemized(){return receiptItemized},get pending(){return receiptPending},get uploading(){return uploading},get connecting(){return receiptAIConnecting},
     network(next){network=next},clipboardUnavailable(){clipboardFailure=true},persistenceFailure(){failSave=true},persistenceRecovered(){failSave=false},
@@ -109,6 +111,7 @@ type Controller = {
   sendReceiptQuestion(text:string,itemId?:string):Promise<boolean>;retryReceiptQuestion(questionId:string):Promise<boolean>;setEditorPlace(place:{location?:{label:string;source:'user'|'receipt'|'chat'};locationHint?:{latitude:number;longitude:number;accuracy:number;capturedAt:string}}):void;
   setNotes(text:string):void;captureNotes:string;
   reviewRestore(event: {tripId:string;entityType:string;entityId:string;actorName:string;createdAt:string;before:Expense}):Promise<void>;
+  lookupFx():Promise<void>;fxError:string;fxLoading:boolean;referenceRate:unknown;
   editing: Editing | null; trip: Trip; error: string; updates: Trip[]; baseline: { tripId: string; expense?: Expense } | null;
   processed: Draft | null; edit(next: Partial<Editing>): void; remote(next: Trip,revision?:number): void; conflict(next: Expense | null): void;
   uploading:boolean;connecting:boolean;refreshReceiptAIStatus(accountId:string,fresh?:boolean):Promise<unknown>;prompt:string;handoffError:string;clipboard:string[];requests:{url:string;options?:RequestInit}[];processing:boolean;itemized:boolean;pending:boolean;
@@ -785,4 +788,60 @@ test('rates, bank charges and splits chosen while reviewing a proposal are not m
   editor.reconcileEditorReceipt(editor.trip); assert.equal(editor.processed,null,'local edits do not offer to replace themselves');
   const incoming=structuredClone(editor.trip); incoming.drafts[0].items[0].amount=2500; editor.remote(incoming);
   editor.reconcileEditorReceipt(editor.trip); assert.equal((editor.processed as Draft | null)?.id,draft.id,'a changed proposal is still offered for review');
+});
+
+function deferredRate(editor: Controller) {
+  const replies:((rate:number)=>void)[]=[];
+  editor.network(url=>{assert(url.startsWith('/api/fx?'));return new Promise(resolve=>replies.push(rate=>resolve(response({rate,asOf:'2026-10-04'}))));});
+  return replies;
+}
+
+test('a rate entered while a lookup is pending is kept when the lookup answers', async () => {
+  const editor=controller(blankTrip()); editor.newExpense(); editor.edit({currency:'EUR'});
+  const replies=deferredRate(editor); const lookup=editor.lookupFx();
+  editor.edit({fx:{rate:0.75,asOf:'2026-10-04',source:'manual'}});
+  replies[0](0.86); await lookup;
+  assert.deepEqual(editor.editing?.fx,{rate:0.75,asOf:'2026-10-04',source:'manual'});
+  assert.equal(editor.fxLoading,false);
+});
+
+test('an explicit lookup still replaces the rate it was asked to replace', async () => {
+  const editor=controller(blankTrip()); editor.newExpense(); editor.edit({currency:'EUR',fx:{rate:0.75,asOf:'2026-10-04',source:'manual'}});
+  const replies=deferredRate(editor); const lookup=editor.lookupFx(); replies[0](0.86); await lookup;
+  assert.deepEqual(editor.editing?.fx,{rate:0.86,asOf:'2026-10-04',source:'reference'});
+});
+
+test('a rate answering for a closed or replaced editor, or an older lookup, changes nothing', async () => {
+  const editor=controller(blankTrip()); editor.newExpense(); editor.edit({currency:'EUR'});
+  const replies=deferredRate(editor); const stale=editor.lookupFx();
+  editor.newExpense(); editor.edit({currency:'EUR'}); const otherId=editor.editing!.id;
+  replies[0](0.86); await stale;
+  assert.equal(editor.editing?.id,otherId); assert.equal(editor.editing?.fx,undefined); assert.equal(editor.referenceRate,null);
+  const older=editor.lookupFx(), newer=editor.lookupFx();
+  replies[2](0.9); await newer; replies[1](0.5); await older;
+  assert.equal((editor.editing as ReceiptEditor | null)?.fx?.rate,0.9,'the newest lookup wins'); assert.equal(editor.fxLoading,false);
+});
+
+test('sibling elements in the expense editor never share a React key', () => {
+  const problems:string[]=[];
+  const keyOf=(node:import('typescript').Node)=>{
+    const element=isJsxElement(node)?node.openingElement:ts.isJsxSelfClosingElement(node)?node:null;
+    const attr=element?.attributes.properties.find(prop=>isJsxAttribute(prop)&&prop.name.getText(syntax)==='key');
+    return attr&&isJsxAttribute(attr)?attr.initializer?.getText(syntax):undefined;
+  };
+  const childElements=(node:import('typescript').Node):import('typescript').Node[]=>{
+    if(isJsxElement(node)||ts.isJsxSelfClosingElement(node))return [node];
+    if(isJsxExpression(node)&&node.expression)return childElements(node.expression);
+    if(ts.isBinaryExpression(node))return childElements(node.right);
+    if(ts.isParenthesizedExpression(node))return childElements(node.expression);
+    return [];
+  };
+  function visit(node:import('typescript').Node){
+    if(isJsxElement(node)||ts.isJsxFragment(node)){
+      const keys=node.children.flatMap(childElements).map(keyOf).filter(Boolean) as string[];
+      for(const key of new Set(keys))if(keys.filter(value=>value===key).length>1)problems.push(key);
+    }
+    node.forEachChild(visit);
+  }
+  visit(syntax); assert.deepEqual(problems,[]);
 });

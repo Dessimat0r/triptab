@@ -18,7 +18,7 @@ import ReceiptPhotoViewer from "@/components/receipt-photo-viewer";
 import ExpenseIconPicker from "@/components/expense-icon";
 import ReceiptScanReview, { receiptMoney } from "@/components/receipt-scan-review";
 import { carryReviewAcknowledgements, receiptScanSaveError } from "@/lib/receipt-scan";
-import { assignUnassignedItems, EXPENSE_TARGETS, expenseSaveBlockers, unassignedItemIds } from "@/lib/expense-readiness";
+import { assignUnassignedItems, EXPENSE_TARGETS, expenseSaveBlockers, hasReceiptDiscussion, unassignedItemIds } from "@/lib/expense-readiness";
 import { MoreOptions, PurchaseDetails, QuickSplit, ReadyToSave, SaveChecklist, focusExpenseTarget } from "@/components/expense-quick-review";
 import ItemReceiptConversation from "@/components/item-receipt-conversation";
 import PaymentEditor from "@/components/payment-editor";
@@ -219,6 +219,7 @@ export default function Home({ children }: { children: ReactNode }) {
   const receiptAIStatusRequest = useRef(0);
   const receiptAIStatusInFlight = useRef<{ accountId: string; promise: Promise<ReceiptAIState | null> } | null>(null);
   const activeReceiptEditor = useRef<typeof editing>(null);
+  const fxRequest = useRef(0);
   useLayoutEffect(() => { activeReceiptEditor.current = editing; }, [editing]);
   const savedEtag = useRef("");
   const latestSnapshot = useRef<{ data: Ledger; revision: number }>({ data: { trips: [] }, revision: 0 });
@@ -1229,7 +1230,11 @@ export default function Home({ children }: { children: ReactNode }) {
     if (!editing || !trip || !editing.currency) return;
     setFxLoading(true);
     setFxError("");
-    const transaction = editing;
+    const transaction = editing, tripId = trip.id, request = ++fxRequest.current;
+    // A rate belongs to the editor and trip that asked for it. A newer lookup,
+    // another open receipt or a rate entered meanwhile always wins.
+    const current = () => request === fxRequest.current && editorBaseline.current?.tripId === tripId
+      && activeReceiptEditor.current?.id === transaction.id;
     try {
       const q = new URLSearchParams({
         from: transaction.currency!,
@@ -1240,6 +1245,7 @@ export default function Home({ children }: { children: ReactNode }) {
       });
       const r = await fetch("/api/fx?" + q.toString()),
         b = (await r.json()) as { rate: number; asOf: string; error: string };
+      if (!current()) return;
       if (!r.ok || !Number.isFinite(b.rate) || b.rate <= 0 || typeof b.asOf !== "string")
         throw Error(
           b.error ||
@@ -1247,6 +1253,8 @@ export default function Home({ children }: { children: ReactNode }) {
         );
       setEditing((prev) =>
         prev &&
+        prev.id === transaction.id &&
+        equalSavedValue(prev.fx, transaction.fx) &&
         prev.currency === transaction.currency &&
         prev.date === transaction.date &&
         prev.time === transaction.time &&
@@ -1256,9 +1264,9 @@ export default function Home({ children }: { children: ReactNode }) {
       );
       setReferenceRate({ rate: b.rate, currency: transaction.currency!, date: transaction.date, time: transaction.time, timezone: transaction.timezone });
     } catch (e) {
-      setFxError(e instanceof Error ? e.message : "Rate lookup failed.");
+      if (current()) setFxError(e instanceof Error ? e.message : "Rate lookup failed.");
     } finally {
-      setFxLoading(false);
+      if (request === fxRequest.current) setFxLoading(false);
     }
   }
   async function openPayment(suggestion?: { from: string; to: string; amount: number }, existing?: Payment) {
@@ -2303,7 +2311,7 @@ export default function Home({ children }: { children: ReactNode }) {
                     />
                   </label>
                   {editing.fieldSources?.title === "default" && <p className="footnote">Suggested name. Receipt reading may replace it; editing confirms your choice.</p>}
-                  <PurchaseDetails key={editing.id} id={EXPENSE_TARGETS.details} needsAttention={purchaseDetailsNeedAttention}
+                  <PurchaseDetails key={`details:${editing.id}`} id={EXPENSE_TARGETS.details} needsAttention={purchaseDetailsNeedAttention}
                     summary={`${name(editing.payer)} paid · ${expenseDate(editing.date)} ${editing.time} · ${editing.currency || "Currency needed"} · ${editing.timezone.replaceAll("_", " ")}`}>
                   <div className="fieldpair">
                     <label>
@@ -2540,7 +2548,7 @@ export default function Home({ children }: { children: ReactNode }) {
                     {editing.percentages === undefined ? "Tax, tip and discount are shared in proportion to each person’s items." : "Tax, tip and discount follow the whole receipt percentages."} Add tax only if it isn’t already in the item prices.
                   </p>
                   {editing.percentages === undefined && editing.items.every(item => item.amount === 0) && editing.tax + editing.tip > editing.discount && <p className="notification-status" role="status">Added tax and tip on zero-priced items are shared between the people selected on those items.{editorBaseline.current?.expense?.adjustmentAllocation === undefined && editorBaseline.current?.expense ? " Saving changes the earlier split, which included every traveller." : ""}</p>}
-                  <MoreOptions key={editing.id} defaultOpen={!!editing.conversation?.length}>
+                  <MoreOptions key={`more:${editing.id}`} defaultOpen={hasReceiptDiscussion(editing.conversation)}>
                   <ExpenseIconPicker entry={editing} showLabel disabled={saving || uploading} onChange={icon => setEditing(previous => previous && { ...previous, icon })} />
                   <ReceiptLanguageSelect tripLanguage={trip.receiptLanguage} value={editing.receiptLanguage} detected={editing.detectedLanguage} onChange={receiptLanguage=>setEditing(previous=>previous&&{...previous,receiptLanguage})} />
                   <details className="import">

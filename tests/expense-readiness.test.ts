@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { assignUnassignedItems, expenseSaveBlockers, unassignedItemIds } from '../lib/expense-readiness';
+import { assignUnassignedItems, expenseSaveBlockers, hasReceiptDiscussion, unassignedItemIds } from '../lib/expense-readiness';
 import { expenseSchema } from '../lib/model';
 import type { ReceiptEditor } from '../lib/receipt-processing';
 import { acknowledgeReceiptReview, carryReviewAcknowledgements, pendingReviewActions, receiptScanFingerprint, receiptScanSaveError } from '../lib/receipt-scan';
@@ -99,4 +99,16 @@ test('the save checklist reports unreadable prices, unfinished item splits and r
     receiptScan: { version: 1, printedTotal: null, printedCurrency: 'EUR', status: 'incomplete', warnings: [] },
   });
   assert.deepEqual(expenseSaveBlockers(entry, trip).map(blocker => blocker.key), ['prices', 'names', 'review', 'item-split']);
+});
+
+test('routine scan summaries keep More options closed; a traveller\'s receipt message opens it', () => {
+  const at = '2026-10-05T12:00:00.000Z';
+  const note = { id: 'note', role: 'user' as const, text: 'Gary had the decaf', createdAt: at };
+  const summary = { id: 'summary', role: 'assistant' as const, text: 'Read 3 items.', createdAt: at };
+  assert.equal(hasReceiptDiscussion(undefined), false);
+  assert.equal(hasReceiptDiscussion([summary]), false, 'an automatic scan summary is routine');
+  assert.equal(hasReceiptDiscussion([summary, { ...summary, id: 'rescan' }]), false, 'so are repeated scans');
+  assert.equal(hasReceiptDiscussion([summary, { id: 'item', role: 'user', text: 'Who had this?', createdAt: at, itemId: 'soup' }]), false, 'item discussions show with their item');
+  assert.equal(hasReceiptDiscussion([note, { ...summary, replyTo: 'note' }]), true, 'the reply to an upload note is shown');
+  assert.equal(hasReceiptDiscussion([summary, { id: 'q', role: 'user', text: 'Is service included?', createdAt: at }]), true);
 });
