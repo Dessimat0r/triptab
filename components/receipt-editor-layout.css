@@ -98,6 +98,10 @@
    its scroll area far below the dialog. */
 .editor {
   position: relative;
+  /* Focus and in-page jumps stop above the sticky footer, whose measured
+     height (with or without the checklist) is published by the editor. */
+  scroll-padding-top: 16px;
+  scroll-padding-bottom: calc(var(--editor-footer-height, 96px) + 12px);
 }
 /* The dialog never pans sideways on touch screens. Every control is sized to
    fit (the layout tests measure each one), so this only stops a stray
@@ -108,4 +112,14 @@
 }
 .editor .editor-body {
   overflow: visible;
+}
+/* With a photo, review comes first in reading and focus order; on wide
+   screens the photo panel still sits in the left column. */
+.editor-body.with-receipt > .edit-fields {
+  grid-column: 2;
+  grid-row: 1;
+}
+.editor-body.with-receipt > .receipt-capture {
+  grid-column: 1;
+  grid-row: 1;
 }

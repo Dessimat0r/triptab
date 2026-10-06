@@ -11,6 +11,7 @@ import * as receiptScan from '../lib/receipt-scan';
 import * as receiptProcessing from '../lib/receipt-processing';
 import * as receiptChatgpt from '../lib/receipt-chatgpt';
 import * as expenseReadiness from '../lib/expense-readiness';
+import * as dataUtils from '../lib/data-utils';
 import { createSourceFile, isArrayBindingPattern, isBindingElement, isCallExpression, isFunctionDeclaration, isIdentifier, isVariableStatement, JsxEmit, ModuleKind, ScriptKind, ScriptTarget, transpileModule } from 'typescript';
 
 // Run Home's actual render and event handlers with a small hook boundary. Child
@@ -86,6 +87,7 @@ function controller(trip: model.Trip, fetcher?: typeof fetch) {
     if (name === '@/lib/receipt-processing') return receiptProcessing;
     if (name === '@/lib/receipt-scan') return receiptScan;
     if (name === '@/lib/expense-readiness') return expenseReadiness;
+    if (name === '@/lib/data-utils') return dataUtils;
     if (name === '@/components/receipt-scan-review') return {__esModule: true, default: component, receiptMoney: (amount: number, currency: string | null) => currency ? moneyFormat.formatMoney(amount, currency) : String(amount / 100)};
     if (name === '@/lib/receipt-chatgpt') return receiptChatgpt;
     if (name === '@/components/trip-routing') return {
@@ -93,6 +95,7 @@ function controller(trip: model.Trip, fetcher?: typeof fetch) {
       useTripTabEntryQuery: () => '',
       useTripTabNavigation: () => ({ view: state.view, navigate: (next: string) => {state.view = next;}, replaceEntryUrl() {} }),
     };
+    if (name === '@/components/editor-footer-reveal') return { useStickyFooterReveal: () => () => {} };
     if (name === '@/components/confirmation-dialog') return { useConfirmation: () => ({ confirm: async () => true, dialog: null, confirming: false }) };
     if (name === 'lucide-react') return new Proxy({}, { get: () => component });
     return { __esModule: true, default: component, PwaUpdates: component };

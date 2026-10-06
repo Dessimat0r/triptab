@@ -83,6 +83,9 @@ export async function prepareReceiptImage(file: File, onQualityWarnings?: (warni
 
 export type ReceiptCaptureProps = {
   receiptId?: string;
+  /** Before any photo or request exists: just the two capture actions, with
+   * reading notes and location tucked into an optional disclosure. */
+  compact?: boolean;
   contextFields?: ReactNode;
   busy: boolean;
   stored: boolean;
@@ -119,6 +122,7 @@ export type ReceiptCaptureProps = {
 
 export default function ReceiptCapture({
   receiptId,
+  compact = false,
   contextFields,
   busy,
   stored,
@@ -226,6 +230,67 @@ export default function ReceiptCapture({
     }
   }
 
+  const inputs = <div className="receipt-capture-inputs">
+    <label
+      htmlFor={cameraId}
+      className={`receipt-capture-action${locked ? " disabled" : ""}`}
+    >
+      <Camera size={17} aria-hidden="true" />
+      Scan receipt
+      <input
+        id={cameraId}
+        type="file"
+        accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
+        capture="environment"
+        aria-describedby={`${hintId}${captureError ? " " + errorId : ""}`}
+        disabled={locked}
+        onChange={capture}
+      />
+    </label>
+    <label
+      htmlFor={imageId}
+      className={`receipt-capture-action${locked ? " disabled" : ""}`}
+    >
+      <ImagePlus size={17} aria-hidden="true" />
+      Choose image
+      <input
+        id={imageId}
+        type="file"
+        accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
+        aria-describedby={`${hintId}${captureError ? " " + errorId : ""}`}
+        disabled={locked}
+        onChange={capture}
+      />
+    </label>
+  </div>;
+  const problems = <>
+    {captureError && <p id={errorId} className="receipt-chat-error" role="alert">{captureError}</p>}
+    {captureWarnings.length > 0 && <div className="receipt-capture-hint" role="status" aria-live="polite">
+      {captureWarnings.map(warning => <p key={warning.code}>{warning.message}</p>)}
+      <p>Your image can still be uploaded and reviewed.</p>
+    </div>}
+    {assistantError && <p className="receipt-chat-error" role="alert">{assistantError}</p>}
+  </>;
+
+  if (compact && !receiptUrl && !prompt) return (
+    <section className="receipt-capture receipt-capture--compact" aria-labelledby={titleId} aria-busy={locked}>
+      <h3 id={titleId}>Have a receipt?</h3>
+      <div className="receipt-capture-status" role="status" aria-live="polite" aria-atomic="true">
+        {locked && <p>{processing ? readingText : (preparing ? "Preparing receipt photo…" : "Please wait…")}</p>}
+      </div>
+      {inputs}
+      {contextFields && <details className="receipt-capture-context-toggle">
+        <summary>Add notes for reading the photo <small>optional</small></summary>
+        {contextFields}
+      </details>}
+      <p id={hintId} className="receipt-capture-hint">
+        {aiConnected ? "TripTab reads the photo and suggests items for you to check. " : ""}
+        Photos are resized and camera metadata is removed before uploading.
+      </p>
+      {problems}
+    </section>
+  );
+
   return (
     <section className="receipt-capture" aria-labelledby={titleId} aria-busy={locked}>
       <h3 id={titleId}>Receipt image</h3>
@@ -243,39 +308,7 @@ export default function ReceiptCapture({
         )}
       </div>
       {contextFields}
-      <div className="receipt-capture-inputs">
-        <label
-          htmlFor={cameraId}
-          className={`receipt-capture-action${locked ? " disabled" : ""}`}
-        >
-          <Camera size={17} aria-hidden="true" />
-          Scan receipt
-          <input
-            id={cameraId}
-            type="file"
-            accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
-            capture="environment"
-            aria-describedby={`${hintId}${captureError ? " " + errorId : ""}`}
-            disabled={locked}
-            onChange={capture}
-          />
-        </label>
-        <label
-          htmlFor={imageId}
-          className={`receipt-capture-action${locked ? " disabled" : ""}`}
-        >
-          <ImagePlus size={17} aria-hidden="true" />
-          Choose image
-          <input
-            id={imageId}
-            type="file"
-            accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
-            aria-describedby={`${hintId}${captureError ? " " + errorId : ""}`}
-            disabled={locked}
-            onChange={capture}
-          />
-        </label>
-      </div>
+      {inputs}
       {receiptUrl && (
         <div className="receipt-capture-original">
           <img src={receiptUrl} alt="Stored receipt image for review" loading="lazy" />
@@ -292,12 +325,7 @@ export default function ReceiptCapture({
         When receipt AI is connected, TripTab reads uploaded receipts automatically and suggests items. {" "}
         Review the items here before choosing Save expense. You can also enter items yourself.
       </p>
-      {captureError && <p id={errorId} className="receipt-chat-error" role="alert">{captureError}</p>}
-      {captureWarnings.length > 0 && <div className="receipt-capture-hint" role="status" aria-live="polite">
-        {captureWarnings.map(warning => <p key={warning.code}>{warning.message}</p>)}
-        <p>Your image can still be uploaded and reviewed.</p>
-      </div>}
-      {assistantError && <p className="receipt-chat-error" role="alert">{assistantError}</p>}
+      {problems}
       {(receiptUrl || prompt) && (
         <div className="receipt-capture-processing">
           {ready && <button type="button" className="primary" disabled={locked} onClick={onUseProcessed}>
@@ -316,7 +344,7 @@ export default function ReceiptCapture({
           {!ready && !itemized && receiptUrl && automaticAvailable && aiProvider === "siwc" && !aiConnected && onConnectPlan && <button type="button" className="primary" disabled={locked} onClick={onConnectPlan}>
             Connect ChatGPT plan
           </button>}
-          <details className="receipt-capture-tools" open={!aiConnected}><summary>Connected ChatGPT tools</summary><div className="receipt-capture-tool-actions">
+          <details className="receipt-capture-tools" open={!aiConnected && !ready && !itemized}><summary>Connected ChatGPT tools</summary><div className="receipt-capture-tool-actions">
           {!ready && !itemized && connected && stored && prompt && chatgptUrl && (
             locked ? <button type="button" className={aiConfigured ? "quiet" : "primary"} disabled>
               <ExternalLink size={17} aria-hidden="true" /> Open ChatGPT
@@ -339,7 +367,7 @@ export default function ReceiptCapture({
         </div>
       )}
       {stored && <p className="receipt-chat-note" role="status">{offline ? "You’re offline. Receipt updates resume when you reconnect." : refreshError ? "Unable to refresh receipt updates. We’ll keep trying automatically." : "Processed items and replies appear automatically while this receipt is open."}</p>}
-      {prompt && <details className="receipt-capture-prompt" open={!aiConnected}>
+      {prompt && <details className="receipt-capture-prompt" open={!aiConnected && !ready && !itemized}>
         <summary>Request to send in ChatGPT</summary>
         <p>{handoffNeedsPaste
           ? "This request is too long to prefill reliably. Copy the complete text below, open ChatGPT, then paste and send it with TripTab enabled."

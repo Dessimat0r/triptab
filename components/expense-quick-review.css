@@ -228,3 +228,146 @@
 .editor-footer > .save-checklist {
   flex: 1 1 100%;
 }
+
+/* Quick expense form: name, amount and currency, payer and people. */
+.editor .fieldpair.quick-amount {
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
+}
+.quick-amount input {
+  font-size: 1.15rem;
+  font-weight: 650;
+}
+.quick-shared {
+  min-width: 0;
+  margin: 0 0 12px;
+  padding: 0;
+  border: 0;
+}
+.quick-shared legend {
+  padding: 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #424c65;
+}
+.quick-shared .personchips {
+  padding: 8px 0 0;
+}
+.quick-shared .personchips button {
+  min-height: 44px;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.quick-shares {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 0.875rem;
+  overflow-wrap: anywhere;
+}
+.quick-shares .textbutton,
+.purchase-details-done,
+.expense-extra-actions button,
+.receipt-capture-context-toggle > summary {
+  min-height: 44px;
+}
+.expense-extra-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0;
+}
+.expense-extra-actions button {
+  flex: 0 1 auto;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 14px;
+  font-size: 0.875rem;
+}
+.purchase-details-done {
+  margin: 0 0 12px;
+}
+
+/* Before any photo exists, capture is two actions plus optional notes. */
+.receipt-capture--compact {
+  padding: 12px 14px;
+  margin: 12px 0 16px;
+}
+.receipt-capture--compact h3 {
+  margin: 0 0 10px;
+  font-size: 0.95rem;
+}
+.receipt-capture--compact .receipt-capture-status:empty {
+  display: none;
+}
+.receipt-capture-context-toggle {
+  margin-top: 8px;
+}
+.receipt-capture-context-toggle > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+.receipt-capture-context-toggle > summary small {
+  color: var(--muted);
+  font-weight: 400;
+}
+.receipt-capture--compact .receipt-capture-hint {
+  margin: 8px 0 0;
+}
+
+/* One checklist row: the next blocker plus a count of the rest. */
+.save-checklist ul {
+  display: inline-flex;
+}
+.save-checklist-item,
+.save-checklist-more {
+  min-height: 44px;
+}
+.save-checklist-more {
+  margin: 0 0 0 6px;
+}
+
+.saved-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-bottom: 22px;
+  padding: 10px 16px;
+  border: 1px solid var(--green);
+  border-radius: 8px;
+  background: var(--mint);
+  color: var(--green);
+  font-weight: 600;
+}
+.saved-banner span {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.saved-banner button {
+  min-height: 44px;
+}
+@media (prefers-color-scheme: dark) {
+  .saved-banner {
+    background: #12382a;
+    border-color: #2f7a5c;
+    color: #b9f0d6;
+  }
+  .quick-shared legend {
+    color: #d3dcf0;
+  }
+}
+
+@media (max-width: 480px) {
+  /* Total and Save share one row even on a 320px phone. */
+  .editor-footer > div:not(.save-checklist) {
+    flex: 1 1 96px;
+  }
+}

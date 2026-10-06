@@ -9,6 +9,7 @@ type ConfirmationOptions = {
   title: string;
   message: string;
   confirmLabel: string;
+  cancelLabel?: string;
   destructive?: boolean;
 };
 type PendingConfirmation = ConfirmationOptions & { scope: string };
@@ -54,7 +55,7 @@ export function useConfirmation(scope: string) {
         <h2 id={`${id}-title`}>{pending.title}</h2>
         <p id={`${id}-message`}>{pending.message}</p>
         <div className="confirmation-actions">
-          <button type="button" className="quiet" data-autofocus onClick={() => finish(false)}>Cancel</button>
+          <button type="button" className="quiet" data-autofocus onClick={() => finish(false)}>{pending.cancelLabel || "Cancel"}</button>
           <button type="button" className={pending.destructive ? "danger quiet" : "primary"}
             onClick={() => finish(true)}>{pending.confirmLabel}</button>
         </div>

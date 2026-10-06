@@ -21,11 +21,15 @@ function rememberChoice(tripId: string, choice: QuickChoice) {
   try { localStorage.setItem(preferenceKey(tripId), choice); } catch { /* A remembered choice is only a convenience. */ }
 }
 
-export function focusExpenseTarget(id: string) {
+/** Scroll to a field that needs attention and put focus on the control that fixes it. */
+export function focusExpenseTarget(id: string, focus?: string) {
   const target = document.getElementById(id);
   if (!target) return;
-  target.scrollIntoView({ behavior: "smooth", block: "start" });
-  const control = target.matches("input, select, textarea, button") ? target : target.querySelector<HTMLElement>("input:not([type=hidden]), select, textarea, button");
+  const reduced = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+  target.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "start" });
+  const controls = "input:not([type=hidden]), select, textarea, button";
+  const control = target.matches(controls) ? target
+    : (focus && target.querySelector<HTMLElement>(focus)) || target.querySelector<HTMLElement>(controls);
   control?.focus({ preventScroll: true });
 }
 
@@ -33,23 +37,28 @@ export function focusExpenseTarget(id: string) {
  * One choice for every unassigned line instead of a tap per item. Shown only
  * while lines have nobody assigned; per-item controls stay available below.
  */
-export function QuickSplit({ tripId, unassigned, members, currentMemberId, disabled, onAssign }: {
+export function QuickSplit({ tripId, unassigned, members, currentMemberId, disabled, autoFocus, onAssign }: {
   tripId: string; unassigned: number; members: { id: string; name: string }[]; currentMemberId?: string; disabled?: boolean;
+  /** The allocation is the receipt's next step, so it takes the dialog's initial focus. */
+  autoFocus?: boolean;
   onAssign: (memberIds: string[]) => void;
 }) {
   const [remembered] = useState(() => rememberedChoice(tripId));
   if (!unassigned || !members.length) return null;
   const me = members.find(member => member.id === currentMemberId);
+  // Labels say exactly what is affected: only the lines nobody is on yet.
+  const scope = unassigned === 1 ? "the remaining item" : `${unassigned} remaining items`;
   const choices: { key: QuickChoice; label: string; icon: ReactNode; ids: string[] }[] = [
-    { key: "everyone", label: members.length === 2 ? "Split between both of us" : "Everyone equally", icon: <Users size={17} aria-hidden="true" />, ids: members.map(member => member.id) },
-    ...(me && members.length > 1 ? [{ key: "me" as const, label: `All for ${me.name}`, icon: <User size={17} aria-hidden="true" />, ids: [me.id] }] : []),
+    { key: "everyone", label: `Share ${scope} equally`, icon: <Users size={17} aria-hidden="true" />, ids: members.map(member => member.id) },
+    ...(me && members.length > 1 ? [{ key: "me" as const, label: `Give ${scope} to ${me.name}`, icon: <User size={17} aria-hidden="true" />, ids: [me.id] }] : []),
   ];
   const ordered = remembered ? [...choices].sort((a, b) => Number(b.key === remembered) - Number(a.key === remembered)) : choices;
   return <section className="quick-split" aria-labelledby="quick-split-title">
     <h3 id="quick-split-title">{unassigned === 1 ? "1 item needs" : `${unassigned} items need`} people</h3>
-    <p className="footnote">Choose for all of them at once. You can still change any item below.</p>
+    <p className="footnote">Only items with nobody on them yet change. You can still adjust any item below.</p>
     <div className="quick-split-actions">
       {ordered.map((choice, index) => <button key={choice.key} type="button" className={index === 0 ? "primary" : "quiet"} disabled={disabled}
+        data-autofocus={autoFocus && index === 0 ? true : undefined}
         onClick={() => { rememberChoice(tripId, choice.key); onAssign(choice.ids); }}>
         {choice.icon}{choice.label}
       </button>)}
@@ -62,18 +71,20 @@ export function QuickSplit({ tripId, unassigned, members, currentMemberId, disab
 export function SaveChecklist({ blockers }: { blockers: SaveBlocker[] }) {
   const [expanded, setExpanded] = useState(false);
   if (!blockers.length) return null;
-  const shown = expanded ? blockers : blockers.slice(0, 3);
+  // The first blocker is the next thing to fix; the rest are one tap away so
+  // the pinned footer stays small on phones.
+  const shown = expanded ? blockers : blockers.slice(0, 1);
   return <div className="save-checklist" role="status" aria-label="Before you can save">
     <span className="save-checklist-title">Before saving</span>
     <ul>
       {shown.map(blocker => <li key={blocker.key}>
-        <button type="button" className="save-checklist-item" onClick={() => focusExpenseTarget(blocker.target)}>
+        <button type="button" className="save-checklist-item" onClick={() => focusExpenseTarget(blocker.target, blocker.focus)}>
           {blocker.message}<ChevronRight size={14} aria-hidden="true" />
         </button>
       </li>)}
     </ul>
-    {blockers.length > 3 && <button type="button" className="save-checklist-more" onClick={() => setExpanded(value => !value)}>
-      {expanded ? "Show fewer" : `${blockers.length - 3} more`}
+    {blockers.length > 1 && <button type="button" className="save-checklist-more" aria-expanded={expanded} onClick={() => setExpanded(value => !value)}>
+      {expanded ? "Show fewer" : `${blockers.length - 1} more`}
     </button>}
   </div>;
 }
@@ -107,7 +118,7 @@ export function ReadyToSave({ title, originalTotal, convertedTotal, payerName, s
 /**
  * Purchase details that are usually right (payer, date, time, currency and
  * time zone) collapse to a single line. They open by themselves while any of
- * them needs attention, and stay open once opened.
+ * them needs attention; Done collapses them again once nothing is missing.
  */
 export function PurchaseDetails({ id, summary, needsAttention, children }: {
   id: string; summary: string; needsAttention: boolean; children: ReactNode;
@@ -125,6 +136,7 @@ export function PurchaseDetails({ id, summary, needsAttention, children }: {
       <button type="button" className="quiet" aria-expanded={false} onClick={() => setOpen(true)}>Edit</button>
     </div>}
     {shown && children}
+    {shown && !needsAttention && <button type="button" className="quiet purchase-details-done" aria-expanded={true} onClick={() => setOpen(false)}>Done</button>}
   </section>;
 }
 
