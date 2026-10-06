@@ -17,7 +17,9 @@ import ReceiptLocationFields, { type ReceiptPlace } from "@/components/receipt-l
 import ReceiptPhotoViewer from "@/components/receipt-photo-viewer";
 import ExpenseIconPicker from "@/components/expense-icon";
 import ReceiptScanReview, { receiptMoney } from "@/components/receipt-scan-review";
-import { receiptScanSaveError } from "@/lib/receipt-scan";
+import { carryReviewAcknowledgements, receiptScanSaveError } from "@/lib/receipt-scan";
+import { assignUnassignedItems, EXPENSE_TARGETS, expenseSaveBlockers, hasReceiptDiscussion, unassignedItemIds } from "@/lib/expense-readiness";
+import { MoreOptions, PurchaseDetails, QuickSplit, ReadyToSave, SaveChecklist, focusExpenseTarget } from "@/components/expense-quick-review";
 import ItemReceiptConversation from "@/components/item-receipt-conversation";
 import PaymentEditor from "@/components/payment-editor";
 import ActivityPanel from "@/components/activity-panel";
@@ -217,6 +219,7 @@ export default function Home({ children }: { children: ReactNode }) {
   const receiptAIStatusRequest = useRef(0);
   const receiptAIStatusInFlight = useRef<{ accountId: string; promise: Promise<ReceiptAIState | null> } | null>(null);
   const activeReceiptEditor = useRef<typeof editing>(null);
+  const fxRequest = useRef(0);
   useLayoutEffect(() => { activeReceiptEditor.current = editing; }, [editing]);
   const savedEtag = useRef("");
   const latestSnapshot = useRef<{ data: Ledger; revision: number }>({ data: { trips: [] }, revision: 0 });
@@ -621,8 +624,10 @@ export default function Home({ children }: { children: ReactNode }) {
       adjustmentAllocation: "selected-participants",
       date: today(),
       time: localTime(),
-      timezone:
-        Intl.DateTimeFormat().resolvedOptions().timeZone || "Europe/London",
+      // Expenses are usually entered where the previous one was bought, even
+      // when catching up later from a phone set to the home time zone.
+      timezone: trip.expenses[0]?.timezone
+        || Intl.DateTimeFormat().resolvedOptions().timeZone || "Europe/London",
       currency: trip.currency,
       payer: trip.members.find(member => member.userId === profile?.id)?.id || trip.members[0].id,
       items: [
@@ -660,7 +665,8 @@ export default function Home({ children }: { children: ReactNode }) {
       id: draft.expenseId || draft.id,
       date: draft.date || existing?.date || today(),
       time: draft.time || existing?.time || "12:00",
-      timezone: draft.timezone || existing?.timezone || "Europe/London",
+      timezone: draft.timezone || existing?.timezone || trip.expenses[0]?.timezone
+        || Intl.DateTimeFormat().resolvedOptions().timeZone || "Europe/London",
       currency: draft.currency,
       draftId: draft.id,
       conversation: mergeReceiptConversation(existing?.conversation, draft.conversation),
@@ -747,7 +753,9 @@ export default function Home({ children }: { children: ReactNode }) {
       // only after its accepted values render; a rejected update keeps Review.
       if (initial) initial.pendingFinancial = receiptEditableValue(next);
     } else if (proposal && reviewedReceipt.current?.draftId === proposal.id && reviewedReceipt.current.receiptId === proposal.receiptId
-      && equalSavedValue(reviewedReceipt.current.financial, receiptEditableValue(receiptProposalEditor(editing, proposal)))) {
+      // Apply the proposal to what was reviewed, not to later edits: a rate,
+      // bank charge or split chosen since is not a newer proposal.
+      && equalSavedValue(reviewedReceipt.current.financial, receiptEditableValue(receiptProposalEditor({ ...editing, ...reviewedReceipt.current.financial }, proposal)))) {
       needsReview = null;
     }
     if (!matching) initialReceiptReview.current = null;
@@ -1222,7 +1230,11 @@ export default function Home({ children }: { children: ReactNode }) {
     if (!editing || !trip || !editing.currency) return;
     setFxLoading(true);
     setFxError("");
-    const transaction = editing;
+    const transaction = editing, tripId = trip.id, request = ++fxRequest.current;
+    // A rate belongs to the editor and trip that asked for it. A newer lookup,
+    // another open receipt or a rate entered meanwhile always wins.
+    const current = () => request === fxRequest.current && editorBaseline.current?.tripId === tripId
+      && activeReceiptEditor.current?.id === transaction.id;
     try {
       const q = new URLSearchParams({
         from: transaction.currency!,
@@ -1233,13 +1245,16 @@ export default function Home({ children }: { children: ReactNode }) {
       });
       const r = await fetch("/api/fx?" + q.toString()),
         b = (await r.json()) as { rate: number; asOf: string; error: string };
-      if (!r.ok)
+      if (!current()) return;
+      if (!r.ok || !Number.isFinite(b.rate) || b.rate <= 0 || typeof b.asOf !== "string")
         throw Error(
           b.error ||
             "No historical rate available. Enter a manual rate or your bank charge.",
         );
       setEditing((prev) =>
         prev &&
+        prev.id === transaction.id &&
+        equalSavedValue(prev.fx, transaction.fx) &&
         prev.currency === transaction.currency &&
         prev.date === transaction.date &&
         prev.time === transaction.time &&
@@ -1249,9 +1264,9 @@ export default function Home({ children }: { children: ReactNode }) {
       );
       setReferenceRate({ rate: b.rate, currency: transaction.currency!, date: transaction.date, time: transaction.time, timezone: transaction.timezone });
     } catch (e) {
-      setFxError(e instanceof Error ? e.message : "Rate lookup failed.");
+      if (current()) setFxError(e instanceof Error ? e.message : "Rate lookup failed.");
     } finally {
-      setFxLoading(false);
+      if (request === fxRequest.current) setFxLoading(false);
     }
   }
   async function openPayment(suggestion?: { from: string; to: string; amount: number }, existing?: Payment) {
@@ -1344,6 +1359,31 @@ export default function Home({ children }: { children: ReactNode }) {
   const editorTotal = useMemo(() => editing && trip ? previewTotal(editing, trip) : null, [editing, trip]);
   const editorOriginalTotal = useMemo(() => editing ? receiptEditorTotal(editing) : 0, [editing]);
   const editorScanError = useMemo(() => editing ? receiptScanSaveError(editing, { allowAcknowledgement: true, previous: editorBaseline.current?.expense }) : null, [editing]);
+  const saveDisabled = !editing || !trip || saving || !!editorConflict || uploading || receiptProcessing || fxLoading
+    || editing.bankAmount === 0 || (editing.bankAmount !== undefined && editing.currency === trip.currency)
+    || !!editorScanError || !!receiptSplitError(editing)
+    || (editing.percentages === undefined && editing.items.some(item => !!itemSplitError(item)))
+    || editorOriginalTotal === null || editorOriginalTotal <= 0
+    || (editing.currency !== trip.currency && editing.bankAmount === undefined && !editing.fx?.rate);
+  // Collapsed purchase details open while a value is missing, or when a
+  // processed receipt could not supply the date, time or currency itself.
+  const purchaseDetailsNeedAttention = !!editing && (!editing.currency || !editing.date || !editing.time
+    || (!!editing.receiptScan && (["date", "time", "currency"] as const).some(field => editing.fieldSources?.[field] === "default"))
+    || (!!editing.receiptScan?.printedCurrency && editing.receiptScan.printedCurrency !== editing.currency));
+  const editorBlockers = useMemo(() => editing && trip ? expenseSaveBlockers(editing, trip) : [], [editing, trip]);
+  // Foreign-currency receipts need a rate before Save. Look up the daily
+  // reference rate once per currency/date/time/zone instead of asking for a
+  // tap; a manual rate or bank charge always takes priority.
+  const autoFxKey = editing && trip && editing.currency && editing.currency !== trip.currency && !editing.fx
+    && editing.bankAmount === undefined && editing.date && editing.time && editing.timezone && !receiptHistoryOpen
+    ? [trip.id, editing.id, editing.currency, trip.currency, editing.date, editing.time, editing.timezone].join("|") : "";
+  const autoFxAttempted = useRef("");
+  useEffect(() => {
+    if (!autoFxKey || offline || autoFxAttempted.current === autoFxKey) return;
+    const timer = setTimeout(() => { autoFxAttempted.current = autoFxKey; void lookupFx(); }, 500);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoFxKey, offline]);
   const itemNames = useMemo(() => Object.fromEntries(editing?.items.map(item => [item.id, item.name]) || []), [editing?.items]);
   const estimatedCharge = useMemo(() => editing?.fx && trip ? previewTotal({ ...editing, bankAmount: undefined }, trip) : null, [editing, trip]);
   const receiptTimezones = useMemo(() => Array.from(new Set([
@@ -2243,13 +2283,24 @@ export default function Home({ children }: { children: ReactNode }) {
                   onUseProcessed={reviewProcessedReceipt}
                 />
                 <div className="edit-fields">
-                  <ExpenseIconPicker entry={editing} showLabel disabled={saving || uploading} onChange={icon => setEditing(previous => previous && { ...previous, icon })} />
                   {restoration && <RestorationNotice info={restoration} />}
                   {editing.receiptId && <ReceiptPhotoViewer receiptId={editing.receiptId} />}
-                  <ReceiptScanReview entry={editing} onChange={setEditing} />
+                  <div id={EXPENSE_TARGETS.review} className="expense-target">
+                    <ReceiptScanReview entry={editing} onChange={setEditing} />
+                  </div>
+                  <QuickSplit key={`${trip.id}:${editing.id}`} tripId={trip.id} unassigned={unassignedItemIds(editing).length} members={trip.members}
+                    currentMemberId={trip.members[currentMemberIndex]?.id} disabled={saving || uploading || receiptProcessing}
+                    onAssign={ids => setEditing(previous => previous && assignUnassignedItems(previous, ids))} />
+                  {!editorBlockers.length && !saveDisabled && !!editing.receiptScan && !trip.expenses.some(expense => expense.id === editing.id) && <ReadyToSave title={editing.title.trim()}
+                    originalTotal={receiptMoney(editorOriginalTotal || 0, editing.currency)}
+                    convertedTotal={editing.currency !== trip.currency && editorTotal !== null ? money(editorTotal, trip.currency) : undefined}
+                    payerName={name(editing.payer)}
+                    shares={trip.members.flatMap((member, index) => editorShares?.[index] ? [{ id: member.id, name: member.name, amount: money(editorShares[index], trip.currency) }] : [])}
+                    disabled={saveDisabled} onEdit={() => focusExpenseTarget(EXPENSE_TARGETS.title)} />}
                   <label>
                     Expense name
                     <input
+                      id={EXPENSE_TARGETS.title}
                       value={editing.title}
                       required
                       maxLength={200}
@@ -2260,6 +2311,8 @@ export default function Home({ children }: { children: ReactNode }) {
                     />
                   </label>
                   {editing.fieldSources?.title === "default" && <p className="footnote">Suggested name. Receipt reading may replace it; editing confirms your choice.</p>}
+                  <PurchaseDetails key={`details:${editing.id}`} id={EXPENSE_TARGETS.details} needsAttention={purchaseDetailsNeedAttention}
+                    summary={`${name(editing.payer)} paid · ${expenseDate(editing.date)} ${editing.time} · ${editing.currency || "Currency needed"} · ${editing.timezone.replaceAll("_", " ")}`}>
                   <div className="fieldpair">
                     <label>
                       Paid by
@@ -2350,19 +2403,20 @@ export default function Home({ children }: { children: ReactNode }) {
                     </select>
                   </label>
                   {Object.entries(editing.fieldSources || {}).some(([field, source]) => source === "default" && ["date", "time", "currency", "timezone"].includes(field)) && <p className="footnote">Some purchase details are suggested defaults. Check the original currency, date and time against the receipt. Editing confirms your values.</p>}
+                  </PurchaseDetails>
                   <div className="receipt-split">
                     <label>
                       Split method
-                      <select value={editing.percentages === undefined ? "items" : "receipt"} onChange={event => {
+                      <select id={EXPENSE_TARGETS.split} value={editing.percentages === undefined ? "items" : "receipt"} onChange={event => {
                         setEditing(prev => {
                           if (!prev) return prev;
-                          if (event.target.value === "items") return { ...prev, percentages: undefined };
+                          if (event.target.value === "items") return carryReviewAcknowledgements(prev, { ...prev, percentages: undefined });
                           const ids = trip.members.map(member => member.id);
-                          return {
+                          return carryReviewAcknowledgements(prev, {
                             ...prev,
                             percentages: equalPercentages(ids),
                             items: prev.items,
-                          };
+                          });
                         });
                       }}>
                         <option value="items">By item</option>
@@ -2371,11 +2425,10 @@ export default function Home({ children }: { children: ReactNode }) {
                     </label>
                     {editing.percentages !== undefined && <>
                       <p className="footnote">These shares apply to the entire receipt, including tax, tips, discounts and the amount charged by your bank.</p>
-                      <ShareSplit members={trip.members} selected={Object.keys(editing.percentages)} percentages={editing.percentages} scope="receipt" alwaysPercent onChange={(ids, percentages) => setEditing(prev => prev && { ...prev, percentages: percentages || equalPercentages(ids) })} />
+                      <ShareSplit members={trip.members} selected={Object.keys(editing.percentages)} percentages={editing.percentages} scope="receipt" alwaysPercent onChange={(ids, percentages) => setEditing(prev => prev && carryReviewAcknowledgements(prev, { ...prev, percentages: percentages || equalPercentages(ids) }))} />
                     </>}
                   </div>
-                  <ReceiptLanguageSelect tripLanguage={trip.receiptLanguage} value={editing.receiptLanguage} detected={editing.detectedLanguage} onChange={receiptLanguage=>setEditing(previous=>previous&&{...previous,receiptLanguage})} />
-                  <div className="itemsheading">
+                  <div className="itemsheading" id={EXPENSE_TARGETS.items}>
                     <h3>Items</h3>
                     <span className="muted">
                       Full line total · {editing.currency}
@@ -2436,10 +2489,10 @@ export default function Home({ children }: { children: ReactNode }) {
                           <span><strong>Receipt:</strong> {item.quantity.total} {item.quantity.label || "units"}</span>
                           {item.quantity.sourceText && <small>Printed: {item.quantity.sourceText}</small>}
                         </p>}
-                        {editing.percentages === undefined && <ShareSplit members={trip.members} selected={item.members} percentages={item.percentages} units={item.units} quantity={item.quantity} scope={`item ${i + 1}`} onChange={(members, percentages, units) => setEditing(prev => prev && {
+                        {editing.percentages === undefined && <ShareSplit members={trip.members} selected={item.members} percentages={item.percentages} units={item.units} quantity={item.quantity} scope={`item ${i + 1}`} onChange={(members, percentages, units) => setEditing(prev => prev && carryReviewAcknowledgements(prev, {
                           ...prev,
                           items: prev.items.map(current => current.id === item.id ? { ...current, members, percentages, units } : current),
-                        })} />}
+                        }))} />}
                         <ItemReceiptConversation messages={editing.conversation || []} itemId={item.id}
                           scopeLabel={item.name.trim() || `item ${i + 1}`}
                           itemNames={itemNames} memberNames={memberNames}
@@ -2495,6 +2548,9 @@ export default function Home({ children }: { children: ReactNode }) {
                     {editing.percentages === undefined ? "Tax, tip and discount are shared in proportion to each person’s items." : "Tax, tip and discount follow the whole receipt percentages."} Add tax only if it isn’t already in the item prices.
                   </p>
                   {editing.percentages === undefined && editing.items.every(item => item.amount === 0) && editing.tax + editing.tip > editing.discount && <p className="notification-status" role="status">Added tax and tip on zero-priced items are shared between the people selected on those items.{editorBaseline.current?.expense?.adjustmentAllocation === undefined && editorBaseline.current?.expense ? " Saving changes the earlier split, which included every traveller." : ""}</p>}
+                  <MoreOptions key={`more:${editing.id}`} defaultOpen={hasReceiptDiscussion(editing.conversation)}>
+                  <ExpenseIconPicker entry={editing} showLabel disabled={saving || uploading} onChange={icon => setEditing(previous => previous && { ...previous, icon })} />
+                  <ReceiptLanguageSelect tripLanguage={trip.receiptLanguage} value={editing.receiptLanguage} detected={editing.detectedLanguage} onChange={receiptLanguage=>setEditing(previous=>previous&&{...previous,receiptLanguage})} />
                   <details className="import">
                     <summary>
                       Paste itemised data <ChevronDown size={15} />
@@ -2533,6 +2589,7 @@ export default function Home({ children }: { children: ReactNode }) {
                     onSend={sendReceiptQuestion}
                     onRefresh={() => void load({ background: true, fresh: true })}
                   />
+                  </MoreOptions>
                   {processedReceipt && <section className="receipt-proposal" aria-label="Proposed receipt changes">
                     <h3>Changes ready to review</h3>
                     <p className="footnote">ChatGPT has proposed an update. Review the whole receipt, including any changes outside the item you discussed, before saving.</p>
@@ -2540,7 +2597,7 @@ export default function Home({ children }: { children: ReactNode }) {
                   </section>}
                   {editing.bankAmount !== undefined && (editing.currency === trip.currency || editing.bankAmount <= 0) && <div className="error" role="alert"><p>The saved bank charge is {money(editing.bankAmount, trip.currency)}. {editing.currency === trip.currency ? "A receipt already in the holiday currency cannot use a currency-conversion bank charge." : "A bank charge must be greater than zero."} Review it before saving.</p><button type="button" className="quiet" onClick={() => setEditing({ ...editing, bankAmount: undefined })}>Remove bank charge</button></div>}
                   {editing.currency && editing.currency !== trip.currency && (
-                    <div className="fx-panel">
+                    <div className="fx-panel" id={EXPENSE_TARGETS.fx}>
                       <div className="sectionheading">
                         <h3>What did the bank charge?</h3>
                         <span className="currency-pair">
@@ -2717,14 +2774,14 @@ export default function Home({ children }: { children: ReactNode }) {
                 <p className="footnote">Review your split and press Save expense to commit your choice.</p>
               </section>}
               <div className="editor-footer">
-                {editorScanError && <p className="receipt-save-block" role="status">{editorScanError}</p>}
+                <SaveChecklist blockers={editorBlockers} />
                 <div>
                   <small>Itemised total</small>
                   <strong>{editorOriginalTotal === null ? "Incomplete" : !editing.items.length ? "Not processed" : receiptMoney(editorOriginalTotal, editing.currency)}</strong>
-                  {editing.currency !== trip.currency &&
+                  {editing.currency !== trip.currency && editorTotal !== null &&
                     (editing.bankAmount !== undefined || editing.fx?.rate) && (
                       <small>
-                        {money(editorTotal || 0, trip.currency)}{" "}
+                        {money(editorTotal, trip.currency)}{" "}
                         to split
                       </small>
                     )}
@@ -2757,22 +2814,7 @@ export default function Home({ children }: { children: ReactNode }) {
                   )}
                   <button
                     className="primary"
-                    disabled={
-                      saving ||
-                      !!editorConflict ||
-                      uploading ||
-                      receiptProcessing ||
-                      fxLoading ||
-                      editing.bankAmount === 0 ||
-                      (editing.bankAmount !== undefined && editing.currency === trip.currency) ||
-                      !!editorScanError ||
-                      !!receiptSplitError(editing) ||
-                      (editing.percentages === undefined && editing.items.some((item) => !!itemSplitError(item))) ||
-                      editorOriginalTotal === null || editorOriginalTotal <= 0 ||
-                      (editing.currency !== trip.currency &&
-                        editing.bankAmount === undefined &&
-                        !editing.fx?.rate)
-                    }
+                    disabled={saveDisabled}
                   >
                     {saving ? "Saving…" : "Save expense"}
                   </button>
