@@ -546,7 +546,7 @@ export function applyReceiptTranscription(_trip: Trip, draft: Draft, transcripti
       ? { location: {label:value.location,source:value.locationSource==='context'?'chat':'receipt'}, fieldSources:{...fieldSources,location:value.locationSource==='context'?'ai':'receipt'} } : {}),
     fx: currency === draft.currency ? draft.fx : undefined,
     bankAmount: currency === draft.currency ? draft.bankAmount : undefined,
-    source: 'ai', status: 'review', adjustmentAllocation: 'selected-participants',
+    source: 'ai', status: 'review', adjustmentAllocation: draft.adjustmentAllocation === 'receipt-total' ? 'receipt-total' : 'selected-participants',
     receiptScan: {
       version: 1, ...evidence, fieldSources: evidenceSources, status: 'incomplete', warnings: uniqueWarnings,
       processedAt: options.processedAt ?? new Date().toISOString(), processor: options.processor ?? 'native-api',

@@ -586,7 +586,7 @@ export default function Home({ children }: { children: ReactNode }) {
     editorBaseline.current = { tripId: trip.id, expense: structuredClone(expense) };
     setEditorConflict(null); setReferenceRate(null); resetReceiptReview();
     if (pending) editorDraftBinding.current = { draftId: pending.id, receiptId: pending.receiptId, expenseId: pending.expenseId };
-    setEditing(structuredClone({ ...expense, adjustmentAllocation: "selected-participants", expenseId: expense.id,
+    setEditing(structuredClone({ ...expense, adjustmentAllocation: "receipt-total", expenseId: expense.id,
       draftId: pending?.id, conversation: mergeReceiptConversation(expense.conversation, pending?.conversation),
       memory: pending?.memory ?? expense.memory,
     }));
@@ -621,7 +621,7 @@ export default function Home({ children }: { children: ReactNode }) {
       id: uid(),
       title: "",
       source: "manual",
-      adjustmentAllocation: "selected-participants",
+      adjustmentAllocation: "receipt-total",
       date: today(),
       time: localTime(),
       // Expenses are usually entered where the previous one was bought, even
@@ -661,7 +661,7 @@ export default function Home({ children }: { children: ReactNode }) {
     const entry: ReceiptEditor = {
       ...draft,
       languageViewId: draft.languageViewId || existing?.languageViewId || draft.expenseId || draft.id,
-      adjustmentAllocation: "selected-participants",
+      adjustmentAllocation: "receipt-total",
       id: draft.expenseId || draft.id,
       date: draft.date || existing?.date || today(),
       time: draft.time || existing?.time || "12:00",
@@ -815,7 +815,7 @@ export default function Home({ children }: { children: ReactNode }) {
       bankAmount: source.bankAmount,
       fx: source.fx,
       source: source.source || "manual",
-      adjustmentAllocation: source.adjustmentAllocation || "selected-participants",
+      adjustmentAllocation: source.adjustmentAllocation || "receipt-total",
       status: keepProposal && previous ? previous.status : "waiting",
     };
     const saved = await updateTrip({
@@ -1332,7 +1332,7 @@ export default function Home({ children }: { children: ReactNode }) {
     }
     setRestoration({ actorName: event.actorName, createdAt: event.createdAt, adjustments });
     setCaptureNotes("");
-    setEditing({ ...expense, adjustmentAllocation: "selected-participants", expenseId: undefined });
+    setEditing({ ...expense, adjustmentAllocation: "receipt-total", expenseId: undefined });
   }
   // Saved balances do not depend on form keystrokes or which panel is open.
   const { balance, due, spent, calculationError } = useMemo(() => {
@@ -2420,7 +2420,7 @@ export default function Home({ children }: { children: ReactNode }) {
                         });
                       }}>
                         <option value="items">By item</option>
-                        <option value="receipt">Whole receipt percentages</option>
+                        <option value="receipt">Whole bill (equal or custom %)</option>
                       </select>
                     </label>
                     {editing.percentages !== undefined && <>

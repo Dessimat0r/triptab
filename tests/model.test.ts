@@ -300,7 +300,7 @@ test('seeded mixed-currency trips conserve every penny through allocation, JSON 
       }));
       const percentages = random(3) === 0 ? { [ids[0]]: 60, [ids[1]]: 40 } : undefined;
       if (random(2)) items[0] = { ...items[0], members: [ids[0], ids[1]], percentages: { [ids[0]]: 33.33, [ids[1]]: 66.67 } };
-      return expense({ id: `expense-${index}`, currency, payer: ids[random(ids.length)], items, tax: random(200), tip: random(200), discount: random(400), percentages,
+      return expense({ id: `expense-${index}`, adjustmentAllocation: 'receipt-total', currency, payer: ids[random(ids.length)], items, tax: random(200), tip: random(200), discount: random(400), percentages,
         fx: currency === 'GBP' ? undefined : { rate: currency === 'HUF' || currency === 'ISK' ? 0.00214 : 0.85327, asOf: '2026-08-15', source: 'manual' },
         bankAmount: currency !== 'GBP' && random(3) === 0 ? 1 + random(80000) : undefined,
       });
@@ -580,6 +580,60 @@ test('zero-priced items assign positive tax and tip only to their selected parti
   assert.throws(() => shares({ ...dinner, items: [] }, members), /Choose at least one person/);
 });
 
+test('the receipt-total rule rounds once so per-item pennies cannot pile onto one person', () => {
+  const pair = [{ id: 'a', name: 'Chris' }, { id: 'b', name: 'Gary' }];
+  const billa = expense({
+    currency: 'GBP', fx: undefined, adjustmentAllocation: 'receipt-total',
+    items: [
+      { id: 'roll', name: 'Roll', amount: 35, members: ['a', 'b'] },
+      { id: 'water', name: 'Water', amount: 129, members: ['a', 'b'] },
+    ],
+  });
+  assert.deepEqual(shares({ ...billa, adjustmentAllocation: 'selected-participants' }, pair), [83, 81], 'the per-item rule rounds each line separately');
+  assert.deepEqual(shares(billa, pair), [82, 82]);
+  assert.deepEqual(expenseShares(billa, pair, 'GBP'), [82, 82]);
+  const odd = { ...billa, items: [...billa.items, { id: 'gum', name: 'Gum', amount: 1, members: ['b', 'a'] }] };
+  assert.deepEqual(shares(odd, pair), [83, 82], 'a true tie follows the order people were first selected on items');
+  assert.deepEqual(shares({ ...odd, items: [odd.items[2], ...billa.items] }, pair), [82, 83]);
+  assert.deepEqual(shares(expense({ adjustmentAllocation: 'receipt-total', items: [{ id: 'bar', name: 'Bar', amount: 1001, members: ['b', 'a'],
+    units: { total: 3, allocations: { a: 1.5, b: 1.5 } } }] }), members), [500, 501, 0]);
+});
+
+test('the receipt-total rule shares tax, tip, discount and conversion against exact item shares', () => {
+  const dinner = expense({
+    adjustmentAllocation: 'receipt-total',
+    items: [
+      { id: 'salad', name: 'Salad', amount: 1250, members: ['a'] },
+      { id: 'wine', name: 'Wine', amount: 2101, members: ['b', 'c'], percentages: { b: 33.33, c: 66.67 } },
+      { id: 'bread', name: 'Bread', amount: 503, members: ['a', 'b', 'c'] },
+      { id: 'units', name: 'Olives', amount: 700, members: ['c', 'a'], units: { total: 3, allocations: { a: 1, c: 2 } } },
+    ], tax: 385, tip: 401, discount: 99,
+  });
+  assert.equal(sum(shares(dinner, members)), total(dinner));
+  assert.equal(sum(expenseShares(dinner, members, 'GBP')), expenseTotal(dinner, 'GBP'));
+  assert.equal(sum(expenseShares({ ...dinner, bankAmount: 4999 }, members, 'GBP')), 4999);
+  const free = expense({ adjustmentAllocation: 'receipt-total', currency: 'GBP', fx: undefined, tax: 101,
+    items: [{ id: 'free', name: 'Free', amount: 0, members: ['b', 'c'] }] });
+  assert.deepEqual(shares(free, members), [0, 51, 50], 'zero-priced items share adjustments between selected people');
+  assert.throws(() => shares({ ...free, items: [] }, members), /Choose at least one person/);
+});
+
+test('saved per-item receipts keep their balances until they are edited', () => {
+  const legacy = expense({ currency: 'GBP', fx: undefined, items: [
+    { id: 'roll', name: 'Roll', amount: 35, members: ['a', 'b'] },
+    { id: 'water', name: 'Water', amount: 129, members: ['a', 'b'] },
+  ] });
+  const oldTrip = trip([legacy]);
+  const untouched = validateLedger({ trips: [structuredClone(oldTrip)] }, { previous: { trips: [oldTrip] } }).trips[0];
+  assert.equal(untouched.expenses[0].adjustmentAllocation, 'selected-participants');
+  assert.deepEqual(shares(untouched.expenses[0], members), [83, 81, 0]);
+  const edited = structuredClone(oldTrip);
+  edited.expenses[0].title = 'BILLA';
+  const saved = validateLedger({ trips: [edited] }, { previous: { trips: [oldTrip] } }).trips[0];
+  assert.equal(saved.expenses[0].adjustmentAllocation, 'receipt-total');
+  assert.deepEqual(shares(saved.expenses[0], members), [82, 82, 0]);
+});
+
 test('unversioned zero-price receipts preserve historical shares until explicitly saved with the corrected allocation rule', () => {
   const historical = expense({
     currency: 'GBP', fx: undefined, adjustmentAllocation: undefined,
@@ -597,11 +651,11 @@ test('unversioned zero-price receipts preserve historical shares until explicitl
   const modified = structuredClone(parsed);
   modified.expenses[0].title = 'Reviewed complimentary meal';
   const saved = validateLedger({ trips: [modified] }, { previous: { trips: [oldTrip] } }).trips[0];
-  assert.equal(saved.expenses[0].adjustmentAllocation, 'selected-participants');
+  assert.equal(saved.expenses[0].adjustmentAllocation, 'receipt-total');
   assert.deepEqual(shares(saved.expenses[0], members), [0, 101, 0]);
   assert.deepEqual(balances(saved), [101, -101, 0]);
   const newTrip = validateLedger({ trips: [{ ...oldTrip, id: 'new-trip' }] }).trips[0];
-  assert.equal(newTrip.expenses[0].adjustmentAllocation, 'selected-participants');
+  assert.equal(newTrip.expenses[0].adjustmentAllocation, 'receipt-total');
   assert.deepEqual(shares(newTrip.expenses[0], members), [0, 101, 0]);
 });
 
@@ -609,7 +663,7 @@ test('waiting empty-item drafts accept allocation metadata without requiring com
   const holiday = trip([]);
   holiday.drafts = [{ ...expense({ id: 'waiting', adjustmentAllocation: undefined }), items: [], fx: undefined, tax: 100, status: 'waiting' }];
   const accepted = validateLedger({ trips: [holiday] }).trips[0].drafts[0];
-  assert.equal(accepted.adjustmentAllocation, 'selected-participants');
+  assert.equal(accepted.adjustmentAllocation, 'receipt-total');
   assert.equal(accepted.items.length, 0);
   assert.equal(accepted.tax, 100);
 });
@@ -787,7 +841,7 @@ test('preserves receipt-wide percentages on saved expenses and review drafts', (
 });
 
 test('persists a receipt review draft linked to an existing expense without changing posted costs', () => {
-  const original = expense({ percentages: { a: 60, b: 40 } });
+  const original = expense({ percentages: { a: 60, b: 40 }, adjustmentAllocation: 'receipt-total' });
   const holiday = trip([original]);
   const postedBalances = balances(holiday);
   holiday.drafts = [draftSchema.parse({

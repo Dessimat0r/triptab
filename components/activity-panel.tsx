@@ -328,7 +328,7 @@ function changes(event: ActivityEvent, currency: Currency | undefined, names: Re
   for (const [key, label] of Object.entries({ amount: "Amount", tax: "Tax", tip: "Tip", discount: "Discount", bankAmount: "Actual bank charge" })) add(key, label, (value, snapshot) => money(value, key === "bankAmount" || String(event.entityType) === "payment" ? currency : auditText(snapshot.currency) || currency));
   for (const [key, label] of Object.entries({ from: "Paid by", to: "Paid to", payer: "Receipt payer", memberId: "Traveller" })) add(key, label, value => traveller(value, names));
   add("percentages", "Whole-receipt split", value => percentages(value, names));
-  add("adjustmentAllocation", "Adjustment split when item prices are zero", value => value === "selected-participants" ? "People selected on receipt items" : "Earlier rule: all travellers");
+  add("adjustmentAllocation", "Split calculation rule", value => value === "receipt-total" ? "People selected on receipt items; pennies rounded once on the receipt total" : value === "selected-participants" ? "People selected on receipt items; pennies rounded per item" : "Earlier rule: all travellers");
   add("fx", "Exchange rate", value => {
     const fx = auditRecord(value); return fx ? `Rate: ${fx.rate}\nAs of: ${auditText(fx.asOf)}\nSource: ${auditText(fx.source)}` : "No recorded rate";
   });
