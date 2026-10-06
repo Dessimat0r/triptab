@@ -44,6 +44,14 @@ test('both compact item names are editable and refresh in either direction with 
   f.requests[1].resolve('Acqua naturale');await flush();f.render();assert.equal(f.props.item.name,'Acqua naturale');assert.equal(f.props.item.fieldSources?.name,'user');assert.equal(f.props.item.translations?.en?.pairedText,'Still water');
   f.undo();assert.equal(f.props.item.name,'Acqua frizzante');assert.equal(f.props.item.translations?.en?.text,'Still water');assert.equal(f.props.item.amount,500);
 });
+test('same-language items use one canonical name field',()=>{
+  const f=fixture();
+  f.props.item={...f.props.item,name:'Ticket',nameLanguage:'en',translations:{en:{text:'Ticket',sourceText:'Ticket',pairedText:'Ticket',sourceLanguage:'en',provenance:'ai'}}};
+  f.props.receipt={...f.props.receipt,detectedLanguage:'en',items:[f.props.item]};f.render();
+  assert.equal(f.input('Item 1 name').props.value,'Ticket');
+  assert.doesNotMatch(f.text(),/Item 1 English name|Show first for item 1|Refresh item 1/);
+  f.edit('Item 1 name','Train ticket');assert.equal(f.props.item.name,'Train ticket');
+});
 for(const target of ['source','target','merchant','receipt-language','reading-language','account'])test(`a pending item translation preserves newer ${target} context`,async()=>{
   const f=fixture();f.click(f.button('Refresh item 1 English name'));await flush();
   if(target==='source')f.edit('Item 1 name','Human source');
