@@ -241,6 +241,11 @@ export const itemSchema = rawItemSchema.superRefine((item, context) => {
 const expenseItemSchema = rawItemSchema.extend({
   members: z.array(id).max(50), units: draftUnitsSchema.optional(),
 });
+// The calculation rule a saved receipt follows. Absent: adjustments on zero-priced
+// items include every traveller. 'selected-participants': only people selected on
+// items, with each item rounded to whole cents separately. 'receipt-total': as
+// before, but the receipt total is rounded once against everyone's exact share.
+const calculationRuleSchema = z.enum(['selected-participants', 'receipt-total']);
 const expenseBaseSchema = z.object({
   location: receiptLocationSchema.optional(), locationHint: receiptLocationHintSchema.optional(),
   id, title: z.string().min(1).max(200), date: dateSchema,
@@ -253,7 +258,7 @@ const expenseBaseSchema = z.object({
   currency: currencySchema.default('EUR'), fx: fxSchema.optional(), bankAmount: bankAmountSchema.optional(),
   payer: id, items: z.array(expenseItemSchema).min(1).max(200),
   percentages: percentagesSchema.optional(),
-  adjustmentAllocation: z.literal('selected-participants').optional(),
+  adjustmentAllocation: calculationRuleSchema.optional(),
   source: z.enum(['manual', 'ai']).optional(),
   receiptScan: receiptScanSchema.optional(), fieldSources: fieldSourcesSchema.optional(),
   conversation: conversationSchema.optional(),
@@ -283,7 +288,7 @@ export const draftSchema = z.object({
   date: dateSchema.optional(), time: timeSchema.optional(), timezone: timezoneSchema.optional(),
   fx: fxSchema.optional(), bankAmount: bankAmountSchema.optional(),
   percentages: percentagesSchema.optional(),
-  adjustmentAllocation: z.literal('selected-participants').optional(),
+  adjustmentAllocation: calculationRuleSchema.optional(),
   source: z.enum(['manual', 'ai']).optional(),
   receiptScan: receiptScanSchema.optional(), fieldSources: fieldSourcesSchema.optional(),
   conversation: conversationSchema.optional(),
@@ -392,8 +397,8 @@ export function validateLedger(data: unknown, options: { previous?: Ledger; sour
         if ('status' in expense) draftSchema.parse(expense);
         else expenseSchema.parse(expense);
         // Keep the old absence on untouched historical records. An explicitly
-        // saved new/modified record adopts the corrected adjustment rule.
-        expense.adjustmentAllocation = 'selected-participants';
+        // saved new/modified record adopts the current calculation rule.
+        expense.adjustmentAllocation = 'receipt-total';
         const old = [...(prior?.expenses || []), ...(prior?.drafts || [])].find(value => value.id === expense.id);
         if (options.source === 'mcp' && receiptScanHumanReviewChanged(expense, old)) {
           throw new LedgerValidationError('Receipt scan warnings and differences must be reviewed in TripTab by a person.');
@@ -439,7 +444,9 @@ export function validateLedger(data: unknown, options: { previous?: Ledger; sour
 /**
  * Largest-remainder allocation keeps every penny and resolves exact ties by
  * input order. Items use their selected-person order; receipt percentages use
- * their stored key order; adjustments/conversion use trip-member order.
+ * their stored key order; adjustments/conversion use trip-member order. The
+ * receipt-total rule rounds once per receipt, with ties following the order
+ * people were first selected on its items.
  * Changing the tie policy needs a versioned calculation rule, because applying
  * a rotation to old receipts would change historical balances on the next read.
  */
@@ -452,22 +459,25 @@ export function allocate(amount: number, weights: number[]): number[] {
   if (!sum) return weights.map(() => 0);
   // Receipt shares are integer weights. Exact remainders avoid floating-point ties
   // and preserve cents even for unusually large currency conversions.
-  if (weights.every(Number.isSafeInteger)) {
-    const denominator = weights.reduce((value, weight) => value + BigInt(weight), BigInt(0));
-    const numerators = weights.map(weight => BigInt(amount) * BigInt(weight));
-    const output = numerators.map(value => Number(value / denominator));
-    const remaining = amount - output.reduce((a, b) => a + b, 0);
-    const order = numerators.map((value, index) => ({ index, remainder: value % denominator }))
-      .sort((a, b) => a.remainder === b.remainder ? a.index - b.index : a.remainder > b.remainder ? -1 : 1);
-    for (let index = 0; index < remaining; index++) output[order[index].index]++;
-    return output;
-  }
+  if (weights.every(Number.isSafeInteger)) return allocateExact(amount, weights.map(weight => BigInt(weight)));
   const raw = weights.map(weight => amount * (weight / sum));
   const output = raw.map(Math.floor);
   const remaining = amount - output.reduce((a, b) => a + b, 0);
   const order = raw.map((value, index) => ({ index, remainder: value - output[index] }))
     .sort((a, b) => b.remainder - a.remainder || a.index - b.index);
   for (let index = 0; index < remaining; index++) output[order[index % order.length].index]++;
+  return output;
+}
+
+function allocateExact(amount: number, weights: bigint[], tieOrder: number[] = weights.map((_, index) => index)): number[] {
+  const denominator = weights.reduce((value, weight) => value + weight, BigInt(0));
+  if (!denominator) return weights.map(() => 0);
+  const numerators = weights.map(weight => BigInt(amount) * weight);
+  const output = numerators.map(value => Number(value / denominator));
+  const remaining = amount - output.reduce((a, b) => a + b, 0);
+  const order = numerators.map((value, index) => ({ index, remainder: value % denominator }))
+    .sort((a, b) => a.remainder === b.remainder ? tieOrder[a.index] - tieOrder[b.index] : a.remainder > b.remainder ? -1 : 1);
+  for (let index = 0; index < remaining; index++) output[order[index].index]++;
   return output;
 }
 
@@ -488,9 +498,7 @@ export function total(expense: OriginalAmounts): number {
   return addAmount(addAmount(addAmount(subtotal, expense.tax), expense.tip), -expense.discount);
 }
 
-/** Allocate an item's whole cents, with remainder ties following its selected-person order. */
-export function itemShares(item: DraftItem, members: { id: string }[]): number[] {
-  if (item.amount === null) throw new LedgerValidationError('Enter a readable item amount before calculating shares');
+function itemWeights(item: DraftItem, members: { id: string }[]): { memberIndexes: number[]; weights: number[] } {
   const error = itemSplitError(item);
   if (error) throw new Error(error);
   const memberIndexes = item.members.map(id => {
@@ -500,6 +508,13 @@ export function itemShares(item: DraftItem, members: { id: string }[]): number[]
   });
   const weights = item.members.map(id => item.units !== undefined ? unitsScale(item.units.allocations[id])!
     : item.percentages === undefined ? 1 : Math.round(item.percentages[id] * 100));
+  return { memberIndexes, weights };
+}
+
+/** Allocate an item's whole cents, with remainder ties following its selected-person order. */
+export function itemShares(item: DraftItem, members: { id: string }[]): number[] {
+  if (item.amount === null) throw new LedgerValidationError('Enter a readable item amount before calculating shares');
+  const { memberIndexes, weights } = itemWeights(item, members);
   const amounts = allocate(item.amount, weights);
   const output = members.map(() => 0);
   memberIndexes.forEach((memberIndex, index) => { output[memberIndex] = amounts[index]; });
@@ -521,10 +536,61 @@ function percentageShares(amount: number, percentages: Record<string, number>, m
   return output;
 }
 
+function gcd(left: bigint, right: bigint): bigint {
+  while (right) [left, right] = [right, left % right];
+  return left;
+}
+
+/**
+ * Each person's exact, unrounded item subtotal, as numerators over a shared
+ * denominator. Rounding the receipt total once against these weights means
+ * per-item remainders can't pile onto the same person: €0.35 + €1.29 split
+ * equally is €0.82 each, not €0.83 and €0.81.
+ */
+function exactItemWeights(expense: AllocatedAmounts, members: { id: string }[]): bigint[] {
+  let denominator = BigInt(1);
+  let numerators = members.map(() => BigInt(0));
+  for (const item of expense.items) {
+    const { memberIndexes, weights } = itemWeights(item, members);
+    const sum = weights.reduce((value, weight) => value + BigInt(weight), BigInt(0));
+    if (!sum || !item.amount) continue;
+    const common = denominator / gcd(denominator, sum) * sum;
+    numerators = numerators.map(value => value * (common / denominator));
+    memberIndexes.forEach((memberIndex, index) => {
+      numerators[memberIndex] += BigInt(item.amount!) * BigInt(weights[index]) * (common / sum);
+    });
+    const divisor = numerators.reduce(gcd, common);
+    numerators = numerators.map(value => value / divisor);
+    denominator = common / divisor;
+  }
+  return numerators;
+}
+
+/** Receipt-total ties follow the order people were first selected on items, then trip-member order. */
+function receiptTieOrder(expense: AllocatedAmounts, members: { id: string }[]): number[] {
+  const ids = [...new Set([...expense.items.flatMap(item => item.members), ...members.map(member => member.id)])];
+  return members.map(member => ids.indexOf(member.id));
+}
+
+/** Weights for rounding the whole receipt once, including tax, tip and discount. */
+function receiptWeights(expense: AllocatedAmounts, members: { id: string }[]): bigint[] {
+  const weights = exactItemWeights(expense, members);
+  if (weights.some(Boolean)) return weights;
+  const selected = new Set(expense.items.flatMap(item => item.members));
+  const fallback = members.map(member => BigInt(selected.has(member.id) ? 1 : 0));
+  if (total(expense) && !fallback.some(Boolean)) throw new Error('Choose at least one person for receipt adjustments');
+  return fallback;
+}
+
 /** Item assignments and proportional adjustments are always calculated in receipt currency first. */
 export function shares(expense: AllocatedAmounts, members: { id: string }[]): number[] {
   if (expense.items.some(item => item.amount === null)) throw new LedgerValidationError('Enter every item amount before calculating shares');
   if (expense.percentages !== undefined) return percentageShares(total(expense), expense.percentages, members);
+  if (expense.adjustmentAllocation === 'receipt-total') {
+    const amount = total(expense);
+    if (amount < 0) throw new LedgerValidationError('Discount exceeds total');
+    return allocateExact(amount, receiptWeights(expense, members), receiptTieOrder(expense, members));
+  }
   const sums = members.map(() => 0);
   for (const item of expense.items) {
     itemShares(item, members).forEach((amount, index) => { sums[index] = addAmount(sums[index], amount); });
@@ -584,6 +650,11 @@ export function expenseTotal(expense: Expense | Draft, baseCurrency: Currency): 
 
 export function expenseShares(expense: Expense | Draft, members: { id: string }[], baseCurrency: Currency): number[] {
   if (expense.percentages !== undefined) return percentageShares(expenseTotal(expense, baseCurrency), expense.percentages, members);
+  if (expense.adjustmentAllocation === 'receipt-total') {
+    if (expense.items.some(item => item.amount === null)) throw new LedgerValidationError('Enter every item amount before calculating shares');
+    const weights = receiptWeights(expense, members);
+    return allocateExact(expenseTotal(expense, baseCurrency), weights.some(Boolean) ? weights : members.map(() => BigInt(1)), receiptTieOrder(expense, members));
+  }
   const originalShares = shares(expense, members);
   const convertedTotal = expenseTotal(expense, baseCurrency);
   return allocate(convertedTotal, originalShares.some(Boolean) ? originalShares : members.map(() => 1));

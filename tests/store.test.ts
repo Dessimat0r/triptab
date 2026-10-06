@@ -554,12 +554,12 @@ test('a Unicode ledger near the content limit survives maximum receipt policy gr
   database.sqlite.exec('DROP TRIGGER refuse_last_large_event');
   let saved = await store.writeLedger(actor, data, 0);
   assert.equal(saved.data.trips.flatMap(holiday => holiday.expenses).length, 7000);
-  assert.ok(jsonBytes(saved.data) > 1_800_000, '7000 new policy stamps require reserved storage headroom');
+  assert.ok(jsonBytes(saved.data) > 1_750_000, '7000 new policy stamps require reserved storage headroom');
   assert.equal(count(database), 7014);
   assert.equal(store.ledgerContentBytes(saved.data), store.MAX_LEDGER_CONTENT_BYTES - 10);
   assert.ok(jsonBytes(saved.data) <= store.MAX_STORED_LEDGER_BYTES);
   for (const holiday of saved.data.trips) {
-    assert.ok(holiday.expenses.every(expense => expense.adjustmentAllocation === 'selected-participants'));
+    assert.ok(holiday.expenses.every(expense => expense.adjustmentAllocation === 'receipt-total'));
     const stored = database.sqlite.prepare('SELECT data FROM trips WHERE id=?').get(holiday.id)?.data as string;
     assert.ok(new TextEncoder().encode(stored).byteLength <= store.MAX_STORED_TRIP_BYTES);
     assert.deepEqual(JSON.parse(stored), holiday);
@@ -1817,7 +1817,7 @@ test('real ledger POST returns its saved body/revision/tag from one response sna
   assert.equal(response.status, 200);
   const body = await response.json() as Awaited<ReturnType<typeof store.readLedger>>;
   assert.equal(body.revision, 2); assert.deepEqual(body.data.trips[0].expenses,
-    changed.trips[0].expenses.map(expense => ({ ...expense, adjustmentAllocation: 'selected-participants' })));
+    changed.trips[0].expenses.map(expense => ({ ...expense, adjustmentAllocation: 'receipt-total' })));
   assert.deepEqual(Object.keys(body).sort(), ['data', 'revision']);
   assert.equal(response.headers.get('x-ledger-revision'), String(body.revision));
   const tag = response.headers.get('etag'); assert(tag);
