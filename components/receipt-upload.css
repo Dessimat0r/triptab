@@ -5,6 +5,8 @@
 .receipt-upload-place { margin: 16px 0; }
 .receipt-upload-place summary { min-height: 36px; cursor: pointer; }
 .receipt-place-fields { min-width: 0; display: grid; gap: 6px; margin: 8px 0; }
+.receipt-place-fields > label { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 6px; row-gap: 2px; line-height: 1.4; }
+.receipt-place-fields > label > small { display: inline; margin: 0; line-height: inherit; }
 .receipt-place-fields label small, .receipt-upload-dialog label small, .receipt-upload-place summary small { font-weight: normal; opacity: .7; }
 .receipt-place-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; min-width: 0; }
 .receipt-place-actions button { min-height: 40px; min-width: 0; max-width: 100%; white-space: normal; }

@@ -99,6 +99,18 @@ async function fits(page: Page) {
   expect(result.swipePolicy).toEqual(['auto', 'auto', 'auto']);
 }
 
+async function hasComfortableMobileItemSpacing(page: Page) {
+  const gaps = await page.locator('.item').first().evaluate(item => {
+    const controls = Array.from(item.querySelectorAll<HTMLElement>('.item-bilingual-names input, .item-bilingual-names select, .moneyinput input'))
+      .filter(element => element.getClientRects().length)
+      .map(element => element.getBoundingClientRect())
+      .sort((left, right) => left.top - right.top);
+    return controls.slice(1).map((control, index) => control.top - controls[index]!.bottom);
+  });
+  expect(gaps.length).toBeGreaterThan(0);
+  expect(Math.min(...gaps)).toBeGreaterThanOrEqual(10);
+}
+
 const viewports = [
   { width: 320, height: 740, touch: true },
   { width: 390, height: 844, touch: true },
@@ -130,6 +142,7 @@ for (const { width, height, touch } of viewports) {
           await expect(page.getByRole('button', { name: 'Translate item 2 English name', exact: true })).toBeEnabled();
         }
         await fits(page);
+        if (width <= 480) await hasComfortableMobileItemSpacing(page);
         if (touch) {
           expect(await page.evaluate(() => matchMedia('(any-pointer: coarse)').matches)).toBe(true);
           const smallControls = await page.locator('.editor input, .editor select, .editor textarea').evaluateAll(elements =>
@@ -157,9 +170,9 @@ test.describe('same-language receipt item', () => {
     const sameLanguageTrip = structuredClone(trip);
     sameLanguageTrip.drafts[0].detectedLanguage = 'en';
     sameLanguageTrip.drafts[0].items[0].nameLanguage = 'en';
-    sameLanguageTrip.drafts[0].items[0].translations.en = {
+    sameLanguageTrip.drafts[0].items[0].translations = { en: {
       text: originalName, sourceText: originalName, pairedText: originalName, sourceLanguage: 'en', provenance: 'ai',
-    };
+    } };
     await fixtures(page, () => sameLanguageTrip);
     await page.goto('/expenses?receiptDraft=layout-draft&receiptTrip=layout-trip');
     const firstItem = page.locator('.item').first();
@@ -167,6 +180,7 @@ test.describe('same-language receipt item', () => {
     await expect(firstItem.locator('.item-bilingual-names input')).toHaveCount(1);
     await expect(page.getByRole('combobox', { name: 'Show first for item 1', exact: true })).toHaveCount(0);
     await fits(page);
+    await hasComfortableMobileItemSpacing(page);
   });
 });
 
