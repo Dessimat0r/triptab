@@ -768,3 +768,21 @@ test('place-only guidance keeps a new receipt eligible for initial extraction an
   assert.equal(editor.trip.drafts[0].location?.label,'Bratislava');assert.equal(editor.editing?.location?.label,'Bratislava');assert.equal(editor.editing?.items[0].name,'Dinner from image');
   assert.equal(editor.trip.expenses.length,0);
 });
+
+test('a new expense starts in the time zone of the holiday\'s latest expense, else the device zone', () => {
+  const trip=blankTrip(); const empty=controller(trip); empty.newExpense();
+  assert.equal(empty.editing?.timezone,Intl.DateTimeFormat().resolvedOptions().timeZone||'Europe/London');
+  const latest={...structuredClone(posted),id:'latest',timezone:'Europe/Prague'};
+  const editor=controller({...trip,expenses:[latest,{...structuredClone(posted),timezone:'Europe/Lisbon'}]}); editor.newExpense();
+  assert.equal(editor.editing?.timezone,'Europe/Prague'); assert.equal(editor.editing?.fieldSources?.timezone,'default');
+});
+
+test('rates, bank charges and splits chosen while reviewing a proposal are not mistaken for a newer proposal', () => {
+  const draft=pending('review'); delete draft.fx; delete draft.bankAmount; delete draft.percentages;
+  const initial=fixture(draft); const editor=controller(initial); editor.openDraft(initial.drafts[0]);
+  editor.reconcileEditorReceipt(editor.trip); assert.equal(editor.processed,null);
+  editor.edit({fx:{rate:0.86,asOf:'2026-09-04',source:'reference'},percentages:{a:50,b:50}});
+  editor.reconcileEditorReceipt(editor.trip); assert.equal(editor.processed,null,'local edits do not offer to replace themselves');
+  const incoming=structuredClone(editor.trip); incoming.drafts[0].items[0].amount=2500; editor.remote(incoming);
+  editor.reconcileEditorReceipt(editor.trip); assert.equal((editor.processed as Draft | null)?.id,draft.id,'a changed proposal is still offered for review');
+});

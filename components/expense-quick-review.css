@@ -1,0 +1,230 @@
+.expense-target,
+.edit-fields [id^="expense-"] {
+  scroll-margin-top: 16px;
+}
+
+.quick-split,
+.ready-to-save,
+.receipt-review-all {
+  min-width: 0;
+  margin: 16px 0;
+}
+
+.quick-split,
+.ready-to-save {
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-raised, #f3f5fa);
+}
+
+.quick-split h3,
+.ready-to-save h3 {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.quick-split .footnote {
+  margin: 4px 0 12px;
+}
+
+.quick-split-actions,
+.ready-to-save-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.quick-split-actions button,
+.ready-to-save-actions button {
+  flex: 1 1 180px;
+  min-height: 44px;
+  min-width: 0;
+  justify-content: center;
+  gap: 6px;
+  overflow-wrap: anywhere;
+}
+
+.quick-split-memory {
+  margin: 8px 0 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.ready-to-save {
+  border-color: var(--green);
+}
+
+.ready-to-save-heading {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  min-width: 0;
+}
+
+.ready-to-save-heading > div {
+  min-width: 0;
+}
+
+.ready-to-save-heading p {
+  margin: 2px 0 0;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.ready-to-save-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  color: var(--green);
+  background: var(--mint);
+}
+
+.ready-to-save-shares {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.ready-to-save-shares div {
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--surface-inset, #fff);
+}
+
+.ready-to-save-shares dt {
+  font-size: 0.8rem;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.ready-to-save-shares dd {
+  margin: 0;
+  font-weight: 700;
+}
+
+.purchase-details {
+  min-width: 0;
+}
+
+.purchase-details-summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  margin: 12px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.purchase-details-summary p {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.purchase-details-summary button {
+  flex: 0 0 auto;
+  min-height: 44px;
+}
+
+.expense-more-options {
+  min-width: 0;
+  margin: 16px 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.expense-more-options > summary {
+  min-height: 44px;
+  padding: 12px;
+  cursor: pointer;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.expense-more-options > summary small {
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.expense-more-options-body {
+  min-width: 0;
+  padding: 0 12px 12px;
+}
+
+.receipt-review-all .footnote {
+  margin: 6px 0 0;
+}
+
+.receipt-review-all button {
+  width: 100%;
+  min-height: 44px;
+  overflow-wrap: anywhere;
+}
+
+.save-checklist {
+  flex: 1 1 100%;
+  min-width: 0;
+  font-size: 0.85rem;
+}
+
+.save-checklist-title {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.save-checklist ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.save-checklist li {
+  min-width: 0;
+}
+
+.save-checklist-item,
+.save-checklist-more {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 32px;
+  max-width: 100%;
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font-size: 0.85rem;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.save-checklist-more {
+  margin-top: 6px;
+  color: var(--primary);
+}
+
+/* The checklist takes the full footer width so totals and Save keep their row. */
+.editor-footer:has(.save-checklist) {
+  flex-wrap: wrap;
+  row-gap: 8px;
+}
+
+.editor-footer > .save-checklist {
+  flex: 1 1 100%;
+}

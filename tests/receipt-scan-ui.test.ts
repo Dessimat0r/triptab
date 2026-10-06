@@ -149,3 +149,19 @@ test('difference checkbox fingerprints reconciled warnings exactly as Save does'
   (checkbox.props.onChange as (event:unknown)=>void)({target:{checked:true}});
   assert(ui.changed); assert.equal(scan.receiptScanSaveError(ui.changed),null);
 });
+
+test('several review points can be confirmed with one action that satisfies Save', () => {
+  const value = entry({items: [{id: 'pizza', name: 'Pizza', amount: 1200, members: ['alice'], scanSource: {confidence: 'low'}}], receiptScan: {version: 1, printedTotal: 1201, printedCurrency: 'EUR', status: 'needs-review', warnings: [{code: 'image-may-be-incomplete'}]}});
+  const ui = render(value);
+  const button = ui.elements.find(element => element.type === 'button' && text(element.props.children as React.ReactNode).startsWith('I checked all'));
+  assert(button); assert.match(text(button.props.children as React.ReactNode), /I checked all 3 points/);
+  assert(scan.receiptScanSaveError(value));
+  (button.props.onClick as () => void)();
+  assert(ui.changed); assert.equal(scan.receiptScanSaveError(ui.changed), null);
+  assert.equal(scan.pendingReviewActions(ui.changed), 0);
+});
+
+test('a single review point keeps its own control without an extra confirm-all action', () => {
+  const ui = render(entry({receiptScan: {version: 1, printedTotal: 1201, status: 'matched', warnings: []}}));
+  assert.equal(ui.elements.filter(element => element.type === 'button' && text(element.props.children as React.ReactNode).startsWith('I checked all')).length, 0);
+});

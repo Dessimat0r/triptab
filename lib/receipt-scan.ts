@@ -338,3 +338,60 @@ export function receiptScanHumanReviewChanged(entry: ScannableReceipt, previous?
   if (resolved.length && previous && receiptScanFingerprint(entry) !== receiptScanFingerprint(previous)) return true;
   return resolved.some(warning => !oldResolutions.has(warningKey(warning)));
 }
+
+/** Warnings a person may mark as checked; every other warning needs a real correction. */
+export const RESOLVABLE_SCAN_WARNINGS: ReadonlySet<string> = new Set(['uncertain-description', 'possible-duplicate', 'unmapped-adjustment', 'included-tax-ambiguous', 'image-may-be-incomplete', 'low-confidence']);
+
+/** How many separate human review actions the receipt currently asks for. */
+export function pendingReviewActions(entry: ScannableReceipt): number {
+  const scan = reconcileReceiptScan(entry);
+  if (!scan) return 0;
+  const fingerprint = receiptScanFingerprint(entry);
+  const checkable = scan.warnings.filter(warning => !warning.resolved && RESOLVABLE_SCAN_WARNINGS.has(warning.code)).length;
+  const mismatch = scan.warnings.some(warning => warning.code === 'subtotal-mismatch' || warning.code === 'total-mismatch')
+    && scan.acknowledgement?.fingerprint !== fingerprint ? 1 : 0;
+  const missingTotal = (scan.printedTotal === null || scan.printedTotal === undefined)
+    && scan.missingTotalAcknowledgement?.fingerprint !== fingerprint ? 1 : 0;
+  return checkable + mismatch + missingTotal;
+}
+
+/**
+ * One deliberate review action: mark every checkable warning as checked and
+ * acknowledge a total difference or an unavailable printed total, using the
+ * same fingerprint Save verifies. Unreadable prices, missing names and
+ * currency problems are not checkable and still need real corrections.
+ */
+export function acknowledgeReceiptReview<T extends ScannableReceipt>(entry: T): T {
+  const scan = reconcileReceiptScan(entry);
+  if (!entry.receiptScan || !scan) return entry;
+  const warnings = scan.warnings.map(warning => !warning.resolved && RESOLVABLE_SCAN_WARNINGS.has(warning.code) ? { ...warning, resolved: true as const } : warning);
+  const resolved: T = { ...entry, receiptScan: { ...entry.receiptScan, warnings, acknowledgement: undefined, missingTotalAcknowledgement: undefined } };
+  const fingerprint = receiptScanFingerprint(resolved);
+  const mismatch = scan.warnings.some(warning => warning.code === 'subtotal-mismatch' || warning.code === 'total-mismatch');
+  const missingTotal = scan.printedTotal === null || scan.printedTotal === undefined;
+  return { ...resolved, receiptScan: { ...resolved.receiptScan!,
+    ...(mismatch ? { acknowledgement: { fingerprint } } : {}),
+    ...(missingTotal ? { missingTotalAcknowledgement: { fingerprint } } : {}),
+  } };
+}
+
+/**
+ * Review acknowledgements fingerprint item allocations too. Choosing who owes
+ * an item changes no price evidence, so an acknowledgement that was current
+ * before an allocation-only change stays current afterwards. Callers must
+ * only pass changes to members, percentages or units.
+ */
+export function carryReviewAcknowledgements<T extends ScannableReceipt>(previous: T, next: T): T {
+  const scan = previous.receiptScan;
+  if (!scan || !next.receiptScan || (!scan.acknowledgement && !scan.missingTotalAcknowledgement)) return next;
+  const before = receiptScanFingerprint(previous);
+  const keepAcknowledgement = scan.acknowledgement?.fingerprint === before && next.receiptScan.acknowledgement?.fingerprint === before;
+  const keepMissingTotal = scan.missingTotalAcknowledgement?.fingerprint === before && next.receiptScan.missingTotalAcknowledgement?.fingerprint === before;
+  if (!keepAcknowledgement && !keepMissingTotal) return next;
+  const after = receiptScanFingerprint(next);
+  if (after === before) return next;
+  return { ...next, receiptScan: { ...next.receiptScan,
+    ...(keepAcknowledgement ? { acknowledgement: { fingerprint: after } } : {}),
+    ...(keepMissingTotal ? { missingTotalAcknowledgement: { fingerprint: after } } : {}),
+  } };
+}
