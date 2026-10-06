@@ -109,9 +109,8 @@ async function fixture(providerURL?: string) {
   try {
     const database = await worker.getD1Database('DB');
     for (const file of (await readdir(new URL('../drizzle/', import.meta.url))).filter(name => name.endsWith('.sql')).sort()) {
-      for (const sql of unstable_splitSqlQuery(await readFile(new URL('../drizzle/' + file, import.meta.url), 'utf8'))) {
-        await database.prepare(sql).run();
-      }
+      const statements = unstable_splitSqlQuery(await readFile(new URL('../drizzle/' + file, import.meta.url), 'utf8'));
+      await database.batch(statements.map(statement => database.prepare(statement)));
     }
     const now = new Date().toISOString();
     for (const [name, account] of Object.entries({ owner, member })) {

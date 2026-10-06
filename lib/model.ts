@@ -53,10 +53,17 @@ const cents = z.number().int().min(0).max(MAX_AMOUNT);
 const bankAmountSchema = cents.positive('The actual bank charge must be greater than zero');
 const dateSchema = z.string().refine(validCalendarDate, 'Enter a valid calendar date');
 const timeSchema = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Enter a time as HH:mm');
+// Constructing Intl.DateTimeFormat dominates validation of large ledgers, so
+// remember accepted zones. Names are case-insensitive, so the cache is capped.
+const MAX_CACHED_TIMEZONES = 1000;
+const validTimezones = new Set<string>();
 const timezoneSchema = z.string().min(1).max(100).refine(value => {
+  if (validTimezones.has(value)) return true;
   if (/^[+-]/.test(value)) return false;
-  try { new Intl.DateTimeFormat('en', { timeZone: value }); return true; }
+  try { new Intl.DateTimeFormat('en', { timeZone: value }); }
   catch { return false; }
+  if (validTimezones.size < MAX_CACHED_TIMEZONES) validTimezones.add(value);
+  return true;
 }, 'Choose a valid timezone');
 export function validExchangeRate(rate: unknown): rate is number {
   return typeof rate === 'number' && Number.isFinite(rate) && rate > 0;
