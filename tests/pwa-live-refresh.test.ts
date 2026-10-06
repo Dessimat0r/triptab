@@ -22,7 +22,7 @@ const source = await readFile(new URL('../components/pwa-controls.tsx', import.m
 const compiled = transpileWithSharedImports(source, { sharedImportOverrides: { react: bridgeUrl }, compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022, jsx: JsxEmit.ReactJSX } }).outputText
   .replace('"@/components/use-live-refresh"', JSON.stringify(bridgeUrl))
   .replace('"lucide-react"', JSON.stringify(import.meta.resolve('lucide-react')));
-const { default: PwaControls } = await import('data:text/javascript;base64,' + Buffer.from(compiled).toString('base64')) as typeof import('../components/pwa-controls');
+const { default: PwaControls, PwaUpdates } = await import('data:text/javascript;base64,' + Buffer.from(compiled).toString('base64')) as typeof import('../components/pwa-controls');
 
 class Controls {
   hooks: Hook[] = []; position = 0; layouts: Effect[] = []; effects: Effect[] = [];
@@ -43,9 +43,9 @@ class Controls {
     if (sameDependencies(hook.dependencies, dependencies)) return;
     hook.dependencies = dependencies; (layout ? this.layouts : this.effects).push({ hook, run });
   }
-  render() {
+  render(updates = false) {
     activate(this); this.position = 0;
-    this.tree = PwaControls({ accountId: this.accountId, onChanged: () => { this.changes++; } });
+    this.tree = updates ? PwaUpdates() : PwaControls({ accountId: this.accountId, onChanged: () => { this.changes++; } });
     for (const effect of [...this.layouts.splice(0), ...this.effects.splice(0)]) {
       effect.hook.cleanup?.(); const cleanup = effect.run(); effect.hook.cleanup = typeof cleanup === 'function' ? cleanup : undefined;
     }
@@ -76,11 +76,13 @@ async function flush() { for (let index = 0; index < 12; index++) await Promise.
 
 function browser(context: import('node:test').TestContext) {
   let subscription: { endpoint: string; unsubscribe(): Promise<boolean> } | null = null;
-  let unsubscribe = 0, subscribe = 0, permissions = 0, calls = 0;
+  let unsubscribe = 0, subscribe = 0, permissions = 0, calls = 0, updates = 0, reloads = 0;
+  const listeners = new Map<string, () => void>();
   let owned = false, key = 'configured-key', fail = false;
   let response: (() => Promise<Response>) | undefined;
   const registration = {
     active: {},
+    async update() { updates++; return registration; },
     pushManager: { async getSubscription() { return subscription; }, async subscribe() { subscribe++; subscription = makeSubscription(); return subscription; } },
     async getNotifications() { return []; },
   };
@@ -92,7 +94,7 @@ function browser(context: import('node:test').TestContext) {
     context.after(() => { if (previous) Object.defineProperty(globalThis, name, previous); else Reflect.deleteProperty(globalThis, name); });
   };
   property('navigator', { serviceWorker: worker, onLine: true });
-  property('window', { PushManager: {}, Notification: {}, addEventListener() {}, removeEventListener() {} });
+  property('window', { PushManager: {}, Notification: {}, location: { reload() { reloads++; } }, addEventListener(name: string, listener: () => void) { listeners.set(name, listener); }, removeEventListener(name: string) { listeners.delete(name); } });
   property('matchMedia', () => ({ matches: false }));
   property('Notification', { async requestPermission() { permissions++; return 'granted'; } });
   context.mock.method(globalThis, 'fetch', async (_url: unknown, init?: RequestInit) => {
@@ -101,8 +103,27 @@ function browser(context: import('node:test').TestContext) {
     if (init?.body && JSON.parse(String(init.body)).mode === 'subscribe') owned = true;
     return Response.json({ ownsSubscription: owned, publicKey: key });
   });
-  return { registration, worker, setSubscribed() { subscription = makeSubscription(); owned = true; }, set owned(value: boolean) { owned = value; }, set key(value: string) { key = value; }, set fail(value: boolean) { fail = value; }, set response(value: (() => Promise<Response>) | undefined) { response = value; }, get calls() { return calls; }, get unsubscribed() { return unsubscribe; }, get subscribed() { return subscribe; }, get permissions() { return permissions; } };
+  return { registration, worker, listeners, get updates() { return updates; }, get reloads() { return reloads; }, setSubscribed() { subscription = makeSubscription(); owned = true; }, set owned(value: boolean) { owned = value; }, set key(value: string) { key = value; }, set fail(value: boolean) { fail = value; }, set response(value: (() => Promise<Response>) | undefined) { response = value; }, get calls() { return calls; }, get unsubscribed() { return unsubscribe; }, get subscribed() { return subscribe; }, get permissions() { return permissions; } };
 }
+
+test('PWA updates release an older waiting worker without a banner or page reload', async context => {
+  const fixture = browser(context), controls = new Controls(), messages: unknown[] = [];
+  Object.assign(fixture.registration, { waiting: { state: 'installed', postMessage(message: unknown) { messages.push(message); } } });
+  controls.render(true); await flush();
+  assert.equal(controls.tree, null); assert.deepEqual(messages, [{ type: 'SKIP_WAITING' }]);
+  fixture.listeners.get('focus')!(); fixture.listeners.get('online')!(); await flush();
+  assert.equal(fixture.updates, 2); assert.equal(messages.length, 1); assert.equal(fixture.reloads, 0);
+  controls.dispose(); assert.equal(fixture.listeners.size, 0);
+});
+
+test('unmounted PWA updates cannot activate a late registration', async context => {
+  const fixture = browser(context), controls = new Controls(), held = deferred<typeof fixture.registration>();
+  let activations = 0;
+  Object.assign(fixture.registration, { waiting: { state: 'installed', postMessage() { activations++; } } });
+  context.mock.method(fixture.worker, 'register', () => held.promise);
+  controls.render(true); controls.dispose(); held.resolve(fixture.registration); await flush();
+  assert.equal(activations, 0); assert.equal(fixture.reloads, 0); assert.equal(fixture.listeners.size, 0);
+});
 
 test('live notification ownership and configuration update in place without prompting or opting in', async context => {
   const fixture = browser(context), controls = new Controls(); fixture.setSubscribed(); controls.render(); await flush();

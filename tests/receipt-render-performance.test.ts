@@ -93,7 +93,7 @@ function controller(trip: model.Trip, fetcher?: typeof fetch) {
     };
     if (name === '@/components/confirmation-dialog') return { useConfirmation: () => ({ confirm: async () => true, dialog: null, confirming: false }) };
     if (name === 'lucide-react') return new Proxy({}, { get: () => component });
-    return { __esModule: true, default: component, PwaUpdatePrompt: component };
+    return { __esModule: true, default: component, PwaUpdates: component };
   }, exported, exported.exports, fetcher || fetch);
   return { calls, state,
     render() {

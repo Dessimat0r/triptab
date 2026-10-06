@@ -1,6 +1,6 @@
 "use client";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Bell, Download, Check, RefreshCw } from "lucide-react";
+import { Bell, Download, Check } from "lucide-react";
 import { useLiveRefresh } from "@/components/use-live-refresh";
 type InstallEvent = Event & {
   prompt: () => Promise<void>;
@@ -67,74 +67,45 @@ export async function reconcileBrowserNotifications(guard: NotificationRequestGu
   return { owned, publicKey: data.publicKey || "", reset: Boolean(subscription && !owned) };
 }
 
-export function PwaUpdatePrompt({ canUpdate = true }: { canUpdate?: boolean }) {
-  const [waiting, setWaiting] = useState<ServiceWorker | null>(null);
-  const [dismissed, setDismissed] = useState<ServiceWorker | null>(null);
-  const [updating, setUpdating] = useState(false);
-  const requested = useRef(false);
+// The worker caches only public icons and the offline screen. Replacing it is
+// safe without replacing the running page or discarding an open form.
+export function PwaUpdates() {
   useEffect(() => {
     if (!("serviceWorker" in navigator)) return;
     let live = true;
     let registration: ServiceWorkerRegistration | undefined;
-    let installing: ServiceWorker | null = null;
-    const detect = () => {
-      if (live && registration?.waiting && navigator.serviceWorker.controller) {
-        setWaiting(registration.waiting);
+    const activated = new WeakSet<ServiceWorker>();
+    const activateWaiting = () => {
+      const waiting = registration?.waiting;
+      if (!live || !waiting || waiting.state !== "installed" || activated.has(waiting)) return;
+      try {
+        // Also release an older worker left waiting by the previous prompt.
+        waiting.postMessage({ type: "SKIP_WAITING" });
+        activated.add(waiting);
+      } catch {
+        // Another tab may have made this worker redundant in the meantime.
       }
-    };
-    const stateChanged = () => {
-      if (live && installing?.state === "installed" && navigator.serviceWorker.controller) {
-        setWaiting(registration?.waiting || installing);
-      }
-    };
-    const updateFound = () => {
-      installing?.removeEventListener("statechange", stateChanged);
-      installing = registration?.installing || null;
-      installing?.addEventListener("statechange", stateChanged);
     };
     const check = () => {
-      if (navigator.onLine) registration?.update().catch(() => {});
-      detect();
+      if (!live) return;
+      if (navigator.onLine) registration?.update().then(activateWaiting).catch(() => {});
+      activateWaiting();
     };
-    const changed = () => {
-      // Initial activation and updates requested by another tab never reload
-      // this tab: its expense editor may contain unsaved work.
-      if (requested.current) window.location.reload();
-      else if (live) setWaiting(null);
-    };
-    navigator.serviceWorker.addEventListener("controllerchange", changed);
     window.addEventListener("focus", check);
     window.addEventListener("online", check);
     navigator.serviceWorker.register("/sw.js", { scope: "/", updateViaCache: "none" })
       .then(reg => {
         if (!live) return;
         registration = reg;
-        reg.addEventListener("updatefound", updateFound);
-        updateFound();
-        detect();
+        activateWaiting();
       }).catch(() => {});
     return () => {
       live = false;
-      registration?.removeEventListener("updatefound", updateFound);
-      installing?.removeEventListener("statechange", stateChanged);
-      navigator.serviceWorker.removeEventListener("controllerchange", changed);
       window.removeEventListener("focus", check);
       window.removeEventListener("online", check);
     };
   }, []);
-  if (!waiting || waiting === dismissed) return null;
-  return <div className="pwa-update-banner" role="status">
-    <p><strong>A TripTab update is available.</strong> {canUpdate ? "Update when you’re ready." : "Finish or close your current form before updating."}</p>
-    <div>
-      <button type="button" className="quiet" disabled={!canUpdate || updating} onClick={() => {
-        if (!canUpdate || updating || waiting.state !== "installed") return;
-        requested.current = true;
-        setUpdating(true);
-        waiting.postMessage({ type: "SKIP_WAITING" });
-      }}><RefreshCw size={17} aria-hidden="true" />{updating ? "Updating…" : "Update and reload"}</button>
-      <button type="button" className="textbutton" disabled={updating} onClick={() => setDismissed(waiting)}>Later</button>
-    </div>
-  </div>;
+  return null;
 }
 
 export default function PwaControls({ accountId, onChanged }: { accountId?: string | null; onChanged?: () => void } = {}) {
