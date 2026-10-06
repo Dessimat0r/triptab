@@ -4,7 +4,7 @@ import path from 'node:path';
 for (const width of [320, 390]) {
   test.describe(`receipt upload at ${width}px`, () => {
     test.use({ viewport: { width, height: 844 }, hasTouch: true, isMobile: true });
-    test('saves natural-language guidance before its single scan, with optional location and no horizontal overflow', async ({ page }) => {
+    test('saves natural-language guidance before its single scan, with optional location and no horizontal overflow', async ({ page, browserName }) => {
       let current: Record<string, unknown> = { id: 'holiday', ownerId: 'owner', name: 'Holiday', currency: 'GBP',
         members: [{ id: 'you', name: 'Chris', userId: 'owner' }, { id: 'gary', name: 'Gary' }], expenses: [], drafts: [], payments: [] };
       let revision = 1, uploads = 0, reads = 0;
@@ -70,8 +70,14 @@ for (const width of [320, 390]) {
         };
       });
       expect(locationLabelLayout).toEqual({ overlaps: false, helperMarginTop: '0px' });
-      await dialog.getByRole('button', { name: 'Use current location', exact: true }).click();
-      await expect(dialog.getByRole('status').last()).toContainText('Location was not shared');
+      // The site's Permissions-Policy disables geolocation. Chromium reports
+      // that, so the action is not offered; elsewhere it fails truthfully.
+      const locate = dialog.getByRole('button', { name: 'Use current location', exact: true });
+      if (browserName === 'chromium') await expect(locate).toHaveCount(0);
+      else if (await locate.count()) {
+        await locate.click();
+        await expect(dialog.getByRole('status').last()).toContainText('Your position is unavailable');
+      }
       await dialog.getByRole('textbox', { name: /Receipt location/ }).fill('Bratislava');
       expect(await dialog.evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
       expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(1);

@@ -5,6 +5,7 @@ import { TripTabRouteProvider, TripTabNavigation, useTripTabNavigation, useTripT
 import type { TripSection } from "@/lib/trip-routes";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import ModalA11y from "@/components/modal-accessibility";
+import { useStickyFooterReveal } from "@/components/editor-footer-reveal";
 import { useConfirmation } from "@/components/confirmation-dialog";
 import AccountPanel, { profileFromAuth, type Profile, type AuthResponse } from "@/components/account-panel";
 import AuthPanel from "@/components/auth-panel";
@@ -18,7 +19,7 @@ import ReceiptPhotoViewer from "@/components/receipt-photo-viewer";
 import ExpenseIconPicker from "@/components/expense-icon";
 import ReceiptScanReview, { receiptMoney } from "@/components/receipt-scan-review";
 import { carryReviewAcknowledgements, receiptScanSaveError } from "@/lib/receipt-scan";
-import { assignUnassignedItems, EXPENSE_TARGETS, expenseSaveBlockers, hasReceiptDiscussion, unassignedItemIds } from "@/lib/expense-readiness";
+import { assignUnassignedItems, EXPENSE_TARGETS, expenseItemTarget, expenseSaveBlockers, hasReceiptDiscussion, unassignedItemIds } from "@/lib/expense-readiness";
 import { MoreOptions, PurchaseDetails, QuickSplit, ReadyToSave, SaveChecklist, focusExpenseTarget } from "@/components/expense-quick-review";
 import ItemReceiptConversation from "@/components/item-receipt-conversation";
 import PaymentEditor from "@/components/payment-editor";
@@ -83,7 +84,7 @@ import {
 } from "@/lib/model";
 import { formatMoney as money } from "@/lib/money-format";
 const uid = () => crypto.randomUUID();
-const today = () => localDate();
+const today = (timezone?: string) => localDate(new Date(), timezone);
 const expenseDateFormatter = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric" });
 function expenseDate(date: string) {
   const value = new Date(date + "T12:00:00");
@@ -99,54 +100,113 @@ function previewTotal(e: ReceiptEditor, t: Trip) {
   try { return parsed.success ? expenseTotal(parsed.data, t.currency) : null; }
   catch { return null; }
 }
+/**
+ * Money typed as text, in exact hundredths. One "." or "," is the decimal
+ * separator, so "12,50" and "12.50" are both 1250. Anything else (grouping
+ * separators, signs, a third decimal) is rejected rather than reinterpreted:
+ * "1,234.56" must never silently become another amount. `null` means
+ * rejected; "" and a bare separator are unfinished input.
+ */
+function parseAmountText(text: string): { text: string; hundredths: number | undefined } | null {
+  const s = text.trim().replace(",", ".");
+  if (!/^\d*(\.\d{0,2})?$/.test(s)) return null;
+  if (!s || s === ".") return { text: s, hundredths: undefined };
+  const n = Math.round(Number(s) * 100);
+  return Number.isSafeInteger(n) && n <= 100000000 ? { text: s, hundredths: n } : null;
+}
 function Amount({
   value,
   onChange,
   label,
   nullable = false,
+  id,
 }: {
   value: number | null;
   onChange: (n: number | null) => void;
   nullable?: boolean;
   label: string;
+  id?: string;
 }) {
-  const [v, set] = useState(value === null ? "" : (value / 100).toFixed(2));
+  // A required amount of zero shows as an empty field, so typing starts a
+  // new number instead of having to delete "0.00" first.
+  const shown = (amount: number | null) => amount === null || (!nullable && amount === 0) ? "" : (amount / 100).toFixed(2);
+  const [v, set] = useState(shown(value));
   useEffect(() => {
     let active = true;
     Promise.resolve().then(() => {
-      if (active) set(previous => (previous === "" && value === null) || (previous !== "" && Math.round(Number(previous) * 100) === value) ? previous : value === null ? "" : (value / 100).toFixed(2));
+      if (active) set(previous => {
+        const parsed = parseAmountText(previous);
+        return (previous === "" && (value === null || (!nullable && value === 0))) || (parsed?.hundredths !== undefined && parsed.hundredths === value) ? previous : shown(value);
+      });
     });
     return () => { active = false; };
+    // `shown` only depends on `nullable`, which is fixed for a field.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value]);
   return (
     <input
+      id={id}
       aria-label={label}
-      placeholder={nullable ? "Unreadable / missing" : undefined}
+      placeholder={nullable ? "Unreadable / missing" : "0.00"}
       aria-invalid={nullable && value === null}
       inputMode="decimal"
+      autoComplete="off"
       value={v}
+      // A shown zero (a new receipt line) is replaced by typing, not appended to.
+      onFocus={(e) => { const input = e.currentTarget; if (parseAmountText(input.value)?.hundredths === 0) requestAnimationFrame(() => { if (document.activeElement === input) input.select(); }); }}
       onChange={(e) => {
-        const s = e.target.value;
-        if (/^\d*(\.\d{0,2})?$/.test(s)) {
-          const n = Math.round(Number(s) * 100);
-          if (s && s !== "." && (!Number.isSafeInteger(n) || n > 100000000)) return;
-          set(s);
-          if (nullable && (!s || s === ".")) { if (value !== null) onChange(null); }
-          else if (Number.isSafeInteger(n) && n !== value) onChange(n);
-        }
-      }}
-      onBlur={() => {
-        const n = Math.round(Number(v) * 100);
-        if ((nullable && !v) || !Number.isSafeInteger(n) || n > 100000000) {
-          if (nullable) { if (value !== null) onChange(null); set(""); }
-          else set(((value ?? 0) / 100).toFixed(2));
+        const parsed = parseAmountText(e.target.value);
+        if (!parsed) {
+          // Tell the person why the keystroke or paste was not accepted.
+          e.target.setCustomValidity?.("Use digits with one decimal point or comma, such as 12.50 or 12,50.");
+          e.target.reportValidity?.();
           return;
         }
-        if (n !== value) onChange(n);
-        set((n / 100).toFixed(2));
+        e.target.setCustomValidity?.("");
+        set(e.target.value.trim());
+        if (parsed.hundredths === undefined) {
+          if (nullable) { if (value !== null) onChange(null); }
+          else if (!parsed.text && value !== 0) onChange(0);
+        } else if (parsed.hundredths !== value) onChange(parsed.hundredths);
+      }}
+      onBlur={(e) => {
+        e?.target?.setCustomValidity?.("");
+        const parsed = parseAmountText(v);
+        if (!parsed || parsed.hundredths === undefined) {
+          if (nullable) { if (value !== null) onChange(null); set(""); }
+          else set(shown(parsed && !parsed.text ? 0 : value ?? 0));
+          return;
+        }
+        if (parsed.hundredths !== value) onChange(parsed.hundredths);
+        set(shown(parsed.hundredths));
       }}
     />
   );
+}
+/**
+ * What a person has entered in the editor, for "unsaved changes" checks.
+ * An automatically looked-up reference rate is not their work; a manual
+ * rate is.
+ */
+function editorWorkValue(entry: Pick<ReceiptEditor, "title" | "payer" | "currency" | "items" | "tax" | "tip" | "discount" | "percentages" | "bankAmount" | "fx" | "date" | "time" | "timezone" | "location" | "icon">) {
+  const { title, payer, currency, items, tax, tip, discount, percentages, bankAmount, fx, date, time, timezone, location, icon } = entry;
+  return canonicalJson({ title, payer, currency, items, tax, tip, discount, percentages, bankAmount, fx: fx?.source === "manual" ? fx : undefined, date, time, timezone, location, icon });
+}
+/**
+ * A manual expense with one line priced and shared equally (or by one
+ * person) needs no item editor: its name is the line's name. Anything richer
+ * (a photo, a scan, several lines, a separately named line, percentages or
+ * quantities) opens the full itemised editor so nothing is flattened.
+ */
+function quickEligible(entry: ReceiptEditor) {
+  const [item] = entry.items;
+  return !entry.receiptId && !entry.receiptScan && !entry.draftId && entry.percentages === undefined && entry.items.length === 1
+    && !!item.members.length && item.amount !== null && item.name === entry.title && !item.units && !item.percentages && !item.quantity
+    && !item.scanSource && !Object.keys(item.translations ?? {}).length;
+}
+/** In the quick form the expense name is also its single line's name. */
+function withQuickName(entry: ReceiptEditor, name: string): ReceiptEditor {
+  return { ...entry, items: entry.items.map((item, index) => index === 0 ? { ...item, name, fieldSources: { ...item.fieldSources, name: "user" as const } } : item) };
 }
 function mergeReceiptConversation(stored?: ReceiptMessage[], local?: ReceiptMessage[]) {
   const messages = [...stored || []];
@@ -205,6 +265,7 @@ export default function Home({ children }: { children: ReactNode }) {
     [restoration, setRestoration] = useState<RestorationInfo | null>(null),
     [receiptHistoryOpen, setReceiptHistoryOpen] = useState(false),
     [statement, setStatement] = useState(""),
+    [savedNotice, setSavedNotice] = useState<{ title: string; at: number } | null>(null),
     [referenceRate, setReferenceRate] = useState<{ rate: number; currency: Currency; date: string; time: string; timezone: string } | null>(null);
   const editorBaseline = useRef<{ tripId: string; expense?: Expense } | null>(null);
   const receiptSession = useRef(0);
@@ -617,17 +678,20 @@ export default function Home({ children }: { children: ReactNode }) {
     setFxError("");
     editorBaseline.current = { tripId: trip.id };
     setEditorConflict(null); setReferenceRate(null);
+    // Expenses are usually entered where the previous one was bought, even
+    // when catching up later from a phone set to the home time zone. The
+    // default date and time are "now" in that same zone, so all three
+    // describe one instant.
+    const timezone = trip.expenses[0]?.timezone
+      || Intl.DateTimeFormat().resolvedOptions().timeZone || "Europe/London";
     const entry: ReceiptEditor = {
       id: uid(),
       title: "",
       source: "manual",
       adjustmentAllocation: "receipt-total",
-      date: today(),
-      time: localTime(),
-      // Expenses are usually entered where the previous one was bought, even
-      // when catching up later from a phone set to the home time zone.
-      timezone: trip.expenses[0]?.timezone
-        || Intl.DateTimeFormat().resolvedOptions().timeZone || "Europe/London",
+      date: today(timezone),
+      time: localTime(new Date(), timezone),
+      timezone,
       currency: trip.currency,
       payer: trip.members.find(member => member.userId === profile?.id)?.id || trip.members[0].id,
       items: [
@@ -715,7 +779,21 @@ export default function Home({ children }: { children: ReactNode }) {
   }
   function closeReceiptEditor() {
     setCaptureNotes("");
+    // A rate lookup belongs to the editor that asked for it; never let a
+    // pending one keep the next expense busy.
+    fxRequest.current++; setFxLoading(false);
     resetReceiptReview(); setEditing(null);
+  }
+  async function requestCloseEditor() {
+    if (uploading || saving) return;
+    if (editorDirty && !await confirm({
+      title: "Discard unsaved changes?",
+      message: editing?.draftId
+        ? "Your receipt photo and its saved draft stay on this holiday, but the changes you made since opening it will be lost."
+        : "This expense hasn’t been saved. Closing now loses what you entered.",
+      confirmLabel: "Discard changes", cancelLabel: "Keep editing", destructive: true,
+    })) return;
+    closeReceiptEditor();
   }
   function isReceiptSessionCurrent(session: number, tripId: string, accountId: string, requireEditor = true) {
     return session === receiptSession.current && receiptSessionScope.current.accountId === accountId
@@ -1185,8 +1263,11 @@ export default function Home({ children }: { children: ReactNode }) {
           : [expense, ...trip.expenses],
         drafts: trip.drafts.flatMap(draft => draft.id === draftId ? retainedDraft ? [retainedDraft] : [] : [draft]),
       })
-    )
+    ) {
       closeReceiptEditor();
+      return true;
+    }
+    return false;
   }
   function importItems() {
     try {
@@ -1355,22 +1436,77 @@ export default function Home({ children }: { children: ReactNode }) {
     total: previewTotal(expense, trip),
     shares: currentMemberIndex >= 0 ? previewShares(expense, trip) : null,
   }]) || []), [trip, currentMemberIndex]);
+  // Unsaved work is measured against the editor as it was opened (or last
+  // saved as a draft). A server proposal filling an untouched receipt draft
+  // matches that draft, so it does not count as the person's unsaved work.
+  const editorSnapshot = useRef<{ key: string; value: string } | null>(null);
+  const editorIdentity = editing ? [editing.id, editing.draftId, editing.receiptId, editing.expenseId].join("|") : "";
+  useEffect(() => {
+    editorSnapshot.current = editing ? { key: editorIdentity, value: editorWorkValue(editing) } : null;
+    // Only a different entry (or a newly saved draft of it) takes a new snapshot.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editorIdentity]);
+  const editorDirty = useMemo(() => {
+    if (!editing) return false;
+    if (captureNotes.trim()) return true;
+    const snapshot = editorSnapshot.current, value = editorWorkValue(editing);
+    if (!snapshot || snapshot.key !== editorIdentity || snapshot.value === value) return false;
+    const stored = trip?.drafts.find(draft => draft.id === editing.draftId);
+    return !stored || editorWorkValue({ ...stored, date: stored.date ?? editing.date, time: stored.time ?? editing.time, timezone: stored.timezone ?? editing.timezone }) !== value;
+  }, [editing, editorIdentity, captureNotes, trip]);
+  useEffect(() => {
+    if (!editorDirty) return;
+    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [editorDirty]);
+  const editorFooterRef = useStickyFooterReveal();
+  useEffect(() => {
+    if (!savedNotice) return;
+    const timer = setTimeout(() => setSavedNotice(current => current === savedNotice ? null : current), 8000);
+    return () => clearTimeout(timer);
+  }, [savedNotice]);
+  // Each opened entry starts in the quick form when it fits, and stays in the
+  // itemised editor once someone chooses it (or the entry outgrows the form).
+  const [editorMode, setEditorMode] = useState<{ id: string; quick: boolean } | null>(null);
+  const [adjustmentsFor, setAdjustmentsFor] = useState("");
+  if (editing && editorMode?.id !== editing.id) setEditorMode({ id: editing.id, quick: quickEligible(editing) });
+  else if (!editing && editorMode) setEditorMode(null);
+  // The saved confirmation belongs to the list view; opening a form retires it.
+  if (editing && savedNotice) setSavedNotice(null);
+  const quickMode = !!editing && editorMode?.id === editing.id && editorMode.quick && quickEligible(editing);
+  const adjustmentsShown = !!editing && (adjustmentsFor === editing.id || !!editing.tax || !!editing.tip || !!editing.discount);
+  function itemiseEditor(focus: "name" | "split") {
+    if (!editing) return;
+    const itemId = editing.items[0]?.id;
+    setEditorMode({ id: editing.id, quick: false });
+    if (itemId) setTimeout(() => focusExpenseTarget(expenseItemTarget(itemId), focus === "name" ? "input[required]" : ".share-split button[aria-pressed]"), 0);
+  }
   const editorShares = useMemo(() => editing && trip ? previewShares(editing, trip) : null, [editing, trip]);
   const editorTotal = useMemo(() => editing && trip ? previewTotal(editing, trip) : null, [editing, trip]);
   const editorOriginalTotal = useMemo(() => editing ? receiptEditorTotal(editing) : 0, [editing]);
   const editorScanError = useMemo(() => editing ? receiptScanSaveError(editing, { allowAcknowledgement: true, previous: editorBaseline.current?.expense }) : null, [editing]);
-  const saveDisabled = !editing || !trip || saving || !!editorConflict || uploading || receiptProcessing || fxLoading
+  const editorBlockers = useMemo(() => editing && trip ? expenseSaveBlockers(editing, trip) : [], [editing, trip]);
+  // Save follows the same readiness model as the "Before saving" list, so the
+  // two never disagree. An optional reference-rate lookup does not block it:
+  // a manual rate or bank charge is already a complete conversion.
+  const saveDisabled = !editing || !trip || saving || !!editorConflict || uploading || receiptProcessing || offline
+    || editorBlockers.length > 0
     || editing.bankAmount === 0 || (editing.bankAmount !== undefined && editing.currency === trip.currency)
     || !!editorScanError || !!receiptSplitError(editing)
     || (editing.percentages === undefined && editing.items.some(item => !!itemSplitError(item)))
     || editorOriginalTotal === null || editorOriginalTotal <= 0
     || (editing.currency !== trip.currency && editing.bankAmount === undefined && !editing.fx?.rate);
+  // The quick form has no item list: point its blockers at its own fields.
+  const visibleBlockers = quickMode ? editorBlockers.flatMap(blocker => blocker.key === "names" ? []
+    : blocker.key === "total" || blocker.key === "items" ? [{ ...blocker, message: "Enter the amount", target: EXPENSE_TARGETS.amount }]
+    : blocker.key === "unassigned" || blocker.key === "item-split" ? [{ ...blocker, target: EXPENSE_TARGETS.shared, focus: undefined }]
+    : [blocker]) : editorBlockers;
   // Collapsed purchase details open while a value is missing, or when a
   // processed receipt could not supply the date, time or currency itself.
   const purchaseDetailsNeedAttention = !!editing && (!editing.currency || !editing.date || !editing.time
     || (!!editing.receiptScan && (["date", "time", "currency"] as const).some(field => editing.fieldSources?.[field] === "default"))
     || (!!editing.receiptScan?.printedCurrency && editing.receiptScan.printedCurrency !== editing.currency));
-  const editorBlockers = useMemo(() => editing && trip ? expenseSaveBlockers(editing, trip) : [], [editing, trip]);
   // Foreign-currency receipts need a rate before Save. Look up the daily
   // reference rate once per currency/date/time/zone instead of asking for a
   // tap; a manual rate or bank charge always takes priority.
@@ -1695,6 +1831,223 @@ export default function Home({ children }: { children: ReactNode }) {
                   );
     }
   };
+  // Fields and panels placed differently in the quick form and the itemised
+  // editor; each is defined once here.
+  const payerField = editing && trip ? (
+    <label>
+      Paid by
+      <select
+        value={editing.payer}
+        onChange={(e) =>
+          setEditing(userReceiptField(editing, "payer", e.target.value))
+        }
+      >
+        {trip.members.map((m) => (
+          <option value={m.id} key={m.id}>
+            {m.name}
+          </option>
+        ))}
+      </select>
+    </label>
+  ) : null;
+  const currencyField = editing && trip ? (
+    <label>
+      Original currency
+      <select
+        aria-label="Original currency"
+        value={editing.currency || ""}
+        required
+        onChange={(e) => {
+          setFxError("");
+          setEditing({
+            ...userReceiptField(editing, "currency", e.target.value as Currency),
+            fx: undefined,
+            bankAmount: undefined,
+          });
+        }}
+      >
+        <option value="" disabled>Confirm receipt currency</option>
+        {CURRENCIES.map((c) => (
+          <option value={c.code} key={c.code}>
+            {c.code} · {c.name}
+          </option>
+        ))}
+      </select>
+      {editing.receiptScan && editing.currency && editing.fieldSources?.currency !== "user" && <button type="button" className="quiet" onClick={() => setEditing(userReceiptField(editing, "currency", editing.currency))}>I checked the currency: {editing.currency}</button>}
+    </label>
+  ) : null;
+  const renderReceiptCapture = (entry: ReceiptEditor, current: Trip, compact: boolean) => (
+    <ReceiptCapture
+      compact={compact}
+      contextFields={<div className="receipt-capture-context">
+        {!entry.receiptId && <><label htmlFor="receipt-upload-notes">Who bought what? <small>optional</small></label><textarea id="receipt-upload-notes" rows={3} maxLength={4000} value={captureNotes} disabled={uploading || saving || receiptProcessing} placeholder="Gary had a decaf, I had a cappuccino. We each had 2 croissants." onChange={event => setCaptureNotes(event.target.value)} /></>}
+        <ReceiptLocationFields key={`${profile?.id}:${current.id}:${entry.id}:${receiptSession.current}`} value={{ location: entry.location, locationHint: entry.locationHint }} onChange={setEditorPlace} disabled={uploading || saving || receiptProcessing} />
+      </div>}
+      receiptId={entry.receiptId}
+      busy={uploading || saving || receiptAIConnecting}
+      stored={!receiptPending}
+      copied={receiptCopied}
+      prompt={receiptPrompt}
+      ready={!!processedReceipt}
+      itemized={receiptItemized}
+      connected={!!(profile?.chatgptConnected || profile?.authMethod === "chatgpt")}
+      chatgptUrl={receiptPrompt ? chatgptReceiptUrl(receiptPrompt) : undefined}
+      handoffOpened={receiptHandoffOpened}
+      assistantError={receiptHandoffError}
+      refreshError={refreshError}
+      offline={offline}
+      onOpenChatGPT={() => setReceiptHandoffOpened(true)}
+      onConnectChatGPT={() => setAccount(true)}
+      aiConfigured={!!receiptAI && receiptAI.accountId === profile?.id && receiptAI.configured}
+      aiConnected={!!receiptAI && receiptAI.accountId === profile?.id && receiptAI.connected}
+      aiProvider={receiptAI?.provider}
+      aiEligible={!!receiptAI && receiptAI.accountId === profile?.id && receiptAI.eligible}
+      aiManageable={!!receiptAI && receiptAI.accountId === profile?.id && receiptAI.manageable}
+      aiSiwcAvailable={!!receiptAI && receiptAI.accountId === profile?.id && receiptAI.siwcAvailable}
+      aiReason={receiptAI?.accountId === profile?.id ? receiptAI?.reason : undefined}
+      aiManagementReason={receiptAI?.accountId === profile?.id ? receiptAI?.managementReason : undefined}
+      processing={receiptProcessing}
+      onProcess={() => void readEditorReceipt()}
+      onConnectPlan={() => void connectChatGPTPlan()}
+      onCapture={captureEditorReceipt}
+      onRemove={async () => {
+        if (!await confirm({ title: "Remove receipt image?", message: "Remove this receipt image when you save? Item details will be kept. The image will be deleted once no expense or draft uses it.", confirmLabel: "Remove image", destructive: true })) return;
+        setEditing({ ...entry, receiptId: undefined }); setReceiptPending(false); resetReceiptReview();
+      }}
+      onPreparingChange={setUploading}
+      onPrepare={prepareEditorReceipt}
+      onRefresh={() => void load({ background: true, fresh: true })}
+      onUseProcessed={reviewProcessedReceipt}
+    />
+  );
+  const fxPanel = editing && trip ? ((entry: ReceiptEditor, current: Trip) => (entry.currency && entry.currency !== current.currency && (
+      <div className="fx-panel" id={EXPENSE_TARGETS.fx}>
+        <div className="sectionheading">
+          <h3>What did the bank charge?</h3>
+          <span className="currency-pair">
+            {entry.currency} / {current.currency}
+          </span>
+        </div>
+        <p className="footnote">
+          Compare a reference estimate with the charge on your
+          card statement.
+        </p>
+        <button
+          type="button"
+          className="quiet wide"
+          disabled={fxLoading}
+          onClick={lookupFx}
+        >
+          <RefreshCw
+            size={16}
+            className={fxLoading ? "spin" : ""}
+          />
+          {fxLoading
+            ? "Finding rate…"
+            : "Look up historical rate"}
+        </button>
+        {fxError && <p className="error">{fxError}</p>}
+        {entry.fx && (
+          <div className="rate-result">
+            <span>
+              1 {entry.currency} = {entry.fx.rate.toPrecision(8)}{" "}
+              {current.currency}
+            </span>
+            <small>
+              {entry.fx.source === "reference"
+                ? "Daily reference rate"
+                : "Manual rate"}{" "}
+              · {entry.fx.asOf}
+            </small>
+            <strong>
+              Estimated charge{" "}
+              {estimatedCharge === null ? "Outside the supported amount range" : money(estimatedCharge, current.currency)}
+            </strong>
+          </div>
+        )}
+        <details className="manual-rate">
+          <summary>Enter a conversion rate yourself</summary>
+          <label>
+            1 {entry.currency} in {current.currency}
+            <input
+              type="number"
+              inputMode="decimal"
+              min="0.00000001"
+              max="100000000"
+              step="any"
+              value={entry.fx?.rate || ""}
+              onChange={(e) => {
+                const rate = Number(e.target.value);
+                setEditing({
+                  ...entry,
+                  fx:
+                    rate > 0
+                      ? {
+                          rate,
+                          asOf: entry.date,
+                          source: "manual",
+                        }
+                      : undefined,
+                });
+              }}
+            />
+          </label>
+        </details>
+        <label className="checklabel">
+          <input
+            type="checkbox"
+            checked={entry.bankAmount !== undefined}
+            onChange={(e) =>
+              setEditing({
+                ...entry,
+                bankAmount: e.target.checked ? 0 : undefined,
+              })
+            }
+          />
+          Use the actual bank charge
+        </label>
+        {entry.bankAmount !== undefined && (
+          <label>
+            Amount charged in {current.currency}
+            <Amount
+              label="Actual bank charge"
+              value={entry.bankAmount}
+              onChange={(bankAmount) =>
+                setEditing(
+                  (prev) => prev && { ...prev, bankAmount: bankAmount ?? 0 },
+                )
+              }
+            />
+          </label>
+        )}
+        {entry.bankAmount !== undefined && entry.fx && estimatedCharge !== null && (
+          <p className="bank-diff">
+            Conversion cost vs reference:{" "}
+            <b>
+              {money(
+                entry.bankAmount -
+                  estimatedCharge,
+                current.currency,
+              )}{" "}
+              ·{" "}
+              {estimatedCharge > 0
+                ? (((entry.bankAmount - estimatedCharge) / estimatedCharge) * 100).toFixed(2)
+                : "0.00"}
+              %
+            </b>
+            <small>
+              Estimated fees and exchange-rate markup combined.
+            </small>
+          </p>
+        )}
+        <p className="footnote">
+          Daily reference rates are not intraday card rates. Your
+          transaction time is saved; the bank may use a later
+          processing date and add fees. The actual bank charge
+          takes priority.
+        </p>
+      </div>
+    )))(editing, trip) : null;
   return (
     <div className="shell">
       <aside
@@ -1803,6 +2156,11 @@ export default function Home({ children }: { children: ReactNode }) {
           {(editing && editorBaseline.current?.tripId !== trip?.id || paymentEditor && paymentEditor.tripId !== trip?.id) && <p className="connection-banner" role="status">
             This holiday is no longer available in this view. Its open form has been kept separate from other holidays.
             <button type="button" className="quiet" onClick={() => { closeReceiptEditor(); setPaymentEditor(null); }}>Close unavailable form</button>
+          </p>}
+          {savedNotice && !editing && <p className="saved-banner" role="status">
+            <CheckCircle2 size={18} aria-hidden="true" />
+            <span>Saved “{savedNotice.title}”.</span>
+            <button type="button" className="quiet" disabled={!trip} onClick={() => { setSavedNotice(null); newExpense(); }}><Plus size={16} aria-hidden="true" /> Add another</button>
           </p>}
           {offline && (
             <p className="connection-banner" role="status">
@@ -2205,7 +2563,7 @@ export default function Home({ children }: { children: ReactNode }) {
       {editing && trip && editorBaseline.current?.tripId === trip.id && (
         <ModalA11y
           className="overlay editor-overlay"
-          onClose={() => { if (!uploading && !saving) closeReceiptEditor(); }}
+          onClose={() => void requestCloseEditor()}
         >
           <section
             className="modal editor"
@@ -2213,7 +2571,10 @@ export default function Home({ children }: { children: ReactNode }) {
             aria-modal="true"
             aria-labelledby="expense-title"
           >
-            <form onSubmit={submitExpense}>
+            <form onSubmit={async event => {
+              const title = editing.title.trim();
+              if (await submitExpense(event)) setSavedNotice({ title, at: Date.now() });
+            }}>
               <div className="modalheading">
                 <div>
                   <span className="eyebrow">MAKE EVERY ITEM FAIR</span>
@@ -2230,65 +2591,24 @@ export default function Home({ children }: { children: ReactNode }) {
                   className="iconbutton"
                   aria-label="Close editor"
                   disabled={uploading || saving}
-                  onClick={closeReceiptEditor}
+                  onClick={() => void requestCloseEditor()}
                 >
                   <X />
                 </button>
               </div>
-              <nav className="receipt-view-switch" aria-label="Receipt views">
+              {(editing.draftId || editing.expenseId || trip.expenses.some(value => value.id === editing.id)) && <nav className="receipt-view-switch" aria-label="Receipt views">
                 <button type="button" className="quiet" aria-pressed={!receiptHistoryOpen} aria-controls="receipt-details-view" onClick={() => setReceiptHistoryOpen(false)}>Details & split</button>
                 <button type="button" className="quiet" aria-pressed={receiptHistoryOpen} aria-controls="receipt-history-view" onClick={() => setReceiptHistoryOpen(true)}><History size={17} aria-hidden="true" />Receipt history</button>
-              </nav>
+              </nav>}
               <div id="receipt-details-view" className="receipt-details-view" hidden={receiptHistoryOpen} inert={receiptHistoryOpen}>
               <div className={"editor-body " + (editing.receiptId ? "with-receipt" : "")}>
-                <ReceiptCapture
-                  contextFields={<div className="receipt-capture-context">
-                    {!editing.receiptId && <><label htmlFor="receipt-upload-notes">Who bought what? <small>optional</small></label><textarea id="receipt-upload-notes" rows={3} maxLength={4000} value={captureNotes} disabled={uploading || saving || receiptProcessing} placeholder="Gary had a decaf, I had a cappuccino. We each had 2 croissants." onChange={event => setCaptureNotes(event.target.value)} /></>}
-                    <ReceiptLocationFields key={`${profile?.id}:${trip.id}:${editing.id}:${receiptSession.current}`} value={{ location: editing.location, locationHint: editing.locationHint }} onChange={setEditorPlace} disabled={uploading || saving || receiptProcessing} />
-                  </div>}
-                  receiptId={editing.receiptId}
-                  busy={uploading || saving || receiptAIConnecting}
-                  stored={!receiptPending}
-                  copied={receiptCopied}
-                  prompt={receiptPrompt}
-                  ready={!!processedReceipt}
-                  itemized={receiptItemized}
-                  connected={!!(profile?.chatgptConnected || profile?.authMethod === "chatgpt")}
-                  chatgptUrl={receiptPrompt ? chatgptReceiptUrl(receiptPrompt) : undefined}
-                  handoffOpened={receiptHandoffOpened}
-                  assistantError={receiptHandoffError}
-                  refreshError={refreshError}
-                  offline={offline}
-                  onOpenChatGPT={() => setReceiptHandoffOpened(true)}
-                  onConnectChatGPT={() => setAccount(true)}
-                  aiConfigured={!!receiptAI && receiptAI.accountId === profile?.id && receiptAI.configured}
-                  aiConnected={!!receiptAI && receiptAI.accountId === profile?.id && receiptAI.connected}
-                  aiProvider={receiptAI?.provider}
-                  aiEligible={!!receiptAI && receiptAI.accountId === profile?.id && receiptAI.eligible}
-                  aiManageable={!!receiptAI && receiptAI.accountId === profile?.id && receiptAI.manageable}
-                  aiSiwcAvailable={!!receiptAI && receiptAI.accountId === profile?.id && receiptAI.siwcAvailable}
-                  aiReason={receiptAI?.accountId === profile?.id ? receiptAI?.reason : undefined}
-                  aiManagementReason={receiptAI?.accountId === profile?.id ? receiptAI?.managementReason : undefined}
-                  processing={receiptProcessing}
-                  onProcess={() => void readEditorReceipt()}
-                  onConnectPlan={() => void connectChatGPTPlan()}
-                  onCapture={captureEditorReceipt}
-                  onRemove={async () => {
-                    if (!await confirm({ title: "Remove receipt image?", message: "Remove this receipt image when you save? Item details will be kept. The image will be deleted once no expense or draft uses it.", confirmLabel: "Remove image", destructive: true })) return;
-                    setEditing({ ...editing, receiptId: undefined }); setReceiptPending(false); resetReceiptReview();
-                  }}
-                  onPreparingChange={setUploading}
-                  onPrepare={prepareEditorReceipt}
-                  onRefresh={() => void load({ background: true, fresh: true })}
-                  onUseProcessed={reviewProcessedReceipt}
-                />
                 <div className="edit-fields">
                   {restoration && <RestorationNotice info={restoration} />}
                   {editing.receiptId && <ReceiptPhotoViewer receiptId={editing.receiptId} />}
                   <div id={EXPENSE_TARGETS.review} className="expense-target">
                     <ReceiptScanReview entry={editing} onChange={setEditing} />
                   </div>
-                  <QuickSplit key={`${trip.id}:${editing.id}`} tripId={trip.id} unassigned={unassignedItemIds(editing).length} members={trip.members}
+                  <QuickSplit key={`${trip.id}:${editing.id}`} tripId={trip.id} unassigned={unassignedItemIds(editing).length} members={trip.members} autoFocus
                     currentMemberId={trip.members[currentMemberIndex]?.id} disabled={saving || uploading || receiptProcessing}
                     onAssign={ids => setEditing(previous => previous && assignUnassignedItems(previous, ids))} />
                   {!editorBlockers.length && !saveDisabled && !!editing.receiptScan && !trip.expenses.some(expense => expense.id === editing.id) && <ReadyToSave title={editing.title.trim()}
@@ -2296,7 +2616,7 @@ export default function Home({ children }: { children: ReactNode }) {
                     convertedTotal={editing.currency !== trip.currency && editorTotal !== null ? money(editorTotal, trip.currency) : undefined}
                     payerName={name(editing.payer)}
                     shares={trip.members.flatMap((member, index) => editorShares?.[index] ? [{ id: member.id, name: member.name, amount: money(editorShares[index], trip.currency) }] : [])}
-                    disabled={saveDisabled} onEdit={() => focusExpenseTarget(EXPENSE_TARGETS.title)} />}
+                    disabled={saveDisabled} onEdit={() => editing.items[0] ? focusExpenseTarget(expenseItemTarget(editing.items[0].id)) : focusExpenseTarget(EXPENSE_TARGETS.items)} />}
                   <label>
                     Expense name
                     <input
@@ -2304,31 +2624,94 @@ export default function Home({ children }: { children: ReactNode }) {
                       value={editing.title}
                       required
                       maxLength={200}
-                      placeholder="Dinner by the harbour"
-                      onChange={(e) =>
-                        setEditing(userReceiptField(editing, "title", e.target.value))
-                      }
+                      placeholder={quickMode ? "Taxi, groceries, dinner…" : "Dinner by the harbour"}
+                      autoComplete="off"
+                      onChange={(e) => {
+                        const next = userReceiptField(editing, "title", e.target.value);
+                        // A new manual expense's first line follows its name until
+                        // someone names that line separately.
+                        const follows = quickMode || (!editing.receiptId && !editing.receiptScan && !editing.draftId && !trip.expenses.some(value => value.id === editing.id)
+                          && editing.items[0]?.name === editing.title && !Object.keys(editing.items[0]?.translations ?? {}).length);
+                        setEditing(follows ? withQuickName(next, e.target.value) : next);
+                      }}
                     />
                   </label>
-                  {editing.fieldSources?.title === "default" && <p className="footnote">Suggested name. Receipt reading may replace it; editing confirms your choice.</p>}
+                  {editing.fieldSources?.title === "default" && !!editing.title.trim() && (!!editing.receiptId || !!editing.draftId) && <p className="footnote">Suggested name. Receipt reading may replace it; editing confirms your choice.</p>}
+                  {quickMode && <>
+                    <div className="fieldpair quick-amount">
+                      <label>
+                        Amount
+                        <Amount id={EXPENSE_TARGETS.amount} label="Amount" value={editing.items[0].amount}
+                          onChange={amount => setEditing(previous => previous && { ...previous, items: previous.items.map((item, index) => index === 0 && item.amount !== amount
+                            ? { ...item, amount, fieldSources: { ...item.fieldSources, amount: "user" as const } } : item) })} />
+                      </label>
+                      {currencyField}
+                    </div>
+                    <div className="fieldpair quick-allocation">
+                      {payerField}
+                      <fieldset className="quick-shared" id={EXPENSE_TARGETS.shared}>
+                        <legend>Shared with</legend>
+                        <div className="personchips">
+                          {trip.members.map((member, index) => {
+                            const chosen = editing.items[0].members.includes(member.id);
+                            return <button type="button" key={member.id} className={chosen ? "chosen" : ""} aria-pressed={chosen}
+                              onClick={() => setEditing(previous => {
+                                if (!previous) return previous;
+                                const [first, ...rest] = previous.items;
+                                const members = first.members.includes(member.id) ? first.members.filter(id => id !== member.id) : trip.members.map(value => value.id).filter(id => id === member.id || first.members.includes(id));
+                                // Someone always pays for the purchase; keep at least one person.
+                                return members.length ? { ...previous, items: [{ ...first, members, percentages: undefined, units: undefined }, ...rest] } : previous;
+                              })}>
+                              <span aria-hidden="true" className={`chipavatar color${index % 5}`}>{member.name.slice(0, 1).toUpperCase()}</span>
+                              {member.name}
+                              {chosen && <Check size={13} />}
+                            </button>;
+                          })}
+                        </div>
+                      </fieldset>
+                    </div>
+                    <p className="quick-shares" role="status" aria-live="polite">
+                      {editorShares && editorTotal
+                        ? trip.members.flatMap((member, index) => editing.items[0].members.includes(member.id) ? [`${member.name} ${money(editorShares[index], trip.currency)}`] : []).join(" · ")
+                        : editing.items[0].members.length === trip.members.length ? "Split equally between everyone" : `Split equally between ${editing.items[0].members.length === 1 ? "1 person" : `${editing.items[0].members.length} people`}`}
+                      <button type="button" className="textbutton" onClick={() => itemiseEditor("split")}>Custom split</button>
+                    </p>
+                  </>}
                   <PurchaseDetails key={`details:${editing.id}`} id={EXPENSE_TARGETS.details} needsAttention={purchaseDetailsNeedAttention}
-                    summary={`${name(editing.payer)} paid · ${expenseDate(editing.date)} ${editing.time} · ${editing.currency || "Currency needed"} · ${editing.timezone.replaceAll("_", " ")}`}>
-                  <div className="fieldpair">
+                    summary={quickMode ? `${expenseDate(editing.date)} ${editing.time} · ${editing.timezone.replaceAll("_", " ")}`
+                      : `${name(editing.payer)} paid · ${expenseDate(editing.date)} ${editing.time} · ${editing.currency || "Currency needed"} · ${editing.timezone.replaceAll("_", " ")}`}>
+                  {quickMode ? <div className="fieldpair">
                     <label>
-                      Paid by
-                      <select
-                        value={editing.payer}
+                      Date
+                      <input
+                        type="date"
+                        required
+                        value={editing.date}
                         onChange={(e) =>
-                          setEditing(userReceiptField(editing, "payer", e.target.value))
+                          setEditing({
+                            ...userReceiptField(editing, "date", e.target.value),
+                            fx: undefined,
+                          })
                         }
-                      >
-                        {trip.members.map((m) => (
-                          <option value={m.id} key={m.id}>
-                            {m.name}
-                          </option>
-                        ))}
-                      </select>
+                      />
                     </label>
+                    <label>
+                      Transaction time
+                      <input
+                        type="time"
+                        required
+                        value={editing.time}
+                        onChange={(e) =>
+                          setEditing({
+                            ...userReceiptField(editing, "time", e.target.value),
+                            fx: undefined,
+                          })
+                        }
+                      />
+                    </label>
+                  </div> : <>
+                  <div className="fieldpair">
+                    {payerField}
                     <label>
                       Date
                       <input
@@ -2345,30 +2728,7 @@ export default function Home({ children }: { children: ReactNode }) {
                     </label>
                   </div>
                   <div className="fieldpair">
-                    <label>
-                      Original currency
-                      <select
-                        aria-label="Original currency"
-                        value={editing.currency || ""}
-                        required
-                        onChange={(e) => {
-                          setFxError("");
-                          setEditing({
-                            ...userReceiptField(editing, "currency", e.target.value as Currency),
-                            fx: undefined,
-                            bankAmount: undefined,
-                          });
-                        }}
-                      >
-                        <option value="" disabled>Confirm receipt currency</option>
-                        {CURRENCIES.map((c) => (
-                          <option value={c.code} key={c.code}>
-                            {c.code} · {c.name}
-                          </option>
-                        ))}
-                      </select>
-                      {editing.receiptScan && editing.currency && editing.fieldSources?.currency !== "user" && <button type="button" className="quiet" onClick={() => setEditing(userReceiptField(editing, "currency", editing.currency))}>I checked the currency: {editing.currency}</button>}
-                    </label>
+                    {currencyField}
                     <label>
                       Transaction time
                       <input
@@ -2384,6 +2744,7 @@ export default function Home({ children }: { children: ReactNode }) {
                       />
                     </label>
                   </div>
+                  </>}
                   <label>
                     Transaction time zone
                     <select
@@ -2404,6 +2765,8 @@ export default function Home({ children }: { children: ReactNode }) {
                   </label>
                   {Object.entries(editing.fieldSources || {}).some(([field, source]) => source === "default" && ["date", "time", "currency", "timezone"].includes(field)) && <p className="footnote">Some purchase details are suggested defaults. Check the original currency, date and time against the receipt. Editing confirms your values.</p>}
                   </PurchaseDetails>
+                  {quickMode && fxPanel}
+                  {!quickMode && <>
                   <div className="receipt-split">
                     <label>
                       Split method
@@ -2442,7 +2805,7 @@ export default function Home({ children }: { children: ReactNode }) {
                   {!editing.items.length && <p className="receipt-no-items" role="status">No itemisation received yet. Process the stored receipt, or add its items manually.</p>}
                   <div className="items">
                     {editing.items.map((item, i) => (
-                      <div className="item" key={item.id}>
+                      <div className="item" key={item.id} id={expenseItemTarget(item.id)}>
                         <div className="item-top">
                           <span className="itemnumber">{i + 1}</span>
                           <ReceiptItemNames accountId={profile?.id || ""} trip={trip} receipt={editing} item={item} index={i} settings={languageSettings}
@@ -2518,7 +2881,9 @@ export default function Home({ children }: { children: ReactNode }) {
                             id: uid(),
                             name: "",
                             amount: 0,
-                            members: trip.members.map((m) => m.id),
+                            // Repeat purchases are usually for the same people
+                            // as the line before; the chips show the choice.
+                            members: editing.items.at(-1)?.members.length ? [...editing.items.at(-1)!.members] : trip.members.map((m) => m.id),
                           },
                         ],
                       })
@@ -2526,6 +2891,12 @@ export default function Home({ children }: { children: ReactNode }) {
                   >
                     <Plus size={16} /> Add item
                   </button>
+                  </>}
+                  <div className="expense-extra-actions">
+                    {quickMode && <button type="button" className="quiet" onClick={() => itemiseEditor("name")}><Plus size={16} aria-hidden="true" /> Split by item</button>}
+                    {!adjustmentsShown && <button type="button" className="quiet" onClick={() => setAdjustmentsFor(editing.id)}><Plus size={16} aria-hidden="true" /> Tip, tax or discount</button>}
+                  </div>
+                  {adjustmentsShown && <>
                   <div className="adjustments">
                     {(["tax", "tip", "discount"] as const).map((k) => (
                       <label key={k}>
@@ -2548,6 +2919,8 @@ export default function Home({ children }: { children: ReactNode }) {
                     {editing.percentages === undefined ? "Tax, tip and discount are shared in proportion to each person’s items." : "Tax, tip and discount follow the whole receipt percentages."} Add tax only if it isn’t already in the item prices.
                   </p>
                   {editing.percentages === undefined && editing.items.every(item => item.amount === 0) && editing.tax + editing.tip > editing.discount && <p className="notification-status" role="status">Added tax and tip on zero-priced items are shared between the people selected on those items.{editorBaseline.current?.expense?.adjustmentAllocation === undefined && editorBaseline.current?.expense ? " Saving changes the earlier split, which included every traveller." : ""}</p>}
+                  </>}
+                  {!editing.receiptId && renderReceiptCapture(editing, trip, true)}
                   <MoreOptions key={`more:${editing.id}`} defaultOpen={hasReceiptDiscussion(editing.conversation)}>
                   <ExpenseIconPicker entry={editing} showLabel disabled={saving || uploading} onChange={icon => setEditing(previous => previous && { ...previous, icon })} />
                   <ReceiptLanguageSelect tripLanguage={trip.receiptLanguage} value={editing.receiptLanguage} detected={editing.detectedLanguage} onChange={receiptLanguage=>setEditing(previous=>previous&&{...previous,receiptLanguage})} />
@@ -2596,135 +2969,8 @@ export default function Home({ children }: { children: ReactNode }) {
                     <button type="button" className="primary" disabled={saving || uploading || receiptProcessing} onClick={reviewProcessedReceipt}>Review proposed changes</button>
                   </section>}
                   {editing.bankAmount !== undefined && (editing.currency === trip.currency || editing.bankAmount <= 0) && <div className="error" role="alert"><p>The saved bank charge is {money(editing.bankAmount, trip.currency)}. {editing.currency === trip.currency ? "A receipt already in the holiday currency cannot use a currency-conversion bank charge." : "A bank charge must be greater than zero."} Review it before saving.</p><button type="button" className="quiet" onClick={() => setEditing({ ...editing, bankAmount: undefined })}>Remove bank charge</button></div>}
-                  {editing.currency && editing.currency !== trip.currency && (
-                    <div className="fx-panel" id={EXPENSE_TARGETS.fx}>
-                      <div className="sectionheading">
-                        <h3>What did the bank charge?</h3>
-                        <span className="currency-pair">
-                          {editing.currency} / {trip.currency}
-                        </span>
-                      </div>
-                      <p className="footnote">
-                        Compare a reference estimate with the charge on your
-                        card statement.
-                      </p>
-                      <button
-                        type="button"
-                        className="quiet wide"
-                        disabled={fxLoading}
-                        onClick={lookupFx}
-                      >
-                        <RefreshCw
-                          size={16}
-                          className={fxLoading ? "spin" : ""}
-                        />
-                        {fxLoading
-                          ? "Finding rate…"
-                          : "Look up historical rate"}
-                      </button>
-                      {fxError && <p className="error">{fxError}</p>}
-                      {editing.fx && (
-                        <div className="rate-result">
-                          <span>
-                            1 {editing.currency} = {editing.fx.rate.toPrecision(8)}{" "}
-                            {trip.currency}
-                          </span>
-                          <small>
-                            {editing.fx.source === "reference"
-                              ? "Daily reference rate"
-                              : "Manual rate"}{" "}
-                            · {editing.fx.asOf}
-                          </small>
-                          <strong>
-                            Estimated charge{" "}
-                            {estimatedCharge === null ? "Outside the supported amount range" : money(estimatedCharge, trip.currency)}
-                          </strong>
-                        </div>
-                      )}
-                      <details className="manual-rate">
-                        <summary>Enter a conversion rate yourself</summary>
-                        <label>
-                          1 {editing.currency} in {trip.currency}
-                          <input
-                            type="number"
-                            inputMode="decimal"
-                            min="0.00000001"
-                            max="100000000"
-                            step="any"
-                            value={editing.fx?.rate || ""}
-                            onChange={(e) => {
-                              const rate = Number(e.target.value);
-                              setEditing({
-                                ...editing,
-                                fx:
-                                  rate > 0
-                                    ? {
-                                        rate,
-                                        asOf: editing.date,
-                                        source: "manual",
-                                      }
-                                    : undefined,
-                              });
-                            }}
-                          />
-                        </label>
-                      </details>
-                      <label className="checklabel">
-                        <input
-                          type="checkbox"
-                          checked={editing.bankAmount !== undefined}
-                          onChange={(e) =>
-                            setEditing({
-                              ...editing,
-                              bankAmount: e.target.checked ? 0 : undefined,
-                            })
-                          }
-                        />
-                        Use the actual bank charge
-                      </label>
-                      {editing.bankAmount !== undefined && (
-                        <label>
-                          Amount charged in {trip.currency}
-                          <Amount
-                            label="Actual bank charge"
-                            value={editing.bankAmount}
-                            onChange={(bankAmount) =>
-                              setEditing(
-                                (prev) => prev && { ...prev, bankAmount: bankAmount ?? 0 },
-                              )
-                            }
-                          />
-                        </label>
-                      )}
-                      {editing.bankAmount !== undefined && editing.fx && estimatedCharge !== null && (
-                        <p className="bank-diff">
-                          Conversion cost vs reference:{" "}
-                          <b>
-                            {money(
-                              editing.bankAmount -
-                                estimatedCharge,
-                              trip.currency,
-                            )}{" "}
-                            ·{" "}
-                            {estimatedCharge > 0
-                              ? (((editing.bankAmount - estimatedCharge) / estimatedCharge) * 100).toFixed(2)
-                              : "0.00"}
-                            %
-                          </b>
-                          <small>
-                            Estimated fees and exchange-rate markup combined.
-                          </small>
-                        </p>
-                      )}
-                      <p className="footnote">
-                        Daily reference rates are not intraday card rates. Your
-                        transaction time is saved; the bank may use a later
-                        processing date and add fees. The actual bank charge
-                        takes priority.
-                      </p>
-                    </div>
-                  )}
-                  <div className="split-preview">
+                  {!quickMode && fxPanel}
+                  {!quickMode && <div className="split-preview">
                     <h3>Each person’s share · {trip.currency}</h3>
                     {trip.members.map((m, i) => (
                       <div key={m.id}>
@@ -2734,8 +2980,9 @@ export default function Home({ children }: { children: ReactNode }) {
                         </b>
                       </div>
                     ))}
-                  </div>
+                  </div>}
                 </div>
+                {editing.receiptId && renderReceiptCapture(editing, trip, false)}
               </div>
               {error && (
                 <div className="error" role="alert">
@@ -2773,10 +3020,12 @@ export default function Home({ children }: { children: ReactNode }) {
                 </div>
                 <p className="footnote">Review your split and press Save expense to commit your choice.</p>
               </section>}
-              <div className="editor-footer">
-                <SaveChecklist blockers={editorBlockers} />
+              <div className="editor-footer" ref={editorFooterRef}>
+                {offline ? <p className="receipt-save-block" role="status">You’re offline. Reconnect to save; your entry stays here while this form is open.</p>
+                  // An untouched quick form needs no to-do list yet; Save is simply unavailable.
+                  : <SaveChecklist blockers={quickMode && !editorDirty ? [] : visibleBlockers} />}
                 <div>
-                  <small>Itemised total</small>
+                  <small>{quickMode ? "Total" : "Itemised total"}</small>
                   <strong>{editorOriginalTotal === null ? "Incomplete" : !editing.items.length ? "Not processed" : receiptMoney(editorOriginalTotal, editing.currency)}</strong>
                   {editing.currency !== trip.currency && editorTotal !== null &&
                     (editing.bankAmount !== undefined || editing.fx?.rate) && (

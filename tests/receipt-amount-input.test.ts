@@ -7,8 +7,9 @@ import { createSourceFile, isFunctionDeclaration, JsxEmit, ModuleKind, ScriptKin
 const source = await readFile(new URL('../components/trip-app.tsx', import.meta.url), 'utf8');
 const syntax = createSourceFile('trip-app.tsx', source, ScriptTarget.Latest, true, ScriptKind.TSX);
 const declaration = syntax.statements.find(statement => isFunctionDeclaration(statement) && statement.name?.text === 'Amount');
-assert(declaration);
-const compiled = transpileModule(declaration.getText(syntax) + '\nmodule.exports = Amount;', {compilerOptions: {module: ModuleKind.CommonJS, target: ScriptTarget.ES2022, jsx: JsxEmit.ReactJSX}}).outputText;
+const parser = syntax.statements.find(statement => isFunctionDeclaration(statement) && statement.name?.text === 'parseAmountText');
+assert(declaration && parser);
+const compiled = transpileModule(parser.getText(syntax) + '\n' + declaration.getText(syntax) + '\nmodule.exports = Amount; module.exports.parseAmountText = parseAmountText;', {compilerOptions: {module: ModuleKind.CommonJS, target: ScriptTarget.ES2022, jsx: JsxEmit.ReactJSX}}).outputText;
 function control(initial: number | null, nullable: boolean) {
   let value = initial, text: unknown;
   const changes: (number | null)[] = [];
@@ -49,4 +50,24 @@ test('focus, blur and equivalent decimal formatting never manufacture human conf
   assert.deepEqual(amount.changes,[]);
   amount.change('12.01'); amount.blur();
   assert.deepEqual(amount.changes,[1201]);
+});
+
+test('a decimal comma is a decimal separator, typed or pasted, and never a silent factor of 100', () => {
+  const typed = control(0, false);
+  for (const text of ['1', '12', '12,', '12,5', '12,50']) typed.change(text);
+  assert.equal(typed.value, 1250); typed.blur(); assert.equal(typed.text, '12.50');
+  const pasted = control(0, false); pasted.change('12,50'); assert.equal(pasted.value, 1250);
+  const dotted = control(0, false); dotted.change('12.50'); assert.equal(dotted.value, 1250);
+});
+
+test('ambiguous grouped or signed amounts are refused rather than reinterpreted', () => {
+  const amount = control(1250, false);
+  for (const text of ['1,234.56', '1.234,56', '12,5,0', '12,505', '-12,50', '12 50']) amount.change(text);
+  assert.equal(amount.value, 1250); assert.equal(amount.text, '12.50'); assert.deepEqual(amount.changes, []);
+});
+
+test('a required amount of zero shows an empty field so typing starts a new number', () => {
+  const amount = control(0, false); assert.equal(amount.text, '');
+  amount.change('7'); assert.equal(amount.value, 700);
+  amount.change(''); assert.equal(amount.value, 0); amount.blur(); assert.equal(amount.text, '');
 });

@@ -37,6 +37,15 @@ export function observedItemLanguage(item:BilingualItem,receipt:{receiptLanguage
   if(receipt.receiptLanguage&&receipt.receiptLanguage!=='auto')return receipt.receiptLanguage;
   return item.nameLanguage ?? receipt.detectedLanguage;
 }
+/**
+ * A line someone typed with no language evidence: no recorded or detected
+ * language, no translation and nothing read from a receipt. Its name is just
+ * a name, so it is edited in one field rather than as a translation pair.
+ */
+export function isUntranslatedManualItem(item:BilingualItem&{scanSource?:unknown},receipt:{receiptLanguage?:ReceiptLanguage|'auto';detectedLanguage?:ReceiptLanguage}):boolean {
+  return !item.nameLanguage&&!Object.keys(item.translations??{}).length&&!item.scanSource&&item.fieldSources?.name!=='receipt'
+    &&!receipt.detectedLanguage&&(!receipt.receiptLanguage||receipt.receiptLanguage==='auto');
+}
 export function originalItemLanguage(item:BilingualItem,trip:{receiptLanguage?:ReceiptLanguage|'auto'},receipt:{receiptLanguage?:ReceiptLanguage|'auto';detectedLanguage?:ReceiptLanguage}):ReceiptLanguage|undefined {
   return observedItemLanguage(item,receipt) ?? receiptLanguageHint(trip,receipt);
 }

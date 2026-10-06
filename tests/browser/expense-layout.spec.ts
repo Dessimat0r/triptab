@@ -136,7 +136,15 @@ for (const { width, height, touch } of viewports) {
           await expect(page.getByRole('heading', { name: 'Edit expense', exact: true })).toBeVisible();
         }
         await expect(page.locator('.editor')).toBeVisible();
-        await expect(page.getByRole('combobox', { name: 'Show first for item 1', exact: true })).toBeEnabled();
+        if (mode === 'manual') {
+          // A new expense opens as the quick form; it must fit too before itemising.
+          await expect(page.getByRole('textbox', { name: 'Amount', exact: true })).toBeVisible();
+          await fits(page);
+          await page.getByRole('button', { name: 'Split by item', exact: true }).click();
+        }
+        if (receipt) await expect(page.getByRole('combobox', { name: 'Show first for item 1', exact: true })).toBeEnabled();
+        // Typed lines with no language evidence keep one canonical name field.
+        else await expect(page.locator('.item').first().locator('.item-bilingual-names input')).toHaveCount(1);
         if (receipt) {
           await expect(page.getByRole('textbox', { name: 'Item 1 English name', exact: true })).toHaveValue(translatedName);
           await expect(page.getByRole('button', { name: 'Translate item 2 English name', exact: true })).toBeEnabled();
@@ -214,7 +222,7 @@ test.describe('320px amount field', () => {
     await fixtures(page);
     await page.goto('/expenses');
     await page.getByRole('button', { name: 'Add expense', exact: true }).click();
-    const amount = page.getByRole('textbox', { name: 'Item 1 total', exact: true });
+    const amount = page.getByRole('textbox', { name: 'Amount', exact: true });
     await amount.fill('1000000.00');
     await amount.blur();
     await expect(amount).toHaveValue('1000000.00');

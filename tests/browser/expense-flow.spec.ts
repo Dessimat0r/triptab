@@ -65,7 +65,7 @@ test('a scanned foreign receipt fetches its rate, splits in one tap and stays ti
   await expect(page.locator('.expense-more-options')).not.toHaveAttribute('open', '');
   await expect(page.locator('.purchase-details')).toHaveCount(1);
   await expect(page.locator('.purchase-details-summary')).toContainText('Gary paid');
-  await page.getByRole('button', { name: 'Split between both of us' }).click();
+  await page.getByRole('button', { name: 'Share the remaining item equally' }).click();
   await expect(page.locator('.quick-split')).toHaveCount(0);
   await expect(page.locator('.ready-to-save')).toContainText('Ready to save');
   await expect(page.locator('.receipt-proposal')).toHaveCount(0);
