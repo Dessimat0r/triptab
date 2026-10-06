@@ -184,13 +184,16 @@ function Amount({
   );
 }
 /**
- * What a person has entered in the editor, for "unsaved changes" checks.
- * An automatically looked-up reference rate is not their work; a manual
- * rate is.
+ * What a person has entered or confirmed in the editor, for "unsaved
+ * changes" checks: values, the attached photo (removing it applies on Save),
+ * printed receipt evidence and review acknowledgements, and confirmed field
+ * sources. An automatically looked-up reference rate is not their work; a
+ * manual rate is.
  */
-function editorWorkValue(entry: Pick<ReceiptEditor, "title" | "payer" | "currency" | "items" | "tax" | "tip" | "discount" | "percentages" | "bankAmount" | "fx" | "date" | "time" | "timezone" | "location" | "icon">) {
-  const { title, payer, currency, items, tax, tip, discount, percentages, bankAmount, fx, date, time, timezone, location, icon } = entry;
-  return canonicalJson({ title, payer, currency, items, tax, tip, discount, percentages, bankAmount, fx: fx?.source === "manual" ? fx : undefined, date, time, timezone, location, icon });
+type EditorWork = Pick<ReceiptEditor, "title" | "payer" | "currency" | "items" | "tax" | "tip" | "discount" | "percentages" | "bankAmount" | "fx" | "date" | "time" | "timezone" | "location" | "icon" | "receiptId" | "receiptScan" | "fieldSources">;
+function editorWorkValue(entry: EditorWork) {
+  const { title, payer, currency, items, tax, tip, discount, percentages, bankAmount, fx, date, time, timezone, location, icon, receiptId, receiptScan, fieldSources } = entry;
+  return canonicalJson({ title, payer, currency, items, tax, tip, discount, percentages, bankAmount, fx: fx?.source === "manual" ? fx : undefined, date, time, timezone, location, icon, receiptId, receiptScan, fieldSources });
 }
 /**
  * A manual expense with one line priced and shared equally (or by one
@@ -1439,8 +1442,10 @@ export default function Home({ children }: { children: ReactNode }) {
   // Unsaved work is measured against the editor as it was opened (or last
   // saved as a draft). A server proposal filling an untouched receipt draft
   // matches that draft, so it does not count as the person's unsaved work.
+  // Identity changes only when a different entry opens or a draft is saved;
+  // attaching or removing a photo is an edit, not a save.
   const editorSnapshot = useRef<{ key: string; value: string } | null>(null);
-  const editorIdentity = editing ? [editing.id, editing.draftId, editing.receiptId, editing.expenseId].join("|") : "";
+  const editorIdentity = editing ? [editing.id, editing.draftId, editing.expenseId].join("|") : "";
   useEffect(() => {
     editorSnapshot.current = editing ? { key: editorIdentity, value: editorWorkValue(editing) } : null;
     // Only a different entry (or a newly saved draft of it) takes a new snapshot.
@@ -1452,7 +1457,12 @@ export default function Home({ children }: { children: ReactNode }) {
     const snapshot = editorSnapshot.current, value = editorWorkValue(editing);
     if (!snapshot || snapshot.key !== editorIdentity || snapshot.value === value) return false;
     const stored = trip?.drafts.find(draft => draft.id === editing.draftId);
-    return !stored || editorWorkValue({ ...stored, date: stored.date ?? editing.date, time: stored.time ?? editing.time, timezone: stored.timezone ?? editing.timezone }) !== value;
+    if (!stored) return true;
+    // Opening a draft fills a missing date, time or zone with a default and
+    // marks it as such; compare the stored draft with those same fills.
+    const filled = (["date", "time", "timezone"] as const).filter(field => !stored[field] && editing.fieldSources?.[field] === "default");
+    return editorWorkValue({ ...stored, date: stored.date ?? editing.date, time: stored.time ?? editing.time, timezone: stored.timezone ?? editing.timezone,
+      fieldSources: filled.length ? { ...stored.fieldSources, ...Object.fromEntries(filled.map(field => [field, "default" as const])) } : stored.fieldSources }) !== value;
   }, [editing, editorIdentity, captureNotes, trip]);
   useEffect(() => {
     if (!editorDirty) return;
@@ -1475,6 +1485,9 @@ export default function Home({ children }: { children: ReactNode }) {
   // The saved confirmation belongs to the list view; opening a form retires it.
   if (editing && savedNotice) setSavedNotice(null);
   const quickMode = !!editing && editorMode?.id === editing.id && editorMode.quick && quickEligible(editing);
+  // Once shown (asked for, or holding a value), adjustments stay open for this
+  // entry, so clearing a tip to retype it never hides the field being edited.
+  if (editing && adjustmentsFor !== editing.id && (!!editing.tax || !!editing.tip || !!editing.discount)) setAdjustmentsFor(editing.id);
   const adjustmentsShown = !!editing && (adjustmentsFor === editing.id || !!editing.tax || !!editing.tip || !!editing.discount);
   function itemiseEditor(focus: "name" | "split") {
     if (!editing) return;

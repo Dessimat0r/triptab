@@ -14,10 +14,10 @@ const trip = {
 
 type Posted = { data: { trips: typeof trip[] } };
 
-async function fixtures(page: Page, options: { holdRate?: () => Promise<void> } = {}) {
+async function fixtures(page: Page, options: { holdRate?: () => Promise<void>; trip?: typeof trip } = {}) {
   const posted: Posted[] = [];
   let revision = 1;
-  let current = structuredClone(trip);
+  let current = structuredClone(options.trip ?? trip);
   await page.route('**/api/**', async route => {
     const path = new URL(route.request().url()).pathname;
     if (path === '/api/ledger' && route.request().method() === 'POST') {
@@ -26,6 +26,8 @@ async function fixtures(page: Page, options: { holdRate?: () => Promise<void> } 
       current = body.data.trips[0];
       return route.fulfill({ json: { data: body.data, revision: ++revision }, headers: { 'X-TripTab-Account': 'quick-owner' } });
     }
+    if (path === '/api/receipt') return route.fulfill({ contentType: 'image/svg+xml',
+      body: '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="900"><rect width="400" height="900" fill="white"/></svg>' });
     if (path === '/api/fx') {
       await options.holdRate?.();
       return route.fulfill({ json: { rate: 0.86, asOf: '2026-10-05' } });
@@ -224,4 +226,75 @@ test('an existing single-line expense reopens in the quick form', async ({ page 
   await expect(page.getByRole('heading', { name: 'Edit expense', exact: true })).toBeVisible();
   await expect(page.getByRole('textbox', { name: 'Amount', exact: true })).toHaveValue('4.00');
   await expect(page.locator('.receipt-view-switch')).toHaveCount(1);
+});
+
+// Unsaved-work detection must follow what the person changed, not which
+// photo or draft the editor happens to point at.
+const receiptExpense = {
+  id: 'quick-receipt', title: 'Café Central', date: '2026-10-05', time: '13:42', timezone: 'Europe/Vienna',
+  currency: 'GBP', payer: 'quick-gary', tax: 0, tip: 0, discount: 0, receiptId: 'quick-photo',
+  items: [{ id: 'quick-melange', name: 'Melange', amount: 520, members: ['quick-gary', 'quick-sam'] }],
+};
+
+async function expectDiscardPrompt(page: Page) {
+  await page.getByRole('button', { name: 'Close editor', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Discard unsaved changes?' });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('button', { name: 'Keep editing', exact: true }).click();
+  await expect(page.locator('.editor')).toBeVisible();
+}
+
+test('removing a photo keeps earlier unsaved edits guarded', async ({ page }) => {
+  await fixtures(page, { trip: { ...trip, expenses: [receiptExpense, ...trip.expenses] } });
+  await page.goto('/expenses', { waitUntil: 'domcontentloaded' });
+  await page.locator('.expense-open').first().click();
+  await expect(page.getByRole('heading', { name: 'Edit expense', exact: true })).toBeVisible();
+  await page.getByRole('textbox', { name: 'Expense name', exact: true }).fill('Café Central, corrected');
+  await page.getByRole('button', { name: 'Remove receipt image' }).click();
+  await page.getByRole('dialog', { name: 'Remove receipt image?' }).getByRole('button', { name: 'Remove image', exact: true }).click();
+  await expectDiscardPrompt(page);
+  await expect(page.getByRole('textbox', { name: 'Expense name', exact: true })).toHaveValue('Café Central, corrected');
+});
+
+test('removing a photo on its own counts as an unsaved change', async ({ page }) => {
+  await fixtures(page, { trip: { ...trip, expenses: [receiptExpense, ...trip.expenses] } });
+  await page.goto('/expenses', { waitUntil: 'domcontentloaded' });
+  await page.locator('.expense-open').first().click();
+  await page.getByRole('button', { name: 'Remove receipt image' }).click();
+  await page.getByRole('dialog', { name: 'Remove receipt image?' }).getByRole('button', { name: 'Remove image', exact: true }).click();
+  await expectDiscardPrompt(page);
+});
+
+test('changing printed receipt evidence counts as an unsaved change', async ({ page }) => {
+  const scanned = { ...trip, drafts: [{
+    id: 'quick-draft', receiptId: 'quick-photo', title: 'Café Central', status: 'review', currency: 'EUR',
+    date: '2026-10-05', time: '13:42', timezone: 'Europe/Vienna', payer: 'quick-gary', tax: 0, tip: 0, discount: 0,
+    fieldSources: { title: 'receipt', currency: 'receipt', date: 'receipt', time: 'receipt' },
+    items: [{ id: 'quick-melange', name: 'Melange', amount: 520, members: ['quick-gary'] }],
+    receiptScan: { version: 1, printedTotal: 520, printedCurrency: 'EUR', status: 'matched', warnings: [] },
+  }] };
+  await fixtures(page, { trip: scanned as unknown as typeof trip });
+  await page.goto('/expenses?receiptDraft=quick-draft&receiptTrip=quick-trip', { waitUntil: 'domcontentloaded' });
+  await expect(page.locator('.editor')).toBeVisible();
+  // Opening the receipt alone is not unsaved work.
+  await page.getByRole('button', { name: 'Close editor', exact: true }).click();
+  await expect(page.locator('.editor')).toHaveCount(0);
+  await page.goto('/expenses?receiptDraft=quick-draft&receiptTrip=quick-trip', { waitUntil: 'domcontentloaded' });
+  await page.getByText('Check or correct printed totals').click();
+  await page.getByRole('textbox', { name: 'Printed grand total', exact: true }).fill('6.20');
+  await expectDiscardPrompt(page);
+});
+
+test('clearing the only adjustment keeps its field open and focused', async ({ page }) => {
+  const tipped = { ...trip, expenses: [{ ...trip.expenses[0], tip: 200 }] };
+  await fixtures(page, { trip: tipped });
+  await page.goto('/expenses', { waitUntil: 'domcontentloaded' });
+  await page.locator('.expense-open').first().click();
+  const tip = page.getByRole('textbox', { name: 'tip', exact: true });
+  await expect(tip).toHaveValue('2.00');
+  await tip.fill('');
+  await expect(tip).toBeVisible();
+  await expect(tip).toBeFocused();
+  await tip.pressSequentially('1.50');
+  await expect(tip).toHaveValue('1.50');
 });
