@@ -3126,30 +3126,6 @@ footer {
   outline: 3px solid var(--primary);
   outline-offset: 3px;
 }
-.pwa-update-banner {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 14px 16px;
-  margin-bottom: 22px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface-raised, #edf0ff);
-  font-size: 0.875rem;
-  line-height: 1.6;
-  overflow-wrap: anywhere;
-}
-.pwa-update-banner > div {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px 16px;
-}
-.pwa-update-banner .quiet {
-  white-space: normal;
-}
 @media (max-width: 480px) {
   /* A second row keeps the amount and removal target readable at 320 px. */
   .item-top {

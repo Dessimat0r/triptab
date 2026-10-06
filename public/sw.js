@@ -1,4 +1,4 @@
-const CACHE_NAME = 'triptab-public-v4';
+const CACHE_NAME = 'triptab-public-v5';
 const OFFLINE_URL = '/offline.html';
 const PUBLIC_ASSETS = [
   OFFLINE_URL,
@@ -10,11 +10,13 @@ const PUBLIC_ASSETS = [
 ];
 
 self.addEventListener('install', (event) => {
-  // Updates stay waiting until a traveller explicitly requests activation.
-  // Never reload an open expense editor automatically.
-  event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(PUBLIC_ASSETS)),
-  );
+  // Only public icons and the offline screen are cached. Activate silently
+  // after those assets are ready; open pages and their unsaved forms stay put.
+  event.waitUntil((async () => {
+    const cache = await caches.open(CACHE_NAME);
+    await cache.addAll(PUBLIC_ASSETS);
+    await self.skipWaiting();
+  })());
 });
 
 self.addEventListener('activate', (event) => {

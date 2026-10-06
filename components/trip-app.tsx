@@ -29,7 +29,7 @@ import { TripReceiptLanguage, ReceiptLanguageSelect } from "@/components/receipt
 import ReceiptItemNames, { TranslateMissingNames } from "@/components/receipt-item-names";
 import type { ReceiptLanguage } from "@/lib/receipt-languages";
 import DataExport from "@/components/data-export";
-import { PwaUpdatePrompt } from "@/components/pwa-controls";
+import { PwaUpdates } from "@/components/pwa-controls";
 import { dispatchLiveRefresh, useLiveRefresh } from "@/components/use-live-refresh";
 import { localDate, localTime } from "@/lib/dates";
 import { equalFinancialValue, equalSavedValue, hasNewMatchingPayment, rebaseLedger } from "@/lib/client-ledger";
@@ -251,7 +251,7 @@ export default function Home({ children }: { children: ReactNode }) {
     document.addEventListener("visibilitychange", visibility);
     return () => { active = false; window.removeEventListener("triptab:receipt-ai-settings", refresh); window.removeEventListener("focus", refresh); document.removeEventListener("visibilitychange", visibility); };
   }, [profile?.id]);
-  const { confirm, dialog: confirmationDialog, confirming } = useConfirmation(`${trip?.id || ""}:${profile?.id || ""}`);
+  const { confirm, dialog: confirmationDialog } = useConfirmation(`${trip?.id || ""}:${profile?.id || ""}`);
   const load = useCallback(async (options?: { background?: boolean; fresh?: boolean }) => {
     const pending = inFlightLoad.current;
     // Background refreshes share the active request. A foreground action starts
@@ -1730,7 +1730,7 @@ export default function Home({ children }: { children: ReactNode }) {
               here. Reconnect before saving.
             </p>
           )}
-          <PwaUpdatePrompt canUpdate={!editing && !paymentEditor && !create && !account && !linkRequested && !confirming && !saving && !uploading && view !== "settings"} />
+          <PwaUpdates />
           {invite && (
             <JoinTrip
               key={`${profile?.id || "anonymous"}:${invite}`}
