@@ -253,6 +253,8 @@ function updateDescription(event: NotificationChange): { title: string; summary:
     add('the transaction time', 'Expense time changed', ['time', 'timezone']);
     add('the receipt image', 'Receipt image changed', ['receiptId']);
     add('the receipt language', 'Receipt language changed', ['receiptLanguage', 'detectedLanguage']);
+    add('the purchase place', 'Receipt place changed', ['location']);
+    add('the device location hint', 'Receipt location hint changed', ['locationHint']);
     add('receipt notes or aliases', 'Receipt notes updated', ['memory']);
     add('the expense name or icon', 'Expense details changed', ['title', 'icon']);
     if (canonicalJson(conversation(before.conversation)) !== canonicalJson(conversation(after.conversation))) {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useState, type ChangeEvent } from "react";
+import { useId, useState, type ChangeEvent, type ReactNode } from "react";
 import { Camera, Check, Copy, ExternalLink, ImagePlus, RefreshCw, Trash2 } from "lucide-react";
 import { receiptImageQualityWarnings, sampleReceiptImageContrast, type ReceiptImageQualityWarning } from "@/lib/receipt-image-quality";
 
@@ -83,6 +83,7 @@ export async function prepareReceiptImage(file: File, onQualityWarnings?: (warni
 
 export type ReceiptCaptureProps = {
   receiptId?: string;
+  contextFields?: ReactNode;
   busy: boolean;
   stored: boolean;
   copied: boolean;
@@ -118,6 +119,7 @@ export type ReceiptCaptureProps = {
 
 export default function ReceiptCapture({
   receiptId,
+  contextFields,
   busy,
   stored,
   copied,
@@ -227,7 +229,7 @@ export default function ReceiptCapture({
   return (
     <section className="receipt-capture" aria-labelledby={titleId} aria-busy={locked}>
       <h3 id={titleId}>Receipt image</h3>
-      <p className="receipt-capture-hint">ChatGPT identity: {connected ? "linked" : "not linked"}. External TripTab tools: availability unknown. Enable them in the ChatGPT or Codex conversation you use; linking an identity does not enable those tools.</p>
+      {!aiConnected && <p className="receipt-capture-hint">Upload a photo or enter items yourself. Connected ChatGPT tools are also available when enabled in your conversation.</p>}
       <div className="receipt-capture-status" role="status" aria-live="polite" aria-atomic="true">
         {locked ? <p>{processing ? readingText : (preparing ? "Preparing receipt photo…" : "Please wait…")}</p> : (receiptUrl || prompt) && (
           <>
@@ -240,6 +242,7 @@ export default function ReceiptCapture({
           </>
         )}
       </div>
+      {contextFields}
       <div className="receipt-capture-inputs">
         <label
           htmlFor={cameraId}
@@ -313,6 +316,7 @@ export default function ReceiptCapture({
           {!ready && !itemized && receiptUrl && automaticAvailable && aiProvider === "siwc" && !aiConnected && onConnectPlan && <button type="button" className="primary" disabled={locked} onClick={onConnectPlan}>
             Connect ChatGPT plan
           </button>}
+          <details className="receipt-capture-tools" open={!aiConnected}><summary>Connected ChatGPT tools</summary><div className="receipt-capture-tool-actions">
           {!ready && !itemized && connected && stored && prompt && chatgptUrl && (
             locked ? <button type="button" className={aiConfigured ? "quiet" : "primary"} disabled>
               <ExternalLink size={17} aria-hidden="true" /> Open ChatGPT
@@ -327,6 +331,7 @@ export default function ReceiptCapture({
             {copied ? <Check size={17} aria-hidden="true" /> : <Copy size={17} aria-hidden="true" />}
             {prompt ? "Copy receipt request" : "Prepare receipt request"}
           </button>
+          </div></details>
           {refreshError && !offline && <button type="button" className="quiet" disabled={locked} onClick={onRefresh}>
             <RefreshCw size={17} aria-hidden="true" />
             Retry updates
@@ -334,7 +339,7 @@ export default function ReceiptCapture({
         </div>
       )}
       {stored && <p className="receipt-chat-note" role="status">{offline ? "You’re offline. Receipt updates resume when you reconnect." : refreshError ? "Unable to refresh receipt updates. We’ll keep trying automatically." : "Processed items and replies appear automatically while this receipt is open."}</p>}
-      {prompt && <details className="receipt-capture-prompt" open>
+      {prompt && <details className="receipt-capture-prompt" open={!aiConnected}>
         <summary>Request to send in ChatGPT</summary>
         <p>{handoffNeedsPaste
           ? "This request is too long to prefill reliably. Copy the complete text below, open ChatGPT, then paste and send it with TripTab enabled."

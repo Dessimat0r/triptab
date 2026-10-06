@@ -5,19 +5,20 @@ import { bucket, db, ensureProfile, failure, readBoundedBody, readLedger, receip
 import { getReceiptAIAccess, ReceiptAIAccessError, type ReceiptAIEnvironment } from '@/lib/receipt-ai-access';
 import { applyReceiptTranscription, consumeReceiptProcessBudget, processReceiptImage, ReceiptAIError } from '@/lib/receipt-ai';
 import { readTripLanguagePreferences } from '@/lib/trip-language-preferences';
+import { processReceiptQuestion, applyReceiptQuestion } from '@/lib/receipt-assistant';
 
 export const dynamic = 'force-dynamic';
 const id = z.string().min(1).max(100);
-const requestSchema = z.object({ tripId: id, draftId: id, receiptId: id.regex(/^[-a-z0-9]+$/i),
+const requestSchema = z.object({ tripId: id, draftId: id, receiptId: id.regex(/^[-a-z0-9]+$/i).optional(),
   // Cached clients may still send this global counter. Only the required draft
   // fingerprint fences inference; this compatibility value never decides it.
   revision: z.number().int().min(0).optional(), draftHash: z.string().regex(/^[a-f0-9]{64}$/),
   questionId: id.optional(), readPurchaseDetails: z.boolean().optional() }).strict();
-type Operation = { attemptId: string; tripId: string; draftId: string; receiptId: string };
+type Operation = { attemptId: string; tripId: string; draftId: string; receiptId?: string };
 function logOperation(event: string, operation: Operation, details: Record<string, string | number | undefined> = {}) {
   // Legacy/imported IDs can contain user text. Keep operational tokens only;
   // receipt contents, account emails and provider secrets never enter logs.
-  const ids = Object.fromEntries(Object.entries(operation).filter(([, value]) => /^[-a-zA-Z0-9_]{1,100}$/.test(value)));
+  const ids = Object.fromEntries(Object.entries(operation).filter(([, value]) => typeof value === 'string' && /^[-a-zA-Z0-9_]{1,100}$/.test(value)));
   console.info('TripTab receipt operation', { event, ...ids, ...details });
 }
 
@@ -35,22 +36,28 @@ export async function POST(request: Request) {
     const parsed = requestSchema.safeParse(body);
     if (!parsed.success) throw new RequestError('Reload TripTab and open the saved receipt again before processing it. A current receipt fingerprint is required.');
     const values = parsed.data;
-    if (values.questionId) throw new RequestError('Use your connected ChatGPT tools to answer receipt questions or change item shares. This action only transcribes the receipt image.');
     const ledger = await readLedger(profile.id);
     const trip = ledger.data.trips.find(value => value.id === values.tripId);
     const draft = trip?.drafts.find(value => value.id === values.draftId);
     if (!trip || !draft) throw new RequestError('Receipt draft not found in your holidays.', 404);
     if (await sha256Hex(canonicalJson(draft)) !== values.draftHash) throw new RequestError('This receipt changed. Refresh before processing it.', 409);
     if (draft.receiptId !== values.receiptId) throw new RequestError('This receipt changed. Refresh before processing it.', 409);
+    if (values.questionId && !draft.conversation?.some(message=>message.id===values.questionId&&message.role==='user')) throw new RequestError('Choose a saved question from this receipt.');
+    if (values.questionId && draft.conversation?.some(message=>message.replyTo===values.questionId&&message.role==='assistant')) return Response.json({...ledger,draft},{headers:{'Cache-Control':'private, no-store'}});
     if ((draft.conversation?.length ?? 0) >= 100) throw new RequestError('This receipt conversation has reached its limit of 100 messages.');
-    const access = await receiptAccess(profile.id, values.receiptId);
-    if (!access || access.tripId !== trip.id) throw new RequestError('This receipt image is unavailable.', 404);
-    const object = await bucket().get(receiptKey(access.owner, values.receiptId));
-    const mimeType = object?.httpMetadata?.contentType;
-    if (!object || !mimeType || !['image/jpeg', 'image/png', 'image/webp'].includes(mimeType)) throw new RequestError('This receipt image is unavailable.', 404);
-    if (object.size > 5 * 1024 * 1024) throw new RequestError('Use a receipt image no larger than 5 MB.', 413);
-    const image = new Uint8Array(await object.arrayBuffer());
-    if (!image.length || image.byteLength > 5 * 1024 * 1024) throw new RequestError('Use a receipt image no larger than 5 MB.', 413);
+    let imageData: {bytes:Uint8Array;mimeType:string;owner:string;version:string;size:number}|undefined;
+    if (!values.questionId) {
+      if(!values.receiptId)throw new RequestError('Save a receipt photo before reading it.');
+      const access = await receiptAccess(profile.id, values.receiptId);
+      if (!access || access.tripId !== trip.id) throw new RequestError('This receipt image is unavailable.', 404);
+      const object = await bucket().get(receiptKey(access.owner, values.receiptId));
+      const mimeType = object?.httpMetadata?.contentType;
+      if (!object || !mimeType || !['image/jpeg', 'image/png', 'image/webp'].includes(mimeType)) throw new RequestError('This receipt image is unavailable.', 404);
+      if (object.size > 5 * 1024 * 1024) throw new RequestError('Use a receipt image no larger than 5 MB.', 413);
+      const bytes = new Uint8Array(await object.arrayBuffer());
+      if (!bytes.length || bytes.byteLength > 5 * 1024 * 1024) throw new RequestError('Use a receipt image no larger than 5 MB.', 413);
+      imageData={bytes,mimeType,owner:access.owner,version:object.version,size:object.size};
+    }
     const signal = AbortSignal.any([request.signal, AbortSignal.timeout(90_000)]);
     const database = db();
     const {preferences:{readingLanguage}} = await readTripLanguagePreferences(database,profile.id,trip.id);
@@ -58,10 +65,9 @@ export async function POST(request: Request) {
     await consumeReceiptProcessBudget(database, profile.id, { provider: connection.provider });
     operation = { attemptId: crypto.randomUUID(), tripId: trip.id, draftId: draft.id, receiptId: values.receiptId };
     logOperation('native-processing-started', operation, { provider: connection.provider });
-    const transcription = await processReceiptImage({
-      ...connection, trip, draft, readingLanguage, callerMemberId: trip.members.find(member => member.userId === profile.id)?.id ?? null,
-      questionId: values.questionId, image: { bytes: image, mimeType },
-    }, { signal });
+    const context={...connection,trip,draft,readingLanguage,callerMemberId:trip.members.find(member=>member.userId===profile.id)?.id??null};
+    const answer = values.questionId ? await processReceiptQuestion({...context,questionId:values.questionId},{signal}) : undefined;
+    const transcription = imageData ? await processReceiptImage({...context,image:imageData},{signal}) : undefined;
     // An unrelated ledger edit does not invalidate a paid transcription. Rebase
     // only onto an unchanged source draft and member context, always retaining
     // the latest other entries. Every CAS retry repeats the access checks;
@@ -72,22 +78,22 @@ export async function POST(request: Request) {
       const latest = await readLedger(profile.id);
       const currentTrip = latest.data.trips.find(value => value.id === trip.id);
       const currentDraft = currentTrip?.drafts.find(value => value.id === draft.id);
-      const currentAccess = await receiptAccess(profile.id, values.receiptId);
+      const currentAccess = imageData && values.receiptId ? await receiptAccess(profile.id, values.receiptId) : undefined;
       if (!currentTrip || !currentDraft || JSON.stringify(currentDraft) !== JSON.stringify(draft)
         || currentTrip.ownerId !== trip.ownerId || currentTrip.receiptLanguage !== trip.receiptLanguage || JSON.stringify(currentTrip.members) !== JSON.stringify(trip.members)
-        || !currentAccess || currentAccess.tripId !== trip.id || currentAccess.owner !== access.owner) {
+        || imageData && (!currentAccess || currentAccess.tripId !== trip.id || currentAccess.owner !== imageData.owner)) {
         throw new RequestError('This receipt changed during processing. Refresh before trying again.', 409);
       }
-      const currentImage = await bucket().head(receiptKey(access.owner, values.receiptId));
-      if (!currentImage || currentImage.version !== object.version || currentImage.size !== object.size
-        || currentImage.httpMetadata?.contentType !== mimeType) {
-        throw new RequestError('This receipt image changed during processing. Refresh before trying again.', 409);
+      if(imageData && values.receiptId) {
+        const currentImage = await bucket().head(receiptKey(imageData.owner, values.receiptId));
+        if (!currentImage || currentImage.version !== imageData.version || currentImage.size !== imageData.size
+          || currentImage.httpMetadata?.contentType !== imageData.mimeType) throw new RequestError('This receipt image changed during processing. Refresh before trying again.', 409);
       }
       const tripSnapshot = structuredClone(currentTrip);
-      const proposal = applyReceiptTranscription(currentTrip, currentDraft, transcription, undefined, {
+      const proposal = answer && values.questionId ? applyReceiptQuestion(currentTrip,currentDraft,answer,values.questionId) : applyReceiptTranscription(currentTrip, currentDraft, transcription!, undefined, {
         readingLanguage, readPurchaseDetails: values.readPurchaseDetails, attemptId: operation.attemptId,
         processedAt: new Date().toISOString(), processor: connection.provider === 'api' ? 'native-api' : 'native-siwc',
-        imageIds: [values.receiptId],
+        imageIds: values.receiptId ? [values.receiptId] : [],
       });
       currentTrip.drafts[currentTrip.drafts.findIndex(value => value.id === proposal.id)] = proposal;
       try {

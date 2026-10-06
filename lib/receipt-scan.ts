@@ -19,6 +19,7 @@ export const itemFieldSourcesSchema = z.object({
   name: source.optional(), amount: source.optional(), quantity: source.optional(),
 }).strict();
 export const fieldSourcesSchema = z.object({
+  location: source.optional(),
   title: source.optional(), currency: source.optional(), date: source.optional(), time: source.optional(),
   timezone: z.enum(['default', 'ai', 'user']).optional(), payer: z.enum(['default', 'ai', 'user']).optional(),
   tax: source.optional(), tip: source.optional(), discount: source.optional(),

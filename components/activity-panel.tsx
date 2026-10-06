@@ -305,6 +305,15 @@ function changes(event: ActivityEvent, currency: Currency | undefined, names: Re
   for (const [key, label] of Object.entries({ name: "Name", title: "Title", currency: "Currency", date: "Transaction date", startDate: "Start date", endDate: "End date", time: "Transaction time", timezone: "Transaction timezone", method: "Payment method", note: "Note", email: "Traveller email" })) add(key, label);
   add("receiptLanguage", "Receipt language setting", languageName);
   add("detectedLanguage", "Detected receipt language", languageName);
+  add("location", "Purchase place", value => {
+    const place = auditRecord(value);
+    const origin = { user: "Entered manually", receipt: "Read from receipt", chat: "From receipt conversation" }[auditText(place?.source)];
+    return place ? `${auditText(place.label)}${origin ? `\n${origin}` : ""}` : "Not recorded";
+  });
+  add("locationHint", "Device location hint", value => {
+    const hint = auditRecord(value);
+    return hint ? `Latitude: ${hint.latitude}\nLongitude: ${hint.longitude}\nAccuracy: ${hint.accuracy} metres\nCaptured: ${auditTimestamp(hint.capturedAt, true)}\nHint only; not a confirmed purchase place` : "Not recorded";
+  });
   handled.add("languageViewId");
   add("source", "Entry source", value => value === "ai" ? "AI assisted" : value === "manual" ? "Entered manually" : readable(value));
   add("icon", "Icon & background", value => {

@@ -32,7 +32,8 @@ findPanel(syntax);
 assert(panelKeys.length);
 const controllerSource = `return function controller(fetch) {
   let ledger = {trips: []}, revision = 0, activityRefreshKey = 0, loading = false, error = '', refreshError = '', auth = false, profile = {id: 'current-account'};
-  let editing = {id:'private-receipt'}, receiptAI = {connected:true}, receiptResets = 0;
+  let editing = {id:'private-receipt'}, receiptAI = {connected:true}, receiptResets = 0, captureNotes='Private upload guidance',uploadOpen=true;
+  const setCaptureNotes=next=>{captureNotes=next},setUploadOpen=next=>{uploadOpen=next};
   const receiptSessionScope = {current:{accountId:'current-account'}}, profileReadRequest = {current:0}, activeProfile = {current:profile};
   const signals = [], dispatchLiveRefresh = accountId => {signals.push(accountId)}, setPaymentEditor = () => {};
   const profileRefreshes = [], initialProfileRead = {current:accountId=>{profileRefreshes.push(accountId);}};
@@ -43,11 +44,11 @@ const controllerSource = `return function controller(fetch) {
   const resetReceiptReview = () => {receiptResets++}, setEditing = next => {editing=next}, setReceiptAI = next => {receiptAI=next};
   ${callbacks}
   ${accountAuthenticated.getText(syntax)}
-  return {load,applySnapshot,accountAuthenticated,setError,get revision(){return revision},get ledger(){return ledger},get refreshKey(){return ${panelKeys[0]}},get panelKeys(){return [${panelKeys.join(',')}]},get loading(){return loading},get error(){return error},get refreshError(){return refreshError},get auth(){return auth},get profile(){return profile},get editing(){return editing},get receiptAI(){return receiptAI},get receiptResets(){return receiptResets},get signals(){return signals},get profileRefreshes(){return profileRefreshes}};
+  return {load,applySnapshot,accountAuthenticated,setError,get revision(){return revision},get ledger(){return ledger},get refreshKey(){return ${panelKeys[0]}},get panelKeys(){return [${panelKeys.join(',')}]},get loading(){return loading},get error(){return error},get refreshError(){return refreshError},get auth(){return auth},get profile(){return profile},get editing(){return editing},get receiptAI(){return receiptAI},get receiptResets(){return receiptResets},get captureNotes(){return captureNotes},get uploadOpen(){return uploadOpen},get signals(){return signals},get profileRefreshes(){return profileRefreshes}};
 }`;
 const compiled = transpileModule(controllerSource, { compilerOptions: { module: ModuleKind.CommonJS, target: ScriptTarget.ES2022 } }).outputText;
 type Snapshot = {data: Ledger; revision: number};
-type Controller = {load(options?: {background?: boolean;fresh?:boolean}): Promise<unknown>; applySnapshot(snapshot: Snapshot, etag?: string, invalidateRefresh?: boolean): boolean; accountAuthenticated(profile: object): Promise<void>; setError(message: string): void; revision: number; ledger: Ledger; refreshKey: string | number; panelKeys: (string | number)[]; loading: boolean; error: string; refreshError:string; auth: boolean; profile: {id: string} | null; editing:object|null;receiptAI:object|null;receiptResets:number;signals:string[];profileRefreshes:string[]};
+type Controller = {load(options?: {background?: boolean;fresh?:boolean}): Promise<unknown>; applySnapshot(snapshot: Snapshot, etag?: string, invalidateRefresh?: boolean): boolean; accountAuthenticated(profile: object): Promise<void>; setError(message: string): void; revision: number; ledger: Ledger; refreshKey: string | number; panelKeys: (string | number)[]; loading: boolean; error: string; refreshError:string; auth: boolean; profile: {id: string} | null; editing:object|null;receiptAI:object|null;receiptResets:number;captureNotes:string;uploadOpen:boolean;signals:string[];profileRefreshes:string[]};
 const controller = new Function(compiled)() as (fetch: (url: string, options: RequestInit) => Promise<Response>) => Controller;
 
 test('an invitation event refreshes the History panel with no ledger revision change', async () => {
@@ -198,6 +199,7 @@ test('account authentication starts its own refresh epoch and never reuses the p
   assert.equal(requests, 3);
   assert.equal(editor.receiptResets,1,'the account transition invalidates outstanding receipt work');
   assert.equal(editor.editing,null);assert.equal(editor.receiptAI,null,'AI access belongs to the account that loaded it');
+  assert.equal(editor.captureNotes,'');assert.equal(editor.uploadOpen,false,'upload guidance belongs to the account that typed it');
 });
 
 test('a foreground financial action starts a fresh read after an earlier background snapshot', async () => {

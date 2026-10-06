@@ -17,7 +17,7 @@ const pageSource = await readFile(new URL('../components/trip-app.tsx', import.m
 const syntax = createSourceFile('page.tsx', pageSource, ScriptTarget.Latest, true, ScriptKind.TSX);
 const home = syntax.statements.find(statement => isFunctionDeclaration(statement) && statement.name?.text === 'Home');
 assert(home && isFunctionDeclaration(home) && home.body);
-const names = ['openExpense', 'openDraft', 'newExpense', 'keepExpenseEdits', 'editorIsCurrent', 'resetReceiptReview', 'closeReceiptEditor', 'isReceiptSessionCurrent', 'stageEditorReceiptPrompt', 'refreshReceiptAIStatus', 'prepareEditorReceipt', 'copyEditorReceiptPrompt', 'captureEditorReceipt', 'upload', 'processEditorReceipt', 'readEditorReceipt', 'sendReceiptQuestion', 'reconcileEditorReceipt', 'storeEditorReceipt', 'submitExpense', 'reviewProcessedReceipt', 'reviewRestore'];
+const names = ['openExpense', 'openDraft', 'newExpense', 'keepExpenseEdits', 'editorIsCurrent', 'resetReceiptReview', 'closeReceiptEditor', 'isReceiptSessionCurrent', 'stageEditorReceiptPrompt', 'refreshReceiptAIStatus', 'prepareEditorReceipt', 'copyEditorReceiptPrompt', 'captureEditorReceipt', 'upload', 'processEditorReceipt', 'readEditorReceipt', 'sendReceiptQuestion', 'retryReceiptQuestion', 'setEditorPlace', 'reconcileEditorReceipt', 'storeEditorReceipt', 'submitExpense', 'reviewProcessedReceipt', 'reviewRestore'];
 const declarations = [...syntax.statements, ...home.body.statements].filter(isFunctionDeclaration);
 const handlers = ['mergeReceiptConversation', 'hasPendingReceiptQuestions', ...names].map(name => {
   const declaration = declarations.find(statement => statement.name?.text === name);
@@ -27,7 +27,8 @@ const handlers = ['mergeReceiptConversation', 'hasPendingReceiptQuestions', ...n
 const controllerSource = `return function createController(initial, boundary) {
   let trip = structuredClone(initial), editing = null, processedReceipt = null, error = '', editorConflict = null;
   let receiptPending = false, receiptCopied = false, receiptPrompt = '', receiptHistoryOpen = false, restoration = null;
-  let paste = '', fxError = '', referenceRate = null;
+  let paste = '', fxError = '', referenceRate = null,captureNotes='',uploadOpen=false;
+  const setCaptureNotes=next=>{captureNotes=next},setUploadOpen=next=>{uploadOpen=next};
   let uploading = false, receiptProcessing = false, receiptItemized = false, receiptHandoffError = '', receiptHandoffOpened = false, receiptAIConnecting = false;
   const saving = false, profile = {id:'owner'};
   let receiptAI = null, clipboardFailure = false, failSave = false, network, statusNetwork;
@@ -86,14 +87,14 @@ const controllerSource = `return function createController(initial, boundary) {
   return {${names.join(',')},get editing(){return editing},get trip(){return trip},get error(){return error},get updates(){return updates},get baseline(){return editorBaseline.current},get processed(){return processedReceipt},
     edit(next){editing={...editing,...next};activeReceiptEditor.current=editing},remote(next,revision=updates.length){trip=structuredClone(next);latestSnapshot.current={data:{trips:[trip]},revision}},
     get prompt(){return receiptPrompt},get handoffError(){return receiptHandoffError},get clipboard(){return clipboard},get requests(){return requests},get processing(){return receiptProcessing},get itemized(){return receiptItemized},get pending(){return receiptPending},get uploading(){return uploading},get connecting(){return receiptAIConnecting},
-    network(next){network=next},clipboardUnavailable(){clipboardFailure=true},persistenceFailure(){failSave=true},
+    network(next){network=next},clipboardUnavailable(){clipboardFailure=true},persistenceFailure(){failSave=true},persistenceRecovered(){failSave=false},
     aiConnected(){receiptAI={accountId:profile.id,configured:true,connected:true,provider:'api',eligible:true,manageable:true,siwcAvailable:false}},
     participantAccount(connected=true){profile.id='participant';receiptSessionScope.current.accountId='participant';receiptAI={accountId:'participant',configured:connected,connected,provider:'api',eligible:true,manageable:false,siwcAvailable:false}},
     statusNetwork(next){statusNetwork=next},deferAIState(){commitAIState=false},get ai(){return receiptAI},
     deferLayout(){commitLayout=false;activeReceiptEditor.current=null},get view(){return view},get help(){return help},
     accountSwitch(){receiptSession.current++;receiptSessionScope.current={accountId:'other',tripId:trip.id}},
     conflict(next){editorConflict={latest:next}},restoring(){restoration={actorName:'Earlier traveller',createdAt:'2026-10-04T00:00:00Z',adjustments:[]}},
-    get restoration(){return restoration}};
+    setNotes(next){captureNotes=next},get captureNotes(){return captureNotes},get restoration(){return restoration}};
 }`;
 const compiled = transpileModule(controllerSource, { compilerOptions: { module: ModuleKind.CommonJS, target: ScriptTarget.ES2022 } }).outputText;
 type Editing = ReceiptEditor;
@@ -104,13 +105,14 @@ type Controller = {
   submitExpense(event: { preventDefault(): void }): Promise<void>;
   reviewProcessedReceipt():void;
   closeReceiptEditor():void;prepareEditorReceipt():Promise<void>;captureEditorReceipt(file:File):Promise<void>;processEditorReceipt(draft?:Draft):Promise<boolean>;reconcileEditorReceipt(trip:Trip):void;
-  upload(file:File):Promise<void>;deferLayout():void;view:string;help:boolean;
-  sendReceiptQuestion(text:string,itemId?:string):Promise<boolean>;
+  upload(file:File,options?:{notes:string;location?:{label:string;source:'user'|'receipt'|'chat'};locationHint?:{latitude:number;longitude:number;accuracy:number;capturedAt:string}}):Promise<void>;deferLayout():void;view:string;help:boolean;
+  sendReceiptQuestion(text:string,itemId?:string):Promise<boolean>;retryReceiptQuestion(questionId:string):Promise<boolean>;setEditorPlace(place:{location?:{label:string;source:'user'|'receipt'|'chat'};locationHint?:{latitude:number;longitude:number;accuracy:number;capturedAt:string}}):void;
+  setNotes(text:string):void;captureNotes:string;
   reviewRestore(event: {tripId:string;entityType:string;entityId:string;actorName:string;createdAt:string;before:Expense}):Promise<void>;
   editing: Editing | null; trip: Trip; error: string; updates: Trip[]; baseline: { tripId: string; expense?: Expense } | null;
   processed: Draft | null; edit(next: Partial<Editing>): void; remote(next: Trip,revision?:number): void; conflict(next: Expense | null): void;
   uploading:boolean;connecting:boolean;refreshReceiptAIStatus(accountId:string,fresh?:boolean):Promise<unknown>;prompt:string;handoffError:string;clipboard:string[];requests:{url:string;options?:RequestInit}[];processing:boolean;itemized:boolean;pending:boolean;
-  network(next:(url:string,options?:RequestInit)=>Promise<unknown>):void;clipboardUnavailable():void;persistenceFailure():void;aiConnected():void;accountSwitch():void;
+  network(next:(url:string,options?:RequestInit)=>Promise<unknown>):void;clipboardUnavailable():void;persistenceFailure():void;persistenceRecovered():void;aiConnected():void;accountSwitch():void;
   participantAccount(connected?:boolean):void;statusNetwork(next:()=>Promise<unknown>):void;deferAIState():void;ai:{connected:boolean;accountId:string}|null;
   restoring(): void; restoration: unknown;
 };
@@ -486,13 +488,34 @@ test('native failures preserve the photo and draft with a retryable error instea
   assert.equal(editor.editing!.items.length,0);assert(editor.prompt.includes('new-photo')); assert.equal(editor.trip.expenses.length,0);
 });
 
-test('item share questions keep the full connected-tool handoff even when automatic receipt reading is configured', async () => {
+test('item share questions use configured native text processing with saved context and review-only changes', async () => {
   const initial=fixture(pending('review'));const editor=controller(initial);editor.openExpense(initial.expenses[0]);editor.aiConnected();
+  let savedQuestionId='';
+  editor.network(async(url,options)=>{
+    assert.equal(url,'/api/receipt/process');const args=JSON.parse(String(options?.body));
+    savedQuestionId=args.questionId;const saved=editor.trip.drafts.find(draft=>draft.id===args.draftId)!;
+    assert(saved.conversation!.some(message=>message.id===savedQuestionId&&message.itemId==='replacement-item'&&message.text.includes('Alice ate 2.5')));
+    assert.equal(args.draftHash,await sha256Hex(canonicalJson(saved)));assert.equal(args.readPurchaseDetails,false);
+    const next=structuredClone(editor.trip),proposal=next.drafts.find(draft=>draft.id===saved.id)!;
+    proposal.conversation!.push({id:'native-reply',role:'assistant',replyTo:savedQuestionId,itemId:'replacement-item',text:'Proposed the requested shares.',createdAt:stamp});
+    return response({data:{trips:[next]},revision:editor.updates.length+1});
+  });
   assert.equal(await editor.sendReceiptQuestion('Alice ate 2.5 bars and Bob ate 5. Set their item shares.','replacement-item'),true);
-  assert.equal(editor.requests.length,0,'the transcription-only endpoint cannot resolve split changes');
-  assert(editor.prompt.includes('reply_to_receipt_chat'));assert(editor.prompt.includes('replacement-item'));
-  assert(editor.prompt.includes('Alice ate 2.5 bars'));assert.equal(editor.clipboard.at(-1),editor.prompt);
+  assert.equal(editor.requests.length,1);assert.equal(editor.clipboard.length,0);assert.equal(editor.processing,false);
+  assert.equal(editor.trip.drafts.find(draft=>draft.id==='replacement-draft')!.conversation!.at(-1)!.replyTo,savedQuestionId);
   assert.equal(editor.trip.expenses[0].items[0].amount,1000,'asking is not posting financial changes');
+  assert.equal(await editor.retryReceiptQuestion(savedQuestionId),true);assert.equal(editor.requests.length,1,'an answered saved question cannot trigger another request');
+});
+
+test('native chat failure keeps the saved question available for retry without duplicating it', async () => {
+  const initial=fixture(pending('review'));const editor=controller(initial);editor.openExpense(initial.expenses[0]);editor.aiConnected();
+  editor.network(async()=>response({error:'OpenAI is temporarily unavailable.'},false));
+  assert.equal(await editor.sendReceiptQuestion('Gaz had this drink.','replacement-item'),true);
+  assert.match(editor.handoffError,/temporarily unavailable/);assert.equal(editor.processing,false);assert.equal(editor.clipboard.length,0);
+  const saved=editor.trip.drafts.find(draft=>draft.id==='replacement-draft')!,id=saved.conversation!.at(-1)!.id,count=saved.conversation!.length;
+  assert.equal(await editor.retryReceiptQuestion(id),false);
+  assert.equal(editor.trip.drafts.find(draft=>draft.id===saved.id)!.conversation!.length,count);
+  const args=editor.requests.map(request=>JSON.parse(String(request.options?.body)));assert.equal(args[0].questionId,args[1].questionId);
 });
 
 test('a remotely changed receipt image or review target cannot be consumed by a stale editor save', async context => {
@@ -713,4 +736,35 @@ test('explicit confirmation of the same original currency keeps bank amount and 
   assert(next); assert.equal(next.currency,original.currency);
   assert.equal(next.bankAmount,original.bankAmount); assert.deepEqual(next.fx,original.fx);
   assert.equal(next.fieldSources?.currency,'user');
+});
+
+test('upload notes and optional place are saved before the first vision request and retained in editor context',async()=>{
+  const editor=controller(blankTrip());editor.aiConnected();let inspected=false;
+  editor.network(async(url,options)=>{
+    if(url.startsWith('/api/receipt?'))return response({receiptId:'notes-photo'});
+    const args=JSON.parse(String(options?.body)),saved=editor.trip.drafts.find(draft=>draft.id===args.draftId)!;
+    assert.equal(saved.conversation!.at(-1)!.text,'In Bratislava. Gaz had a decaf; I had a cappuccino.');
+    assert.equal(saved.conversation!.at(-1)!.authorMemberId,undefined,'the client does not fabricate an author stamp');
+    assert.deepEqual(saved.location,{label:'Bratislava',source:'user'});assert.equal(saved.fieldSources?.location,'user');
+    assert.equal(saved.locationHint?.latitude,48.1486);assert.equal(args.receiptId,'notes-photo');inspected=true;
+    return response({data:{trips:[itemizedTrip(editor.trip)]},revision:editor.updates.length+1});
+  });
+  await editor.upload(receiptFile(),{notes:' In Bratislava. Gaz had a decaf; I had a cappuccino. ',location:{label:'Bratislava',source:'user'},locationHint:{latitude:48.1486,longitude:17.1077,accuracy:100,capturedAt:stamp}});
+  assert.equal(inspected,true);assert.equal(editor.trip.expenses.length,0);assert.equal(editor.editing?.location?.label,'Bratislava');
+});
+
+test('editor capture notes survive a failed canonical save and are cleared after a successful retry',async()=>{
+  const editor=controller(blankTrip());editor.newExpense();editor.setNotes('Gary had this; I had that.');editor.persistenceFailure();
+  editor.network(async()=>response({receiptId:'notes-photo'}));await editor.captureEditorReceipt(receiptFile());
+  assert.equal(editor.captureNotes,'Gary had this; I had that.');assert.equal(editor.requests.filter(request=>request.url==='/api/receipt/process').length,0);
+  editor.persistenceRecovered();await editor.captureEditorReceipt(receiptFile());assert.equal(editor.captureNotes,'');
+  assert.equal(editor.trip.drafts[0].conversation!.filter(message=>message.text==='Gary had this; I had that.').length,1);
+});
+
+test('place-only guidance keeps a new receipt eligible for initial extraction and is retained through proposal review',async()=>{
+  const editor=controller(blankTrip());editor.newExpense();editor.aiConnected();editor.setEditorPlace({location:{label:'Bratislava',source:'user'}});
+  editor.network(async(url)=>url.startsWith('/api/receipt?')?response({receiptId:'new-photo'}):response({data:{trips:[itemizedTrip(editor.trip)]},revision:editor.updates.length+1}));
+  await editor.captureEditorReceipt(receiptFile());editor.reconcileEditorReceipt(editor.trip);
+  assert.equal(editor.trip.drafts[0].location?.label,'Bratislava');assert.equal(editor.editing?.location?.label,'Bratislava');assert.equal(editor.editing?.items[0].name,'Dinner from image');
+  assert.equal(editor.trip.expenses.length,0);
 });

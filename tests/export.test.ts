@@ -295,6 +295,8 @@ test('real saved receipt purchased quantities, units, memory and item conversati
   const trip = holiday('mine', 'owner');
   const expense = trip.expenses[0];
   expense.currency = 'GBP';
+  expense.location = { label: 'Bratislava café', source: 'chat' };
+  expense.locationHint = { latitude: 48.1486, longitude: 17.1077, accuracy: 50, capturedAt: '2026-10-06T10:00:00Z' };
   delete expense.bankAmount;
   expense.items = [{ id: 'chocolate', name: 'Chocolate, "dark"\nThree blocks', amount: 1001, members: ['a', 'b'], quantity: { total: 3, label: 'blocks', sourceText: '3 x Stck' }, units: { total: 3, label: 'blocks', allocations: { a: 2.5, b: 0.5 } } }];
   expense.memory = { notes: 'Treat "blocks" as chocolate.\nKeep this context for later questions.', aliases: [{ name: 'blocks', itemId: 'chocolate' }, { name: 'me', memberId: 'b', scopeMemberId: 'b' }] };
@@ -316,12 +318,14 @@ test('real saved receipt purchased quantities, units, memory and item conversati
     assert.deepEqual(exported.expenses[0].memory, edited.expenses[0].memory);
     assert.deepEqual(exported.drafts[0].memory, edited.expenses[0].memory);
     assert.deepEqual(exported.expenses[0].conversation, expense.conversation);
+    assert.deepEqual(exported.expenses[0].location, expense.location);
+    assert.deepEqual(exported.drafts[0].locationHint, expense.locationHint);
     assert.deepEqual(exported.drafts[0].conversation, expense.conversation);
   }
 
   const financialRows = parseCsv(await (await route.GET(request('scope=trip&tripId=mine&format=csv'))).text());
   const header = financialRows[0];
-  assert.deepEqual(header.slice(-3), ['item_details_json', 'receipt_scan_json', 'field_sources_json'], 'scan evidence appends without moving existing financial columns');
+  assert.deepEqual(header.slice(-6,-3), ['item_details_json', 'receipt_scan_json', 'field_sources_json'], 'scan evidence appends without moving existing financial columns');
   assert.equal(header[8], 'receipt_amount');
   assert.equal(header[27], 'Alice_cost_share_hundredths');
   assert.ok(financialRows.every(row => row.length === header.length));
@@ -330,6 +334,10 @@ test('real saved receipt purchased quantities, units, memory and item conversati
   assert.equal(financialRows[1][header.indexOf('Bob_cost_share_hundredths')], '167');
   assert.deepEqual(JSON.parse(financialRows[1][header.indexOf('item_details_json')]), expense.items);
   assert.equal(financialRows[2][header.indexOf('item_details_json')], '', 'payment rows have no item detail');
+  assert.equal(financialRows[1][header.indexOf('receipt_location')], expense.location.label);
+  assert.equal(financialRows[1][header.indexOf('receipt_location_source')], 'chat');
+  assert.deepEqual(JSON.parse(financialRows[1][header.indexOf('receipt_location_hint_json')]), expense.locationHint);
+  assert.equal(financialRows[2][header.indexOf('receipt_location_hint_json')], '', 'payments have no device hint');
   const history = await json<HistoryPage>(await route.GET(request('scope=activity&tripId=mine')));
   const changed = history.events.find(event => event.entityType === 'expense' && event.entityId === expense.id && event.action === 'update');
   assert.deepEqual(changed?.after?.memory, edited.expenses[0].memory);
