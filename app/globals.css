@@ -2525,8 +2525,8 @@ footer {
   cursor: pointer;
 }
 .receipt-capture-action:focus-within {
-  outline: 3px solid var(--primary);
-  outline-offset: 3px;
+  border-color: var(--primary);
+  box-shadow: inset 0 0 0 2px var(--primary);
 }
 .receipt-capture-action.disabled {
   opacity: 0.5;
@@ -2614,6 +2614,9 @@ footer {
 }
 .receipt-capture-status:not(:empty) {
   margin-bottom: 14px;
+}
+.receipt-capture-status:empty + .receipt-capture-inputs {
+  margin-top: 14px;
 }
 @media (max-width: 900px) {
   .editor-body.with-receipt .receipt-capture {
