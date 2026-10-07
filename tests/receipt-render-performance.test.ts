@@ -11,6 +11,7 @@ import * as receiptScan from '../lib/receipt-scan';
 import * as receiptProcessing from '../lib/receipt-processing';
 import * as receiptChatgpt from '../lib/receipt-chatgpt';
 import * as expenseReadiness from '../lib/expense-readiness';
+import * as quickExpense from '../lib/quick-expense';
 import * as dataUtils from '../lib/data-utils';
 import { createSourceFile, isArrayBindingPattern, isBindingElement, isCallExpression, isFunctionDeclaration, isIdentifier, isVariableStatement, JsxEmit, ModuleKind, ScriptKind, ScriptTarget, transpileModule } from 'typescript';
 
@@ -87,6 +88,7 @@ function controller(trip: model.Trip, fetcher?: typeof fetch) {
     if (name === '@/lib/receipt-processing') return receiptProcessing;
     if (name === '@/lib/receipt-scan') return receiptScan;
     if (name === '@/lib/expense-readiness') return expenseReadiness;
+    if (name === '@/lib/quick-expense') return quickExpense;
     if (name === '@/lib/data-utils') return dataUtils;
     if (name === '@/components/receipt-scan-review') return {__esModule: true, default: component, receiptMoney: (amount: number, currency: string | null) => currency ? moneyFormat.formatMoney(amount, currency) : String(amount / 100)};
     if (name === '@/lib/receipt-chatgpt') return receiptChatgpt;
