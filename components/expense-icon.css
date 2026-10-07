@@ -2,10 +2,6 @@
 .expense-icon-trigger { display: inline-flex; align-items: center; gap: 12px; flex-shrink: 0; padding: 0; border: 0; border-radius: 13px; background: transparent; color: var(--ink); text-align: left; cursor: pointer; }
 .expense-icon-trigger:focus-visible { outline: 3px solid var(--primary); outline-offset: 4px; }
 .expense-icon-trigger:hover .expense-symbol { box-shadow: 0 0 0 3px var(--line); }
-.expense-icon-labelled { margin-bottom: 18px; max-width: 100%; }
-.expense-icon-labelled > span:last-child { min-width: 0; overflow-wrap: anywhere; }
-.expense-icon-labelled b { display: block; font-size: 1rem; }
-.expense-icon-labelled small { display: block; font-size: 0.875rem; color: var(--muted); margin-top: 4px; }
 .expense-open { display: flex; align-items: center; gap: 15px; min-width: 0; flex: 1; width: 100%; padding: 0; border: 0; background: transparent; color: var(--ink); text-align: left; cursor: pointer; }
 .overlay.icon-picker-overlay { z-index: 110; padding: 16px; }
 .modal.icon-picker { max-width: 560px; max-height: calc(100dvh - 32px); padding: 24px; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; }
