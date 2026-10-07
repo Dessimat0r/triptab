@@ -161,15 +161,19 @@ const TITLE_RULES: readonly [ExpenseSymbol, IconBackground, string][] = [
   ['Utensils', 'orange', 'restaurant|restaurante|ristorante|dinner|lunch|breakfast|dining|meal|meals|bistro|taverna|trattoria|tapas|osteria|brasserie|izakaya'],
 ];
 const groupColors: Record<string, IconBackground> = { Food: 'orange', Drinks: 'gold', Transport: 'blue', Stays: 'violet', Activities: 'purple', Shopping: 'green', 'Health & family': 'rose', Other: 'indigo' };
+const symbolGroups = new Map<ExpenseSymbol, string>(ICON_CATALOG.map(icon => [icon[0], icon[2]]));
 export function defaultBackground(symbol: ExpenseSymbol): IconBackground {
   return TITLE_RULES.find(rule => rule[0] === symbol)?.[1]
-    ?? groupColors[ICON_CATALOG.find(icon => icon[0] === symbol)![2]];
+    ?? groupColors[symbolGroups.get(symbol) ?? 'Other'] ?? 'indigo';
+}
+export function sameExpenseIcon(a?: ExpenseIconChoice, b?: ExpenseIconChoice): boolean {
+  return !!a && !!b && a.symbol === b.symbol && a.background === b.background;
 }
 const normalizedTitleRules = TITLE_RULES.map(([symbol, background, terms]) => ({symbol,background,terms:terms.split('|').map(iconSearchText)}));
 const normalizedLabels = ICON_CATALOG.map(([symbol,label,group]) => ({symbol,background:groupColors[group],term:iconSearchText(label)}));
 const titleCandidates = [
-  ...normalizedTitleRules.flatMap(({symbol,background,terms}) => terms.map(term => ({symbol,background,term}))),
-  ...normalizedLabels.filter(rule => rule.symbol !== 'Receipt'),
+  ...normalizedTitleRules.flatMap(({symbol,background,terms}) => terms.map(term => ({symbol,background,term,merchant:true}))),
+  ...normalizedLabels.filter(rule => rule.symbol !== 'Receipt').map(rule => ({...rule,merchant:false})),
 ];
 const groceries = new Set(['milk', 'bread', 'cheese', 'butter', 'eggs', 'rice', 'pasta', 'bananas', 'apples', 'potatoes', 'tomatoes', 'leche', 'pan', 'queso', 'lait', 'pain', 'fromage', 'leite', 'pao', 'queijo', 'milch', 'brot', 'kase']);
 const generic = new Set(['receipt', 'expense', 'general', 'other', 'tab', 'payment', 'budget', 'change', 'currency', 'unknown', 'help', 'question', 'something', 'else', 'card', 'bank', 'station', 'cream', 'park', 'holiday', 'check', 'first', 'aid', 'pass', 'cable', 'data', 'soft']);
@@ -188,10 +192,11 @@ normalizedTitleRules.forEach(rule => {
 });
 
 // A venue's specific service outranks its broader setting: restaurant > cafe/bar
-// > hotel. Within a service, prefer the longest matching phrase or label.
+// > hotel. Within a service, a known merchant or title rule beats a generic
+// catalogue label, then the longest matching phrase wins.
 function titleSpecificity(symbol: ExpenseSymbol): number {
   if (['Hotel', 'House', 'BedDouble', 'Building2'].includes(symbol)) return 0;
-  if (ICON_CATALOG.find(icon => icon[0] === symbol)?.[2] === 'Drinks') return 1;
+  if (symbolGroups.get(symbol) === 'Drinks') return 1;
   if (symbol === 'Utensils') return 2;
   return 3;
 }
@@ -199,6 +204,7 @@ function matchTitle(value?: string): ExpenseIconChoice | undefined {
   const title = ` ${iconSearchText(value || '')} `;
   const candidates = titleCandidates.filter(rule => mentions(title, rule.term));
   candidates.sort((a, b) => titleSpecificity(b.symbol) - titleSpecificity(a.symbol)
+    || Number(b.merchant) - Number(a.merchant)
     || b.term.split(' ').length - a.term.split(' ').length || b.term.length - a.term.length);
   const best = candidates[0];
   return best && { symbol: best.symbol, background: best.background };

@@ -17,7 +17,7 @@ import {
   Dog, Sparkles, Scissors, Wifi, Plug, Wrench, Package, CircleHelp, Check, X,
 } from "lucide-react";
 import ModalA11y from "@/components/modal-accessibility";
-import { ICON_CATALOG, ICON_BACKGROUNDS, resolveExpenseIcon,
+import { ICON_CATALOG, ICON_BACKGROUNDS, resolveExpenseIcon, sameExpenseIcon,
   iconLabel, iconSearchText, type ExpenseIconChoice, type IconReceipt } from "@/lib/expense-icons";
 import "./expense-icon.css";
 
@@ -54,7 +54,7 @@ export default function ExpenseIconPicker({ entry, onChange, disabled, showLabel
 }) {
   const {title,items,suggestedIcon} = entry, titleSource = entry.titleSource ?? entry.fieldSources?.title;
   const suggested = useMemo(() => resolveExpenseIcon({title,items,suggestedIcon,titleSource}), [title,items,suggestedIcon,titleSource]);
-  const receiptSuggestion = suggestedIcon !== undefined && suggested === suggestedIcon;
+  const receiptSuggestion = sameExpenseIcon(suggested, suggestedIcon);
   const resolved = entry.icon || suggested;
   const [open, setOpen] = useState(false), [choice, setChoice] = useState(resolved);
   const [automatic, setAutomatic] = useState(!entry.icon), [search, setSearch] = useState("");

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { receiptExpenseIconSchema, receiptExpenseIconJsonSchema, receiptSuggestedIcon } from '@/lib/receipt-proposals';
+import { receiptExpenseIconSchema, receiptExpenseIconJsonSchema, nextSuggestedIcon } from '@/lib/receipt-proposals';
 import { languageSchema, receiptLanguageSchema, itemTranslationsSchema, RECEIPT_LANGUAGES } from '@/lib/receipt-languages';
 import { readTripLanguagePreferences } from '@/lib/trip-language-preferences';
 import { readLedger, writeLedger, bucket, receiptKey, receiptAccess, ensureProfile, db } from '@/lib/store';
@@ -779,7 +779,7 @@ export async function POST(request: Request) {
           title: '', currency: null, tax: 0, tip: 0, discount: 0,
           ...existing,
           ...cleanMetadata,
-          suggestedIcon: receiptSuggestedIcon(expenseIcon) ?? existing?.suggestedIcon,
+          suggestedIcon: nextSuggestedIcon(expenseIcon, existing?.suggestedIcon),
           id: draftId,
           languageViewId: existing?.languageViewId || existing?.expenseId || draftId,
           source: 'ai' as const,

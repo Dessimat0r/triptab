@@ -2550,6 +2550,17 @@ test('MCP recognition fills a missing printed place but never invents a device o
   assert.equal(content(cleared).data.trips[0].drafts[0].location, undefined);
 });
 
+test('connected receipt drafts keep a suggestion when omitted and clear it when unclear', async () => {
+  const previous={symbol:'Utensils',background:'orange'} as const;
+  for (const [expenseIcon,expected] of [[undefined,previous],[null,undefined],[{symbol:'Car',confidence:'low'},undefined]] as const) {
+    reset();
+    state.data.trips[0].drafts[0].suggestedIcon=previous;
+    const reply=await invoke('update_receipt_draft',{trip_id:'trip-1',revision:3,draft:{id:'draft-1',...(expenseIcon===undefined?{}:{expenseIcon})}});
+    assert.equal(reply.result.isError,undefined);
+    assert.deepEqual(content(reply).data.trips[0].drafts[0].suggestedIcon,expected);
+  }
+});
+
 test('connected receipt drafts accept the same display suggestion and preserve user icons', async () => {
   for (const expenseIcon of [
     {symbol:'Utensils',confidence:'high'}, {symbol:'Martini',confidence:'medium'},

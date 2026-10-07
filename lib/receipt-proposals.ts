@@ -21,6 +21,10 @@ export function receiptSuggestedIcon(value: z.infer<typeof receiptExpenseIconSch
   return value?.symbol && value.confidence !== 'low'
     ? { symbol: value.symbol, background: defaultBackground(value.symbol) } : undefined;
 }
+/** An omitted reading keeps the earlier suggestion; an explicit unclear or low-confidence one clears it. */
+export function nextSuggestedIcon(value: z.infer<typeof receiptExpenseIconSchema> | undefined, previous: ExpenseIconChoice | undefined): ExpenseIconChoice | undefined {
+  return value === undefined ? previous : receiptSuggestedIcon(value);
+}
 
 const id = z.string().min(1).max(100), text = z.string().trim().min(1).max(200);
 const money = z.number().int().min(0).max(MAX_AMOUNT);

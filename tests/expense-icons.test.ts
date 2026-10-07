@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { ICON_CATALOG, ICON_BACKGROUNDS, expenseIconSchema, defaultBackground, inferExpenseIcon, resolveExpenseIcon } from '../lib/expense-icons';
+import { ICON_CATALOG, ICON_BACKGROUNDS, expenseIconSchema, defaultBackground, sameExpenseIcon, inferExpenseIcon, resolveExpenseIcon } from '../lib/expense-icons';
 import { draftSchema, expenseSchema, parseLedgerStructure, type Trip } from '../lib/model';
 import { isBlankReceipt, receiptEditableValue, receiptProposalEditor, type ReceiptEditor } from '../lib/receipt-processing';
 import { rebaseLedger } from '../lib/client-ledger';
@@ -109,4 +109,12 @@ test('user icon > matching user title > AI suggestion > local matcher', () => {
   assert.equal(defaultBackground('Salad'),'orange');
   assert.deepEqual(expenseSchema.parse({...receipt,suggestedIcon}).suggestedIcon,suggestedIcon);
   assert.deepEqual(draftSchema.parse({...receipt,status:'review',suggestedIcon}).suggestedIcon,suggestedIcon);
+});
+
+test('a known merchant outranks a generic catalogue label of the same specificity', () => {
+  assert.equal(inferExpenseIcon({title:'Tesco Gifts'}).symbol,'ShoppingCart');
+  assert.equal(inferExpenseIcon({title:'Pharmacy'}).symbol,'Pill');
+  assert.equal(inferExpenseIcon({title:'Boat tour'}).symbol,'Ship');
+  assert.equal(sameExpenseIcon({symbol:'Car',background:'blue'},{symbol:'Car',background:'blue'}),true);
+  assert.equal(sameExpenseIcon({symbol:'Car',background:'blue'},undefined),false);
 });

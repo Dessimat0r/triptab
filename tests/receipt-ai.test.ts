@@ -1419,5 +1419,11 @@ test('receipt reading stores a display suggestion without touching the user icon
     assert.equal(result.suggestedIcon,undefined);
     assert.deepEqual(result.icon,icon);
   }
+  const previous = {symbol:'Utensils',background:'orange'} as const;
+  const {expenseIcon:omitted,...withoutIcon} = transcription as ReceiptTranscription & {expenseIcon?: unknown}; void omitted;
+  assert.deepEqual(applyReceiptTranscription(trip,{...draft,suggestedIcon:previous},withoutIcon as ReceiptTranscription).suggestedIcon,previous,'an omitted reading keeps the earlier suggestion');
+  for (const expenseIcon of [null,{symbol:null,confidence:'high'},{symbol:'Car',confidence:'low'}] as const) {
+    assert.equal(applyReceiptTranscription(trip,{...draft,suggestedIcon:previous},{...transcription,expenseIcon}).suggestedIcon,undefined,'an explicit unclear reading clears a stale suggestion');
+  }
   assert.throws(()=>applyReceiptTranscription(trip,draft,{...transcription,expenseIcon:{symbol:'MadeUp',confidence:'high'}} as unknown as ReceiptTranscription),ReceiptAIError);
 });

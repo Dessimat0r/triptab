@@ -4,7 +4,7 @@ import { DEFAULT_RECEIPT_MODEL } from './receipt-ai-config';
 import { z } from 'zod';
 import { CURRENCIES, MAX_AMOUNT, MAX_UNITS, draftSchema, receiptQuantitySchema, total, type Currency, type Draft, type Trip } from './model';
 import { blankReceiptItem, mayRecognizeUnknownProvenance, mergeReceiptSourceLines, reconcileReceiptScan, type ReceiptScanWarning } from './receipt-scan';
-import { receiptChangesSchema, receiptChangesJsonSchema, applyReceiptChanges, receiptExpenseIconSchema, receiptExpenseIconJsonSchema, receiptSuggestedIcon } from './receipt-proposals';
+import { receiptChangesSchema, receiptChangesJsonSchema, applyReceiptChanges, receiptExpenseIconSchema, receiptExpenseIconJsonSchema, nextSuggestedIcon } from './receipt-proposals';
 
 export class ReceiptAIError extends Error {
   constructor(message: string, public readonly status = 502, public readonly code = 'receipt_processing_failed') {
@@ -544,7 +544,7 @@ export function applyReceiptTranscription(_trip: Trip, draft: Draft, transcripti
   if (sourceLines.length > 1000 || uniqueWarnings.length > 1000) throw new ReceiptAIError('This receipt has reached its scan evidence limit. Your saved evidence is unchanged; review it before rescanning.', 422);
   let proposal = draftSchema.parse({
     ...draft, title, currency, date, time, items, ...adjustments, fieldSources,
-    suggestedIcon: receiptSuggestedIcon(value.expenseIcon) ?? draft.suggestedIcon,
+    suggestedIcon: nextSuggestedIcon(value.expenseIcon, draft.suggestedIcon),
     ...(value.detectedLanguage?{detectedLanguage:value.detectedLanguage}:{}),
     ...(value.location && draft.fieldSources?.location !== 'user' && (!draft.location || draft.location.source === 'receipt')
       ? { location: {label:value.location,source:value.locationSource==='context'?'chat':'receipt'}, fieldSources:{...fieldSources,location:value.locationSource==='context'?'ai':'receipt'} } : {}),
