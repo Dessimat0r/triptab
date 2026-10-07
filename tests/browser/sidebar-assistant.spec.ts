@@ -49,7 +49,9 @@ async function openSidebar(page: Page) {
 
 async function fits(page: Page, connected: boolean) {
   await expect(page.locator('.personal')).toBeInViewport({ ratio: 1 });
-  await expect(page.locator('.tripnav button').first()).toBeInViewport({ ratio: 1 });
+  // The holiday list may scroll; its viewport must remain visible and separate
+  // from the account area even when its contents are taller than that viewport.
+  await expect(page.locator('.tripnav')).toBeInViewport({ ratio: 1 });
   const layout = await page.locator('.sidebar').evaluate(sidebar => {
     const status = sidebar.querySelector<HTMLElement>('.assistant-status');
     const account = sidebar.querySelector<HTMLElement>('.personal')!;
