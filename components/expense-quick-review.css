@@ -234,7 +234,6 @@
   grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
 }
 .quick-amount input {
-  font-size: 1.15rem;
   font-weight: 650;
 }
 .quick-shared {

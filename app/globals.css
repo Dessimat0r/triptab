@@ -780,6 +780,18 @@ select {
   min-height: 44px;
   font-size: 0.95rem;
 }
+/* Native dropdowns may ignore line-height; match the text input's
+   1.5em line box, 22px padding and 2px border at every font size. */
+input:where(:not([type="checkbox"], [type="radio"], [type="file"])),
+select {
+  min-height: max(44px, calc(1.5em + 24px));
+}
+/* macOS WebKit's native dropdown also requires an explicit height. Because
+   this fixes the height, a select styled with larger padding or font-size
+   must override height as well as min-height. */
+select {
+  height: max(44px, calc(1.5em + 24px));
+}
 label > input,
 label > textarea,
 label > select {
