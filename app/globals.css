@@ -900,7 +900,12 @@ label > small {
   font-weight: 750;
   text-overflow: ellipsis;
 }
-.editor .expense-title-input:hover,
+@media (hover: hover) {
+  .editor .expense-title-input:hover {
+    background: var(--bg);
+    border-bottom-color: var(--muted);
+  }
+}
 .editor .expense-title-input:focus {
   background: var(--bg);
   border-bottom-color: var(--muted);
@@ -915,7 +920,8 @@ label > small {
 .expense-title-pencil {
   position: absolute;
   right: 8px;
-  top: 14px;
+  top: 50%;
+  transform: translateY(-50%);
   color: var(--muted);
   pointer-events: none;
 }
