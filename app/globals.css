@@ -211,6 +211,28 @@ small {
   font-size: 0.875rem;
   padding: 5px 0;
 }
+.assistant-status {
+  display: grid;
+  grid-template-columns: 19px minmax(0, 1fr);
+  align-items: center;
+  column-gap: 4px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+.assistant-status > svg {
+  color: var(--primary);
+}
+.assistant-status strong {
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+.assistant-status .textbutton {
+  grid-column: 2;
+  justify-self: start;
+  padding: 12px 4px;
+  min-height: 44px;
+}
 .personal {
   display: flex;
   align-items: center;
@@ -780,6 +802,18 @@ select {
   min-height: 44px;
   font-size: 0.95rem;
 }
+/* Native dropdowns may ignore line-height; match the text input's
+   1.5em line box, 22px padding and 2px border at every font size. */
+input:where(:not([type="checkbox"], [type="radio"], [type="file"])),
+select {
+  min-height: max(44px, calc(1.5em + 24px));
+}
+/* macOS WebKit's native dropdown also requires an explicit height. Because
+   this fixes the height, a select styled with larger padding or font-size
+   must override height as well as min-height. */
+select {
+  height: max(44px, calc(1.5em + 24px));
+}
 label > input,
 label > textarea,
 label > select {
@@ -876,6 +910,69 @@ label > small {
   padding: 26px 28px 22px;
   border-bottom: 1px solid var(--line);
   margin: 0;
+}
+.editor .modalheading {
+  gap: 12px;
+}
+.editor .expense-heading-text {
+  flex: 1;
+  min-width: 0;
+}
+.expense-title-control {
+  position: relative;
+}
+.editor .expense-title-input {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  padding: 2px 30px 2px 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink);
+  font-size: 1.4rem;
+  font-weight: 750;
+  text-overflow: ellipsis;
+}
+@media (hover: hover) {
+  .editor .expense-title-input:hover {
+    background: var(--bg);
+    border-bottom-color: var(--muted);
+  }
+}
+.editor .expense-title-input:focus {
+  background: var(--bg);
+  border-bottom-color: var(--muted);
+}
+.editor .expense-title-input:focus {
+  text-overflow: clip;
+}
+.editor .expense-title-input:focus-visible {
+  outline: 3px solid var(--primary);
+  outline-offset: 2px;
+}
+.expense-title-pencil {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--muted);
+  pointer-events: none;
+}
+.editor .expense-heading-text h2 {
+  margin: 2px 6px 0;
+  font-size: 0.8rem;
+  font-weight: 500;
+  line-height: 1.4;
+  color: var(--muted);
+}
+.editor .modalheading > .expense-icon-trigger {
+  min-width: 44px;
+  min-height: 44px;
+}
+.editor .expense-title-suggestion {
+  margin: 0;
+  padding: 8px 28px;
 }
 .editor-body {
   padding: 26px 28px;
@@ -1457,7 +1554,13 @@ input[type="datetime-local"]::-webkit-date-and-time-value {
     padding: 0;
   }
   .editor form > .modalheading {
-    padding: 20px 18px;
+    padding: 11px 18px;
+  }
+  .editor .expense-title-input {
+    font-size: 1.2rem;
+  }
+  .editor .expense-title-suggestion {
+    padding: 8px 18px;
   }
   .editor-body {
     padding: 20px 18px;
@@ -2261,6 +2364,44 @@ footer {
 .sidebar-close {
   display: none;
 }
+/* Leave room for the original setup card on short drawers with wider fonts. */
+@media (max-width: 900px) and (max-height: 700px) {
+  .sidebar.visible:has(.account-note) {
+    padding-bottom: calc(16px + env(safe-area-inset-bottom));
+  }
+  .sidebar.visible:has(.account-note) .side-label {
+    margin-top: 16px;
+    margin-bottom: 12px;
+  }
+  .sidebar.visible:has(.account-note) .newtrip {
+    margin-top: 0;
+  }
+  .sidebar.visible:has(.account-note) .side-bottom {
+    padding-top: 8px;
+  }
+}
+/* The setup card wraps onto more lines in WebKit, so reclaim vertical space
+   wherever the sidebar is narrow or short and the card is showing. */
+@media (max-width: 1150px) and (max-height: 860px) {
+  .sidebar:has(.account-note) .side-label {
+    margin-top: 24px;
+  }
+  .sidebar:has(.account-note) .side-bottom {
+    padding-top: 12px;
+  }
+  .sidebar:has(.account-note) .account-note {
+    padding: 12px 14px;
+  }
+  .sidebar:has(.account-note) .account-note > svg {
+    margin-bottom: 6px;
+  }
+  .sidebar:has(.account-note) .account-note p {
+    margin: 4px 0;
+  }
+  .sidebar:has(.account-note) .personal {
+    margin-top: 12px;
+  }
+}
 @media (max-width: 900px) {
   .sidebar-close {
     display: grid;
@@ -2330,6 +2471,7 @@ footer {
     color: var(--primary);
   }
   .account-note,
+  .assistant-status,
   .profile-email,
   .split-preview {
     background: var(--surface-raised);

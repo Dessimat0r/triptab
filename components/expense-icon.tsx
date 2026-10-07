@@ -46,11 +46,10 @@ export function ExpenseIconBadge({ entry, size = 23 }: { entry: IconReceipt; siz
   </span>;
 }
 
-export default function ExpenseIconPicker({ entry, onChange, disabled, showLabel = false }: {
+export default function ExpenseIconPicker({ entry, onChange, disabled }: {
   entry: IconReceipt;
   onChange: (icon: ExpenseIconChoice | undefined) => void | Promise<boolean>;
   disabled?: boolean;
-  showLabel?: boolean;
 }) {
   const {title,items,suggestedIcon} = entry, titleSource = entry.titleSource ?? entry.fieldSources?.title;
   const suggested = useMemo(() => resolveExpenseIcon({title,items,suggestedIcon,titleSource}), [title,items,suggestedIcon,titleSource]);
@@ -73,12 +72,11 @@ export default function ExpenseIconPicker({ entry, onChange, disabled, showLabel
     finally { setPending(false); }
   }
   return <>
-    <button type="button" className={`expense-icon-trigger${showLabel ? " expense-icon-labelled" : ""}`}
+    <button type="button" className="expense-icon-trigger"
       aria-label={`Choose icon for ${entry.title || "this receipt"}. ${entry.icon ? "Selected" : "Automatic"}: ${iconLabel(resolved)}`}
       aria-haspopup="dialog" disabled={disabled}
       onClick={() => { setChoice(resolved); setAutomatic(!entry.icon); setSearch(""); setGroup("All"); setError(""); setOpen(true); }}>
       <ExpenseIconBadge entry={{ icon: resolved }} />
-      {showLabel && <span><b>Icon & background</b><small>{entry.icon ? iconLabel(entry.icon) : `Automatic · ${iconLabel(suggested)}`}</small></span>}
     </button>
     {open && createPortal(<ModalA11y className="overlay icon-picker-overlay" onClose={close}>
       <section className="modal icon-picker" role="dialog" aria-modal="true" aria-labelledby={`${id}-title`}>

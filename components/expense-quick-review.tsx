@@ -143,7 +143,7 @@ export function PurchaseDetails({ id, summary, needsAttention, children }: {
 /** Rarely needed tools stay one tap away instead of lengthening every expense. */
 export function MoreOptions({ defaultOpen, children }: { defaultOpen: boolean; children: ReactNode }) {
   return <details className="expense-more-options" open={defaultOpen || undefined}>
-    <summary>More options <small>icon, receipt language, conversation, import</small></summary>
+    <summary>More options <small>receipt language, conversation, import</small></summary>
     <div className="expense-more-options-body">{children}</div>
   </details>;
 }

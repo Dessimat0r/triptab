@@ -136,6 +136,19 @@ for (const { width, height, touch } of viewports) {
           await expect(page.getByRole('heading', { name: 'Edit expense', exact: true })).toBeVisible();
         }
         await expect(page.locator('.editor')).toBeVisible();
+        const header = page.locator('.editor .modalheading');
+        const title = header.getByRole('textbox', { name: 'Expense name', exact: true });
+        await expect(title).toHaveCount(1);
+        await title.fill('A'.repeat(200));
+        await title.blur();
+        for (const control of [header.locator('.expense-icon-trigger'), header.getByRole('button', { name: 'Close editor', exact: true })]) {
+          const box = (await control.boundingBox())!;
+          expect(box.width).toBeGreaterThanOrEqual(44);
+          expect(box.height).toBeGreaterThanOrEqual(44);
+          expect(box.x).toBeGreaterThanOrEqual(0);
+          expect(box.x + box.width).toBeLessThanOrEqual(width);
+        }
+        if (width === 390) expect((await header.boundingBox())!.height).toBeLessThanOrEqual(88);
         if (mode === 'manual') {
           // A new expense opens as the quick form; it must fit too before itemising.
           await expect(page.getByRole('textbox', { name: 'Amount', exact: true })).toBeVisible();
