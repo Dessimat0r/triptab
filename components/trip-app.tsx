@@ -818,6 +818,7 @@ export default function Home({ children }: { children: ReactNode }) {
     const proposal = matchingReceiptProposal(current, editing);
     const target = current.expenses.find(value => value.id === editing.expenseId);
     let next = { ...editing, conversation: mergeReceiptConversation(mergeReceiptConversation(target?.conversation, conversationMatches ? draft!.conversation : undefined), editing.conversation),
+      ...(matching ? { suggestedIcon: draft.suggestedIcon } : {}),
       memory: conversationMatches ? draft!.memory ?? target?.memory ?? editing.memory : editing.memory };
     let needsReview = proposal;
     const initial = initialReceiptReview.current;
@@ -873,6 +874,7 @@ export default function Home({ children }: { children: ReactNode }) {
       expenseId: target?.id,
       title: source.title.trim() || "Receipt",
       icon: entry.icon,
+      suggestedIcon: source.suggestedIcon,
       receiptLanguage: source.receiptLanguage,
       location: source.location,
       locationHint: source.locationHint,

@@ -845,3 +845,27 @@ test('sibling elements in the expense editor never share a React key', () => {
   }
   visit(syntax); assert.deepEqual(problems,[]);
 });
+
+test('a suggestion-only proposal keeps the editor clean and carries through draft storage and expense save', async () => {
+  const initial = fixture(), draft = initial.drafts[0];
+  const editor = controller(initial); editor.openDraft(draft);
+  const before = receiptEditableValue(editor.editing!);
+  const icon = {symbol:'Palmtree',background:'pink'} as const;
+  editor.edit({icon});
+  const proposed = {...draft,suggestedIcon:{symbol:'Utensils',background:'orange'} as const};
+  const merged = receiptProposalEditor(editor.editing!,proposed);
+  assert.deepEqual(receiptEditableValue(merged),before);
+  assert.deepEqual(merged.icon,icon);
+  assert.deepEqual(merged.suggestedIcon,proposed.suggestedIcon);
+  const remote=structuredClone(initial);remote.drafts[0]=proposed;
+  editor.remote(remote);editor.reconcileEditorReceipt(remote);
+  assert.deepEqual(editor.editing!.suggestedIcon,proposed.suggestedIcon);
+  assert.deepEqual(receiptEditableValue(editor.editing!),before);
+  const stored=await editor.storeEditorReceipt(editor.editing!,draft.receiptId);
+  assert.deepEqual(stored?.suggestedIcon,proposed.suggestedIcon);
+  assert.deepEqual(stored?.icon,icon);
+  await submit(editor);
+  assert.equal(editor.error,'');
+  assert.deepEqual(editor.trip.expenses[0].suggestedIcon,proposed.suggestedIcon);
+  assert.deepEqual(editor.trip.expenses[0].icon,icon);
+});

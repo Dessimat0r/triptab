@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { ICON_CATALOG, ICON_BACKGROUNDS, expenseIconSchema, inferExpenseIcon, resolveExpenseIcon } from '../lib/expense-icons';
+import { ICON_CATALOG, ICON_BACKGROUNDS, expenseIconSchema, defaultBackground, inferExpenseIcon, resolveExpenseIcon } from '../lib/expense-icons';
 import { draftSchema, expenseSchema, parseLedgerStructure, type Trip } from '../lib/model';
 import { isBlankReceipt, receiptEditableValue, receiptProposalEditor, type ReceiptEditor } from '../lib/receipt-processing';
 import { rebaseLedger } from '../lib/client-ledger';
@@ -67,4 +67,46 @@ test('conflicting icon edits are protected by the ledger conflict guard', () => 
   const rebased=rebaseLedger(base,local,remote);
   assert.deepEqual(rebased.conflicts,[{tripId:'trip',entityType:'expenses',entityId:'receipt'}]);
   assert.deepEqual(rebased.data.trips[0].expenses[0].icon,remote.trips[0].expenses[0].icon);
+});
+
+test('specific merchant services beat broader venues and include common travel terms', () => {
+  for (const [title,symbol] of [
+    ['Restaurant & Bar','Utensils'], ['Cafe restaurant','Utensils'], ['Cafe lunch','Utensils'], ['Restaurant Wine Bar','Utensils'],
+    ['Hotel Atlantic Bar','Martini'], ['Tapas','Utensils'], ['Osteria','Utensils'],
+    ['Brasserie','Utensils'], ['Trattoria','Utensils'], ['Izakaya','Utensils'],
+    ['Tabac','ShoppingCart'], ['Food shop','ShoppingCart'], ['Boat tour','Ship'], ['Guided tour','Compass'],
+  ] as const) assert.equal(inferExpenseIcon({title,items:[{name:'Wine'},{name:'Beer'}]}).symbol,symbol,title);
+  for (const [name,symbol] of [
+    ['Tapas','Utensils'], ['Osteria','Utensils'], ['Brasserie','Utensils'], ['Trattoria','Utensils'],
+    ['Izakaya','Utensils'], ['Ramen','Soup'], ['Tabac','ShoppingCart'], ['Food shop','ShoppingCart'],
+    ['Boat tour','Ship'], ['Tour','Compass'],
+  ] as const) assert.equal(inferExpenseIcon({items:[{name}]}).symbol,symbol,name);
+  assert.equal(inferExpenseIcon({title:'Restaurant',items:[{name:'Wine'}]}).symbol,'Utensils');
+});
+
+test('reading translations count once per line, and the category with most lines wins', () => {
+  assert.equal(inferExpenseIcon({items:[{name:'拉面',translations:{en:{text:'Ramen'}}}]}).symbol,'Soup');
+  const food = [{name:'Pizza'},{name:'Salad'},{name:'Ramen'}], wine = [{name:'Wine'},{name:'Wine'}];
+  for (const items of [[...wine,...food],[...food,...wine]]) assert.equal(inferExpenseIcon({items}).symbol,'Pizza');
+  assert.equal(inferExpenseIcon({items:[
+    {name:'Wine',translations:{en:{text:'Wine'},fr:{text:'Wine'}}}, ...food,
+  ]}).symbol,'Pizza');
+});
+
+test('user icon > matching user title > AI suggestion > local matcher', () => {
+  const suggestedIcon = {symbol:'Utensils',background:'orange'} as const;
+  const entry = {title:'Taxi home',titleSource:'user' as const,suggestedIcon,items:[{name:'Coffee'}]};
+  assert.deepEqual(resolveExpenseIcon({...entry,icon}),icon);
+  assert.equal(resolveExpenseIcon(entry).symbol,'Car','a renamed expense overrides stale Meals');
+  assert.equal(resolveExpenseIcon({...entry,titleSource:'receipt'}).symbol,'Utensils');
+  assert.equal(resolveExpenseIcon({...entry,title:'Something unclear'}).symbol,'Utensils');
+  assert.equal(resolveExpenseIcon({...entry,title:'Something unclear',suggestedIcon:undefined}).symbol,'Coffee');
+  assert.equal(resolveExpenseIcon({...entry,titleSource:undefined,fieldSources:{title:'user'}}).symbol,'Car');
+  assert.equal(resolveExpenseIcon({...entry,title:'Museums & sights'}).symbol,'Landmark','user label matches count');
+  assert.equal(defaultBackground('Utensils'),'orange');
+  assert.equal(defaultBackground('Martini'),'pink');
+  assert.equal(defaultBackground('Ship'),'cyan');
+  assert.equal(defaultBackground('Salad'),'orange');
+  assert.deepEqual(expenseSchema.parse({...receipt,suggestedIcon}).suggestedIcon,suggestedIcon);
+  assert.deepEqual(draftSchema.parse({...receipt,status:'review',suggestedIcon}).suggestedIcon,suggestedIcon);
 });

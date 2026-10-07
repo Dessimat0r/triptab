@@ -46,7 +46,7 @@ export function mayFillInitialReceipt(initial: InitialReceiptReview | null, acco
 
 export function receiptProposalEditor(editor: ReceiptEditor, draft: Draft): ReceiptEditor {
   const next = { ...editor, ...draft, id: editor.id, draftId: draft.id, expenseId: draft.expenseId,
-    icon: editor.icon, receiptLanguage: editor.receiptLanguage, languageViewId: editor.languageViewId || editor.expenseId || editor.id,
+    icon: editor.icon, suggestedIcon: draft.suggestedIcon, receiptLanguage: editor.receiptLanguage, languageViewId: editor.languageViewId || editor.expenseId || editor.id,
     date: draft.date || editor.date, time: draft.time || editor.time, timezone: draft.timezone || editor.timezone };
   // A proposal may replace defaults, but user-confirmed purchase details stay
   // authoritative even when a later external client carries older metadata.

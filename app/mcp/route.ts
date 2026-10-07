@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { receiptExpenseIconSchema, receiptExpenseIconJsonSchema, receiptSuggestedIcon } from '@/lib/receipt-proposals';
 import { languageSchema, receiptLanguageSchema, itemTranslationsSchema, RECEIPT_LANGUAGES } from '@/lib/receipt-languages';
 import { readTripLanguagePreferences } from '@/lib/trip-language-preferences';
 import { readLedger, writeLedger, bucket, receiptKey, receiptAccess, ensureProfile, db } from '@/lib/store';
@@ -219,6 +220,7 @@ metadataProperties.currency = { anyOf: [metadataProperties.currency, { type: 'nu
 publishedMetadata.currency = metadataProperties.currency;
 publishedDraft.properties = {
   ...publishedMetadata,
+  expenseIcon: receiptExpenseIconJsonSchema,
   upsertItems: { type: 'array', maxItems: 200, items: publishedItem, description: 'Create or correct only these stable item IDs. Omitted existing items are retained. New items may have null unreadable amounts and no selected travellers.' },
   removeItemIds: { type: 'array', maxItems: 200, uniqueItems: true, items: identifier, description: 'Explicitly remove only known active item IDs when requested. Their historical chats and aliases remain readable as inactive references.' },
   metadataPatch: { type: 'object', properties: metadataProperties, additionalProperties: false, description: 'Only explicit user-requested changes to purchase details, payer, original currency, receipt shares or adjustments. Legacy draft metadata does not overwrite an existing draft.' },
@@ -344,6 +346,7 @@ const updateArgs = z.object({
     removeItemIds: z.array(idSchema).max(200).optional(),
     metadataPatch: metadataInput.optional(),
     receiptScan: scanEvidenceInput.optional(),
+    expenseIcon: receiptExpenseIconSchema.optional(),
   }).strict().refine(value => value.items === undefined || value.upsertItems === undefined,
     'Use upsertItems or the compatible items field, never both'),
 }).strict();
@@ -739,7 +742,7 @@ export async function POST(request: Request) {
         // Legacy full-draft metadata initializes a new draft; explicit patches
         // are required to change saved manual metadata during corrections.
         const { id: draftId, receiptId: requestedReceiptId, items: ignoredItems, upsertItems: ignoredUpserts,
-          removeItemIds: ignoredRemovals, metadataPatch, receiptScan: scanEvidence, ...legacyMetadata } = args.draft;
+          removeItemIds: ignoredRemovals, metadataPatch, receiptScan: scanEvidence, expenseIcon, ...legacyMetadata } = args.draft;
         void ignoredItems; void ignoredUpserts; void ignoredRemovals;
         const defaultReceiptMetadata = recognition && existing?.receiptId ? Object.fromEntries(Object.entries(legacyMetadata).filter(([key, value]) => value !== undefined
           && ((key === 'location' && (!existing.location || existing.location.source === 'receipt') && existing.fieldSources?.location !== 'user')
@@ -776,6 +779,7 @@ export async function POST(request: Request) {
           title: '', currency: null, tax: 0, tip: 0, discount: 0,
           ...existing,
           ...cleanMetadata,
+          suggestedIcon: receiptSuggestedIcon(expenseIcon) ?? existing?.suggestedIcon,
           id: draftId,
           languageViewId: existing?.languageViewId || existing?.expenseId || draftId,
           source: 'ai' as const,
