@@ -44,6 +44,7 @@ import { isBlankReceipt, isUnchangedInitialReceipt, matchingReceiptProposal, may
 import type { ActivityEvent } from "@/lib/store";
 import {
   Plus,
+  Minus,
   Plane,
   Receipt,
   Wallet,
@@ -210,6 +211,24 @@ function quickEligible(entry: ReceiptEditor) {
 /** In the quick form the expense name is also its single line's name. */
 function withQuickName(entry: ReceiptEditor, name: string): ReceiptEditor {
   return { ...entry, items: entry.items.map((item, index) => index === 0 ? { ...item, name, fieldSources: { ...item.fieldSources, name: "user" as const } } : item) };
+}
+/** Return a single manual line to the equal/one-person quick form. */
+function collapseToQuick(entry: ReceiptEditor, memberIds: string[]): ReceiptEditor {
+  const [item] = entry.items;
+  return withQuickName({
+    ...entry,
+    percentages: undefined,
+    items: [{
+      ...item,
+      amount: item.amount ?? 0,
+      members: item.members.length ? item.members : memberIds,
+      percentages: undefined,
+      units: undefined,
+      quantity: undefined,
+      translations: undefined,
+      scanSource: undefined,
+    }],
+  }, entry.title);
 }
 function mergeReceiptConversation(stored?: ReceiptMessage[], local?: ReceiptMessage[]) {
   const messages = [...stored || []];
@@ -1485,6 +1504,7 @@ export default function Home({ children }: { children: ReactNode }) {
   // The saved confirmation belongs to the list view; opening a form retires it.
   if (editing && savedNotice) setSavedNotice(null);
   const quickMode = !!editing && editorMode?.id === editing.id && editorMode.quick && quickEligible(editing);
+  const canCollapseToQuick = !!editing && !editing.receiptId && !editing.receiptScan && !editing.draftId && editing.items.length === 1;
   // Once shown (asked for, or holding a value), adjustments stay open for this
   // entry, so clearing a tip to retype it never hides the field being edited.
   if (editing && adjustmentsFor !== editing.id && (!!editing.tax || !!editing.tip || !!editing.discount)) setAdjustmentsFor(editing.id);
@@ -1494,6 +1514,13 @@ export default function Home({ children }: { children: ReactNode }) {
     const itemId = editing.items[0]?.id;
     setEditorMode({ id: editing.id, quick: false });
     if (itemId) setTimeout(() => focusExpenseTarget(expenseItemTarget(itemId), focus === "name" ? "input[required]" : ".share-split button[aria-pressed]"), 0);
+  }
+  function stopItemSplitting() {
+    if (!editing || !trip || !canCollapseToQuick) return;
+    setEditing(prev => prev && prev.id === editing.id
+      ? carryReviewAcknowledgements(prev, collapseToQuick(prev, trip.members.map(member => member.id))) : prev);
+    setEditorMode({ id: editing.id, quick: true });
+    setTimeout(() => focusExpenseTarget(EXPENSE_TARGETS.amount, "input"), 0);
   }
   const editorShares = useMemo(() => editing && trip ? previewShares(editing, trip) : null, [editing, trip]);
   const editorTotal = useMemo(() => editing && trip ? previewTotal(editing, trip) : null, [editing, trip]);
@@ -2845,10 +2872,10 @@ export default function Home({ children }: { children: ReactNode }) {
                           <button
                             type="button"
                             className="iconbutton"
-                            aria-label={"Remove item " + (i + 1)}
-                            disabled={editing.items.length === 1}
+                            aria-label={canCollapseToQuick ? "Stop splitting by item" : "Remove item " + (i + 1)}
+                            disabled={editing.items.length === 1 && !canCollapseToQuick}
                             onClick={() =>
-                              setEditing({
+                              canCollapseToQuick ? stopItemSplitting() : setEditing({
                                 ...editing,
                                 items: editing.items.filter(
                                   (x) => x.id !== item.id,
@@ -2907,6 +2934,7 @@ export default function Home({ children }: { children: ReactNode }) {
                   </>}
                   <div className="expense-extra-actions">
                     {quickMode && <button type="button" className="quiet" onClick={() => itemiseEditor("name")}><Plus size={16} aria-hidden="true" /> Split by item</button>}
+                    {!quickMode && canCollapseToQuick && <button type="button" className="quiet" onClick={stopItemSplitting}><Minus size={16} aria-hidden="true" /> Use one amount</button>}
                     {!adjustmentsShown && <button type="button" className="quiet" onClick={() => setAdjustmentsFor(editing.id)}><Plus size={16} aria-hidden="true" /> Tip, tax or discount</button>}
                   </div>
                   {adjustmentsShown && <>

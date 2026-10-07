@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page, type Locator } from '@playwright/test';
 
 // A plain shared purchase uses the quick form: name, amount, payer, people.
 const trip = {
@@ -297,4 +297,122 @@ test('clearing the only adjustment keeps its field open and focused', async ({ p
   await expect(tip).toBeFocused();
   await tip.pressSequentially('1.50');
   await expect(tip).toHaveValue('1.50');
+});
+
+for (const mobile of [true, false]) test.describe(`cancel item splitting on ${mobile ? 'mobile' : 'desktop'}`, () => {
+  // Focus moves scroll the editor; use reduced motion so later pointer actions
+  // cannot race an in-progress smooth scroll in WebKit.
+  test.use({ viewport: mobile ? { width: 390, height: 844 } : { width: 1440, height: 900 }, hasTouch: mobile, isMobile: mobile, contextOptions: { reducedMotion: 'reduce' } });
+
+  const activate = (control: Locator) => mobile ? control.tap() : control.press('Enter');
+
+  for (const action of ['Stop splitting by item', 'Use one amount']) test(`${action} returns to Amount and saves the same line`, async ({ page }) => {
+    const posted = await fixtures(page);
+    await page.goto('/expenses', { waitUntil: 'domcontentloaded' });
+    await page.locator('.expense-open').first().click();
+    await page.getByRole('combobox', { name: 'Paid by' }).selectOption('quick-sam');
+    await activate(page.getByRole('button', { name: 'Sam', exact: true }));
+    await expect(page.getByRole('button', { name: 'Sam', exact: true })).toHaveAttribute('aria-pressed', 'false');
+    await activate(page.getByRole('button', { name: 'Tip, tax or discount', exact: true }));
+    await page.getByRole('textbox', { name: 'tip', exact: true }).fill('2');
+    await page.getByRole('textbox', { name: 'tax', exact: true }).fill('1');
+    await page.getByRole('textbox', { name: 'discount', exact: true }).fill('0.50');
+    await activate(page.getByRole('button', { name: 'Split by item', exact: true }));
+    await page.getByRole('textbox', { name: 'Item 1 name', exact: true }).fill('Changed line name');
+    const control = page.getByRole('button', { name: action, exact: true });
+    await expect(control).toBeEnabled();
+    await control.scrollIntoViewIfNeeded();
+    const box = (await control.boundingBox())!;
+    expect(box.height).toBeGreaterThanOrEqual(44);
+    if (mobile) await control.tap();
+    else { await control.focus(); await control.press('Enter'); }
+    const amount = page.getByRole('textbox', { name: 'Amount', exact: true });
+    await expect(amount).toBeFocused();
+    await expect(amount).toHaveValue('4.00');
+    await expect(amount).toBeInViewport({ ratio: 1 });
+    await expect(page.locator('.item')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Use one amount', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('textbox', { name: 'tip', exact: true })).toHaveValue('2.00');
+    await expect(page.getByRole('combobox', { name: 'Paid by' })).toHaveValue('quick-sam');
+    await activate(page.getByRole('button', { name: 'Save expense', exact: true }));
+    await expect(page.locator('.editor')).toHaveCount(0);
+    const saved = posted.at(-1)!.data.trips[0].expenses.find(expense => expense.id === 'quick-earlier')!;
+    expect(saved).toMatchObject({ date: '2026-10-04', time: '09:00', timezone: 'Europe/Vienna', currency: 'GBP', payer: 'quick-sam', tax: 100, tip: 200, discount: 50 });
+    expect(saved.items).toHaveLength(1);
+    expect(saved.items[0]).toMatchObject({ id: 'quick-earlier-item', name: 'Earlier coffee', amount: 400, members: ['quick-gary'], fieldSources: { name: 'user' } });
+  });
+
+  test('custom percentages and units clear when returning to one amount', async ({ page }) => {
+    const posted = await fixtures(page);
+    await openNew(page);
+    await page.getByRole('textbox', { name: 'Expense name', exact: true }).fill('Lunch');
+    await page.getByRole('textbox', { name: 'Amount', exact: true }).fill('20');
+    await activate(page.getByRole('button', { name: 'Custom split', exact: true }));
+    await activate(page.getByRole('button', { name: 'Custom percentages', exact: true }));
+    await page.getByRole('textbox', { name: 'Gary percentage for item 1', exact: true }).fill('75');
+    await page.getByRole('textbox', { name: 'Sam percentage for item 1', exact: true }).fill('25');
+    await activate(page.getByRole('button', { name: 'Use one amount', exact: true }));
+    await expect(page.locator('.quick-shares')).toContainText('Gary £10.00 · Sam £10.00');
+    await activate(page.getByRole('button', { name: 'Split by item', exact: true }));
+    await activate(page.getByRole('button', { name: 'Units', exact: true }));
+    await activate(page.getByRole('button', { name: 'Stop splitting by item', exact: true }));
+    await expect(page.getByRole('textbox', { name: 'Amount', exact: true })).toBeFocused();
+    await activate(page.getByRole('button', { name: 'Save expense', exact: true }));
+    await expect(page.locator('.editor')).toHaveCount(0);
+    const saved = posted.at(-1)!.data.trips[0].expenses[0];
+    expect(saved.items[0]).toMatchObject({ name: 'Lunch', amount: 2000, members: ['quick-gary', 'quick-sam'] });
+    for (const field of ['percentages', 'units', 'quantity', 'translations']) expect(saved.items[0]).not.toHaveProperty(field);
+    expect(saved).not.toHaveProperty('percentages');
+  });
+
+  test('a missing amount and empty selection return to a blocked quick form', async ({ page }) => {
+    await fixtures(page);
+    await openNew(page);
+    await page.getByRole('textbox', { name: 'Expense name', exact: true }).fill('Lunch');
+    await activate(page.getByRole('button', { name: 'Split by item', exact: true }));
+    await page.getByRole('textbox', { name: 'Item 1 total', exact: true }).fill('');
+    await activate(page.getByRole('button', { name: 'Gary', exact: true }));
+    await activate(page.getByRole('button', { name: 'Sam', exact: true }));
+    await activate(page.getByRole('button', { name: 'Use one amount', exact: true }));
+    await expect(page.getByRole('textbox', { name: 'Amount', exact: true })).toBeFocused();
+    await expect(page.getByRole('textbox', { name: 'Amount', exact: true })).toHaveValue('');
+    await expect(page.locator('.save-checklist')).toContainText('Enter the amount');
+    await expect(page.getByRole('button', { name: 'Save expense', exact: true })).toBeDisabled();
+    for (const name of ['Gary', 'Sam']) await expect(page.getByRole('button', { name, exact: true })).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  test('extra lines remove normally and only the remaining line can collapse', async ({ page }) => {
+    const posted = await fixtures(page);
+    await openNew(page);
+    await page.getByRole('textbox', { name: 'Expense name', exact: true }).fill('Groceries');
+    await page.getByRole('textbox', { name: 'Amount', exact: true }).fill('30');
+    await activate(page.getByRole('button', { name: 'Split by item', exact: true }));
+    await activate(page.getByRole('button', { name: 'Add item', exact: true }));
+    await page.getByRole('textbox', { name: 'Item 2 name', exact: true }).fill('Wine');
+    await page.getByRole('textbox', { name: 'Item 2 total', exact: true }).fill('10');
+    await expect(page.getByRole('button', { name: 'Use one amount', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Stop splitting by item', exact: true })).toHaveCount(0);
+    await activate(page.getByRole('button', { name: 'Remove item 1', exact: true }));
+    await expect(page.locator('.item')).toHaveCount(1);
+    await expect(page.getByRole('textbox', { name: 'Item 1 total', exact: true })).toHaveValue('10.00');
+    await activate(page.getByRole('button', { name: 'Stop splitting by item', exact: true }));
+    await expect(page.getByRole('textbox', { name: 'Amount', exact: true })).toHaveValue('10.00');
+    await activate(page.getByRole('button', { name: 'Save expense', exact: true }));
+    await expect(page.locator('.editor')).toHaveCount(0);
+    expect(posted.at(-1)!.data.trips[0].expenses[0].items).toMatchObject([{ name: 'Groceries', amount: 1000 }]);
+  });
+
+  for (const kind of ['photo', 'scan', 'draft']) test(`a ${kind} keeps its last line protected`, async ({ page }) => {
+    const receiptScan = { version: 1, printedTotal: 520, printedCurrency: 'GBP', status: 'matched', warnings: [] };
+    const protectedTrip = kind === 'draft'
+      ? { ...trip, drafts: [{ ...receiptExpense, id: 'protected-draft', receiptId: undefined, status: 'review' }] }
+      : { ...trip, expenses: [{ ...receiptExpense, receiptId: kind === 'photo' ? 'quick-photo' : undefined, receiptScan: kind === 'scan' ? receiptScan : undefined }] };
+    await fixtures(page, { trip: protectedTrip as unknown as typeof trip });
+    await page.goto(kind === 'draft' ? '/expenses?receiptDraft=protected-draft&receiptTrip=quick-trip' : '/expenses', { waitUntil: 'domcontentloaded' });
+    if (kind !== 'draft') await page.locator('.expense-open').first().click();
+    await expect(page.locator('.editor')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Remove item 1', exact: true })).toBeDisabled();
+    await expect(page.getByRole('button', { name: 'Stop splitting by item', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Use one amount', exact: true })).toHaveCount(0);
+  });
 });
