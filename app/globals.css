@@ -211,6 +211,28 @@ small {
   font-size: 0.875rem;
   padding: 5px 0;
 }
+.assistant-status {
+  display: grid;
+  grid-template-columns: 19px minmax(0, 1fr);
+  align-items: center;
+  column-gap: 4px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+.assistant-status > svg {
+  color: var(--primary);
+}
+.assistant-status strong {
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+.assistant-status .textbutton {
+  grid-column: 2;
+  justify-self: start;
+  padding: 12px 4px;
+  min-height: 44px;
+}
 .personal {
   display: flex;
   align-items: center;
@@ -2342,6 +2364,44 @@ footer {
 .sidebar-close {
   display: none;
 }
+/* Leave room for the original setup card on short drawers with wider fonts. */
+@media (max-width: 900px) and (max-height: 700px) {
+  .sidebar.visible:has(.account-note) {
+    padding-bottom: calc(16px + env(safe-area-inset-bottom));
+  }
+  .sidebar.visible:has(.account-note) .side-label {
+    margin-top: 16px;
+    margin-bottom: 12px;
+  }
+  .sidebar.visible:has(.account-note) .newtrip {
+    margin-top: 0;
+  }
+  .sidebar.visible:has(.account-note) .side-bottom {
+    padding-top: 8px;
+  }
+}
+/* The setup card wraps onto more lines in WebKit, so reclaim vertical space
+   wherever the sidebar is narrow or short and the card is showing. */
+@media (max-width: 1150px) and (max-height: 860px) {
+  .sidebar:has(.account-note) .side-label {
+    margin-top: 24px;
+  }
+  .sidebar:has(.account-note) .side-bottom {
+    padding-top: 12px;
+  }
+  .sidebar:has(.account-note) .account-note {
+    padding: 12px 14px;
+  }
+  .sidebar:has(.account-note) .account-note > svg {
+    margin-bottom: 6px;
+  }
+  .sidebar:has(.account-note) .account-note p {
+    margin: 4px 0;
+  }
+  .sidebar:has(.account-note) .personal {
+    margin-top: 12px;
+  }
+}
 @media (max-width: 900px) {
   .sidebar-close {
     display: grid;
@@ -2411,6 +2471,7 @@ footer {
     color: var(--primary);
   }
   .account-note,
+  .assistant-status,
   .profile-email,
   .split-preview {
     background: var(--surface-raised);
