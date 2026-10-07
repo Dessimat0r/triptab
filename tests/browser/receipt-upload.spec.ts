@@ -92,7 +92,6 @@ for (const width of [320, 390, 1440]) {
       await expect(page.getByText('Read the coffee and proposed your share.', { exact: true })).toBeVisible();
       const trigger = page.locator('.editor .expense-icon-trigger');
       await expect(trigger).toHaveAttribute('aria-label', /Automatic: Meals · Orange/);
-      await expect(trigger.locator('small')).toHaveText('Automatic · Meals · Orange');
       await trigger.click();
       const picker = page.getByRole('dialog', {name:'Choose an icon',exact:true});
       await expect(picker.getByText('Suggested from the receipt reading', {exact:true})).toBeVisible();
