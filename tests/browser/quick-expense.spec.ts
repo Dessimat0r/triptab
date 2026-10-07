@@ -55,6 +55,8 @@ test('a shared taxi needs a name, an amount and Save', async ({ page }) => {
   await openNew(page);
   const name = page.getByRole('textbox', { name: 'Expense name', exact: true });
   await expect(name).toBeFocused();
+  await expect(page.locator('.editor .modalheading').getByRole('textbox', { name: 'Expense name', exact: true })).toHaveCount(1);
+  expect((await name.boundingBox())!.y).toBeLessThan((await page.getByRole('textbox', { name: 'Amount', exact: true }).boundingBox())!.y);
   // Everything the common case needs is on the opening screen.
   for (const control of [name, page.getByRole('textbox', { name: 'Amount', exact: true }), page.getByRole('combobox', { name: 'Original currency' }),
     page.getByRole('combobox', { name: 'Paid by' }), page.getByRole('button', { name: 'Sam', exact: true }), page.getByRole('button', { name: 'Save expense', exact: true })]) {
@@ -175,7 +177,9 @@ test('the checklist and Save agree, and a blocker focuses its field', async ({ p
   await expect(checklist).toContainText('Add an expense name');
   await expect(checklist).not.toContainText('Name 1 item');
   await checklist.getByRole('button', { name: /Add an expense name/ }).click();
-  await expect(page.getByRole('textbox', { name: 'Expense name', exact: true })).toBeFocused();
+  const name = page.locator('.editor .modalheading').getByRole('textbox', { name: 'Expense name', exact: true });
+  await expect(name).toBeFocused();
+  await expect(name).toBeInViewport({ ratio: 1 });
   await page.getByRole('button', { name: 'Split by item', exact: true }).click();
   await page.getByRole('button', { name: 'Add item', exact: true }).click();
   await page.getByRole('textbox', { name: 'Expense name', exact: true }).fill('Lunch');
@@ -415,4 +419,82 @@ for (const mobile of [true, false]) test.describe(`cancel item splitting on ${mo
     await expect(page.getByRole('button', { name: 'Stop splitting by item', exact: true })).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Use one amount', exact: true })).toHaveCount(0);
   });
+});
+
+test('the header tab order is icon, name, close, then body', async ({ page, browserName }) => {
+  // macOS WebKit uses Option-Tab to include buttons in keyboard navigation.
+  const tab = browserName === 'webkit' && process.platform === 'darwin' ? 'Alt+Tab' : 'Tab';
+  const backTab = browserName === 'webkit' && process.platform === 'darwin' ? 'Alt+Shift+Tab' : 'Shift+Tab';
+  await fixtures(page);
+  await openNew(page);
+  const header = page.locator('.editor .modalheading');
+  const name = header.getByRole('textbox', { name: 'Expense name', exact: true });
+  await expect(name).toBeFocused();
+  await page.keyboard.press(backTab);
+  await expect(header.getByRole('button', { name: /Choose icon for/ })).toBeFocused();
+  await page.keyboard.press(tab);
+  await expect(name).toBeFocused();
+  await page.keyboard.press(tab);
+  await expect(header.getByRole('button', { name: 'Close editor', exact: true })).toBeFocused();
+  await page.keyboard.press(tab);
+  await expect(page.getByRole('textbox', { name: 'Amount', exact: true })).toBeFocused();
+});
+
+test('the header icon changes the badge, guards unsaved work and saves the choice', async ({ page }) => {
+  const posted = await fixtures(page);
+  await openNew(page);
+  const icon = page.locator('.editor .modalheading .expense-icon-trigger');
+  await expect(icon).toHaveAttribute('aria-label', /Automatic:/);
+  await icon.tap();
+  const picker = page.getByRole('dialog', { name: 'Choose an icon', exact: true });
+  await expect(picker).toBeVisible();
+  await picker.getByRole('textbox', { name: 'Search symbols', exact: true }).fill('Coffee');
+  await picker.getByRole('button', { name: 'Coffee', exact: true }).click();
+  await picker.getByRole('button', { name: 'Blue background', exact: true }).click();
+  await picker.getByRole('button', { name: 'Use icon', exact: true }).click();
+  await expect(picker).toHaveCount(0);
+  await expect(icon).toHaveAttribute('aria-label', /Selected: Coffee/);
+  await expect(icon.locator('svg')).toHaveClass(/lucide-coffee/);
+  await expect(icon.locator('.expense-symbol')).toHaveCSS('background-color', 'rgb(37, 99, 235)');
+  await expect(page.locator('.editor .expense-icon-trigger')).toHaveCount(1);
+  await expectDiscardPrompt(page);
+  await page.getByRole('textbox', { name: 'Expense name', exact: true }).fill('Coffee');
+  await page.getByRole('textbox', { name: 'Amount', exact: true }).fill('5');
+  await page.getByRole('button', { name: 'Save expense', exact: true }).click();
+  await expect(page.locator('.editor')).toHaveCount(0);
+  expect(posted.at(-1)!.data.trips[0].expenses[0]).toMatchObject({ icon: { symbol: 'Coffee', background: 'blue' } });
+});
+
+test('a processed receipt focuses QuickSplit and keeps its name above both views', async ({ page }) => {
+  const scanned = { ...trip, drafts: [{
+    id: 'quick-draft', receiptId: 'quick-photo', title: 'Café Central', status: 'review', currency: 'GBP',
+    date: '2026-10-05', time: '13:42', timezone: 'Europe/Vienna', payer: 'quick-gary', tax: 0, tip: 0, discount: 0,
+    fieldSources: { title: 'default' },
+    items: [{ id: 'quick-melange', name: 'Melange', amount: 520, members: [] }],
+    receiptScan: { version: 1, printedTotal: 520, printedCurrency: 'GBP', status: 'matched', warnings: [] },
+  }] };
+  await fixtures(page, { trip: scanned as unknown as typeof trip });
+  await page.goto('/expenses?receiptDraft=quick-draft&receiptTrip=quick-trip', { waitUntil: 'domcontentloaded' });
+  const name = page.locator('.editor .modalheading').getByRole('textbox', { name: 'Expense name', exact: true });
+  await expect(page.getByRole('button', { name: 'Share the remaining item equally', exact: true })).toBeFocused();
+  await expect(name).not.toBeFocused();
+  await expect(name).not.toHaveAttribute('autofocus');
+  const suggestion = page.locator('.expense-title-suggestion');
+  await expect(suggestion).toHaveText('Suggested name. Receipt reading may replace it; editing confirms your choice.');
+  expect((await suggestion.boundingBox())!.y).toBeGreaterThan((await name.boundingBox())!.y);
+  expect((await suggestion.boundingBox())!.y).toBeLessThan((await page.locator('.receipt-view-switch').boundingBox())!.y);
+  await page.getByRole('button', { name: 'Receipt history', exact: true }).click();
+  await expect(name).toBeVisible();
+  await expect(page.locator('.editor .modalheading .expense-icon-trigger')).toBeVisible();
+  await page.getByRole('button', { name: 'Details & split', exact: true }).click();
+  await page.getByRole('button', { name: 'Share the remaining item equally', exact: true }).click();
+  await name.fill('Melange at Café Central');
+  await expect(suggestion).toHaveCount(0);
+  await expect(page.locator('.ready-to-save')).toContainText('Melange at Café Central');
+  // The footer's blocker must return to the header from deep inside a receipt.
+  await name.fill('');
+  await page.locator('.editor').evaluate(editor => { editor.scrollTop = editor.scrollHeight; });
+  await page.locator('.save-checklist').getByRole('button', { name: /Add an expense name/ }).click();
+  await expect(name).toBeFocused();
+  await expect(name).toBeInViewport({ ratio: 1 });
 });

@@ -877,6 +877,69 @@ label > small {
   border-bottom: 1px solid var(--line);
   margin: 0;
 }
+.editor .modalheading {
+  gap: 12px;
+}
+.editor .expense-heading-text {
+  flex: 1;
+  min-width: 0;
+}
+.expense-title-control {
+  position: relative;
+}
+.editor .expense-title-input {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  padding: 2px 30px 2px 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink);
+  font-size: 1.4rem;
+  font-weight: 750;
+  text-overflow: ellipsis;
+}
+@media (hover: hover) {
+  .editor .expense-title-input:hover {
+    background: var(--bg);
+    border-bottom-color: var(--muted);
+  }
+}
+.editor .expense-title-input:focus {
+  background: var(--bg);
+  border-bottom-color: var(--muted);
+}
+.editor .expense-title-input:focus {
+  text-overflow: clip;
+}
+.editor .expense-title-input:focus-visible {
+  outline: 3px solid var(--primary);
+  outline-offset: 2px;
+}
+.expense-title-pencil {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--muted);
+  pointer-events: none;
+}
+.editor .expense-heading-text h2 {
+  margin: 2px 6px 0;
+  font-size: 0.8rem;
+  font-weight: 500;
+  line-height: 1.4;
+  color: var(--muted);
+}
+.editor .modalheading > .expense-icon-trigger {
+  min-width: 44px;
+  min-height: 44px;
+}
+.editor .expense-title-suggestion {
+  margin: 0;
+  padding: 8px 28px;
+}
 .editor-body {
   padding: 26px 28px;
   overflow: auto;
@@ -1457,7 +1520,13 @@ input[type="datetime-local"]::-webkit-date-and-time-value {
     padding: 0;
   }
   .editor form > .modalheading {
-    padding: 20px 18px;
+    padding: 11px 18px;
+  }
+  .editor .expense-title-input {
+    font-size: 1.2rem;
+  }
+  .editor .expense-title-suggestion {
+    padding: 8px 18px;
   }
   .editor-body {
     padding: 20px 18px;

@@ -45,6 +45,7 @@ import type { ActivityEvent } from "@/lib/store";
 import {
   Plus,
   Minus,
+  Pencil,
   Plane,
   Receipt,
   Wallet,
@@ -2616,8 +2617,31 @@ export default function Home({ children }: { children: ReactNode }) {
               if (await submitExpense(event)) setSavedNotice({ title, at: Date.now() });
             }}>
               <div className="modalheading">
-                <div>
-                  <span className="eyebrow">MAKE EVERY ITEM FAIR</span>
+                <ExpenseIconPicker entry={editing} disabled={saving || uploading} onChange={icon => setEditing(previous => previous && { ...previous, icon })} />
+                <div className="expense-heading-text">
+                  <div className="expense-title-control">
+                    <input
+                      id={EXPENSE_TARGETS.title}
+                      aria-label="Expense name"
+                      className="expense-title-input"
+                      // QuickSplit keeps receipt review's initial focus and the keyboard closed.
+                      data-autofocus={!unassignedItemIds(editing).length || !trip.members.length ? true : undefined}
+                      value={editing.title}
+                      required
+                      maxLength={200}
+                      placeholder={quickMode ? "Taxi, groceries, dinner…" : "Dinner by the harbour"}
+                      autoComplete="off"
+                      onChange={(e) => {
+                        const next = userReceiptField(editing, "title", e.target.value);
+                        // A new manual expense's first line follows its name until
+                        // someone names that line separately.
+                        const follows = quickMode || (!editing.receiptId && !editing.receiptScan && !editing.draftId && !trip.expenses.some(value => value.id === editing.id)
+                          && editing.items[0]?.name === editing.title && !Object.keys(editing.items[0]?.translations ?? {}).length);
+                        setEditing(follows ? withQuickName(next, e.target.value) : next);
+                      }}
+                    />
+                    <Pencil className="expense-title-pencil" size={16} aria-hidden="true" />
+                  </div>
                   <h2 id="expense-title">
                     {editing.draftId
                       ? editing.expenseId ? "Review expense update" : "Review receipt"
@@ -2636,6 +2660,7 @@ export default function Home({ children }: { children: ReactNode }) {
                   <X />
                 </button>
               </div>
+              {editing.fieldSources?.title === "default" && !!editing.title.trim() && (!!editing.receiptId || !!editing.draftId) && <p className="footnote expense-title-suggestion">Suggested name. Receipt reading may replace it; editing confirms your choice.</p>}
               {(editing.draftId || editing.expenseId || trip.expenses.some(value => value.id === editing.id)) && <nav className="receipt-view-switch" aria-label="Receipt views">
                 <button type="button" className="quiet" aria-pressed={!receiptHistoryOpen} aria-controls="receipt-details-view" onClick={() => setReceiptHistoryOpen(false)}>Details & split</button>
                 <button type="button" className="quiet" aria-pressed={receiptHistoryOpen} aria-controls="receipt-history-view" onClick={() => setReceiptHistoryOpen(true)}><History size={17} aria-hidden="true" />Receipt history</button>
@@ -2657,26 +2682,6 @@ export default function Home({ children }: { children: ReactNode }) {
                     payerName={name(editing.payer)}
                     shares={trip.members.flatMap((member, index) => editorShares?.[index] ? [{ id: member.id, name: member.name, amount: money(editorShares[index], trip.currency) }] : [])}
                     disabled={saveDisabled} onEdit={() => editing.items[0] ? focusExpenseTarget(expenseItemTarget(editing.items[0].id)) : focusExpenseTarget(EXPENSE_TARGETS.items)} />}
-                  <label>
-                    Expense name
-                    <input
-                      id={EXPENSE_TARGETS.title}
-                      value={editing.title}
-                      required
-                      maxLength={200}
-                      placeholder={quickMode ? "Taxi, groceries, dinner…" : "Dinner by the harbour"}
-                      autoComplete="off"
-                      onChange={(e) => {
-                        const next = userReceiptField(editing, "title", e.target.value);
-                        // A new manual expense's first line follows its name until
-                        // someone names that line separately.
-                        const follows = quickMode || (!editing.receiptId && !editing.receiptScan && !editing.draftId && !trip.expenses.some(value => value.id === editing.id)
-                          && editing.items[0]?.name === editing.title && !Object.keys(editing.items[0]?.translations ?? {}).length);
-                        setEditing(follows ? withQuickName(next, e.target.value) : next);
-                      }}
-                    />
-                  </label>
-                  {editing.fieldSources?.title === "default" && !!editing.title.trim() && (!!editing.receiptId || !!editing.draftId) && <p className="footnote">Suggested name. Receipt reading may replace it; editing confirms your choice.</p>}
                   {quickMode && <>
                     <div className="fieldpair quick-amount">
                       <label>
@@ -2963,7 +2968,6 @@ export default function Home({ children }: { children: ReactNode }) {
                   </>}
                   {!editing.receiptId && renderReceiptCapture(editing, trip, true)}
                   <MoreOptions key={`more:${editing.id}`} defaultOpen={hasReceiptDiscussion(editing.conversation)}>
-                  <ExpenseIconPicker entry={editing} showLabel disabled={saving || uploading} onChange={icon => setEditing(previous => previous && { ...previous, icon })} />
                   <ReceiptLanguageSelect tripLanguage={trip.receiptLanguage} value={editing.receiptLanguage} detected={editing.detectedLanguage} onChange={receiptLanguage=>setEditing(previous=>previous&&{...previous,receiptLanguage})} />
                   <details className="import">
                     <summary>
