@@ -211,6 +211,28 @@ small {
   font-size: 0.875rem;
   padding: 5px 0;
 }
+.assistant-status {
+  display: grid;
+  grid-template-columns: 19px minmax(0, 1fr);
+  align-items: center;
+  column-gap: 7px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+.assistant-status > svg {
+  color: var(--primary);
+}
+.assistant-status strong {
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+.assistant-status .textbutton {
+  grid-column: 2;
+  justify-self: start;
+  padding: 12px 4px;
+  min-height: 44px;
+}
 .personal {
   display: flex;
   align-items: center;
@@ -2330,6 +2352,7 @@ footer {
     color: var(--primary);
   }
   .account-note,
+  .assistant-status,
   .profile-email,
   .split-preview {
     background: var(--surface-raised);

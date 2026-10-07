@@ -1433,6 +1433,8 @@ export default function Home({ children }: { children: ReactNode }) {
     return { balance, due, spent, calculationError };
   }, [trip]);
   const currentMemberIndex = trip?.members.findIndex(member => member.userId === profile?.id) ?? -1;
+  const chatgptConnected = !!(profile?.chatgptConnected || profile?.authMethod === "chatgpt")
+    || (!!receiptAI && receiptAI.accountId === profile?.id && receiptAI.provider === "siwc" && receiptAI.connected);
   const memberNames = useMemo(() => Object.fromEntries(trip?.members.map(member => [member.id, member.name]) || []), [trip?.members]);
   const actorMemberNames = useMemo(() => Object.fromEntries(trip?.members.filter(member => member.userId).map(member => [member.userId!, member.name]) || []), [trip?.members]);
   const expensePreviews = useMemo(() => new Map(trip?.expenses.map(expense => [expense.id, {
@@ -1764,7 +1766,7 @@ export default function Home({ children }: { children: ReactNode }) {
                               className="quiet"
                               onClick={() => setHelp(true)}
                             >
-                              Connect ChatGPT or Codex
+                              {chatgptConnected ? "How to use ChatGPT or Codex" : "Connect ChatGPT or Codex"}
                             </button>
                           </div>
                         )}
@@ -2108,17 +2110,27 @@ export default function Home({ children }: { children: ReactNode }) {
           <Plus size={17} /> New holiday
         </button>
         <div className="side-bottom">
-          <div className="account-note">
-            <Sparkles size={19} />
-            <strong>Your assistant, optionally.</strong>
-            <p>
-              Link your ChatGPT identity in Your account. External ChatGPT or Codex receipt assistance also requires the TripTab tools to be enabled in that conversation. Manual
-              entry always works.
-            </p>
-            <button className="textbutton" onClick={() => setHelp(true)}>
-              How to connect <CircleHelp size={15} />
-            </button>
-          </div>
+          {chatgptConnected ? (
+            <div className="assistant-status">
+              <Sparkles size={19} />
+              <strong>ChatGPT connected</strong>
+              <button className="textbutton" onClick={() => setHelp(true)}>
+                Help <CircleHelp size={15} />
+              </button>
+            </div>
+          ) : (
+            <div className="account-note">
+              <Sparkles size={19} />
+              <strong>Your assistant, optionally.</strong>
+              <p>
+                Link your ChatGPT identity in Your account. External ChatGPT or Codex receipt assistance also requires the TripTab tools to be enabled in that conversation. Manual
+                entry always works.
+              </p>
+              <button className="textbutton" onClick={() => setHelp(true)}>
+                How to connect <CircleHelp size={15} />
+              </button>
+            </div>
+          )}
           <button className="personal" onClick={() => { if (auth) requestAccount(); else setAccount(true); }}>
             <span className="avatar">
               {profile?.displayName.slice(0, 1).toUpperCase() || "Y"}
