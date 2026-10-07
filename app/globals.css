@@ -215,8 +215,8 @@ small {
   display: grid;
   grid-template-columns: 19px minmax(0, 1fr);
   align-items: center;
-  column-gap: 7px;
-  padding: 8px;
+  column-gap: 4px;
+  padding: 6px;
   border: 1px solid var(--line);
   border-radius: 12px;
 }
@@ -224,7 +224,7 @@ small {
   color: var(--primary);
 }
 .assistant-status strong {
-  font-size: 0.85rem;
+  font-size: 0.8rem;
   line-height: 1.4;
 }
 .assistant-status .textbutton {
@@ -2282,6 +2282,22 @@ footer {
 
 .sidebar-close {
   display: none;
+}
+/* Leave room for the original setup card on short drawers with wider fonts. */
+@media (max-width: 900px) and (max-height: 700px) {
+  .sidebar.visible:has(.account-note) {
+    padding-bottom: calc(16px + env(safe-area-inset-bottom));
+  }
+  .sidebar.visible:has(.account-note) .side-label {
+    margin-top: 16px;
+    margin-bottom: 12px;
+  }
+  .sidebar.visible:has(.account-note) .newtrip {
+    margin-top: 0;
+  }
+  .sidebar.visible:has(.account-note) .side-bottom {
+    padding-top: 8px;
+  }
 }
 @media (max-width: 900px) {
   .sidebar-close {
