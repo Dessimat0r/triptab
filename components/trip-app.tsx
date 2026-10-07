@@ -2534,7 +2534,7 @@ export default function Home({ children }: { children: ReactNode }) {
                 <span className="eyebrow">
                   YOUR OWN CHATGPT OR CODEX ACCOUNT
                 </span>
-                <h2 id="help-title">{chatgptConnected ? "How to use ChatGPT or Codex" : "Connect ChatGPT or Codex"}</h2>
+                <h2 id="help-title">Connect ChatGPT or Codex</h2>
               </div>
               <button
                 className="iconbutton"

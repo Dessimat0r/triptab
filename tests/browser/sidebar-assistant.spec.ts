@@ -49,6 +49,7 @@ async function openSidebar(page: Page) {
 
 async function fits(page: Page, connected: boolean) {
   await expect(page.locator('.personal')).toBeInViewport({ ratio: 1 });
+  await expect(page.locator('.tripnav button').first()).toBeInViewport({ ratio: 1 });
   const layout = await page.locator('.sidebar').evaluate(sidebar => {
     const status = sidebar.querySelector<HTMLElement>('.assistant-status');
     const account = sidebar.querySelector<HTMLElement>('.personal')!;
@@ -99,7 +100,7 @@ async function fits(page: Page, connected: boolean) {
 
 async function opensHelp(page: Page, connected: boolean) {
   await page.locator('.side-bottom').getByRole('button', { name: connected ? 'Help' : 'How to connect', exact: true }).click();
-  const dialog = page.getByRole('dialog', { name: connected ? 'How to use ChatGPT or Codex' : 'Connect ChatGPT or Codex', exact: true });
+  const dialog = page.getByRole('dialog', { name: 'Connect ChatGPT or Codex', exact: true });
   await expect(dialog).toBeVisible();
   await expect(dialog.getByRole('button', { name: 'Copy receipt-reading prompt', exact: true })).toBeVisible();
   await expect(dialog).toContainText('Enable TripTab tools');
@@ -190,6 +191,6 @@ for (const connected of [false, true]) {
     await page.locator('.empty').getByRole('button', {
       name: connected ? 'How to use ChatGPT or Codex' : 'Connect ChatGPT or Codex', exact: true,
     }).click();
-    await expect(page.getByRole('dialog', { name: connected ? 'How to use ChatGPT or Codex' : 'Connect ChatGPT or Codex', exact: true })).toBeVisible();
+    await expect(page.getByRole('dialog', { name: 'Connect ChatGPT or Codex', exact: true })).toBeVisible();
   });
 }
