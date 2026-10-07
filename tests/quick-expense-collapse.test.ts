@@ -1,22 +1,7 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
 import test from 'node:test';
-import { createSourceFile, isFunctionDeclaration, ModuleKind, ScriptKind, ScriptTarget, transpileModule } from 'typescript';
+import { collapseToQuick, hasItemSplitDetail, isManualSingleLine, quickEligible } from '../lib/quick-expense';
 import type { ReceiptEditor } from '../lib/receipt-processing';
-
-// Exercise the production helpers, following the receipt-editor test harness.
-const source = await readFile(new URL('../components/trip-app.tsx', import.meta.url), 'utf8');
-const syntax = createSourceFile('trip-app.tsx', source, ScriptTarget.Latest, true, ScriptKind.TSX);
-const helpers = ['quickEligible', 'withQuickName', 'collapseToQuick'].map(name => {
-  const declaration = syntax.statements.find(node => isFunctionDeclaration(node) && node.name?.text === name);
-  assert(declaration, `Missing production helper: ${name}`);
-  return declaration.getText(syntax);
-}).join('\n');
-const compiled = transpileModule(helpers, { compilerOptions: { module: ModuleKind.CommonJS, target: ScriptTarget.ES2022 } }).outputText;
-const { quickEligible, collapseToQuick } = new Function(`${compiled}; return { quickEligible, collapseToQuick };`)() as {
-  quickEligible(entry: ReceiptEditor): boolean;
-  collapseToQuick(entry: ReceiptEditor, memberIds: string[]): ReceiptEditor;
-};
 
 const entry: ReceiptEditor = {
   id: 'expense', title: 'Dinner', payer: 'sam', currency: 'EUR',
@@ -36,7 +21,7 @@ const entry: ReceiptEditor = {
 
 test('collapse preserves the line and expense details while clearing item split data', () => {
   const before = structuredClone(entry);
-  const collapsed = collapseToQuick(entry, ['gary', 'sam']);
+  const collapsed = collapseToQuick(entry);
   assert(quickEligible(collapsed));
   assert.equal(collapsed.percentages, undefined);
   assert.deepEqual(collapsed.items[0], {
@@ -49,17 +34,38 @@ test('collapse preserves the line and expense details while clearing item split 
   assert.deepEqual(entry, before, 'collapsing must not mutate the previous editor');
 });
 
-test('missing amount becomes zero and an unassigned line uses every trip member', () => {
-  const collapsed = collapseToQuick({ ...entry, items: [{ ...entry.items[0], amount: null, members: [] }] }, ['gary', 'sam']);
+test('a line named while the expense title was blank names the expense', () => {
+  const collapsed = collapseToQuick({ ...entry, title: '' });
+  assert.equal(collapsed.title, 'Other name');
+  assert.equal(collapsed.items[0].name, 'Other name');
   assert(quickEligible(collapsed));
+});
+
+test('a missing amount becomes zero and collapsing never invents who shares the line', () => {
+  const collapsed = collapseToQuick({ ...entry, items: [{ ...entry.items[0], amount: null, members: [] }] });
   assert.equal(collapsed.items[0].amount, 0);
-  assert.deepEqual(collapsed.items[0].members, ['gary', 'sam']);
+  assert.deepEqual(collapsed.items[0].members, []);
+  assert(!quickEligible(collapsed), 'an unassigned line stays out of the quick form');
 });
 
 test('a zero-priced line keeps its selected people and can collapse repeatedly', () => {
-  const collapsed = collapseToQuick({ ...entry, items: [{ ...entry.items[0], amount: 0 }] }, ['gary', 'sam']);
+  const collapsed = collapseToQuick({ ...entry, items: [{ ...entry.items[0], amount: 0 }] });
   assert(quickEligible(collapsed));
   assert.equal(collapsed.items[0].amount, 0);
   assert.deepEqual(collapsed.items[0].members, ['sam']);
-  assert.deepEqual(collapseToQuick(collapsed, ['gary', 'sam']), collapsed);
+  assert.deepEqual(collapseToQuick(collapsed), collapsed);
+});
+
+test('split detail is reported only when collapsing would discard it', () => {
+  assert(hasItemSplitDetail(entry));
+  assert(hasItemSplitDetail({ ...entry, items: [{ ...entry.items[0], percentages: undefined, units: undefined, quantity: undefined, translations: undefined }] }), 'whole-bill percentages');
+  assert(!hasItemSplitDetail(collapseToQuick(entry)));
+});
+
+test('only a hand-entered single line can collapse', () => {
+  const plain = collapseToQuick(entry);
+  assert(isManualSingleLine(plain));
+  assert(!isManualSingleLine({ ...plain, receiptId: 'photo' }));
+  assert(!isManualSingleLine({ ...plain, draftId: 'draft' }));
+  assert(!isManualSingleLine({ ...plain, items: [plain.items[0], { ...plain.items[0], id: 'other' }] }));
 });

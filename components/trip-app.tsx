@@ -41,6 +41,7 @@ import { localDate, localTime } from "@/lib/dates";
 import { equalFinancialValue, equalSavedValue, hasNewMatchingPayment, rebaseLedger } from "@/lib/client-ledger";
 import { buildReceiptPrompt, chatgptReceiptUrl } from "@/lib/receipt-chatgpt";
 import { isBlankReceipt, isUnchangedInitialReceipt, matchingReceiptProposal, mayFillInitialReceipt, receiptEditableValue, receiptProposalEditor, receiptEditorTotal, userReceiptField, type ReceiptEditor, type InitialReceiptReview } from "@/lib/receipt-processing";
+import { collapseToQuick, hasItemSplitDetail, isManualSingleLine, quickEligible, withQuickName } from "@/lib/quick-expense";
 import type { ActivityEvent } from "@/lib/store";
 import {
   Plus,
@@ -196,40 +197,6 @@ type EditorWork = Pick<ReceiptEditor, "title" | "payer" | "currency" | "items" |
 function editorWorkValue(entry: EditorWork) {
   const { title, payer, currency, items, tax, tip, discount, percentages, bankAmount, fx, date, time, timezone, location, icon, receiptId, receiptScan, fieldSources } = entry;
   return canonicalJson({ title, payer, currency, items, tax, tip, discount, percentages, bankAmount, fx: fx?.source === "manual" ? fx : undefined, date, time, timezone, location, icon, receiptId, receiptScan, fieldSources });
-}
-/**
- * A manual expense with one line priced and shared equally (or by one
- * person) needs no item editor: its name is the line's name. Anything richer
- * (a photo, a scan, several lines, a separately named line, percentages or
- * quantities) opens the full itemised editor so nothing is flattened.
- */
-function quickEligible(entry: ReceiptEditor) {
-  const [item] = entry.items;
-  return !entry.receiptId && !entry.receiptScan && !entry.draftId && entry.percentages === undefined && entry.items.length === 1
-    && !!item.members.length && item.amount !== null && item.name === entry.title && !item.units && !item.percentages && !item.quantity
-    && !item.scanSource && !Object.keys(item.translations ?? {}).length;
-}
-/** In the quick form the expense name is also its single line's name. */
-function withQuickName(entry: ReceiptEditor, name: string): ReceiptEditor {
-  return { ...entry, items: entry.items.map((item, index) => index === 0 ? { ...item, name, fieldSources: { ...item.fieldSources, name: "user" as const } } : item) };
-}
-/** Return a single manual line to the equal/one-person quick form. */
-function collapseToQuick(entry: ReceiptEditor, memberIds: string[]): ReceiptEditor {
-  const [item] = entry.items;
-  return withQuickName({
-    ...entry,
-    percentages: undefined,
-    items: [{
-      ...item,
-      amount: item.amount ?? 0,
-      members: item.members.length ? item.members : memberIds,
-      percentages: undefined,
-      units: undefined,
-      quantity: undefined,
-      translations: undefined,
-      scanSource: undefined,
-    }],
-  }, entry.title);
 }
 function mergeReceiptConversation(stored?: ReceiptMessage[], local?: ReceiptMessage[]) {
   const messages = [...stored || []];
@@ -1505,7 +1472,7 @@ export default function Home({ children }: { children: ReactNode }) {
   // The saved confirmation belongs to the list view; opening a form retires it.
   if (editing && savedNotice) setSavedNotice(null);
   const quickMode = !!editing && editorMode?.id === editing.id && editorMode.quick && quickEligible(editing);
-  const canCollapseToQuick = !!editing && !editing.receiptId && !editing.receiptScan && !editing.draftId && editing.items.length === 1;
+  const canCollapseToQuick = !!editing && isManualSingleLine(editing);
   // Once shown (asked for, or holding a value), adjustments stay open for this
   // entry, so clearing a tip to retype it never hides the field being edited.
   if (editing && adjustmentsFor !== editing.id && (!!editing.tax || !!editing.tip || !!editing.discount)) setAdjustmentsFor(editing.id);
@@ -1516,11 +1483,12 @@ export default function Home({ children }: { children: ReactNode }) {
     setEditorMode({ id: editing.id, quick: false });
     if (itemId) setTimeout(() => focusExpenseTarget(expenseItemTarget(itemId), focus === "name" ? "input[required]" : ".share-split button[aria-pressed]"), 0);
   }
-  function stopItemSplitting() {
-    if (!editing || !trip || !canCollapseToQuick) return;
-    setEditing(prev => prev && prev.id === editing.id
-      ? carryReviewAcknowledgements(prev, collapseToQuick(prev, trip.members.map(member => member.id))) : prev);
-    setEditorMode({ id: editing.id, quick: true });
+  async function stopItemSplitting() {
+    if (!editing || !canCollapseToQuick || !editing.items[0].members.length) return;
+    const id = editing.id;
+    if (hasItemSplitDetail(editing) && !await confirm({ title: "Use one amount?", message: "This removes the custom percentages, units and quantities for this expense. It will be shared equally between the people chosen.", confirmLabel: "Use one amount", cancelLabel: "Keep splitting", destructive: true })) return;
+    setEditing(prev => prev && prev.id === id ? carryReviewAcknowledgements(prev, collapseToQuick(prev)) : prev);
+    setEditorMode({ id, quick: true });
     setTimeout(() => focusExpenseTarget(EXPENSE_TARGETS.amount, "input"), 0);
   }
   const editorShares = useMemo(() => editing && trip ? previewShares(editing, trip) : null, [editing, trip]);
@@ -2877,10 +2845,10 @@ export default function Home({ children }: { children: ReactNode }) {
                           <button
                             type="button"
                             className="iconbutton"
-                            aria-label={canCollapseToQuick ? "Stop splitting by item" : "Remove item " + (i + 1)}
-                            disabled={editing.items.length === 1 && !canCollapseToQuick}
+                            aria-label={"Remove item " + (i + 1)}
+                            disabled={editing.items.length === 1}
                             onClick={() =>
-                              canCollapseToQuick ? stopItemSplitting() : setEditing({
+                              setEditing({
                                 ...editing,
                                 items: editing.items.filter(
                                   (x) => x.id !== item.id,
@@ -2939,7 +2907,7 @@ export default function Home({ children }: { children: ReactNode }) {
                   </>}
                   <div className="expense-extra-actions">
                     {quickMode && <button type="button" className="quiet" onClick={() => itemiseEditor("name")}><Plus size={16} aria-hidden="true" /> Split by item</button>}
-                    {!quickMode && canCollapseToQuick && <button type="button" className="quiet" onClick={stopItemSplitting}><Minus size={16} aria-hidden="true" /> Use one amount</button>}
+                    {!quickMode && canCollapseToQuick && <button type="button" className="quiet" disabled={!editing.items[0].members.length} title={editing.items[0].members.length ? undefined : "Choose who shares this first"} onClick={stopItemSplitting}><Minus size={16} aria-hidden="true" /> Use one amount</button>}
                     {!adjustmentsShown && <button type="button" className="quiet" onClick={() => setAdjustmentsFor(editing.id)}><Plus size={16} aria-hidden="true" /> Tip, tax or discount</button>}
                   </div>
                   {adjustmentsShown && <>

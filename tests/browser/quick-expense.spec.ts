@@ -310,7 +310,14 @@ for (const mobile of [true, false]) test.describe(`cancel item splitting on ${mo
 
   const activate = (control: Locator) => mobile ? control.tap() : control.press('Enter');
 
-  for (const action of ['Stop splitting by item', 'Use one amount']) test(`${action} returns to Amount and saves the same line`, async ({ page }) => {
+  const confirmUseOneAmount = async (page: Page) => {
+    const dialog = page.getByRole('dialog', { name: 'Use one amount?' });
+    await expect(dialog).toBeVisible();
+    await activate(dialog.getByRole('button', { name: 'Use one amount', exact: true }));
+    await expect(dialog).toHaveCount(0);
+  };
+
+  test('Use one amount returns to Amount and saves the same line', async ({ page }) => {
     const posted = await fixtures(page);
     await page.goto('/expenses', { waitUntil: 'domcontentloaded' });
     await page.locator('.expense-open').first().click();
@@ -323,7 +330,8 @@ for (const mobile of [true, false]) test.describe(`cancel item splitting on ${mo
     await page.getByRole('textbox', { name: 'discount', exact: true }).fill('0.50');
     await activate(page.getByRole('button', { name: 'Split by item', exact: true }));
     await page.getByRole('textbox', { name: 'Item 1 name', exact: true }).fill('Changed line name');
-    const control = page.getByRole('button', { name: action, exact: true });
+    const control = page.getByRole('button', { name: 'Use one amount', exact: true });
+    await expect(page.getByRole('button', { name: 'Remove item 1', exact: true })).toBeDisabled();
     await expect(control).toBeEnabled();
     await control.scrollIntoViewIfNeeded();
     const box = (await control.boundingBox())!;
@@ -356,10 +364,16 @@ for (const mobile of [true, false]) test.describe(`cancel item splitting on ${mo
     await page.getByRole('textbox', { name: 'Gary percentage for item 1', exact: true }).fill('75');
     await page.getByRole('textbox', { name: 'Sam percentage for item 1', exact: true }).fill('25');
     await activate(page.getByRole('button', { name: 'Use one amount', exact: true }));
+    await activate(page.getByRole('dialog', { name: 'Use one amount?' }).getByRole('button', { name: 'Keep splitting', exact: true }));
+    await expect(page.locator('.item')).toHaveCount(1);
+    await expect(page.getByRole('textbox', { name: 'Gary percentage for item 1', exact: true })).toHaveValue('75');
+    await activate(page.getByRole('button', { name: 'Use one amount', exact: true }));
+    await confirmUseOneAmount(page);
     await expect(page.locator('.quick-shares')).toContainText('Gary £10.00 · Sam £10.00');
     await activate(page.getByRole('button', { name: 'Split by item', exact: true }));
     await activate(page.getByRole('button', { name: 'Units', exact: true }));
-    await activate(page.getByRole('button', { name: 'Stop splitting by item', exact: true }));
+    await activate(page.getByRole('button', { name: 'Use one amount', exact: true }));
+    await confirmUseOneAmount(page);
     await expect(page.getByRole('textbox', { name: 'Amount', exact: true })).toBeFocused();
     await activate(page.getByRole('button', { name: 'Save expense', exact: true }));
     await expect(page.locator('.editor')).toHaveCount(0);
@@ -369,7 +383,7 @@ for (const mobile of [true, false]) test.describe(`cancel item splitting on ${mo
     expect(saved).not.toHaveProperty('percentages');
   });
 
-  test('a missing amount and empty selection return to a blocked quick form', async ({ page }) => {
+  test('a missing amount returns to a blocked quick form and nobody selected cannot collapse', async ({ page }) => {
     await fixtures(page);
     await openNew(page);
     await page.getByRole('textbox', { name: 'Expense name', exact: true }).fill('Lunch');
@@ -377,12 +391,16 @@ for (const mobile of [true, false]) test.describe(`cancel item splitting on ${mo
     await page.getByRole('textbox', { name: 'Item 1 total', exact: true }).fill('');
     await activate(page.getByRole('button', { name: 'Gary', exact: true }));
     await activate(page.getByRole('button', { name: 'Sam', exact: true }));
+    // Choosing nobody stays a save blocker; collapsing must not clear it by selecting everyone.
+    await expect(page.getByRole('button', { name: 'Use one amount', exact: true })).toBeDisabled();
+    await activate(page.getByRole('button', { name: 'Gary', exact: true }));
     await activate(page.getByRole('button', { name: 'Use one amount', exact: true }));
     await expect(page.getByRole('textbox', { name: 'Amount', exact: true })).toBeFocused();
     await expect(page.getByRole('textbox', { name: 'Amount', exact: true })).toHaveValue('');
     await expect(page.locator('.save-checklist')).toContainText('Enter the amount');
     await expect(page.getByRole('button', { name: 'Save expense', exact: true })).toBeDisabled();
-    for (const name of ['Gary', 'Sam']) await expect(page.getByRole('button', { name, exact: true })).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByRole('button', { name: 'Gary', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByRole('button', { name: 'Sam', exact: true })).toHaveAttribute('aria-pressed', 'false');
   });
 
   test('extra lines remove normally and only the remaining line can collapse', async ({ page }) => {
@@ -395,11 +413,11 @@ for (const mobile of [true, false]) test.describe(`cancel item splitting on ${mo
     await page.getByRole('textbox', { name: 'Item 2 name', exact: true }).fill('Wine');
     await page.getByRole('textbox', { name: 'Item 2 total', exact: true }).fill('10');
     await expect(page.getByRole('button', { name: 'Use one amount', exact: true })).toHaveCount(0);
-    await expect(page.getByRole('button', { name: 'Stop splitting by item', exact: true })).toHaveCount(0);
     await activate(page.getByRole('button', { name: 'Remove item 1', exact: true }));
     await expect(page.locator('.item')).toHaveCount(1);
     await expect(page.getByRole('textbox', { name: 'Item 1 total', exact: true })).toHaveValue('10.00');
-    await activate(page.getByRole('button', { name: 'Stop splitting by item', exact: true }));
+    await expect(page.getByRole('button', { name: 'Remove item 1', exact: true })).toBeDisabled();
+    await activate(page.getByRole('button', { name: 'Use one amount', exact: true }));
     await expect(page.getByRole('textbox', { name: 'Amount', exact: true })).toHaveValue('10.00');
     await activate(page.getByRole('button', { name: 'Save expense', exact: true }));
     await expect(page.locator('.editor')).toHaveCount(0);
@@ -416,7 +434,6 @@ for (const mobile of [true, false]) test.describe(`cancel item splitting on ${mo
     if (kind !== 'draft') await page.locator('.expense-open').first().click();
     await expect(page.locator('.editor')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Remove item 1', exact: true })).toBeDisabled();
-    await expect(page.getByRole('button', { name: 'Stop splitting by item', exact: true })).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Use one amount', exact: true })).toHaveCount(0);
   });
 });
