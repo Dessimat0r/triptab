@@ -17,7 +17,7 @@ import {
   Dog, Sparkles, Scissors, Wifi, Plug, Wrench, Package, CircleHelp, Check, X,
 } from "lucide-react";
 import ModalA11y from "@/components/modal-accessibility";
-import { ICON_CATALOG, ICON_BACKGROUNDS, inferExpenseIcon, resolveExpenseIcon,
+import { ICON_CATALOG, ICON_BACKGROUNDS, resolveExpenseIcon, sameExpenseIcon,
   iconLabel, iconSearchText, type ExpenseIconChoice, type IconReceipt } from "@/lib/expense-icons";
 import "./expense-icon.css";
 
@@ -38,8 +38,8 @@ const SYMBOLS = {
 const GROUPS = [...new Set(ICON_CATALOG.map(icon => icon[2]))];
 
 export function ExpenseIconBadge({ entry, size = 23 }: { entry: IconReceipt; size?: number }) {
-  const {title,items,icon} = entry;
-  const choice = useMemo(() => resolveExpenseIcon({title,items,icon}), [title,items,icon]), Symbol = SYMBOLS[choice.symbol];
+  const {title,items,icon,suggestedIcon} = entry, titleSource = entry.titleSource ?? entry.fieldSources?.title;
+  const choice = useMemo(() => resolveExpenseIcon({title,items,icon,suggestedIcon,titleSource}), [title,items,icon,suggestedIcon,titleSource]), Symbol = SYMBOLS[choice.symbol];
   const background = ICON_BACKGROUNDS.find(color => color[0] === choice.background)![2];
   return <span className="expense-icon expense-symbol" style={{ backgroundColor: background, color: "#fff" }} aria-hidden="true">
     <Symbol size={size} strokeWidth={2.2} />
@@ -51,8 +51,9 @@ export default function ExpenseIconPicker({ entry, onChange, disabled }: {
   onChange: (icon: ExpenseIconChoice | undefined) => void | Promise<boolean>;
   disabled?: boolean;
 }) {
-  const {title,items} = entry;
-  const suggested = useMemo(() => inferExpenseIcon({title,items}), [title,items]);
+  const {title,items,suggestedIcon} = entry, titleSource = entry.titleSource ?? entry.fieldSources?.title;
+  const suggested = useMemo(() => resolveExpenseIcon({title,items,suggestedIcon,titleSource}), [title,items,suggestedIcon,titleSource]);
+  const receiptSuggestion = sameExpenseIcon(suggested, suggestedIcon);
   const resolved = entry.icon || suggested;
   const [open, setOpen] = useState(false), [choice, setChoice] = useState(resolved);
   const [automatic, setAutomatic] = useState(!entry.icon), [search, setSearch] = useState("");
@@ -83,7 +84,7 @@ export default function ExpenseIconPicker({ entry, onChange, disabled }: {
           <button type="button" className="iconbutton" aria-label="Close icon picker" disabled={pending} onClick={close}><X /></button>
         </div>
         <div className="icon-picker-preview"><ExpenseIconBadge entry={{ icon: shown }} size={30} />
-          <div><b>{iconLabel(shown)}</b><small>{automatic ? "Suggested from this receipt" : "Your choice"}</small></div>
+          <div><b>{iconLabel(shown)}</b><small>{automatic ? receiptSuggestion ? "Suggested from the receipt reading" : "Suggested from this receipt" : "Your choice"}</small></div>
           <button type="button" className="quiet" aria-pressed={automatic} disabled={pending || disabled}
             onClick={() => { setAutomatic(true); setChoice(suggested); }}>Automatic{automatic && <Check size={16} aria-hidden="true" />}</button>
         </div>

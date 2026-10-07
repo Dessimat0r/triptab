@@ -3,6 +3,28 @@ import { CURRENCIES, draftSchema, draftItemSchema, itemSplitError, receiptSplitE
 import { reconcileReceiptScan } from './receipt-scan';
 import { receiptAliasSchema } from './receipt-context';
 import { receiptLanguageSchema } from './receipt-languages';
+import { expenseIconSchema, defaultBackground, type ExpenseIconChoice } from './expense-icons';
+
+export const receiptExpenseIconSchema = z.object({
+  symbol: expenseIconSchema.shape.symbol.nullable(),
+  confidence: z.enum(['high', 'medium', 'low']),
+}).strict().nullable();
+export const receiptExpenseIconJsonSchema = {
+  type: ['object', 'null'], additionalProperties: false,
+  properties: {
+    symbol: { type: ['string', 'null'], enum: [...expenseIconSchema.shape.symbol.options, null] },
+    confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
+  },
+  required: ['symbol', 'confidence'],
+};
+export function receiptSuggestedIcon(value: z.infer<typeof receiptExpenseIconSchema> | undefined): ExpenseIconChoice | undefined {
+  return value?.symbol && value.confidence !== 'low'
+    ? { symbol: value.symbol, background: defaultBackground(value.symbol) } : undefined;
+}
+/** An omitted reading keeps the earlier suggestion; an explicit unclear or low-confidence one clears it. */
+export function nextSuggestedIcon(value: z.infer<typeof receiptExpenseIconSchema> | undefined, previous: ExpenseIconChoice | undefined): ExpenseIconChoice | undefined {
+  return value === undefined ? previous : receiptSuggestedIcon(value);
+}
 
 const id = z.string().min(1).max(100), text = z.string().trim().min(1).max(200);
 const money = z.number().int().min(0).max(MAX_AMOUNT);

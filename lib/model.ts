@@ -257,6 +257,7 @@ const expenseBaseSchema = z.object({
   location: receiptLocationSchema.optional(), locationHint: receiptLocationHintSchema.optional(),
   id, title: z.string().min(1).max(200), date: dateSchema,
   icon: expenseIconSchema.optional(),
+  suggestedIcon: expenseIconSchema.optional(),
   receiptLanguage:receiptLanguageSchema.optional(), detectedLanguage:languageSchema.optional(),
   languageViewId:id.optional(),
   // Provenance may reference a consumed or deleted draft retained in history.
@@ -289,6 +290,7 @@ export const draftSchema = z.object({
   location: receiptLocationSchema.optional(), locationHint: receiptLocationHintSchema.optional(),
   id, title: z.string().max(200), receiptId: id.optional(), expenseId: id.optional(),
   icon: expenseIconSchema.optional(),
+  suggestedIcon: expenseIconSchema.optional(),
   receiptLanguage:receiptLanguageSchema.optional(), detectedLanguage:languageSchema.optional(),
   languageViewId:id.optional(),
   currency: currencySchema.nullable().default('EUR'),

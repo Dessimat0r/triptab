@@ -1406,3 +1406,24 @@ test('draft fingerprint rejects a changed receipt before spending and ignores un
   assert.equal((await http({ ...requestBody, draftHash })).status, 409);
   assert.equal(state.providerCalls, 0); assert.equal(state.accessCalls, 0); assert.equal(state.writes, 0);
 });
+
+test('receipt reading stores a display suggestion without touching the user icon', () => {
+  const icon = {symbol:'Palmtree',background:'pink'} as const;
+  for (const confidence of ['high','medium'] as const) {
+    const result = applyReceiptTranscription(trip,{...draft,icon},{...transcription,expenseIcon:{symbol:'Utensils',confidence}});
+    assert.deepEqual(result.suggestedIcon,{symbol:'Utensils',background:'orange'});
+    assert.deepEqual(result.icon,icon);
+  }
+  for (const expenseIcon of [null,{symbol:null,confidence:'high'},{symbol:'Utensils',confidence:'low'}] as const) {
+    const result=applyReceiptTranscription(trip,{...draft,icon},{...transcription,expenseIcon});
+    assert.equal(result.suggestedIcon,undefined);
+    assert.deepEqual(result.icon,icon);
+  }
+  const previous = {symbol:'Utensils',background:'orange'} as const;
+  const {expenseIcon:omitted,...withoutIcon} = transcription as ReceiptTranscription & {expenseIcon?: unknown}; void omitted;
+  assert.deepEqual(applyReceiptTranscription(trip,{...draft,suggestedIcon:previous},withoutIcon as ReceiptTranscription).suggestedIcon,previous,'an omitted reading keeps the earlier suggestion');
+  for (const expenseIcon of [null,{symbol:null,confidence:'high'},{symbol:'Car',confidence:'low'}] as const) {
+    assert.equal(applyReceiptTranscription(trip,{...draft,suggestedIcon:previous},{...transcription,expenseIcon}).suggestedIcon,undefined,'an explicit unclear reading clears a stale suggestion');
+  }
+  assert.throws(()=>applyReceiptTranscription(trip,draft,{...transcription,expenseIcon:{symbol:'MadeUp',confidence:'high'}} as unknown as ReceiptTranscription),ReceiptAIError);
+});

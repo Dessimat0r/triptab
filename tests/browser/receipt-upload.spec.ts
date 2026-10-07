@@ -1,9 +1,9 @@
 import { expect, test } from '@playwright/test';
 import path from 'node:path';
 
-for (const width of [320, 390]) {
+for (const width of [320, 390, 1440]) {
   test.describe(`receipt upload at ${width}px`, () => {
-    test.use({ viewport: { width, height: 844 }, hasTouch: true, isMobile: true });
+    test.use({ viewport: { width, height: width === 1440 ? 900 : width === 320 ? 740 : 844 }, hasTouch: width < 1440, isMobile: width < 1440 });
     test('saves natural-language guidance before its single scan, with optional location and no horizontal overflow', async ({ page, browserName }) => {
       let current: Record<string, unknown> = { id: 'holiday', ownerId: 'owner', name: 'Holiday', currency: 'GBP',
         members: [{ id: 'you', name: 'Chris', userId: 'owner' }, { id: 'gary', name: 'Gary' }], expenses: [], drafts: [], payments: [] };
@@ -36,6 +36,8 @@ for (const width of [320, 390]) {
           expect(message.authorMemberId).toBe('you');
           expect(draft.location).toEqual({ label: 'Bratislava', source: 'user' });
           draft.status = 'review'; draft.source = 'ai';
+          draft.suggestedIcon = {symbol:'Utensils',background:'orange'};
+          draft.receiptScan = {version:1,printedTotal:320,printedCurrency:'GBP',status:'matched',warnings:[]};
           draft.items = [{ id: 'coffee', name: 'Cappuccino', amount: 320, members: ['you'] }];
           draft.conversation = [message, { id: 'answer', role: 'assistant', text: 'Read the coffee and proposed your share.', replyTo: message.id, createdAt: new Date().toISOString() }];
           return route.fulfill({ json: { data: { trips: [current] }, revision: ++revision, draft } });
@@ -88,6 +90,42 @@ for (const width of [320, 390]) {
       expect(uploads).toBe(1); expect(reads).toBe(1);
       expect(current.expenses).toEqual([]);
       await expect(page.getByText('Read the coffee and proposed your share.', { exact: true })).toBeVisible();
+      const trigger = page.locator('.editor .expense-icon-trigger');
+      await expect(trigger).toHaveAttribute('aria-label', /Automatic: Meals · Orange/);
+      await trigger.click();
+      const picker = page.getByRole('dialog', {name:'Choose an icon',exact:true});
+      await expect(picker.getByText('Suggested from the receipt reading', {exact:true})).toBeVisible();
+      const layout = await picker.evaluate(element => {
+        const bounds = element.getBoundingClientRect();
+        return {
+          overflow: element.scrollWidth-element.clientWidth,
+          pageOverflow: document.documentElement.scrollWidth-innerWidth,
+          left: bounds.left, right: bounds.right,
+          columns: getComputedStyle(element.querySelector('.icon-symbol-grid')!).gridTemplateColumns.split(' ').length,
+          smallTargets: Array.from(element.querySelectorAll('button,input,select')).filter(control => {
+            const rect=control.getBoundingClientRect();
+            return rect.width > 0 && (rect.width < 44 || rect.height < 44);
+          }).map(control=>control.getAttribute('aria-label') || control.textContent),
+        };
+      });
+      expect(layout.overflow).toBeLessThanOrEqual(1);
+      expect(layout.pageOverflow).toBeLessThanOrEqual(1);
+      expect(layout.left).toBeGreaterThanOrEqual(0);
+      expect(layout.right).toBeLessThanOrEqual(width);
+      expect(layout.columns).toBe(width <= 360 ? 3 : width <= 480 ? 4 : 5);
+      expect(layout.smallTargets).toEqual([]);
+      await page.getByRole('button', {name:'Close icon picker',exact:true}).click();
+      await page.getByRole('button', {name:'Close editor',exact:true}).click();
+      await expect(page.locator('.draft-visual .expense-icon-trigger')).toHaveAttribute('aria-label', /Automatic: Meals · Orange/);
+      await page.getByRole('button', {name:'Review',exact:true}).click();
+      await page.getByRole('button', {name:'Save expense',exact:true}).click();
+      await expect(page.locator('.editor')).toHaveCount(0);
+      await page.goto('/expenses');
+      await expect(page.locator('.expense .expense-icon-trigger')).toHaveAttribute('aria-label', /Automatic: Meals · Orange/);
+      await page.locator('.expense-open').click();
+      await expect(page.locator('.editor .expense-icon-trigger')).toHaveAttribute('aria-label', /Automatic: Meals · Orange/);
+      await page.getByRole('textbox', {name:'Expense name',exact:true}).fill('Taxi home');
+      await expect(page.locator('.editor .expense-icon-trigger')).toHaveAttribute('aria-label', /Automatic: Taxi & car · Blue/);
     });
   });
 }

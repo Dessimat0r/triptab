@@ -169,6 +169,7 @@ const compiled = transpileWithSharedImports(source, { compilerOptions: { module:
   .replace("'@/lib/store'", JSON.stringify(storeUrl))
   .replace("'@/lib/auth'", JSON.stringify(authUrl))
   .replace("'@/lib/notifications'", JSON.stringify(notificationsUrl))
+  .replace("'@/lib/receipt-proposals'", JSON.stringify(new URL('../lib/receipt-proposals.ts', import.meta.url).href))
   .replace("'@/lib/model'", JSON.stringify(new URL('../lib/model.ts', import.meta.url).href))
   .replace("'@/lib/receipt-context'", JSON.stringify(new URL('../lib/receipt-context.ts', import.meta.url).href))
   .replace("'@/lib/receipt-memory-ownership'", JSON.stringify(new URL('../lib/receipt-memory-ownership.ts', import.meta.url).href))
@@ -2547,4 +2548,32 @@ test('MCP recognition fills a missing printed place but never invents a device o
   const cleared = await invoke('update_receipt_draft', { trip_id: 'trip-1', revision: 4, draft: { id: 'draft-1', metadataPatch: { location: null } } });
   assert.equal(cleared.result.isError, undefined);
   assert.equal(content(cleared).data.trips[0].drafts[0].location, undefined);
+});
+
+test('connected receipt drafts keep a suggestion when omitted and clear it when unclear', async () => {
+  const previous={symbol:'Utensils',background:'orange'} as const;
+  for (const [expenseIcon,expected] of [[undefined,previous],[null,undefined],[{symbol:'Car',confidence:'low'},undefined]] as const) {
+    reset();
+    state.data.trips[0].drafts[0].suggestedIcon=previous;
+    const reply=await invoke('update_receipt_draft',{trip_id:'trip-1',revision:3,draft:{id:'draft-1',...(expenseIcon===undefined?{}:{expenseIcon})}});
+    assert.equal(reply.result.isError,undefined);
+    assert.deepEqual(content(reply).data.trips[0].drafts[0].suggestedIcon,expected);
+  }
+});
+
+test('connected receipt drafts accept the same display suggestion and preserve user icons', async () => {
+  for (const expenseIcon of [
+    {symbol:'Utensils',confidence:'high'}, {symbol:'Martini',confidence:'medium'},
+    {symbol:'Utensils',confidence:'low'}, {symbol:null,confidence:'high'}, null,
+  ]) {
+    reset();
+    const icon={symbol:'Palmtree',background:'pink'} as const;
+    state.data.trips[0].drafts[0].icon=icon;
+    const reply=await invoke('update_receipt_draft',{trip_id:'trip-1',revision:3,draft:{id:'draft-1',expenseIcon}});
+    assert.equal(reply.result.isError,undefined);
+    const result=content(reply).data.trips[0].drafts[0];
+    assert.deepEqual(result.icon,icon);
+    assert.deepEqual(result.suggestedIcon,expenseIcon?.symbol && expenseIcon.confidence!=='low'
+      ? {symbol:expenseIcon.symbol,background:expenseIcon.symbol==='Martini'?'pink':'orange'} : undefined);
+  }
 });

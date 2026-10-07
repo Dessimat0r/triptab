@@ -120,14 +120,21 @@ export const expenseIconSchema = z.object({
   background: z.enum(ICON_BACKGROUNDS.map(color => color[0]) as [IconBackground, ...IconBackground[]]),
 }).strict();
 export type ExpenseIconChoice = z.infer<typeof expenseIconSchema>;
-export type IconReceipt = { title?: string; items?: readonly { name: string }[]; icon?: ExpenseIconChoice };
+export type IconReceipt = {
+  title?: string;
+  titleSource?: 'user' | 'receipt' | 'ai' | 'default';
+  fieldSources?: { title?: IconReceipt['titleSource'] };
+  items?: readonly { name: string; translations?: Readonly<Record<string, { text: string } | undefined>> }[];
+  icon?: ExpenseIconChoice;
+  suggestedIcon?: ExpenseIconChoice;
+};
 
 export function iconSearchText(value: string): string {
   return value.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
 }
 function mentions(text: string, normalizedTerm: string) { return text.includes(` ${normalizedTerm} `); }
 const TITLE_RULES: readonly [ExpenseSymbol, IconBackground, string][] = [
-  ['ShoppingCart', 'green', 'supermarket|supermercado|supermarche|supermarkt|supermercato|groceries|grocery|tesco|lidl|aldi|carrefour|auchan|mercadona|continente|sainsbury|sainsburys|waitrose|rewe|edeka|coop|co op'],
+  ['ShoppingCart', 'green', 'supermarket|supermercado|supermarche|supermarkt|supermercato|groceries|grocery|tesco|lidl|aldi|carrefour|auchan|mercadona|continente|sainsbury|sainsburys|waitrose|rewe|edeka|coop|co op|tabac|food shop'],
   ['Car', 'blue', 'taxi|uber|bolt|cab|car rental|rental car|car hire|autovermietung|location voiture'],
   ['ParkingCircle', 'slate', 'parking|car park|aparcamiento|parkhaus|parcheggio|estacionamento'],
   ['Fuel', 'orange', 'fuel|petrol|diesel|gas station|gasolina|carburant|tankstelle|benzina|posto combustivel'],
@@ -135,7 +142,8 @@ const TITLE_RULES: readonly [ExpenseSymbol, IconBackground, string][] = [
   ['TramFront', 'blue', 'metro|tram|subway|underground'],
   ['Bus', 'blue', 'bus|coach|shuttle|autobus|autocarro'],
   ['Bike', 'teal', 'bike|bicycle|cycling|velo|bicicleta|fahrrad'],
-  ['Ship', 'cyan', 'ferry|cruise|bateau|traghetto'],
+  ['Ship', 'cyan', 'ferry|cruise|bateau|traghetto|boat|boat tour'],
+  ['Compass', 'purple', 'tour|guided tour'],
   ['Plane', 'blue', 'flight|airline|ryanair|easyjet|aeroplane|flug|vuelo|voo'],
   ['Tent', 'green', 'camping|campsite|campground|campismo'],
   ['House', 'violet', 'airbnb|holiday home|holiday apartment|villa rental'],
@@ -150,11 +158,23 @@ const TITLE_RULES: readonly [ExpenseSymbol, IconBackground, string][] = [
   ['Pizza', 'orange', 'pizza|pizzeria'],
   ['Beer', 'gold', 'pub|brewery|beer|bier|cerveja|cerveza'],
   ['Martini', 'pink', 'cocktail|bar|martini'],
-  ['Utensils', 'orange', 'restaurant|restaurante|ristorante|dinner|lunch|breakfast|dining|bistro|taverna|trattoria'],
+  ['Utensils', 'orange', 'restaurant|restaurante|ristorante|dinner|lunch|breakfast|dining|meal|meals|bistro|taverna|trattoria|tapas|osteria|brasserie|izakaya'],
 ];
 const groupColors: Record<string, IconBackground> = { Food: 'orange', Drinks: 'gold', Transport: 'blue', Stays: 'violet', Activities: 'purple', Shopping: 'green', 'Health & family': 'rose', Other: 'indigo' };
+const symbolGroups = new Map<ExpenseSymbol, string>(ICON_CATALOG.map(icon => [icon[0], icon[2]]));
+export function defaultBackground(symbol: ExpenseSymbol): IconBackground {
+  return TITLE_RULES.find(rule => rule[0] === symbol)?.[1]
+    ?? groupColors[symbolGroups.get(symbol) ?? 'Other'] ?? 'indigo';
+}
+export function sameExpenseIcon(a?: ExpenseIconChoice, b?: ExpenseIconChoice): boolean {
+  return !!a && !!b && a.symbol === b.symbol && a.background === b.background;
+}
 const normalizedTitleRules = TITLE_RULES.map(([symbol, background, terms]) => ({symbol,background,terms:terms.split('|').map(iconSearchText)}));
 const normalizedLabels = ICON_CATALOG.map(([symbol,label,group]) => ({symbol,background:groupColors[group],term:iconSearchText(label)}));
+const titleCandidates = [
+  ...normalizedTitleRules.flatMap(({symbol,background,terms}) => terms.map(term => ({symbol,background,term,merchant:true}))),
+  ...normalizedLabels.filter(rule => rule.symbol !== 'Receipt').map(rule => ({...rule,merchant:false})),
+];
 const groceries = new Set(['milk', 'bread', 'cheese', 'butter', 'eggs', 'rice', 'pasta', 'bananas', 'apples', 'potatoes', 'tomatoes', 'leche', 'pan', 'queso', 'lait', 'pain', 'fromage', 'leite', 'pao', 'queijo', 'milch', 'brot', 'kase']);
 const generic = new Set(['receipt', 'expense', 'general', 'other', 'tab', 'payment', 'budget', 'change', 'currency', 'unknown', 'help', 'question', 'something', 'else', 'card', 'bank', 'station', 'cream', 'park', 'holiday', 'check', 'first', 'aid', 'pass', 'cable', 'data', 'soft']);
 // Index once, then look up each observed word instead of rescanning the full
@@ -171,32 +191,70 @@ normalizedTitleRules.forEach(rule => {
   rule.terms.forEach(term=>indexTerm(term,index));
 });
 
+// A venue's specific service outranks its broader setting: restaurant > cafe/bar
+// > hotel. Within a service, a known merchant or title rule beats a generic
+// catalogue label, then the longest matching phrase wins.
+function titleSpecificity(symbol: ExpenseSymbol): number {
+  if (['Hotel', 'House', 'BedDouble', 'Building2'].includes(symbol)) return 0;
+  if (symbolGroups.get(symbol) === 'Drinks') return 1;
+  if (symbol === 'Utensils') return 2;
+  return 3;
+}
+function matchTitle(value?: string): ExpenseIconChoice | undefined {
+  const title = ` ${iconSearchText(value || '')} `;
+  const candidates = titleCandidates.filter(rule => mentions(title, rule.term));
+  candidates.sort((a, b) => titleSpecificity(b.symbol) - titleSpecificity(a.symbol)
+    || Number(b.merchant) - Number(a.merchant)
+    || b.term.split(' ').length - a.term.split(' ').length || b.term.length - a.term.length);
+  const best = candidates[0];
+  return best && { symbol: best.symbol, background: best.background };
+}
+
 /** Uses already transcribed facts. Never calls a model or rewrites saved records. */
 export function inferExpenseIcon(entry: IconReceipt): ExpenseIconChoice {
-  const title = ` ${iconSearchText(entry.title || '')} `;
-  for (const {symbol,background,terms} of normalizedTitleRules) {
-    if (terms.some(term => mentions(title, term))) return { symbol, background };
-  }
-  // Search specific labels in a manually entered name as well as known merchants.
-  for (const {symbol,background,term} of normalizedLabels) {
-    if (symbol !== 'Receipt' && mentions(title, term)) return { symbol, background };
-  }
+  const titleMatch = matchTitle(entry.title);
+  if (titleMatch) return titleMatch;
   const scores = new Uint16Array(ICON_CATALOG.length);
+  const phraseScores = new Uint16Array(ICON_CATALOG.length);
+  const groupScores = new Map<string, number>();
   let groceryLines = 0;
   for (const item of entry.items || []) {
-    const text=iconSearchText(item.name),words=new Set(text.split(' ')),hits=new Set<number>();
-    if ([...words].some(word=>groceries.has(word)) && ++groceryLines >= 2) return {symbol:'ShoppingCart',background:'green'};
-    for (const word of words) for (const index of wordIcons.get(word) || []) hits.add(index);
-    for (const [term,indexes] of phraseIcons) if (mentions(` ${text} `,term)) for (const index of indexes) hits.add(index);
+    // Count each physical line once, even if several translations match it.
+    const hits = new Set<number>();
+    const phraseHits = new Set<number>();
+    let groceryLine = false;
+    for (const name of [item.name, ...Object.values(item.translations ?? {}).map(value => value?.text ?? '')]) {
+      const text=iconSearchText(name),words=new Set(text.split(' '));
+      groceryLine ||= [...words].some(word=>groceries.has(word));
+      for (const word of words) for (const index of wordIcons.get(word) || []) hits.add(index);
+      for (const [term,indexes] of phraseIcons) if (mentions(` ${text} `,term)) for (const index of indexes) { hits.add(index); phraseHits.add(index); }
+    }
+    if (groceryLine) groceryLines++;
     for (const index of hits) scores[index]++;
+    for (const index of phraseHits) phraseScores[index]++;
+    for (const group of new Set([...hits].map(index => ICON_CATALOG[index][2]))) groupScores.set(group, (groupScores.get(group) ?? 0) + 1);
   }
+  if (groceryLines >= 2 && groceryLines >= Math.max(0, ...groupScores.values())) return {symbol:'ShoppingCart',background:'green'};
   let best: ExpenseIconChoice = { symbol: 'Receipt', background: 'indigo' }, bestScore = 0;
-  ICON_CATALOG.forEach(([symbol, , group],index) => { if (scores[index]>bestScore) { best={symbol,background:groupColors[group]};bestScore=scores[index]; } });
+  let bestGroupScore = 0;
+  let bestPhraseScore = 0;
+  ICON_CATALOG.forEach(([symbol, , group],index) => {
+    const groupScore = groupScores.get(group) ?? 0;
+    if (scores[index] && (groupScore > bestGroupScore || groupScore === bestGroupScore
+      && (scores[index] > bestScore || scores[index] === bestScore && phraseScores[index] > bestPhraseScore))) {
+      best={symbol,background:groupColors[group]};bestScore=scores[index];bestGroupScore=groupScore;bestPhraseScore=phraseScores[index];
+    }
+  });
   // Keep very weak or unknown evidence neutral rather than inventing a category.
   return best;
 }
 
-export function resolveExpenseIcon(entry: IconReceipt): ExpenseIconChoice { return entry.icon || inferExpenseIcon(entry); }
+export function resolveExpenseIcon(entry: IconReceipt): ExpenseIconChoice {
+  return entry.icon
+    || ((entry.titleSource ?? entry.fieldSources?.title) === 'user' ? matchTitle(entry.title) : undefined)
+    || entry.suggestedIcon
+    || inferExpenseIcon(entry);
+}
 export function iconLabel(choice: ExpenseIconChoice): string {
   const symbol = ICON_CATALOG.find(icon => icon[0] === choice.symbol)?.[1] || 'Receipt';
   const color = ICON_BACKGROUNDS.find(color => color[0] === choice.background)?.[1] || 'Indigo';

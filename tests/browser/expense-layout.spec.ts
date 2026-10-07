@@ -265,3 +265,25 @@ test.describe('landscape payment', () => {
     expect(smallControls).toBe(0);
   });
 });
+
+for (const [width,columns] of [[360,3],[361,4],[480,4],[481,5]] as const) {
+  test.describe(`icon picker breakpoint at ${width}px`, () => {
+    test.use({viewport:{width,height:844}});
+    test('keeps the existing symbol columns and fits without horizontal scroll', async ({page}) => {
+      await fixtures(page);
+      await page.goto('/expenses?receiptDraft=layout-draft&receiptTrip=layout-trip');
+      await page.locator('.editor .expense-more-options > summary').click();
+      const trigger=page.locator('.editor .expense-icon-trigger');
+      await trigger.focus();
+      await trigger.press('Enter');
+      const picker=page.getByRole('dialog',{name:'Choose an icon',exact:true});
+      await expect(picker).toBeVisible();
+      const layout=await picker.evaluate(element=>({
+        columns:getComputedStyle(element.querySelector('.icon-symbol-grid')!).gridTemplateColumns.split(' ').length,
+        overflow:element.scrollWidth-element.clientWidth,
+        pageOverflow:document.documentElement.scrollWidth-innerWidth,
+      }));
+      expect(layout).toEqual({columns,overflow:0,pageOverflow:0});
+    });
+  });
+}
