@@ -1433,7 +1433,8 @@ export default function Home({ children }: { children: ReactNode }) {
     return { balance, due, spent, calculationError };
   }, [trip]);
   const currentMemberIndex = trip?.members.findIndex(member => member.userId === profile?.id) ?? -1;
-  const chatgptConnected = !!(profile?.chatgptConnected || profile?.authMethod === "chatgpt")
+  const chatgptIdentity = !!(profile?.chatgptConnected || profile?.authMethod === "chatgpt");
+  const chatgptConnected = chatgptIdentity
     || (!!receiptAI && receiptAI.accountId === profile?.id && receiptAI.provider === "siwc" && receiptAI.connected);
   const memberNames = useMemo(() => Object.fromEntries(trip?.members.map(member => [member.id, member.name]) || []), [trip?.members]);
   const actorMemberNames = useMemo(() => Object.fromEntries(trip?.members.filter(member => member.userId).map(member => [member.userId!, member.name]) || []), [trip?.members]);
@@ -1905,7 +1906,7 @@ export default function Home({ children }: { children: ReactNode }) {
       prompt={receiptPrompt}
       ready={!!processedReceipt}
       itemized={receiptItemized}
-      connected={!!(profile?.chatgptConnected || profile?.authMethod === "chatgpt")}
+      connected={chatgptIdentity}
       chatgptUrl={receiptPrompt ? chatgptReceiptUrl(receiptPrompt) : undefined}
       handoffOpened={receiptHandoffOpened}
       assistantError={receiptHandoffError}
@@ -2533,7 +2534,7 @@ export default function Home({ children }: { children: ReactNode }) {
                 <span className="eyebrow">
                   YOUR OWN CHATGPT OR CODEX ACCOUNT
                 </span>
-                <h2 id="help-title">Connect ChatGPT or Codex</h2>
+                <h2 id="help-title">{chatgptConnected ? "How to use ChatGPT or Codex" : "Connect ChatGPT or Codex"}</h2>
               </div>
               <button
                 className="iconbutton"
