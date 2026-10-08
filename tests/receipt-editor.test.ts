@@ -7,8 +7,8 @@ import { createSourceFile, isFunctionDeclaration, isJsxElement, isJsxAttribute, 
 import * as ts from 'typescript';
 import { equalFinancialValue, equalSavedValue } from '../lib/client-ledger';
 import { buildReceiptPrompt } from '../lib/receipt-chatgpt';
-import { isBlankReceipt, isUnchangedInitialReceipt, matchingReceiptProposal, mayFillInitialReceipt, receiptEditableValue, receiptProposalEditor, receiptEditorTotal, userReceiptField, type ReceiptEditor } from '../lib/receipt-processing';
-import { acknowledgeReceiptReview, receiptScanSaveError, receiptScanFingerprint } from '../lib/receipt-scan';
+import { isBlankReceipt, isUnchangedInitialReceipt, matchingReceiptProposal, mayFillInitialReceipt, receiptEditableValue, receiptProposalEditor, receiptEditorTotal, type ReceiptEditor } from '../lib/receipt-processing';
+import { acknowledgeReceiptReview, receiptScanSaveError } from '../lib/receipt-scan';
 import { expenseSaveBlockers, visibleExpenseBlockers } from '../lib/expense-readiness';
 import { itemSchema, draftItemSchema, expenseSchema, itemSplitError, ledgerSchema, receiptSplitError, total, validateLedger, type Draft, type Expense, type ReceiptMessage, type Trip } from '../lib/model';
 

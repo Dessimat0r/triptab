@@ -95,7 +95,7 @@ test('one-cent mismatch appears in the acceptance summary without an editing ack
 test('an unmapped adjustment is named with its printed evidence for the final confirmation', () => {
   const value=entry({receiptScan:{version:1,printedTotal:1200,status:'matched',warnings:[],sourceLines:[{kind:'adjustment',mappedTo:'unmapped',amount:-100,observedText:'Item coupon -1,00',lineIndex:8}]}});
   const ui=render(value);assert.match(ui.text,/Correct the affected item's full line price and shares/);
-  assert.match(ui.text,/Unresolved discount, refund or charge/);assert.match(ui.text,/Item coupon -1,00/);assert.match(ui.text,/line 9/);
+  assert.match(ui.text,/A discount, refund or charge needs checking/);assert.match(ui.text,/Item coupon -1,00/);assert.match(ui.text,/line 9/);
   assert.equal(ui.elements.filter(element=>element.type==='button').length,0);assert.equal(ui.changed,undefined);
   assert(scan.receiptScanSaveError(value));assert.equal(scan.receiptScanSaveError(scan.acknowledgeReceiptReview(value)),null);
 });

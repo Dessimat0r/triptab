@@ -1,4 +1,4 @@
-import { itemSplitError, receiptSplitError, total, type ReceiptMessage, type Trip } from './model';
+import { expenseSchema, itemSplitError, receiptSplitError, total, type ReceiptMessage, type Trip } from './model';
 import type { ReceiptEditor } from './receipt-processing';
 import { acknowledgeReceiptReview, carryReviewAcknowledgements, reconcileReceiptScan, receiptScanSaveError } from './receipt-scan';
 
@@ -6,6 +6,7 @@ import { acknowledgeReceiptReview, carryReviewAcknowledgements, reconcileReceipt
 export const EXPENSE_TARGETS = {
   title: 'expense-name-field',
   details: 'expense-purchase-details',
+  currency: 'expense-currency-field',
   review: 'expense-receipt-review',
   items: 'expense-items',
   split: 'expense-split-method',
@@ -44,9 +45,8 @@ export function assignUnassignedItems(entry: ReceiptEditor, memberIds: string[])
 const plural = (count: number, one: string, many = one + 's') => `${count} ${count === 1 ? one : many}`;
 
 /**
- * Everything that would currently stop Save, in the order a person can fix
- * it. Save remains the authority; this mirrors its checks so nothing is a
- * surprise, and an otherwise unexplained scan failure still gets an entry.
+ * The shared posting gate, in the order a person can fix each problem.
+ * Confirmation is projected here for readiness, and created only on submit.
  */
 export type ExpenseSaveState = {
   uploading?: boolean; processing?: boolean; conflict?: boolean; offline?: boolean; fxLookupPending?: boolean;
@@ -69,7 +69,7 @@ export function expenseSaveBlockers(entry: ReceiptEditor, trip: Pick<Trip, 'curr
     add('bank-currency', 'Remove the conversion bank charge for an expense in the holiday currency', EXPENSE_TARGETS.fx);
   }
   if (!entry.title.trim()) add('title', 'Add an expense name', EXPENSE_TARGETS.title);
-  if (!entry.currency) add('currency', 'Choose the receipt currency', EXPENSE_TARGETS.details);
+  if (!entry.currency) add('currency', 'Choose the receipt currency', EXPENSE_TARGETS.currency);
   const unreadable = entry.items.filter(item => item.amount === null).length;
   if (unreadable) add('prices', `Enter ${plural(unreadable, 'unreadable price')}`, firstItem(item => item.amount === null), '.moneyinput input');
   const unnamed = entry.items.filter(item => !item.name.trim()).length;
@@ -77,7 +77,7 @@ export function expenseSaveBlockers(entry: ReceiptEditor, trip: Pick<Trip, 'curr
   if (unnamed) add('names', `Name ${plural(unnamed, 'item')}`, firstItem(item => !item.name.trim()), 'input[required]');
   const scan = entry.receiptScan && reconcileReceiptScan(entry);
   if (scan && entry.currency && scan.warnings.some(warning => !warning.resolved && warning.code === 'currency-mismatch')) {
-    add('scan-currency', 'Match the original currency to the printed currency', EXPENSE_TARGETS.review);
+    add('scan-currency', 'Match the original currency to the printed currency', EXPENSE_TARGETS.currency);
   }
   const unassigned = unassignedItemIds(entry).length;
   if (unassigned) add('unassigned', `Choose who shares ${plural(unassigned, 'item')}`, firstItem(item => !item.members.length), '.share-split button[aria-pressed]');
@@ -97,6 +97,7 @@ export function expenseSaveBlockers(entry: ReceiptEditor, trip: Pick<Trip, 'curr
     const scanError = receiptScanSaveError(acknowledgeReceiptReview(entry), { allowAcknowledgement: true });
     if (scanError) add('scan', scanError, EXPENSE_TARGETS.review);
   }
+  if (!blockers.length && !expenseSchema.safeParse(entry).success) add('values', 'Complete the purchase details and valid amounts before saving', EXPENSE_TARGETS.details);
   return blockers;
 }
 

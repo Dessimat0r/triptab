@@ -46,6 +46,7 @@ async function openNew(page: Page) {
   await page.goto('/expenses', { waitUntil: 'domcontentloaded' });
   await page.getByRole('button', { name: 'Add expense', exact: true }).click();
   await expect(page.locator('.editor')).toBeVisible();
+  await expect(page.getByRole('textbox', { name: 'Expense name', exact: true })).toBeFocused();
 }
 
 test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
@@ -65,7 +66,7 @@ test('a shared taxi needs a name, an amount and Save', async ({ page }) => {
   await expect(page.locator('.receipt-view-switch')).toHaveCount(0);
   await expect(page.locator('.item')).toHaveCount(0);
   await expect(page.getByRole('textbox', { name: /Who bought what/ })).toBeHidden();
-  await expect(page.getByRole('button', { name: 'Save expense', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Save expense', exact: true })).toBeEnabled();
   await name.fill('Taxi');
   const amount = page.getByRole('textbox', { name: 'Amount', exact: true });
   await amount.pressSequentially('12,50');
@@ -167,12 +168,12 @@ test('a pending rate lookup never blocks a manual rate or the next expense', asy
   release();
 });
 
-test('the checklist and Save agree, and a blocker focuses its field', async ({ page }) => {
+test('Save stays available to explain blockers, and a blocker focuses its field', async ({ page }) => {
   await fixtures(page);
   await openNew(page);
   await page.getByRole('textbox', { name: 'Amount', exact: true }).fill('5');
   const save = page.getByRole('button', { name: 'Save expense', exact: true });
-  await expect(save).toBeDisabled();
+  await expect(save).toBeEnabled();
   const checklist = page.locator('.save-checklist');
   await expect(checklist).toContainText('Add an expense name');
   await expect(checklist).not.toContainText('Name 1 item');
@@ -183,7 +184,7 @@ test('the checklist and Save agree, and a blocker focuses its field', async ({ p
   await page.getByRole('button', { name: 'Split by item', exact: true }).click();
   await page.getByRole('button', { name: 'Add item', exact: true }).click();
   await page.getByRole('textbox', { name: 'Expense name', exact: true }).fill('Lunch');
-  await expect(save).toBeDisabled();
+  await expect(save).toBeEnabled();
   // The first line still follows the expense name; only the new line needs one.
   await expect(page.getByRole('textbox', { name: 'Item 1 name', exact: true })).toHaveValue('Lunch');
   await checklist.getByRole('button', { name: /Name 1 item/ }).click();
@@ -398,7 +399,7 @@ for (const mobile of [true, false]) test.describe(`cancel item splitting on ${mo
     await expect(page.getByRole('textbox', { name: 'Amount', exact: true })).toBeFocused();
     await expect(page.getByRole('textbox', { name: 'Amount', exact: true })).toHaveValue('');
     await expect(page.locator('.save-checklist')).toContainText('Enter the amount');
-    await expect(page.getByRole('button', { name: 'Save expense', exact: true })).toBeDisabled();
+    await expect(page.getByRole('button', { name: 'Save expense', exact: true })).toBeEnabled();
     await expect(page.getByRole('button', { name: 'Gary', exact: true })).toHaveAttribute('aria-pressed', 'true');
     await expect(page.getByRole('button', { name: 'Sam', exact: true })).toHaveAttribute('aria-pressed', 'false');
   });

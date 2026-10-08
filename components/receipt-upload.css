@@ -19,3 +19,6 @@
 .receipt-capture-tools { width: 100%; min-width: 0; }
 .receipt-capture-tools summary { min-height: 36px; cursor: pointer; font-size: .875rem; }
 .receipt-capture-tool-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.receipt-upload-dialog > label { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 6px; row-gap: 2px; line-height: 1.4; }
+.receipt-upload-dialog > label > small { display: inline; margin: 0; line-height: inherit; }

@@ -10,6 +10,7 @@ import * as moneyFormat from '../lib/money-format';
 import * as receiptScan from '../lib/receipt-scan';
 import * as receiptProcessing from '../lib/receipt-processing';
 import * as receiptChatgpt from '../lib/receipt-chatgpt';
+import * as expenseFxReview from '../lib/expense-fx-review';
 import * as expenseReadiness from '../lib/expense-readiness';
 import * as quickExpense from '../lib/quick-expense';
 import * as dataUtils from '../lib/data-utils';
@@ -87,6 +88,7 @@ function controller(trip: model.Trip, fetcher?: typeof fetch) {
     if (name === '@/lib/money-format') return moneyFormat;
     if (name === '@/lib/receipt-processing') return receiptProcessing;
     if (name === '@/lib/receipt-scan') return receiptScan;
+    if (name === '@/lib/expense-fx-review') return expenseFxReview;
     if (name === '@/lib/expense-readiness') return expenseReadiness;
     if (name === '@/lib/quick-expense') return quickExpense;
     if (name === '@/lib/data-utils') return dataUtils;
@@ -234,4 +236,21 @@ test('closed item discussions render no chats, and visited chats remain mounted 
   assert(typeof discussion.props.onToggle === 'function');
   discussion.props.onToggle({currentTarget: {open: false}});
   assert.equal(elements(exported.exports.default(props)).filter(element => element.type === chat).length, 1, 'collapse must not discard an unsent question');
+});
+
+test('the real Save button disables only while posting and every other state uses the shared blockers', () => {
+  const holiday = fixture(1), editor = controller(holiday);
+  const initial = editor.render();
+  const open = initial.find(element => element.type === 'button' && element.props.className === 'expense-open');
+  assert(open && typeof open.props.onClick === 'function'); open.props.onClick();
+  const entry = editor.state.editing as receiptProcessing.ReceiptEditor;
+  for (let flags = 0; flags < 64; flags++) {
+    const state = { uploading: !!(flags & 1), processing: !!(flags & 2), conflict: !!(flags & 4), offline: !!(flags & 8), fxLookupPending: !!(flags & 16) };
+    Object.assign(editor.state, { uploading: state.uploading, receiptProcessing: state.processing, editorConflict: state.conflict ? { latest: holiday.expenses[0] } : null, offline: state.offline, fxLoading: state.fxLookupPending, saving: !!(flags & 32) });
+    const rendered = editor.render();
+    const button = rendered.find(element => element.type === 'button' && ['Save expense','Saving…'].includes(String(element.props.children)));
+    assert(button); assert.equal(button.props.disabled, !!(flags & 32), JSON.stringify(state));
+    const checklist = rendered.find(element => Array.isArray(element.props.blockers)); assert(checklist);
+    assert.deepEqual(checklist.props.blockers, expenseReadiness.expenseSaveBlockers(entry,holiday,state));
+  }
 });

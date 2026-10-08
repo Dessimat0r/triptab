@@ -1230,19 +1230,19 @@ export default function Home({ children }: { children: ReactNode }) {
     } : null;
     expenseSubmitInFlight.current = true;
     try {
-    if (
-      await updateTrip({
-        ...trip,
-        expenses: exists
-          ? trip.expenses.map((x) => (x.id === expense.id ? expense : x))
-          : [expense, ...trip.expenses],
-        drafts: trip.drafts.flatMap(draft => draft.id === draftId ? retainedDraft ? [retainedDraft] : [] : [draft]),
-      })
-    ) {
-      closeReceiptEditor();
-      return true;
-    }
-    return false;
+      if (
+        await updateTrip({
+          ...trip,
+          expenses: exists
+            ? trip.expenses.map((x) => (x.id === expense.id ? expense : x))
+            : [expense, ...trip.expenses],
+          drafts: trip.drafts.flatMap(draft => draft.id === draftId ? retainedDraft ? [retainedDraft] : [] : [draft]),
+        })
+      ) {
+        closeReceiptEditor();
+        return true;
+      }
+      return false;
     } finally { expenseSubmitInFlight.current = false; }
   }
   function importItems() {
@@ -1483,11 +1483,11 @@ export default function Home({ children }: { children: ReactNode }) {
   const editorShares = useMemo(() => editing && trip ? previewShares(editing, trip) : null, [editing, trip]);
   const editorTotal = useMemo(() => editing && trip ? previewTotal(editing, trip) : null, [editing, trip]);
   const editorOriginalTotal = useMemo(() => editing ? receiptEditorTotal(editing) : 0, [editing]);
-  const editorScanError = useMemo(() => editing ? receiptScanSaveError(acknowledgeReceiptReview(editing), { allowAcknowledgement: true, previous: editorBaseline.current?.expense }) : null, [editing]);
+  const editorScan = useMemo(() => editing?.receiptScan ? reconcileReceiptScan(editing) : undefined, [editing]);
   const editorBlockers = useMemo(() => editing && trip ? expenseSaveBlockers(editing, trip, {
     uploading, processing: receiptProcessing, conflict: !!editorConflict, offline, fxLookupPending: fxLoading,
   }) : [], [editing, trip, uploading, receiptProcessing, editorConflict, offline, fxLoading]);
-  // Save stays available to explain and focus blockers. Only a posting request disables it.
+  // Save stays available to explain and focus blockers. Only an active save request disables it.
   const saveDisabled = saving;
   const manualFxWarning = editing && trip ? manualFxReview(editing, trip.currency, referenceRate) : undefined;
   const reviewRequired = !!editing && (pendingReviewActions({ ...editing, receiptScan: editing.receiptScan && { ...editing.receiptScan, acknowledgement: undefined, missingTotalAcknowledgement: undefined } }) > 0 || !!manualFxWarning);
@@ -1496,7 +1496,7 @@ export default function Home({ children }: { children: ReactNode }) {
   // processed receipt could not supply the date, time or currency itself.
   const purchaseDetailsNeedAttention = !!editing && (!editing.currency || !editing.date || !editing.time
     || (!!editing.receiptScan && (["date", "time", "currency"] as const).some(field => editing.fieldSources?.[field] === "default"))
-    || (!!editing.receiptScan && reconcileReceiptScan(editing)?.warnings.some(warning => !warning.resolved && warning.code === "ambiguous-currency"))
+    || (!!editing.receiptScan && editorScan?.warnings.some(warning => !warning.resolved && warning.code === "ambiguous-currency"))
     || (!!editing.receiptScan?.printedCurrency && editing.receiptScan.printedCurrency !== editing.currency));
   // Foreign-currency receipts need a rate before Save. Look up the daily
   // reference rate once per currency/date/time/zone instead of asking for a
@@ -1845,6 +1845,7 @@ export default function Home({ children }: { children: ReactNode }) {
     <label>
       Original currency
       <select
+        id={EXPENSE_TARGETS.currency}
         aria-label="Original currency"
         value={editing.currency || ""}
         required
@@ -2860,7 +2861,7 @@ export default function Home({ children }: { children: ReactNode }) {
                           </button>
                         </div>
                         {item.scanSource?.observedText && <p className="receipt-item-source">Printed line: {item.scanSource.observedText}{item.scanSource.confidence === "low" ? " · needs checking" : ""}</p>}
-                        {editing.receiptScan && reconcileReceiptScan(editing)?.warnings.filter(warning => !warning.resolved && (warning.itemId === item.id || warning.itemIds?.includes(item.id))).map((warning, index) => <p className="receipt-item-source" key={`${warning.code}:${index}`}>{receiptWarningLabel(warning.code)}</p>)}
+                        {editing.receiptScan && editorScan?.warnings.filter(warning => !warning.resolved && (warning.itemId === item.id || warning.itemIds?.includes(item.id))).map((warning, index) => <p className="receipt-item-source" key={`${warning.code}:${index}`}>{receiptWarningLabel(warning.code)}</p>)}
                         {item.amount === null && <p className="error" role="status">Price unreadable. Enter the full line total before saving.</p>}
                         {item.quantity && <p className="receipt-item-quantity">
                           <span><strong>Receipt:</strong> {item.quantity.total} {item.quantity.label || "units"}</span>

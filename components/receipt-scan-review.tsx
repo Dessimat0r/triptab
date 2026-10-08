@@ -4,7 +4,7 @@ import { useEffect, useId, useMemo, useState } from "react";
 import { CURRENCIES } from "@/lib/model";
 import type { ReceiptEditor } from "@/lib/receipt-processing";
 import { receiptEditorTotal } from "@/lib/receipt-processing";
-import { reconcileReceiptScan, receiptWarningLabel, RESOLVABLE_SCAN_WARNINGS as resolvable } from "@/lib/receipt-scan";
+import { canConfirmReceiptWarning, reconcileReceiptScan, receiptWarningLabel, RESOLVABLE_SCAN_WARNINGS as resolvable } from "@/lib/receipt-scan";
 import { formatMoney } from "@/lib/money-format";
 
 export function receiptMoney(amount: number, currency: string | null | undefined) {
@@ -52,7 +52,7 @@ export default function ReceiptScanReview({ entry, onChange, fxWarning }: { entr
   const calculated = receiptEditorTotal(entry);
   const unassigned = entry.percentages === undefined ? entry.items.filter(item => !item.members.length).length : 0;
   const unknown = entry.items.filter(item => item.amount === null).length;
-  const warnings = scan?.warnings.filter(warning => !warning.resolved) || [];
+  const warnings = scan?.warnings.filter(warning => !warning.resolved && !canConfirmReceiptWarning(entry, warning)) || [];
   const name = (itemId?: string) => entry.items.find(item => item.id === itemId)?.name || "Item needing review";
   return <section className="receipt-scan-review" aria-labelledby={titleId}>
     <h3 id={titleId}>{!scan ? "Receipt not processed yet" : scan.status === "matched" ? "Receipt totals match exactly" : "Receipt needs review"}</h3>
@@ -63,6 +63,7 @@ export default function ReceiptScanReview({ entry, onChange, fxWarning }: { entr
       {scan?.printedSubtotal !== undefined && scan.printedSubtotal !== null && <div><dt>Printed subtotal</dt><dd>{receiptMoney(scan.printedSubtotal, scan.printedCurrency || entry.currency)}</dd></div>}
     </dl>
     <p className="receipt-review-counts">{entry.items.length} {entry.items.length === 1 ? "line" : "lines"} · {unassigned} need people assigned{unknown ? ` · ${unknown} missing ${unknown === 1 ? "price" : "prices"}` : ""}{!entry.currency ? " · currency needs review" : ""}</p>
+    <ReceiptReviewSummary entry={entry} fxWarning={fxWarning} />
     {!!warnings.length && <ul className="receipt-scan-warnings">{warnings.map((warning, index) => <li key={`${warning.code}:${warning.itemId || index}`}>
       <strong>{warning.itemId ? `${name(warning.itemId)}: ` : ""}{warningNames[warning.code] || "Check this receipt detail."}</strong>
       {"difference" in warning && typeof warning.difference === "number" && <span>Difference: {receiptMoney(warning.difference, entry.currency)}</span>}
@@ -75,14 +76,13 @@ export default function ReceiptScanReview({ entry, onChange, fxWarning }: { entr
         onChange({ ...entry, receiptScan: { ...scan, [field]: value, fieldSources: { ...scan.fieldSources, [field]: "user" }, acknowledgement: undefined } });
       }} />)}</div>
     </details>}
-    <ReceiptReviewSummary entry={entry} fxWarning={fxWarning} />
   </section>;
 }
 
 /** Nothing is acknowledged in the editor. The footer confirms this current evidence on submit. */
 export function ReceiptReviewSummary({ entry, fxWarning }: { entry: ReceiptEditor; fxWarning?: string }) {
   const scan = entry.receiptScan && reconcileReceiptScan(entry);
-  const warnings = scan?.warnings.filter(warning => !warning.resolved) || [];
+  const warnings = scan?.warnings.filter(warning => canConfirmReceiptWarning(entry, warning)) || [];
   const amount = receiptEditorTotal(entry);
   const points = warnings.flatMap((warning, index) => {
     const ids = warning.itemId ? [warning.itemId] : warning.itemIds || [];
@@ -92,7 +92,7 @@ export function ReceiptReviewSummary({ entry, fxWarning }: { entry: ReceiptEdito
     if (warning.code === 'ambiguous-currency' && entry.currency) message = `Currency read as ${entry.currency}`;
     else if (warning.code === 'missing-printed-total') message = `Printed total not readable — saving the itemised ${amount === null ? 'amount once prices are complete' : receiptMoney(amount, entry.currency)}`;
     else if (warning.code === 'total-mismatch' || warning.code === 'subtotal-mismatch') message = `${warning.code === 'total-mismatch' ? 'Itemised total differs from printed total' : 'Item prices differ from printed subtotal'} by ${receiptMoney(Math.abs(warning.difference || 0), entry.currency)}`;
-    else if (resolvable.has(warning.code)) message = receiptWarningLabel(warning.code);
+    else if (resolvable.has(warning.code)) message = warning.code === "unmapped-adjustment" ? warningNames[warning.code] : receiptWarningLabel(warning.code);
     else return [];
     const names = ids.map(id => entry.items.find(item => item.id === id)?.name).filter(Boolean).join(', ');
     return [{ key: `${warning.code}:${index}`, message: `${message}${names ? `: ${names}` : ''}`, ids, observedText: warning.observedText, lineIndex: warning.lineIndex }];
