@@ -98,7 +98,7 @@ test('the save checklist reports unreadable prices, unfinished item splits and r
     items: [{ id: 'soup', name: '', amount: null, members: ['alice'] }, { id: 'pizza', name: 'Pizza', amount: 1200, members: ['alice', 'bob'], percentages: { alice: 10, bob: 10 } }],
     receiptScan: { version: 1, printedTotal: null, printedCurrency: 'EUR', status: 'incomplete', warnings: [] },
   });
-  assert.deepEqual(expenseSaveBlockers(entry, trip).map(blocker => blocker.key), ['prices', 'names', 'review', 'item-split']);
+  assert.deepEqual(expenseSaveBlockers(entry, trip).map(blocker => blocker.key), ['prices', 'names', 'item-split']);
 });
 
 test('routine scan summaries keep More options closed; a traveller\'s receipt message opens it', () => {
@@ -133,4 +133,22 @@ test('every transient state has a reason and receipt processing suppresses incom
   }
   assert(expenseSaveBlockers({ ...ready, bankAmount: 100 }, trip).some(blocker => blocker.key === 'bank-currency'));
   assert.match(expenseSaveBlockers({ ...ready, currency: 'GBP', receiptScan: undefined }, trip, { fxLookupPending: true }).at(-1)!.message, /Finding an exchange rate/);
+});
+
+
+test('ambiguous currency, missing total and low confidence need one fresh confirmation after any edits', () => {
+  let entry = assignUnassignedItems(receipt({fieldSources:{currency:'ai'},receiptScan:{version:1,printedTotal:null,status:'incomplete',warnings:[{code:'ambiguous-currency'}]},items:[{id:'coffee',name:'Coffee',amount:4210,members:[],scanSource:{confidence:'low'}}]}), ['alice']);
+  assert.equal(pendingReviewActions(entry),3);assert.deepEqual(expenseSaveBlockers(entry,trip),[]);
+  for (const change of [{tax:40},{tip:10},{discount:20},{currency:'EUR' as const}]) {
+    entry={...entry,...change};const final=acknowledgeReceiptReview(entry);
+    assert.equal(receiptScanSaveError(final),null);assert.equal(pendingReviewActions(final),0);
+    assert.equal(final.fieldSources?.currency,'user');assert.equal(final.receiptScan?.missingTotalAcknowledgement?.fingerprint,receiptScanFingerprint(final));
+    assert.equal(entry.receiptScan?.missingTotalAcknowledgement,undefined);
+  }
+});
+
+test('all hard blockers are listed together and confirmation cannot remove them', () => {
+  const entry=receipt({currency:'GBP',receiptScan:{version:1,printedTotal:null,printedCurrency:'EUR',status:'incomplete',warnings:[{code:'ambiguous-currency'}]},items:[{id:'coffee',name:'',amount:null,members:[]}]});
+  assert.deepEqual(expenseSaveBlockers(entry,trip).map(blocker=>blocker.key),['prices','names','scan-currency','unassigned','fx']);
+  assert.deepEqual(expenseSaveBlockers(acknowledgeReceiptReview(entry),trip),expenseSaveBlockers(entry,trip));
 });

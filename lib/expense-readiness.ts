@@ -1,6 +1,6 @@
 import { itemSplitError, receiptSplitError, total, type ReceiptMessage, type Trip } from './model';
 import type { ReceiptEditor } from './receipt-processing';
-import { carryReviewAcknowledgements, pendingReviewActions, reconcileReceiptScan, receiptScanSaveError } from './receipt-scan';
+import { acknowledgeReceiptReview, carryReviewAcknowledgements, reconcileReceiptScan, receiptScanSaveError } from './receipt-scan';
 
 /** Stable element IDs the save checklist can move focus to. */
 export const EXPENSE_TARGETS = {
@@ -79,8 +79,6 @@ export function expenseSaveBlockers(entry: ReceiptEditor, trip: Pick<Trip, 'curr
   if (scan && entry.currency && scan.warnings.some(warning => !warning.resolved && warning.code === 'currency-mismatch')) {
     add('scan-currency', 'Match the original currency to the printed currency', EXPENSE_TARGETS.review);
   }
-  const reviews = scan ? pendingReviewActions(entry) : 0;
-  if (reviews) add('review', `Confirm ${plural(reviews, 'receipt check')}`, EXPENSE_TARGETS.review);
   const unassigned = unassignedItemIds(entry).length;
   if (unassigned) add('unassigned', `Choose who shares ${plural(unassigned, 'item')}`, firstItem(item => !item.members.length), '.share-split button[aria-pressed]');
   const splitError = receiptSplitError(entry);
@@ -96,7 +94,7 @@ export function expenseSaveBlockers(entry: ReceiptEditor, trip: Pick<Trip, 'curr
   if (!unreadable && entry.items.length && total(entry) <= 0) add('total', 'The total must be more than zero', EXPENSE_TARGETS.items);
   if (!entry.items.length) add('items', 'Add at least one item', EXPENSE_TARGETS.items);
   if (!blockers.length) {
-    const scanError = receiptScanSaveError(entry, { allowAcknowledgement: true });
+    const scanError = receiptScanSaveError(acknowledgeReceiptReview(entry), { allowAcknowledgement: true });
     if (scanError) add('scan', scanError, EXPENSE_TARGETS.review);
   }
   return blockers;

@@ -18,7 +18,7 @@ import ReceiptLocationFields, { type ReceiptPlace } from "@/components/receipt-l
 import ReceiptPhotoViewer from "@/components/receipt-photo-viewer";
 import ExpenseIconPicker from "@/components/expense-icon";
 import ReceiptScanReview, { receiptMoney } from "@/components/receipt-scan-review";
-import { carryReviewAcknowledgements, receiptScanSaveError } from "@/lib/receipt-scan";
+import { acknowledgeReceiptReview, carryReviewAcknowledgements, pendingReviewActions, receiptScanSaveError, receiptWarningLabel, reconcileReceiptScan } from "@/lib/receipt-scan";
 import { assignUnassignedItems, EXPENSE_TARGETS, expenseItemTarget, expenseSaveBlockers, visibleExpenseBlockers, hasReceiptDiscussion, unassignedItemIds } from "@/lib/expense-readiness";
 import { MoreOptions, PurchaseDetails, QuickSplit, ReadyToSave, SaveChecklist, focusExpenseTarget } from "@/components/expense-quick-review";
 import ItemReceiptConversation from "@/components/item-receipt-conversation";
@@ -259,6 +259,7 @@ export default function Home({ children }: { children: ReactNode }) {
     [savedNotice, setSavedNotice] = useState<{ title: string; at: number } | null>(null),
     [referenceRate, setReferenceRate] = useState<{ rate: number; currency: Currency; date: string; time: string; timezone: string } | null>(null);
   const editorBaseline = useRef<{ tripId: string; expense?: Expense } | null>(null);
+  const expenseSubmitInFlight = useRef(false);
   const receiptSession = useRef(0);
   const receiptSessionScope = useRef<{ accountId: string; tripId: string }>({ accountId: "", tripId: "" });
   const initialReceiptReview = useRef<InitialReceiptReview | null>(null);
@@ -1184,7 +1185,7 @@ export default function Home({ children }: { children: ReactNode }) {
   async function submitExpense(e: React.FormEvent) {
     e.preventDefault();
     if (receiptHistoryOpen) return;
-    if (!trip || !editing || saving) return;
+    if (!trip || !editing || saving || expenseSubmitInFlight.current) return;
     const blockers = visibleExpenseBlockers(expenseSaveBlockers(editing, trip, {
       uploading, processing: receiptProcessing, conflict: !!editorConflict, offline, fxLookupPending: fxLoading,
     }), quickMode);
@@ -1194,9 +1195,10 @@ export default function Home({ children }: { children: ReactNode }) {
       return;
     }
     if (!editorIsCurrent()) { setSaveAttempted(true); return; }
-    const scanError = receiptScanSaveError(editing, { allowAcknowledgement: true, previous: editorBaseline.current?.expense });
+    const reviewed = acknowledgeReceiptReview(editing);
+    const scanError = receiptScanSaveError(reviewed, { allowAcknowledgement: true, previous: editorBaseline.current?.expense });
     if (scanError) { setError(scanError); return; }
-    const parsedExpense = expenseSchema.safeParse(editing);
+    const parsedExpense = expenseSchema.safeParse(reviewed);
     if (!parsedExpense.success) { setError("Review the receipt: add its currency, named item prices and valid cost shares before saving."); return; }
     if (editing.fx?.source === "manual" && editing.bankAmount === undefined) {
       const matchingReference = referenceRate && referenceRate.currency === editing.currency && referenceRate.date === editing.date && referenceRate.time === editing.time && referenceRate.timezone === editing.timezone ? referenceRate.rate : undefined;
@@ -1257,6 +1259,8 @@ export default function Home({ children }: { children: ReactNode }) {
       expenseId: expense.id,
       status: "waiting",
     } : null;
+    expenseSubmitInFlight.current = true;
+    try {
     if (
       await updateTrip({
         ...trip,
@@ -1270,6 +1274,7 @@ export default function Home({ children }: { children: ReactNode }) {
       return true;
     }
     return false;
+    } finally { expenseSubmitInFlight.current = false; }
   }
   function importItems() {
     try {
@@ -1509,17 +1514,19 @@ export default function Home({ children }: { children: ReactNode }) {
   const editorShares = useMemo(() => editing && trip ? previewShares(editing, trip) : null, [editing, trip]);
   const editorTotal = useMemo(() => editing && trip ? previewTotal(editing, trip) : null, [editing, trip]);
   const editorOriginalTotal = useMemo(() => editing ? receiptEditorTotal(editing) : 0, [editing]);
-  const editorScanError = useMemo(() => editing ? receiptScanSaveError(editing, { allowAcknowledgement: true, previous: editorBaseline.current?.expense }) : null, [editing]);
+  const editorScanError = useMemo(() => editing ? receiptScanSaveError(acknowledgeReceiptReview(editing), { allowAcknowledgement: true, previous: editorBaseline.current?.expense }) : null, [editing]);
   const editorBlockers = useMemo(() => editing && trip ? expenseSaveBlockers(editing, trip, {
     uploading, processing: receiptProcessing, conflict: !!editorConflict, offline, fxLookupPending: fxLoading,
   }) : [], [editing, trip, uploading, receiptProcessing, editorConflict, offline, fxLoading]);
   // Save stays available to explain and focus blockers. Only a posting request disables it.
   const saveDisabled = saving;
+  const reviewRequired = !!editing && pendingReviewActions(editing) > 0;
   const visibleBlockers = visibleExpenseBlockers(editorBlockers, quickMode);
   // Collapsed purchase details open while a value is missing, or when a
   // processed receipt could not supply the date, time or currency itself.
   const purchaseDetailsNeedAttention = !!editing && (!editing.currency || !editing.date || !editing.time
     || (!!editing.receiptScan && (["date", "time", "currency"] as const).some(field => editing.fieldSources?.[field] === "default"))
+    || (!!editing.receiptScan && reconcileReceiptScan(editing)?.warnings.some(warning => !warning.resolved && warning.code === "ambiguous-currency"))
     || (!!editing.receiptScan?.printedCurrency && editing.receiptScan.printedCurrency !== editing.currency));
   // Foreign-currency receipts need a rate before Save. Look up the daily
   // reference rate once per currency/date/time/zone instead of asking for a
@@ -1887,7 +1894,6 @@ export default function Home({ children }: { children: ReactNode }) {
           </option>
         ))}
       </select>
-      {editing.receiptScan && editing.currency && editing.fieldSources?.currency !== "user" && <button type="button" className="quiet" onClick={() => setEditing(userReceiptField(editing, "currency", editing.currency))}>I checked the currency: {editing.currency}</button>}
     </label>
   ) : null;
   const renderReceiptCapture = (entry: ReceiptEditor, current: Trip, compact: boolean) => (
@@ -2875,6 +2881,7 @@ export default function Home({ children }: { children: ReactNode }) {
                           </button>
                         </div>
                         {item.scanSource?.observedText && <p className="receipt-item-source">Printed line: {item.scanSource.observedText}{item.scanSource.confidence === "low" ? " · needs checking" : ""}</p>}
+                        {editing.receiptScan && reconcileReceiptScan(editing)?.warnings.filter(warning => !warning.resolved && (warning.itemId === item.id || warning.itemIds?.includes(item.id))).map((warning, index) => <p className="receipt-item-source" key={`${warning.code}:${index}`}>{receiptWarningLabel(warning.code)}</p>)}
                         {item.amount === null && <p className="error" role="status">Price unreadable. Enter the full line total before saving.</p>}
                         {item.quantity && <p className="receipt-item-quantity">
                           <span><strong>Receipt:</strong> {item.quantity.total} {item.quantity.label || "units"}</span>
@@ -3091,7 +3098,7 @@ export default function Home({ children }: { children: ReactNode }) {
                     className="primary"
                     disabled={saveDisabled}
                   >
-                    {saving ? "Saving…" : "Save expense"}
+                    {saving ? "Saving…" : reviewRequired && !editorBlockers.length ? "Confirm & save expense" : "Save expense"}
                   </button>
                 </div>
               </div>

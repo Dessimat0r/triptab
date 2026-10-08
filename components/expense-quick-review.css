@@ -370,3 +370,11 @@
     flex: 1 1 96px;
   }
 }
+
+.receipt-review-summary { min-width: 0; margin: 16px 0; padding: 12px; border: 1px solid var(--line); border-radius: 10px; }
+.receipt-review-summary h4 { margin: 0; }
+.receipt-review-summary p { margin: 6px 0; font-size: .875rem; }
+.receipt-review-summary ul { margin: 8px 0 0; padding-left: 20px; }
+.receipt-review-summary li { margin: 8px 0; overflow-wrap: anywhere; }
+.receipt-review-summary li span, .receipt-review-summary li small { display: block; }
+.receipt-review-summary a { display: inline-flex; align-items: center; min-height: 44px; margin-right: 12px; }

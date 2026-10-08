@@ -330,6 +330,7 @@ export function receiptScanSaveError(entry: ScannableReceipt, options: {
 /** An AI client cannot manufacture human review acknowledgement/resolutions. */
 export function receiptScanHumanReviewChanged(entry: ScannableReceipt, previous?: ScannableReceipt): boolean {
   if (!entry.receiptScan) return false;
+  if (entry.fieldSources?.currency === 'user' && previous?.fieldSources?.currency !== 'user') return true;
   if (entry.receiptScan.acknowledgement && canonical(entry.receiptScan.acknowledgement) !== canonical(previous?.receiptScan?.acknowledgement)) return true;
   if (entry.receiptScan.missingTotalAcknowledgement && canonical(entry.receiptScan.missingTotalAcknowledgement)
     !== canonical(previous?.receiptScan?.missingTotalAcknowledgement)) return true;
@@ -347,25 +348,29 @@ export function pendingReviewActions(entry: ScannableReceipt): number {
   const scan = reconcileReceiptScan(entry);
   if (!scan) return 0;
   const fingerprint = receiptScanFingerprint(entry);
-  const checkable = scan.warnings.filter(warning => !warning.resolved && RESOLVABLE_SCAN_WARNINGS.has(warning.code)).length;
+  const checkable = scan.warnings.filter(warning => !warning.resolved && RESOLVABLE_SCAN_WARNINGS.has(warning.code)
+    && !(warning.code === 'uncertain-description' && warning.itemId && !entry.items.find(item => item.id === warning.itemId)?.name.trim())).length;
   const mismatch = scan.warnings.some(warning => warning.code === 'subtotal-mismatch' || warning.code === 'total-mismatch')
     && scan.acknowledgement?.fingerprint !== fingerprint ? 1 : 0;
   const missingTotal = (scan.printedTotal === null || scan.printedTotal === undefined)
     && scan.missingTotalAcknowledgement?.fingerprint !== fingerprint ? 1 : 0;
-  return checkable + mismatch + missingTotal;
+  const currency = entry.currency && scan.warnings.some(warning => !warning.resolved && warning.code === 'ambiguous-currency') ? 1 : 0;
+  return checkable + mismatch + missingTotal + currency;
 }
 
 /**
  * One deliberate review action: mark every checkable warning as checked and
  * acknowledge a total difference or an unavailable printed total, using the
  * same fingerprint Save verifies. Unreadable prices, missing names and
- * currency problems are not checkable and still need real corrections.
+ * a different printed currency still needs a real correction. A selected
+ * ambiguous currency is confirmed only by the browser's visible Save summary.
  */
 export function acknowledgeReceiptReview<T extends ScannableReceipt>(entry: T): T {
   const scan = reconcileReceiptScan(entry);
   if (!entry.receiptScan || !scan) return entry;
   const warnings = scan.warnings.map(warning => !warning.resolved && RESOLVABLE_SCAN_WARNINGS.has(warning.code) ? { ...warning, resolved: true as const } : warning);
-  const resolved: T = { ...entry, receiptScan: { ...entry.receiptScan, warnings, acknowledgement: undefined, missingTotalAcknowledgement: undefined } };
+  const currencyConfirmed = entry.currency && scan.warnings.some(warning => !warning.resolved && warning.code === 'ambiguous-currency');
+  const resolved: T = { ...entry, ...(currencyConfirmed ? { fieldSources: { ...entry.fieldSources, currency: 'user' as const } } : {}), receiptScan: { ...entry.receiptScan, warnings, acknowledgement: undefined, missingTotalAcknowledgement: undefined } };
   const fingerprint = receiptScanFingerprint(resolved);
   const mismatch = scan.warnings.some(warning => warning.code === 'subtotal-mismatch' || warning.code === 'total-mismatch');
   const missingTotal = scan.printedTotal === null || scan.printedTotal === undefined;
