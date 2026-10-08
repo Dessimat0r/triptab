@@ -174,6 +174,8 @@ test('Save stays available to explain blockers, and a blocker focuses its field'
   await page.getByRole('textbox', { name: 'Amount', exact: true }).fill('5');
   const save = page.getByRole('button', { name: 'Save expense', exact: true });
   await expect(save).toBeEnabled();
+  await expect(page.locator('.save-checklist')).toHaveCount(0);
+  await save.click();
   const checklist = page.locator('.save-checklist');
   await expect(checklist).toContainText('Add an expense name');
   await expect(checklist).not.toContainText('Name 1 item');
@@ -398,6 +400,7 @@ for (const mobile of [true, false]) test.describe(`cancel item splitting on ${mo
     await activate(page.getByRole('button', { name: 'Use one amount', exact: true }));
     await expect(page.getByRole('textbox', { name: 'Amount', exact: true })).toBeFocused();
     await expect(page.getByRole('textbox', { name: 'Amount', exact: true })).toHaveValue('');
+    await page.getByRole('button', {name:'Save expense',exact:true}).click();
     await expect(page.locator('.save-checklist')).toContainText('Enter the amount');
     await expect(page.getByRole('button', { name: 'Save expense', exact: true })).toBeEnabled();
     await expect(page.getByRole('button', { name: 'Gary', exact: true })).toHaveAttribute('aria-pressed', 'true');

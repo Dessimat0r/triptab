@@ -243,6 +243,7 @@ export default function Home({ children }: { children: ReactNode }) {
     [receiptItemized, setReceiptItemized] = useState(false),
     [receiptProcessing, setReceiptProcessing] = useState(false),
     [saveAttempted, setSaveAttempted] = useState(false),
+    [saveAnnouncement, setSaveAnnouncement] = useState<{ id: number; message: string } | null>(null),
     [receiptAI, setReceiptAI] = useState<ReceiptAIState | null>(null),
     [receiptAIConnecting, setReceiptAIConnecting] = useState(false),
     [processedReceipt, setProcessedReceipt] = useState<Draft | null>(null),
@@ -755,6 +756,7 @@ export default function Home({ children }: { children: ReactNode }) {
   }
   function resetReceiptReview() {
     setSaveAttempted(false);
+    setSaveAnnouncement(null);
     receiptSession.current++;
     receiptProcessRequest.current++;
     receiptProcessInFlight.current = false;
@@ -1138,7 +1140,7 @@ export default function Home({ children }: { children: ReactNode }) {
     }
     openDraft({ ...latest, icon: editing.icon, languageViewId: editing.languageViewId || editing.expenseId || editing.id, conversation: mergeReceiptConversation(latest.conversation, editing.conversation) });
   }
-  async function upload(file: File, context: ReceiptUploadContext = {}, signal?: AbortSignal): Promise<boolean> {
+  async function upload(file: File, context: ReceiptUploadContext = {}, signal?: AbortSignal, onSaving?: () => boolean): Promise<boolean> {
     if (!trip || signal?.aborted) return false;
     resetReceiptReview();
     const session = receiptSession.current, tripId = trip.id, accountId = profile?.id || "";
@@ -1159,6 +1161,7 @@ export default function Home({ children }: { children: ReactNode }) {
         ...(context.notes?.trim() ? { conversation: [{ id: uid(), role: "user" as const, text: context.notes.trim(), createdAt: new Date().toISOString() }] } : {}),
         fieldSources: { title: "default", currency: "default", date: "default", time: "default", timezone: "default", payer: "default", tax: "default", tip: "default", discount: "default", ...(context.location ? { location: "user" as const } : {}) },
         payer: trip.members.find(member => member.userId === accountId)?.id || trip.members[0].id, status: "waiting" };
+      if (signal?.aborted || (onSaving && !onSaving())) return false;
       if (!await updateTrip({ ...trip, drafts: [...trip.drafts, draft] })) return false;
       if (signal?.aborted || !isReceiptSessionCurrent(session, tripId, accountId, false)) return false;
       const canonical = latestSnapshot.current.data.trips.find(value => value.id === tripId)?.drafts.find(value => value.id === draft.id);
@@ -1194,7 +1197,9 @@ export default function Home({ children }: { children: ReactNode }) {
     }), quickMode);
     if (blockers.length) {
       setSaveAttempted(true);
-      focusExpenseTarget(blockers[0].target, blockers[0].focus);
+      setSaveAnnouncement(previous => ({ id: (previous?.id || 0) + 1, message: blockers.map(blocker => blocker.message).join(". ") }));
+      const first = blockers[0];
+      if (first.target) focusExpenseTarget(first.target, first.focus);
       return;
     }
     if (!editorIsCurrent()) { setSaveAttempted(true); return; }
@@ -3036,7 +3041,9 @@ export default function Home({ children }: { children: ReactNode }) {
                 <p className="footnote">Review your split and press Save expense to commit your choice.</p>
               </section>}
               <div className="editor-footer" ref={editorFooterRef}>
-                <SaveChecklist key={editing.id} blockers={visibleBlockers} attempted={saveAttempted} />
+                <div className="expense-save-announcement sr-only" role="alert" aria-atomic="true">{saveAnnouncement && <span key={saveAnnouncement.id}>{saveAnnouncement.message}</span>}</div>
+                <SaveChecklist key={editing.id} blockers={visibleBlockers} attempted={saveAttempted}
+                  hidden={quickMode && !editing.draftId && !trip.expenses.some(expense => expense.id === editing.id) && !saveAttempted && !uploading && !receiptProcessing && !offline && !editorConflict} />
                 <div>
                   <small>{quickMode ? "Total" : "Itemised total"}</small>
                   <strong>{editorOriginalTotal === null ? "Incomplete" : !editing.items.length ? "Not processed" : receiptMoney(editorOriginalTotal, editing.currency)}</strong>

@@ -30,7 +30,7 @@ const controllerSource = `return function createController(initial, boundary) {
   let trip = structuredClone(initial), editing = null, processedReceipt = null, error = '', editorConflict = null;
   let receiptPending = false, receiptCopied = false, receiptPrompt = '', receiptHistoryOpen = false, restoration = null;
   let paste = '', fxError = '', referenceRate = null,captureNotes='',uploadOpen=false;
-  const setSaveAttempted=()=>{},focusExpenseTarget=()=>{};
+  const setSaveAttempted=()=>{},setSaveAnnouncement=()=>{},focusExpenseTarget=()=>{};
   const quickMode=false;const expenseSubmitInFlight={current:false};
   const setCaptureNotes=next=>{captureNotes=next},setUploadOpen=next=>{uploadOpen=next};
   let uploading = false, receiptProcessing = false, receiptItemized = false, receiptHandoffError = '', receiptHandoffOpened = false, receiptAIConnecting = false;

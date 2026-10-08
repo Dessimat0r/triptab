@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useId, useMemo, useState } from "react";
+import { focusExpenseTarget } from "@/components/expense-quick-review";
 import { CURRENCIES } from "@/lib/model";
 import type { ReceiptEditor } from "@/lib/receipt-processing";
 import { receiptEditorTotal } from "@/lib/receipt-processing";
@@ -104,8 +105,9 @@ export function ReceiptReviewSummary({ entry, fxWarning }: { entry: ReceiptEdito
     <ul>{points.map(point => <li key={point.key}>
       <span>{point.message}</span>
       {point.observedText && <small>Printed: {point.observedText}</small>}
-      {point.ids.map(id => <a key={id} href={`#expense-item-${id}`}>Check {entry.items.find(item => item.id === id)?.name || 'item'}</a>)}
-      {entry.receiptId && <a href={`/api/receipt?id=${encodeURIComponent(entry.receiptId)}`} target="_blank" rel="noopener noreferrer">{point.lineIndex === undefined ? 'View photo' : `View photo, line ${point.lineIndex + 1}`}</a>}
-    </li>)}{fxWarning && <li><span>{fxWarning}</span><a href="#expense-fx-panel">Check rate</a></li>}</ul>
+      {point.ids.map(id => <button key={id} type="button" className="quiet" onClick={() => focusExpenseTarget(`expense-item-${id}`, "input[required]")}>Check {entry.items.find(item => item.id === id)?.name || 'item'}</button>)}
+      {point.lineIndex !== undefined && <small>Receipt line {point.lineIndex + 1}</small>}
+    </li>)}{fxWarning && <li><span>{fxWarning}</span><button type="button" className="quiet" onClick={() => focusExpenseTarget("expense-fx-panel", "input[type=number]")}>Check rate</button></li>}</ul>
+    {!!points.length && entry.receiptId && <a href={`/api/receipt?id=${encodeURIComponent(entry.receiptId)}`} target="_blank" rel="noopener noreferrer">View receipt photo</a>}
   </section>;
 }

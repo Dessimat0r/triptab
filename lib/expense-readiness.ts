@@ -24,7 +24,7 @@ export const expenseItemTarget = (itemId: string) => `expense-item-${itemId}`;
  * `target` is the element to scroll to; `focus` optionally selects the
  * control inside it that fixes the problem (otherwise its first control).
  */
-export type SaveBlocker = { key: string; message: string; target: string; focus?: string };
+export type SaveBlocker = { key: string; message: string; target?: string; focus?: string };
 
 export function unassignedItemIds(entry: Pick<ReceiptEditor, 'items' | 'percentages'>): string[] {
   return entry.percentages === undefined ? entry.items.filter(item => !item.members.length).map(item => item.id) : [];
@@ -54,7 +54,7 @@ export type ExpenseSaveState = {
 
 export function expenseSaveBlockers(entry: ReceiptEditor, trip: Pick<Trip, 'currency'>, state: ExpenseSaveState = {}): SaveBlocker[] {
   const blockers: SaveBlocker[] = [];
-  const add = (key: string, message: string, target: string, focus?: string) => blockers.push({ key, message, target, ...(focus ? { focus } : {}) });
+  const add = (key: string, message: string, target?: string, focus?: string) => blockers.push({ key, message, ...(target ? { target } : {}), ...(focus ? { focus } : {}) });
   const firstItem = (match: (item: ReceiptEditor['items'][number]) => boolean) => {
     const item = entry.items.find(match);
     return item ? expenseItemTarget(item.id) : EXPENSE_TARGETS.items;
@@ -62,7 +62,7 @@ export function expenseSaveBlockers(entry: ReceiptEditor, trip: Pick<Trip, 'curr
   if (state.processing) add('processing', 'Reading the receipt…', EXPENSE_TARGETS.review);
   else if (state.uploading) add('uploading', 'Uploading photo…', EXPENSE_TARGETS.capture);
   if (state.conflict) add('conflict', 'Resolve the edit conflict above', EXPENSE_TARGETS.conflict);
-  if (state.offline) add('offline', 'You’re offline. Reconnect to save', EXPENSE_TARGETS.title);
+  if (state.offline) add('offline', 'You’re offline. Reconnect to save');
   // The proposal will supply these values; wait for it before requesting edits.
   if (state.processing || state.uploading) return blockers;
   if (entry.bankAmount !== undefined && entry.currency === trip.currency) {

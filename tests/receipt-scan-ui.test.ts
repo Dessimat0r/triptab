@@ -32,6 +32,7 @@ const exported = {exports: {} as {default: (props: {entry: ReceiptEditor; onChan
 new Function('require', 'module', 'exports', compiled)((name: string) => {
   if (name === 'react') return {useId: () => 'review-title', useMemo: (callback:()=>unknown) => callback(), useEffect() {}, useState: (initial: unknown) => [initial, () => {}]};
   if (name === 'react/jsx-runtime') return runtime;
+  if (name === '@/components/expense-quick-review') return {focusExpenseTarget() {}};
   if (name === '@/lib/model') return model;
   if (name === '@/lib/receipt-processing') return processing;
   if (name === '@/lib/receipt-scan') return scan;
@@ -123,7 +124,8 @@ test('200-line review with long descriptions preserves ordered counts and struct
 test('duplicate warnings preserve both affected pairs and link to their item evidence', () => {
   const value=entry({items:[{id:'pizza',name:'Pizza',amount:1200,members:['alice']},{id:'line-2',name:'Pizza duplicate',amount:0,members:['alice']},{id:'line-3',name:'Pizza similar',amount:0,members:['alice']}],receiptScan:{version:1,printedTotal:1200,status:'needs-review',warnings:[{code:'possible-duplicate',itemIds:['pizza','line-2']},{code:'possible-duplicate',itemIds:['pizza','line-3']}]}});
   const ui=render(value);assert.match(ui.text,/Possible duplicate receipt lines: Pizza, Pizza duplicate/);assert.match(ui.text,/Possible duplicate receipt lines: Pizza, Pizza similar/);
-  assert(ui.elements.some(element=>element.type==='a' && element.props.href==='#expense-item-line-3'));
+  assert(ui.elements.some(element=>element.type==='button' && text(element.props.children as React.ReactNode).replace(/\s+/g,' ').trim()==='Check Pizza similar'));
+  assert.equal(ui.elements.filter(element=>element.type==='a' && element.props.href==='/api/receipt?id=photo').length,1);
   assert.equal(ui.changed,undefined);
 });
 
@@ -138,7 +140,8 @@ test('ambiguous currency is visible alongside missing total and uncertain lines 
   const value=entry({fieldSources:{currency:'ai'},items:[{id:'pizza',name:'Pizza',amount:1200,members:['alice'],scanSource:{confidence:'low'}}],receiptScan:{version:1,printedTotal:null,status:'incomplete',warnings:[{code:'ambiguous-currency'},{code:'image-may-be-incomplete'}]}});
   const ui=render(value);assert.match(ui.text,/Currency read as EUR/);assert.match(ui.text,/Printed total not readable/);
   assert.match(ui.text,/Receipt detail needs checking: Pizza/);assert.match(ui.text,/Receipt image may be incomplete/);
-  assert.equal(ui.elements.filter(element=>element.type==='button' || (element.type==='input' && element.props.type==='checkbox')).length,0);
+  assert.equal(ui.elements.filter(element=>element.type==='input' && element.props.type==='checkbox').length,0);
+  assert(ui.elements.filter(element=>element.type==='button').every(element=>text(element.props.children as React.ReactNode).startsWith('Check ')));
   assert.equal(ui.changed,undefined);assert.equal(scan.receiptScanSaveError(scan.acknowledgeReceiptReview(value)),null);
 });
 
