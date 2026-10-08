@@ -45,7 +45,7 @@ function PrintedAmount({ label, value, onChange }: { label: string; value?: numb
   }} /></label>;
 }
 
-export default function ReceiptScanReview({ entry, onChange }: { entry: ReceiptEditor; onChange: (entry: ReceiptEditor) => void }) {
+export default function ReceiptScanReview({ entry, onChange, fxWarning }: { entry: ReceiptEditor; onChange: (entry: ReceiptEditor) => void; fxWarning?: string }) {
   const titleId = useId();
   const scan = useMemo(() => entry.receiptScan && reconcileReceiptScan(entry), [entry]);
   if (!entry.receiptId && !entry.receiptScan) return null;
@@ -75,7 +75,7 @@ export default function ReceiptScanReview({ entry, onChange }: { entry: ReceiptE
         onChange({ ...entry, receiptScan: { ...scan, [field]: value, fieldSources: { ...scan.fieldSources, [field]: "user" }, acknowledgement: undefined } });
       }} />)}</div>
     </details>}
-    <ReceiptReviewSummary entry={entry} />
+    <ReceiptReviewSummary entry={entry} fxWarning={fxWarning} />
   </section>;
 }
 

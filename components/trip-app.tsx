@@ -17,8 +17,9 @@ import ReceiptUploadDialog, { type ReceiptUploadContext } from "@/components/rec
 import ReceiptLocationFields, { type ReceiptPlace } from "@/components/receipt-location-fields";
 import ReceiptPhotoViewer from "@/components/receipt-photo-viewer";
 import ExpenseIconPicker from "@/components/expense-icon";
-import ReceiptScanReview, { receiptMoney } from "@/components/receipt-scan-review";
+import ReceiptScanReview, { ReceiptReviewSummary, receiptMoney } from "@/components/receipt-scan-review";
 import { acknowledgeReceiptReview, carryReviewAcknowledgements, pendingReviewActions, receiptScanSaveError, receiptWarningLabel, reconcileReceiptScan } from "@/lib/receipt-scan";
+import { manualFxReview } from "@/lib/expense-fx-review";
 import { assignUnassignedItems, EXPENSE_TARGETS, expenseItemTarget, expenseSaveBlockers, visibleExpenseBlockers, hasReceiptDiscussion, unassignedItemIds } from "@/lib/expense-readiness";
 import { MoreOptions, PurchaseDetails, QuickSplit, ReadyToSave, SaveChecklist, focusExpenseTarget } from "@/components/expense-quick-review";
 import ItemReceiptConversation from "@/components/item-receipt-conversation";
@@ -1202,40 +1203,6 @@ export default function Home({ children }: { children: ReactNode }) {
     if (scanError) { setError(scanError); return; }
     const parsedExpense = expenseSchema.safeParse(reviewed);
     if (!parsedExpense.success) { setError("Review the receipt: add its currency, named item prices and valid cost shares before saving."); return; }
-    if (editing.fx?.source === "manual" && editing.bankAmount === undefined) {
-      const matchingReference = referenceRate && referenceRate.currency === editing.currency && referenceRate.date === editing.date && referenceRate.time === editing.time && referenceRate.timezone === editing.timezone ? referenceRate.rate : undefined;
-      const suspicious = matchingReference ? Math.abs(editing.fx.rate / matchingReference - 1) > 0.1 : (["GBP", "EUR", "CHF", "USD"].includes(trip.currency) && (editing.fx.rate > 100 || editing.fx.rate < 0.0001));
-      if (suspicious && !await confirm({ title: "Check manual exchange rate", message: `1 ${editing.currency} = ${editing.fx.rate.toPrecision(8)} ${trip.currency}. The converted receipt is ${money(previewTotal(editing, trip) || 0, trip.currency)}. ${matchingReference ? "It differs by more than 10% from the reference rate." : "This conversion factor is unusually large or small."} Use this rate?`, confirmLabel: "Use this rate" })) return;
-    }
-    const splitError = receiptSplitError(editing) || (editing.percentages === undefined ? editing.items.map(itemSplitError).find(Boolean) : null);
-    if (splitError) {
-      setError(splitError);
-      return;
-    }
-    if (
-      editing.currency !== trip.currency &&
-      !editing.bankAmount &&
-      !editing.fx?.rate
-    ) {
-      setError(
-        "Look up a conversion rate or enter the amount your bank charged.",
-      );
-      return;
-    }
-    if (editing.bankAmount === 0) {
-      setError("The bank charge must be greater than zero.");
-      return;
-    }
-    if (
-      !editing.title.trim() ||
-      parsedExpense.data.items.some((i) => !i.name.trim() || (editing.percentages === undefined && !i.members.length)) ||
-      total(parsedExpense.data) <= 0
-    ) {
-      setError(
-        "Add a title, named items, at least one person per item, and a positive total.",
-      );
-      return;
-    }
     const { draftId } = editing;
     const expense = parsedExpense.data;
     if (draftId) expense.sourceDraftId = draftId;
@@ -1522,7 +1489,8 @@ export default function Home({ children }: { children: ReactNode }) {
   }) : [], [editing, trip, uploading, receiptProcessing, editorConflict, offline, fxLoading]);
   // Save stays available to explain and focus blockers. Only a posting request disables it.
   const saveDisabled = saving;
-  const reviewRequired = !!editing && pendingReviewActions(editing) > 0;
+  const manualFxWarning = editing && trip ? manualFxReview(editing, trip.currency, referenceRate) : undefined;
+  const reviewRequired = !!editing && (pendingReviewActions({ ...editing, receiptScan: editing.receiptScan && { ...editing.receiptScan, acknowledgement: undefined, missingTotalAcknowledgement: undefined } }) > 0 || !!manualFxWarning);
   const visibleBlockers = visibleExpenseBlockers(editorBlockers, quickMode);
   // Collapsed purchase details open while a value is missing, or when a
   // processed receipt could not supply the date, time or currency itself.
@@ -1969,6 +1937,7 @@ export default function Home({ children }: { children: ReactNode }) {
             : "Look up historical rate"}
         </button>
         {fxError && <p className="error">{fxError}</p>}
+        {manualFxWarning && <p className="bank-diff" role="status">{manualFxWarning}. Check the rate before confirming your expense.</p>}
         {entry.fx && (
           <div className="rate-result">
             <span>
@@ -2669,7 +2638,8 @@ export default function Home({ children }: { children: ReactNode }) {
                   {restoration && <RestorationNotice info={restoration} />}
                   {editing.receiptId && <ReceiptPhotoViewer receiptId={editing.receiptId} />}
                   <div id={EXPENSE_TARGETS.review} className="expense-target">
-                    <ReceiptScanReview entry={editing} onChange={setEditing} />
+                    <ReceiptScanReview entry={editing} onChange={setEditing} fxWarning={manualFxWarning} />
+                    {!editing.receiptId && !editing.receiptScan && manualFxWarning && <ReceiptReviewSummary entry={editing} fxWarning={manualFxWarning} />}
                   </div>
                   <QuickSplit key={`${trip.id}:${editing.id}`} tripId={trip.id} unassigned={unassignedItemIds(editing).length} members={trip.members} autoFocus
                     currentMemberId={trip.members[currentMemberIndex]?.id} disabled={saving || uploading || receiptProcessing}
