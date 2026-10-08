@@ -378,3 +378,8 @@
 .receipt-review-summary li { margin: 8px 0; overflow-wrap: anywhere; }
 .receipt-review-summary li span, .receipt-review-summary li small { display: block; }
 .receipt-review-summary a { display: inline-flex; align-items: center; min-height: 44px; margin-right: 12px; }
+
+.expense-entry-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.expense-entry-actions button { min-height: 44px; }
+.receipt-upload-progress { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.receipt-upload-progress .footnote { flex-basis: 100%; }

@@ -54,8 +54,6 @@ for (const width of [320, 390, 1440]) {
       const dialog = page.getByRole('dialog', { name: 'Add a receipt', exact: true });
       await expect(dialog).toBeVisible();
       expect(await page.evaluate(() => (window as unknown as { __locationRequests: number }).__locationRequests)).toBe(0);
-      await dialog.locator('input[type=file]').last().setInputFiles(path.resolve('tests/fixtures/receipts/v1/images/long-receipt.png'));
-      expect(uploads).toBe(0); expect(reads).toBe(0);
       await dialog.getByRole('textbox', { name: /Who bought what/ }).fill('Gaz had a decaf, I had a cappuccino.');
       await dialog.locator('summary').click();
       const locationLabelLayout = await dialog.locator('.receipt-place-fields > label').evaluate(label => {
@@ -83,7 +81,7 @@ for (const width of [320, 390, 1440]) {
       await dialog.getByRole('textbox', { name: /Receipt location/ }).fill('Bratislava');
       expect(await dialog.evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
       expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(1);
-      await dialog.getByRole('button', { name: 'Upload & read receipt', exact: true }).click();
+      await dialog.locator('input[type=file]').last().setInputFiles(path.resolve('tests/fixtures/receipts/v1/images/long-receipt.png'));
       await expect(dialog).toBeHidden();
       await expect(page.locator('.editor')).toBeVisible();
       await expect(page.getByRole('textbox', { name: 'Item 1 name', exact: true })).toHaveValue('Cappuccino');

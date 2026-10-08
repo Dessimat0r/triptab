@@ -44,6 +44,7 @@ import { isBlankReceipt, isUnchangedInitialReceipt, matchingReceiptProposal, may
 import { collapseToQuick, hasItemSplitDetail, isManualSingleLine, quickEligible, withQuickName } from "@/lib/quick-expense";
 import type { ActivityEvent } from "@/lib/store";
 import {
+  Camera,
   Plus,
   Minus,
   Pencil,
@@ -259,6 +260,7 @@ export default function Home({ children }: { children: ReactNode }) {
     [savedNotice, setSavedNotice] = useState<{ title: string; at: number } | null>(null),
     [referenceRate, setReferenceRate] = useState<{ rate: number; currency: Currency; date: string; time: string; timezone: string } | null>(null);
   const editorBaseline = useRef<{ tripId: string; expense?: Expense } | null>(null);
+  const scanReceiptInput = useRef<HTMLInputElement>(null);
   const expenseSubmitInFlight = useRef(false);
   const receiptSession = useRef(0);
   const receiptSessionScope = useRef<{ accountId: string; tripId: string }>({ accountId: "", tripId: "" });
@@ -1135,20 +1137,20 @@ export default function Home({ children }: { children: ReactNode }) {
     }
     openDraft({ ...latest, icon: editing.icon, languageViewId: editing.languageViewId || editing.expenseId || editing.id, conversation: mergeReceiptConversation(latest.conversation, editing.conversation) });
   }
-  async function upload(file: File, context: ReceiptUploadContext = {}): Promise<boolean> {
-    if (!trip) return false;
+  async function upload(file: File, context: ReceiptUploadContext = {}, signal?: AbortSignal): Promise<boolean> {
+    if (!trip || signal?.aborted) return false;
     resetReceiptReview();
     const session = receiptSession.current, tripId = trip.id, accountId = profile?.id || "";
     setUploading(true); setError("");
     try {
       file = await prepareReceiptImage(file);
-      if (!isReceiptSessionCurrent(session, tripId, accountId, false)) return false;
+      if (signal?.aborted || !isReceiptSessionCurrent(session, tripId, accountId, false)) return false;
       if (!["image/jpeg", "image/png", "image/webp"].includes(file.type) || file.size > 5 * 1024 * 1024) throw Error("Choose a JPEG, PNG or WebP image under 5 MB.");
       const response = await fetch("/api/receipt?tripId=" + encodeURIComponent(tripId), {
-        method: "POST", headers: { "Content-Type": file.type }, body: file,
+        method: "POST", headers: { "Content-Type": file.type }, body: file, signal,
       });
       const body = await response.json() as { error?: string; receiptId: string };
-      if (!isReceiptSessionCurrent(session, tripId, accountId, false)) return false;
+      if (signal?.aborted || !isReceiptSessionCurrent(session, tripId, accountId, false)) return false;
       if (!response.ok) throw Error(body.error || "Unable to upload this receipt.");
       const draft: Draft = { id: uid(), currency: trip.currency, title: file.name, source: "manual", receiptId: body.receiptId,
         items: [], tax: 0, tip: 0, discount: 0,
@@ -1157,7 +1159,7 @@ export default function Home({ children }: { children: ReactNode }) {
         fieldSources: { title: "default", currency: "default", date: "default", time: "default", timezone: "default", payer: "default", tax: "default", tip: "default", discount: "default", ...(context.location ? { location: "user" as const } : {}) },
         payer: trip.members.find(member => member.userId === accountId)?.id || trip.members[0].id, status: "waiting" };
       if (!await updateTrip({ ...trip, drafts: [...trip.drafts, draft] })) return false;
-      if (!isReceiptSessionCurrent(session, tripId, accountId, false)) return false;
+      if (signal?.aborted || !isReceiptSessionCurrent(session, tripId, accountId, false)) return false;
       const canonical = latestSnapshot.current.data.trips.find(value => value.id === tripId)?.drafts.find(value => value.id === draft.id);
       if (!canonical) throw Error("The photo uploaded, but its receipt draft is unavailable. Refresh and try again.");
       setUploadOpen(false); setView("receipts"); setHelp(false); openDraft(canonical); setUploading(false);
@@ -1167,7 +1169,7 @@ export default function Home({ children }: { children: ReactNode }) {
       if (service?.connected && service.eligible) await processEditorReceipt(canonical, service);
       return true;
     } catch (cause) {
-      if (isReceiptSessionCurrent(session, tripId, accountId, false)) setError(cause instanceof Error ? cause.message : "Upload failed");
+      if (!signal?.aborted && isReceiptSessionCurrent(session, tripId, accountId, false)) setError(cause instanceof Error ? cause.message : "Upload failed");
       return false;
     } finally { if (session === receiptSession.current) setUploading(false); }
   }
@@ -2226,15 +2228,22 @@ export default function Home({ children }: { children: ReactNode }) {
               {trip && lastRefreshed && <small className="muted">Refreshed {lastRefreshed.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}</small>}
               {trip && refreshError && <small className="error" role="status">{refreshError} <button className="quiet" disabled={loading} onClick={() => void load({ background: true, fresh: true })}>Retry refresh</button></small>}
             </div>
-            {trip && (
-              <button
-                className="primary"
-                onClick={newExpense}
-                disabled={saving}
-              >
-                <Plus size={18} /> Add expense
-              </button>
-            )}
+            {trip && <div className="expense-entry-actions">
+              <button className="primary" onClick={newExpense} disabled={saving}><Plus size={18} /> Add expense</button>
+              <button type="button" className="quiet" disabled={saving || uploading} onClick={() => { newExpense(); scanReceiptInput.current?.click(); }}><Camera size={18} /> Scan receipt</button>
+              <input ref={scanReceiptInput} type="file" hidden aria-label="Scan receipt photo" accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif" capture="environment" onChange={async event => {
+                const file = event.target.files?.[0]; event.target.value = "";
+                if (!file || !editing) return;
+                const session = receiptSession.current, editorId = editing.id;
+                setUploading(true); setError("");
+                try {
+                  const prepared = await prepareReceiptImage(file);
+                  if (session === receiptSession.current && activeReceiptEditor.current?.id === editorId) await captureEditorReceipt(prepared);
+                } catch (cause) {
+                  if (session === receiptSession.current) setError(cause instanceof Error ? cause.message : "Unable to prepare the receipt photo.");
+                } finally { if (session === receiptSession.current) setUploading(false); }
+              }} />
+            </div>}
           </div>
           {error && (
             <div className="error" role="alert">
@@ -2589,7 +2598,7 @@ export default function Home({ children }: { children: ReactNode }) {
       )}
       {uploadOpen && trip && <ReceiptUploadDialog key={`${profile?.id}:${trip.id}`} busy={uploading || saving}
         nativeAvailable={!!receiptAI && receiptAI.accountId === profile?.id && receiptAI.connected && receiptAI.eligible}
-        error={error} onClose={() => setUploadOpen(false)} onUpload={upload} />}
+        error={error} onClose={() => setUploadOpen(false)} onCancel={() => { resetReceiptReview(); setError(""); }} onUpload={upload} />}
       {editing && trip && editorBaseline.current?.tripId === trip.id && (
         <ModalA11y
           className="overlay editor-overlay"
