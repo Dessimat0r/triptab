@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import test from 'node:test';
 import { draftItemSchema, draftSchema, expenseSchema, expenseShares, itemShares, parseLedgerStructure, shares,
   total, validateLedger, type Draft, type Expense, type Trip } from '../lib/model';
-import { reconcileReceiptScan, receiptScanFingerprint, receiptScanHumanReviewChanged, receiptScanSaveError,
+import { acknowledgeReceiptReview, reconcileReceiptScan, receiptScanFingerprint, receiptScanHumanReviewChanged, receiptScanSaveError,
   receiptScanSchema, mergeReceiptSourceLines, receiptWarningLabel, type ReceiptScan } from '../lib/receipt-scan';
 
 function draft(overrides: Partial<Draft> = {}): Draft {
@@ -388,4 +388,14 @@ test('source evidence merging preserves repeated identical physical occurrences 
     assert.equal(mergeReceiptSourceLines(merged, [shifted[0]]).length, 2, 'an omitted physical occurrence stays preserved');
     assert.equal(mergeReceiptSourceLines(merged, [...shifted, { ...source, lineIndex: 9 }]).length, 3, 'a new third occurrence stays represented');
   }
+});
+
+
+test('the browser accepts a final acknowledgement and MCP cannot supply the same review', () => {
+  const proposal=draft({fieldSources:{currency:'ai'},receiptScan:scan({printedTotal:null,warnings:[{code:'ambiguous-currency'},{code:'low-confidence',itemId:'coffee'}]})});
+  const final=acknowledgeReceiptReview({...proposal,tax:40});
+  assert.doesNotThrow(()=>validateLedger({trips:[holiday([posted(final)])]},{source:'web'}));
+  assert.throws(()=>validateLedger({trips:[holiday([posted(final)])]},{source:'mcp'}),/reviewed.*person/);
+  const currencyOnly=acknowledgeReceiptReview(draft({fieldSources:{currency:'ai'},receiptScan:scan({warnings:[{code:'ambiguous-currency'}]})}));
+  assert.throws(()=>validateLedger({trips:[holiday([posted(currencyOnly)])]},{source:'mcp'}),/reviewed.*person/);
 });

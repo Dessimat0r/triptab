@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useId, useMemo, useState } from "react";
+import { focusExpenseTarget } from "@/components/expense-quick-review";
 import { CURRENCIES } from "@/lib/model";
 import type { ReceiptEditor } from "@/lib/receipt-processing";
 import { receiptEditorTotal } from "@/lib/receipt-processing";
-import { acknowledgeReceiptReview, pendingReviewActions, reconcileReceiptScan, receiptScanFingerprint, RESOLVABLE_SCAN_WARNINGS as resolvable } from "@/lib/receipt-scan";
+import { canConfirmReceiptWarning, reconcileReceiptScan, receiptWarningLabel, RESOLVABLE_SCAN_WARNINGS as resolvable } from "@/lib/receipt-scan";
 import { formatMoney } from "@/lib/money-format";
 
 export function receiptMoney(amount: number, currency: string | null | undefined) {
@@ -45,20 +46,14 @@ function PrintedAmount({ label, value, onChange }: { label: string; value?: numb
   }} /></label>;
 }
 
-export default function ReceiptScanReview({ entry, onChange }: { entry: ReceiptEditor; onChange: (entry: ReceiptEditor) => void }) {
+export default function ReceiptScanReview({ entry, onChange, fxWarning }: { entry: ReceiptEditor; onChange: (entry: ReceiptEditor) => void; fxWarning?: string }) {
   const titleId = useId();
   const scan = useMemo(() => entry.receiptScan && reconcileReceiptScan(entry), [entry]);
-  const fingerprint = useMemo(() => scan && (scan.acknowledgement || scan.missingTotalAcknowledgement) ? receiptScanFingerprint(entry) : "", [entry, scan]);
   if (!entry.receiptId && !entry.receiptScan) return null;
   const calculated = receiptEditorTotal(entry);
   const unassigned = entry.percentages === undefined ? entry.items.filter(item => !item.members.length).length : 0;
   const unknown = entry.items.filter(item => item.amount === null).length;
-  const warnings = scan?.warnings.filter(warning => !warning.resolved) || [];
-  const mismatches = warnings.filter(warning => warning.code === "subtotal-mismatch" || warning.code === "total-mismatch");
-  const acknowledged = !!scan?.acknowledgement && scan.acknowledgement.fingerprint === fingerprint;
-  const missingTotal = scan?.printedTotal === null || (!!scan && scan.printedTotal === undefined);
-  const missingTotalAcknowledged = !!scan?.missingTotalAcknowledgement && scan.missingTotalAcknowledgement.fingerprint === fingerprint;
-  const reviewActions = scan ? pendingReviewActions(entry) : 0;
+  const warnings = scan?.warnings.filter(warning => !warning.resolved && !canConfirmReceiptWarning(entry, warning)) || [];
   const name = (itemId?: string) => entry.items.find(item => item.id === itemId)?.name || "Item needing review";
   return <section className="receipt-scan-review" aria-labelledby={titleId}>
     <h3 id={titleId}>{!scan ? "Receipt not processed yet" : scan.status === "matched" ? "Receipt totals match exactly" : "Receipt needs review"}</h3>
@@ -69,15 +64,11 @@ export default function ReceiptScanReview({ entry, onChange }: { entry: ReceiptE
       {scan?.printedSubtotal !== undefined && scan.printedSubtotal !== null && <div><dt>Printed subtotal</dt><dd>{receiptMoney(scan.printedSubtotal, scan.printedCurrency || entry.currency)}</dd></div>}
     </dl>
     <p className="receipt-review-counts">{entry.items.length} {entry.items.length === 1 ? "line" : "lines"} · {unassigned} need people assigned{unknown ? ` · ${unknown} missing ${unknown === 1 ? "price" : "prices"}` : ""}{!entry.currency ? " · currency needs review" : ""}</p>
+    <ReceiptReviewSummary entry={entry} fxWarning={fxWarning} />
     {!!warnings.length && <ul className="receipt-scan-warnings">{warnings.map((warning, index) => <li key={`${warning.code}:${warning.itemId || index}`}>
       <strong>{warning.itemId ? `${name(warning.itemId)}: ` : ""}{warningNames[warning.code] || "Check this receipt detail."}</strong>
       {"difference" in warning && typeof warning.difference === "number" && <span>Difference: {receiptMoney(warning.difference, entry.currency)}</span>}
       {warning.observedText && <span>Printed: {warning.observedText}</span>}
-      {resolvable.has(warning.code) && <button type="button" className="quiet" onClick={() => {
-        if (!entry.receiptScan) return;
-        const updated = scan!.warnings.map(value => value === warning ? { ...value, resolved: true as const } : value);
-        onChange({ ...entry, receiptScan: { ...entry.receiptScan, warnings: updated, acknowledgement: undefined } });
-      }}>{warning.code === "unmapped-adjustment" ? "I corrected and checked this adjustment" : "I checked this against the receipt"}</button>}
     </li>)}</ul>}
     {scan && <details className="receipt-printed-evidence"><summary>Check or correct printed totals</summary>
       <p>Enter only amounts you can read on the receipt. These are evidence from the image, separate from the itemised calculation.</p>
@@ -86,13 +77,37 @@ export default function ReceiptScanReview({ entry, onChange }: { entry: ReceiptE
         onChange({ ...entry, receiptScan: { ...scan, [field]: value, fieldSources: { ...scan.fieldSources, [field]: "user" }, acknowledgement: undefined } });
       }} />)}</div>
     </details>}
-    {scan && mismatches.length > 0 && <label className="checklabel receipt-total-ack"><input type="checkbox" checked={acknowledged} onChange={event => onChange({ ...entry, receiptScan: { ...scan, acknowledgement: event.target.checked ? { fingerprint: fingerprint || receiptScanFingerprint(entry) } : undefined } })} />I checked the photo and item prices. Save the reviewed itemised amount despite this difference.</label>}
-    {scan && missingTotal && <label className="checklabel receipt-total-ack"><input type="checkbox" checked={missingTotalAcknowledged} onChange={event => onChange({ ...entry, receiptScan: { ...scan, missingTotalAcknowledgement: event.target.checked ? { fingerprint: fingerprint || receiptScanFingerprint(entry) } : undefined } })} />The printed total is unavailable. I checked all item prices and adjustments against the photo. Save the reviewed itemised amount.</label>}
-    {reviewActions > 1 && <div className="receipt-review-all">
-      <button type="button" className="primary" onClick={() => onChange(acknowledgeReceiptReview(entry))}>{`I checked all ${reviewActions} points against the photo`}</button>
-      <p className="footnote">Confirms each item above at once. Unreadable prices and currency differences still need correcting.</p>
-    </div>}
-    {acknowledged && <p>Difference acknowledged. Any further changes require a new check.</p>}
-    {missingTotalAcknowledged && <p>Itemised prices reviewed. The printed total remains unavailable; further changes require a new check.</p>}
+  </section>;
+}
+
+/** Nothing is acknowledged in the editor. The footer confirms this current evidence on submit. */
+export function ReceiptReviewSummary({ entry, fxWarning }: { entry: ReceiptEditor; fxWarning?: string }) {
+  const scan = entry.receiptScan && reconcileReceiptScan(entry);
+  const warnings = scan?.warnings.filter(warning => canConfirmReceiptWarning(entry, warning)) || [];
+  const amount = receiptEditorTotal(entry);
+  const points = warnings.flatMap((warning, index) => {
+    const ids = warning.itemId ? [warning.itemId] : warning.itemIds || [];
+    // Missing financial values and empty names require correction, never acceptance.
+    if (warning.code === 'uncertain-description' && ids.some(id => !entry.items.find(item => item.id === id)?.name.trim())) return [];
+    let message: string;
+    if (warning.code === 'ambiguous-currency' && entry.currency) message = `Currency read as ${entry.currency}`;
+    else if (warning.code === 'missing-printed-total') message = `Printed total not readable — saving the itemised ${amount === null ? 'amount once prices are complete' : receiptMoney(amount, entry.currency)}`;
+    else if (warning.code === 'total-mismatch' || warning.code === 'subtotal-mismatch') message = `${warning.code === 'total-mismatch' ? 'Itemised total differs from printed total' : 'Item prices differ from printed subtotal'} by ${receiptMoney(Math.abs(warning.difference || 0), entry.currency)}`;
+    else if (resolvable.has(warning.code)) message = warning.code === "unmapped-adjustment" ? warningNames[warning.code] : receiptWarningLabel(warning.code);
+    else return [];
+    const names = ids.map(id => entry.items.find(item => item.id === id)?.name).filter(Boolean).join(', ');
+    return [{ key: `${warning.code}:${index}`, message: `${message}${names ? `: ${names}` : ''}`, ids, observedText: warning.observedText, lineIndex: warning.lineIndex }];
+  });
+  if (!points.length && !fxWarning) return null;
+  return <section className="receipt-review-summary" aria-label="Confirm when saving">
+    <h4>Confirm when saving</h4>
+    <p>Check these details against the receipt. Confirm &amp; save expense accepts the itemised amount and these points.</p>
+    <ul>{points.map(point => <li key={point.key}>
+      <span>{point.message}</span>
+      {point.observedText && <small>Printed: {point.observedText}</small>}
+      {point.ids.map(id => <button key={id} type="button" className="quiet" onClick={() => focusExpenseTarget(`expense-item-${id}`, "input[required]")}>Check {entry.items.find(item => item.id === id)?.name || 'item'}</button>)}
+      {point.lineIndex !== undefined && <small>Receipt line {point.lineIndex + 1}</small>}
+    </li>)}{fxWarning && <li><span>{fxWarning}</span><button type="button" className="quiet" onClick={() => focusExpenseTarget("expense-fx-panel", "input[type=number]")}>Check rate</button></li>}</ul>
+    {!!points.length && entry.receiptId && <a href={`/api/receipt?id=${encodeURIComponent(entry.receiptId)}`} target="_blank" rel="noopener noreferrer">View receipt photo</a>}
   </section>;
 }

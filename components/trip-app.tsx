@@ -17,9 +17,10 @@ import ReceiptUploadDialog, { type ReceiptUploadContext } from "@/components/rec
 import ReceiptLocationFields, { type ReceiptPlace } from "@/components/receipt-location-fields";
 import ReceiptPhotoViewer from "@/components/receipt-photo-viewer";
 import ExpenseIconPicker from "@/components/expense-icon";
-import ReceiptScanReview, { receiptMoney } from "@/components/receipt-scan-review";
-import { carryReviewAcknowledgements, receiptScanSaveError } from "@/lib/receipt-scan";
-import { assignUnassignedItems, EXPENSE_TARGETS, expenseItemTarget, expenseSaveBlockers, hasReceiptDiscussion, unassignedItemIds } from "@/lib/expense-readiness";
+import ReceiptScanReview, { ReceiptReviewSummary, receiptMoney } from "@/components/receipt-scan-review";
+import { acknowledgeReceiptReview, carryReviewAcknowledgements, pendingReviewActions, receiptScanSaveError, receiptWarningLabel, reconcileReceiptScan } from "@/lib/receipt-scan";
+import { manualFxReview } from "@/lib/expense-fx-review";
+import { assignUnassignedItems, EXPENSE_TARGETS, expenseItemTarget, expenseSaveBlockers, visibleExpenseBlockers, hasReceiptDiscussion, unassignedItemIds } from "@/lib/expense-readiness";
 import { MoreOptions, PurchaseDetails, QuickSplit, ReadyToSave, SaveChecklist, focusExpenseTarget } from "@/components/expense-quick-review";
 import ItemReceiptConversation from "@/components/item-receipt-conversation";
 import PaymentEditor from "@/components/payment-editor";
@@ -44,6 +45,7 @@ import { isBlankReceipt, isUnchangedInitialReceipt, matchingReceiptProposal, may
 import { collapseToQuick, hasItemSplitDetail, isManualSingleLine, quickEligible, withQuickName } from "@/lib/quick-expense";
 import type { ActivityEvent } from "@/lib/store";
 import {
+  Camera,
   Plus,
   Minus,
   Pencil,
@@ -240,6 +242,8 @@ export default function Home({ children }: { children: ReactNode }) {
     [receiptHandoffError, setReceiptHandoffError] = useState(""),
     [receiptItemized, setReceiptItemized] = useState(false),
     [receiptProcessing, setReceiptProcessing] = useState(false),
+    [saveAttempted, setSaveAttempted] = useState(false),
+    [saveAnnouncement, setSaveAnnouncement] = useState<{ id: number; message: string } | null>(null),
     [receiptAI, setReceiptAI] = useState<ReceiptAIState | null>(null),
     [receiptAIConnecting, setReceiptAIConnecting] = useState(false),
     [processedReceipt, setProcessedReceipt] = useState<Draft | null>(null),
@@ -258,6 +262,9 @@ export default function Home({ children }: { children: ReactNode }) {
     [savedNotice, setSavedNotice] = useState<{ title: string; at: number } | null>(null),
     [referenceRate, setReferenceRate] = useState<{ rate: number; currency: Currency; date: string; time: string; timezone: string } | null>(null);
   const editorBaseline = useRef<{ tripId: string; expense?: Expense } | null>(null);
+  const scanReceiptInput = useRef<HTMLInputElement>(null);
+  const pendingEditorFocus = useRef<{ editorId: string; target: string; focus: string } | null>(null);
+  const expenseSubmitInFlight = useRef(false);
   const receiptSession = useRef(0);
   const receiptSessionScope = useRef<{ accountId: string; tripId: string }>({ accountId: "", tripId: "" });
   const initialReceiptReview = useRef<InitialReceiptReview | null>(null);
@@ -749,6 +756,8 @@ export default function Home({ children }: { children: ReactNode }) {
     stageEditorReceiptPrompt(draft);
   }
   function resetReceiptReview() {
+    setSaveAttempted(false);
+    setSaveAnnouncement(null);
     receiptSession.current++;
     receiptProcessRequest.current++;
     receiptProcessInFlight.current = false;
@@ -1132,20 +1141,20 @@ export default function Home({ children }: { children: ReactNode }) {
     }
     openDraft({ ...latest, icon: editing.icon, languageViewId: editing.languageViewId || editing.expenseId || editing.id, conversation: mergeReceiptConversation(latest.conversation, editing.conversation) });
   }
-  async function upload(file: File, context: ReceiptUploadContext = {}): Promise<boolean> {
-    if (!trip) return false;
+  async function upload(file: File, context: ReceiptUploadContext = {}, signal?: AbortSignal, onSaving?: () => boolean): Promise<boolean> {
+    if (!trip || signal?.aborted) return false;
     resetReceiptReview();
     const session = receiptSession.current, tripId = trip.id, accountId = profile?.id || "";
     setUploading(true); setError("");
     try {
       file = await prepareReceiptImage(file);
-      if (!isReceiptSessionCurrent(session, tripId, accountId, false)) return false;
+      if (signal?.aborted || !isReceiptSessionCurrent(session, tripId, accountId, false)) return false;
       if (!["image/jpeg", "image/png", "image/webp"].includes(file.type) || file.size > 5 * 1024 * 1024) throw Error("Choose a JPEG, PNG or WebP image under 5 MB.");
       const response = await fetch("/api/receipt?tripId=" + encodeURIComponent(tripId), {
-        method: "POST", headers: { "Content-Type": file.type }, body: file,
+        method: "POST", headers: { "Content-Type": file.type }, body: file, signal,
       });
       const body = await response.json() as { error?: string; receiptId: string };
-      if (!isReceiptSessionCurrent(session, tripId, accountId, false)) return false;
+      if (signal?.aborted || !isReceiptSessionCurrent(session, tripId, accountId, false)) return false;
       if (!response.ok) throw Error(body.error || "Unable to upload this receipt.");
       const draft: Draft = { id: uid(), currency: trip.currency, title: file.name, source: "manual", receiptId: body.receiptId,
         items: [], tax: 0, tip: 0, discount: 0,
@@ -1153,8 +1162,9 @@ export default function Home({ children }: { children: ReactNode }) {
         ...(context.notes?.trim() ? { conversation: [{ id: uid(), role: "user" as const, text: context.notes.trim(), createdAt: new Date().toISOString() }] } : {}),
         fieldSources: { title: "default", currency: "default", date: "default", time: "default", timezone: "default", payer: "default", tax: "default", tip: "default", discount: "default", ...(context.location ? { location: "user" as const } : {}) },
         payer: trip.members.find(member => member.userId === accountId)?.id || trip.members[0].id, status: "waiting" };
+      if (signal?.aborted || (onSaving && !onSaving())) return false;
       if (!await updateTrip({ ...trip, drafts: [...trip.drafts, draft] })) return false;
-      if (!isReceiptSessionCurrent(session, tripId, accountId, false)) return false;
+      if (signal?.aborted || !isReceiptSessionCurrent(session, tripId, accountId, false)) return false;
       const canonical = latestSnapshot.current.data.trips.find(value => value.id === tripId)?.drafts.find(value => value.id === draft.id);
       if (!canonical) throw Error("The photo uploaded, but its receipt draft is unavailable. Refresh and try again.");
       setUploadOpen(false); setView("receipts"); setHelp(false); openDraft(canonical); setUploading(false);
@@ -1164,7 +1174,7 @@ export default function Home({ children }: { children: ReactNode }) {
       if (service?.connected && service.eligible) await processEditorReceipt(canonical, service);
       return true;
     } catch (cause) {
-      if (isReceiptSessionCurrent(session, tripId, accountId, false)) setError(cause instanceof Error ? cause.message : "Upload failed");
+      if (!signal?.aborted && isReceiptSessionCurrent(session, tripId, accountId, false)) setError(cause instanceof Error ? cause.message : "Upload failed");
       return false;
     } finally { if (session === receiptSession.current) setUploading(false); }
   }
@@ -1182,46 +1192,23 @@ export default function Home({ children }: { children: ReactNode }) {
   async function submitExpense(e: React.FormEvent) {
     e.preventDefault();
     if (receiptHistoryOpen) return;
-    if (!trip || !editing || uploading || saving || receiptProcessing) return;
-    if (!editorIsCurrent()) return;
-    const scanError = receiptScanSaveError(editing, { allowAcknowledgement: true, previous: editorBaseline.current?.expense });
+    if (!trip || !editing || saving || expenseSubmitInFlight.current) return;
+    const blockers = visibleExpenseBlockers(expenseSaveBlockers(editing, trip, {
+      uploading, processing: receiptProcessing, conflict: !!editorConflict, offline, fxLookupPending: fxLoading,
+    }), quickMode);
+    if (blockers.length) {
+      setSaveAttempted(true);
+      setSaveAnnouncement(previous => ({ id: (previous?.id || 0) + 1, message: blockers.map(blocker => blocker.message).join(". ") }));
+      const first = blockers[0];
+      if (first.target) focusExpenseTarget(first.target, first.focus);
+      return;
+    }
+    if (!editorIsCurrent()) { setSaveAttempted(true); return; }
+    const reviewed = acknowledgeReceiptReview(editing);
+    const scanError = receiptScanSaveError(reviewed, { allowAcknowledgement: true, previous: editorBaseline.current?.expense });
     if (scanError) { setError(scanError); return; }
-    const parsedExpense = expenseSchema.safeParse(editing);
+    const parsedExpense = expenseSchema.safeParse(reviewed);
     if (!parsedExpense.success) { setError("Review the receipt: add its currency, named item prices and valid cost shares before saving."); return; }
-    if (editing.fx?.source === "manual" && editing.bankAmount === undefined) {
-      const matchingReference = referenceRate && referenceRate.currency === editing.currency && referenceRate.date === editing.date && referenceRate.time === editing.time && referenceRate.timezone === editing.timezone ? referenceRate.rate : undefined;
-      const suspicious = matchingReference ? Math.abs(editing.fx.rate / matchingReference - 1) > 0.1 : (["GBP", "EUR", "CHF", "USD"].includes(trip.currency) && (editing.fx.rate > 100 || editing.fx.rate < 0.0001));
-      if (suspicious && !await confirm({ title: "Check manual exchange rate", message: `1 ${editing.currency} = ${editing.fx.rate.toPrecision(8)} ${trip.currency}. The converted receipt is ${money(previewTotal(editing, trip) || 0, trip.currency)}. ${matchingReference ? "It differs by more than 10% from the reference rate." : "This conversion factor is unusually large or small."} Use this rate?`, confirmLabel: "Use this rate" })) return;
-    }
-    const splitError = receiptSplitError(editing) || (editing.percentages === undefined ? editing.items.map(itemSplitError).find(Boolean) : null);
-    if (splitError) {
-      setError(splitError);
-      return;
-    }
-    if (
-      editing.currency !== trip.currency &&
-      !editing.bankAmount &&
-      !editing.fx?.rate
-    ) {
-      setError(
-        "Look up a conversion rate or enter the amount your bank charged.",
-      );
-      return;
-    }
-    if (editing.bankAmount === 0) {
-      setError("The bank charge must be greater than zero.");
-      return;
-    }
-    if (
-      !editing.title.trim() ||
-      parsedExpense.data.items.some((i) => !i.name.trim() || (editing.percentages === undefined && !i.members.length)) ||
-      total(parsedExpense.data) <= 0
-    ) {
-      setError(
-        "Add a title, named items, at least one person per item, and a positive total.",
-      );
-      return;
-    }
     const { draftId } = editing;
     const expense = parsedExpense.data;
     if (draftId) expense.sourceDraftId = draftId;
@@ -1247,19 +1234,22 @@ export default function Home({ children }: { children: ReactNode }) {
       expenseId: expense.id,
       status: "waiting",
     } : null;
-    if (
-      await updateTrip({
-        ...trip,
-        expenses: exists
-          ? trip.expenses.map((x) => (x.id === expense.id ? expense : x))
-          : [expense, ...trip.expenses],
-        drafts: trip.drafts.flatMap(draft => draft.id === draftId ? retainedDraft ? [retainedDraft] : [] : [draft]),
-      })
-    ) {
-      closeReceiptEditor();
-      return true;
-    }
-    return false;
+    expenseSubmitInFlight.current = true;
+    try {
+      if (
+        await updateTrip({
+          ...trip,
+          expenses: exists
+            ? trip.expenses.map((x) => (x.id === expense.id ? expense : x))
+            : [expense, ...trip.expenses],
+          drafts: trip.drafts.flatMap(draft => draft.id === draftId ? retainedDraft ? [retainedDraft] : [] : [draft]),
+        })
+      ) {
+        closeReceiptEditor();
+        return true;
+      }
+      return false;
+    } finally { expenseSubmitInFlight.current = false; }
   }
   function importItems() {
     try {
@@ -1485,41 +1475,40 @@ export default function Home({ children }: { children: ReactNode }) {
   function itemiseEditor(focus: "name" | "split") {
     if (!editing) return;
     const itemId = editing.items[0]?.id;
+    pendingEditorFocus.current = itemId ? { editorId: editing.id, target: expenseItemTarget(itemId), focus: focus === "name" ? "input[required]" : ".share-split button[aria-pressed]" } : null;
     setEditorMode({ id: editing.id, quick: false });
-    if (itemId) setTimeout(() => focusExpenseTarget(expenseItemTarget(itemId), focus === "name" ? "input[required]" : ".share-split button[aria-pressed]"), 0);
   }
   async function stopItemSplitting() {
     if (!editing || !canCollapseToQuick || !editing.items[0].members.length) return;
     const id = editing.id;
     if (hasItemSplitDetail(editing) && !await confirm({ title: "Use one amount?", message: "This removes the custom percentages, units and quantities for this expense. It will be shared equally between the people chosen.", confirmLabel: "Use one amount", cancelLabel: "Keep splitting", destructive: true })) return;
+    pendingEditorFocus.current = { editorId: id, target: EXPENSE_TARGETS.amount, focus: "input" };
     setEditing(prev => prev && prev.id === id ? carryReviewAcknowledgements(prev, collapseToQuick(prev)) : prev);
     setEditorMode({ id, quick: true });
-    setTimeout(() => focusExpenseTarget(EXPENSE_TARGETS.amount, "input"), 0);
   }
+  useLayoutEffect(() => {
+    const request = pendingEditorFocus.current;
+    if (!request) return;
+    pendingEditorFocus.current = null;
+    if (editing?.id === request.editorId) focusExpenseTarget(request.target, request.focus);
+  });
   const editorShares = useMemo(() => editing && trip ? previewShares(editing, trip) : null, [editing, trip]);
   const editorTotal = useMemo(() => editing && trip ? previewTotal(editing, trip) : null, [editing, trip]);
   const editorOriginalTotal = useMemo(() => editing ? receiptEditorTotal(editing) : 0, [editing]);
-  const editorScanError = useMemo(() => editing ? receiptScanSaveError(editing, { allowAcknowledgement: true, previous: editorBaseline.current?.expense }) : null, [editing]);
-  const editorBlockers = useMemo(() => editing && trip ? expenseSaveBlockers(editing, trip) : [], [editing, trip]);
-  // Save follows the same readiness model as the "Before saving" list, so the
-  // two never disagree. An optional reference-rate lookup does not block it:
-  // a manual rate or bank charge is already a complete conversion.
-  const saveDisabled = !editing || !trip || saving || !!editorConflict || uploading || receiptProcessing || offline
-    || editorBlockers.length > 0
-    || editing.bankAmount === 0 || (editing.bankAmount !== undefined && editing.currency === trip.currency)
-    || !!editorScanError || !!receiptSplitError(editing)
-    || (editing.percentages === undefined && editing.items.some(item => !!itemSplitError(item)))
-    || editorOriginalTotal === null || editorOriginalTotal <= 0
-    || (editing.currency !== trip.currency && editing.bankAmount === undefined && !editing.fx?.rate);
-  // The quick form has no item list: point its blockers at its own fields.
-  const visibleBlockers = quickMode ? editorBlockers.flatMap(blocker => blocker.key === "names" ? []
-    : blocker.key === "total" || blocker.key === "items" ? [{ ...blocker, message: "Enter the amount", target: EXPENSE_TARGETS.amount }]
-    : blocker.key === "unassigned" || blocker.key === "item-split" ? [{ ...blocker, target: EXPENSE_TARGETS.shared, focus: undefined }]
-    : [blocker]) : editorBlockers;
+  const editorScan = useMemo(() => editing?.receiptScan ? reconcileReceiptScan(editing) : undefined, [editing]);
+  const editorBlockers = useMemo(() => editing && trip ? expenseSaveBlockers(editing, trip, {
+    uploading, processing: receiptProcessing, conflict: !!editorConflict, offline, fxLookupPending: fxLoading,
+  }) : [], [editing, trip, uploading, receiptProcessing, editorConflict, offline, fxLoading]);
+  // Save stays available to explain and focus blockers. Only an active save request disables it.
+  const saveDisabled = saving;
+  const manualFxWarning = editing && trip ? manualFxReview(editing, trip.currency, referenceRate) : undefined;
+  const reviewRequired = !!editing && (pendingReviewActions({ ...editing, receiptScan: editing.receiptScan && { ...editing.receiptScan, acknowledgement: undefined, missingTotalAcknowledgement: undefined } }) > 0 || !!manualFxWarning);
+  const visibleBlockers = visibleExpenseBlockers(editorBlockers, quickMode);
   // Collapsed purchase details open while a value is missing, or when a
   // processed receipt could not supply the date, time or currency itself.
   const purchaseDetailsNeedAttention = !!editing && (!editing.currency || !editing.date || !editing.time
     || (!!editing.receiptScan && (["date", "time", "currency"] as const).some(field => editing.fieldSources?.[field] === "default"))
+    || (!!editing.receiptScan && editorScan?.warnings.some(warning => !warning.resolved && warning.code === "ambiguous-currency"))
     || (!!editing.receiptScan?.printedCurrency && editing.receiptScan.printedCurrency !== editing.currency));
   // Foreign-currency receipts need a rate before Save. Look up the daily
   // reference rate once per currency/date/time/zone instead of asking for a
@@ -1868,6 +1857,7 @@ export default function Home({ children }: { children: ReactNode }) {
     <label>
       Original currency
       <select
+        id={EXPENSE_TARGETS.currency}
         aria-label="Original currency"
         value={editing.currency || ""}
         required
@@ -1887,7 +1877,6 @@ export default function Home({ children }: { children: ReactNode }) {
           </option>
         ))}
       </select>
-      {editing.receiptScan && editing.currency && editing.fieldSources?.currency !== "user" && <button type="button" className="quiet" onClick={() => setEditing(userReceiptField(editing, "currency", editing.currency))}>I checked the currency: {editing.currency}</button>}
     </label>
   ) : null;
   const renderReceiptCapture = (entry: ReceiptEditor, current: Trip, compact: boolean) => (
@@ -1961,6 +1950,7 @@ export default function Home({ children }: { children: ReactNode }) {
             : "Look up historical rate"}
         </button>
         {fxError && <p className="error">{fxError}</p>}
+        {manualFxWarning && <p className="bank-diff" role="status">{manualFxWarning}. Check the rate before confirming your expense.</p>}
         {entry.fx && (
           <div className="rate-result">
             <span>
@@ -2220,15 +2210,22 @@ export default function Home({ children }: { children: ReactNode }) {
               {trip && lastRefreshed && <small className="muted">Refreshed {lastRefreshed.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}</small>}
               {trip && refreshError && <small className="error" role="status">{refreshError} <button className="quiet" disabled={loading} onClick={() => void load({ background: true, fresh: true })}>Retry refresh</button></small>}
             </div>
-            {trip && (
-              <button
-                className="primary"
-                onClick={newExpense}
-                disabled={saving}
-              >
-                <Plus size={18} /> Add expense
-              </button>
-            )}
+            {trip && <div className="expense-entry-actions">
+              <button className="primary" onClick={newExpense} disabled={saving}><Plus size={18} /> Add expense</button>
+              <button type="button" className="quiet" disabled={saving || uploading} onClick={() => { newExpense(); scanReceiptInput.current?.click(); }}><Camera size={18} /> Scan receipt</button>
+              <input ref={scanReceiptInput} type="file" hidden aria-label="Scan receipt photo" accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif" capture="environment" onChange={async event => {
+                const file = event.target.files?.[0]; event.target.value = "";
+                if (!file || !editing) return;
+                const session = receiptSession.current, editorId = editing.id;
+                setUploading(true); setError("");
+                try {
+                  const prepared = await prepareReceiptImage(file);
+                  if (session === receiptSession.current && activeReceiptEditor.current?.id === editorId) await captureEditorReceipt(prepared);
+                } catch (cause) {
+                  if (session === receiptSession.current) setError(cause instanceof Error ? cause.message : "Unable to prepare the receipt photo.");
+                } finally { if (session === receiptSession.current) setUploading(false); }
+              }} />
+            </div>}
           </div>
           {error && (
             <div className="error" role="alert">
@@ -2583,7 +2580,7 @@ export default function Home({ children }: { children: ReactNode }) {
       )}
       {uploadOpen && trip && <ReceiptUploadDialog key={`${profile?.id}:${trip.id}`} busy={uploading || saving}
         nativeAvailable={!!receiptAI && receiptAI.accountId === profile?.id && receiptAI.connected && receiptAI.eligible}
-        error={error} onClose={() => setUploadOpen(false)} onUpload={upload} />}
+        error={error} onClose={() => setUploadOpen(false)} onCancel={() => { resetReceiptReview(); setError(""); }} onUpload={upload} />}
       {editing && trip && editorBaseline.current?.tripId === trip.id && (
         <ModalA11y
           className="overlay editor-overlay"
@@ -2595,7 +2592,7 @@ export default function Home({ children }: { children: ReactNode }) {
             aria-modal="true"
             aria-labelledby="expense-title"
           >
-            <form onSubmit={async event => {
+            <form noValidate onSubmit={async event => {
               const title = editing.title.trim();
               if (await submitExpense(event)) setSavedNotice({ title, at: Date.now() });
             }}>
@@ -2654,7 +2651,8 @@ export default function Home({ children }: { children: ReactNode }) {
                   {restoration && <RestorationNotice info={restoration} />}
                   {editing.receiptId && <ReceiptPhotoViewer receiptId={editing.receiptId} />}
                   <div id={EXPENSE_TARGETS.review} className="expense-target">
-                    <ReceiptScanReview entry={editing} onChange={setEditing} />
+                    <ReceiptScanReview entry={editing} onChange={setEditing} fxWarning={manualFxWarning} />
+                    {!editing.receiptId && !editing.receiptScan && manualFxWarning && <ReceiptReviewSummary entry={editing} fxWarning={manualFxWarning} />}
                   </div>
                   <QuickSplit key={`${trip.id}:${editing.id}`} tripId={trip.id} unassigned={unassignedItemIds(editing).length} members={trip.members} autoFocus
                     currentMemberId={trip.members[currentMemberIndex]?.id} disabled={saving || uploading || receiptProcessing}
@@ -2664,7 +2662,7 @@ export default function Home({ children }: { children: ReactNode }) {
                     convertedTotal={editing.currency !== trip.currency && editorTotal !== null ? money(editorTotal, trip.currency) : undefined}
                     payerName={name(editing.payer)}
                     shares={trip.members.flatMap((member, index) => editorShares?.[index] ? [{ id: member.id, name: member.name, amount: money(editorShares[index], trip.currency) }] : [])}
-                    disabled={saveDisabled} onEdit={() => editing.items[0] ? focusExpenseTarget(expenseItemTarget(editing.items[0].id)) : focusExpenseTarget(EXPENSE_TARGETS.items)} />}
+                    onEdit={() => editing.items[0] ? focusExpenseTarget(expenseItemTarget(editing.items[0].id)) : focusExpenseTarget(EXPENSE_TARGETS.items)} />}
                   {quickMode && <>
                     <div className="fieldpair quick-amount">
                       <label>
@@ -2875,6 +2873,7 @@ export default function Home({ children }: { children: ReactNode }) {
                           </button>
                         </div>
                         {item.scanSource?.observedText && <p className="receipt-item-source">Printed line: {item.scanSource.observedText}{item.scanSource.confidence === "low" ? " · needs checking" : ""}</p>}
+                        {editing.receiptScan && editorScan?.warnings.filter(warning => !warning.resolved && (warning.itemId === item.id || warning.itemIds?.includes(item.id))).map((warning, index) => <p className="receipt-item-source" key={`${warning.code}:${index}`}>{receiptWarningLabel(warning.code)}</p>)}
                         {item.amount === null && <p className="error" role="status">Price unreadable. Enter the full line total before saving.</p>}
                         {item.quantity && <p className="receipt-item-quantity">
                           <span><strong>Receipt:</strong> {item.quantity.total} {item.quantity.label || "units"}</span>
@@ -2996,7 +2995,7 @@ export default function Home({ children }: { children: ReactNode }) {
                     <p className="footnote">ChatGPT has proposed an update. Review the whole receipt, including any changes outside the item you discussed, before saving.</p>
                     <button type="button" className="primary" disabled={saving || uploading || receiptProcessing} onClick={reviewProcessedReceipt}>Review proposed changes</button>
                   </section>}
-                  {editing.bankAmount !== undefined && (editing.currency === trip.currency || editing.bankAmount <= 0) && <div className="error" role="alert"><p>The saved bank charge is {money(editing.bankAmount, trip.currency)}. {editing.currency === trip.currency ? "A receipt already in the holiday currency cannot use a currency-conversion bank charge." : "A bank charge must be greater than zero."} Review it before saving.</p><button type="button" className="quiet" onClick={() => setEditing({ ...editing, bankAmount: undefined })}>Remove bank charge</button></div>}
+                  {editing.bankAmount !== undefined && (editing.currency === trip.currency || editing.bankAmount <= 0) && <div id={editing.currency === trip.currency ? EXPENSE_TARGETS.fx : undefined} className="error" role="alert"><p>The saved bank charge is {money(editing.bankAmount, trip.currency)}. {editing.currency === trip.currency ? "A receipt already in the holiday currency cannot use a currency-conversion bank charge." : "A bank charge must be greater than zero."} Review it before saving.</p><button type="button" className="quiet" onClick={() => setEditing({ ...editing, bankAmount: undefined })}>Remove bank charge</button></div>}
                   {!quickMode && fxPanel}
                   {!quickMode && <div className="split-preview">
                     <h3>Each person’s share · {trip.currency}</h3>
@@ -3017,7 +3016,7 @@ export default function Home({ children }: { children: ReactNode }) {
                   {error}
                 </div>
               )}
-              {editorConflict && <section className="conflict-review" role="region" aria-labelledby="expense-conflict-title">
+              {editorConflict && <section id={EXPENSE_TARGETS.conflict} className="conflict-review" role="region" aria-labelledby="expense-conflict-title">
                 <h3 id="expense-conflict-title">Expense changed</h3>
                 <p>Another traveller changed this expense while you were editing. Compare the saved details with your edits before continuing.</p>
                 <div className="conflict-versions">
@@ -3049,9 +3048,9 @@ export default function Home({ children }: { children: ReactNode }) {
                 <p className="footnote">Review your split and press Save expense to commit your choice.</p>
               </section>}
               <div className="editor-footer" ref={editorFooterRef}>
-                {offline ? <p className="receipt-save-block" role="status">You’re offline. Reconnect to save; your entry stays here while this form is open.</p>
-                  // An untouched quick form needs no to-do list yet; Save is simply unavailable.
-                  : <SaveChecklist blockers={quickMode && !editorDirty ? [] : visibleBlockers} />}
+                <div className="expense-save-announcement sr-only" role="alert" aria-atomic="true">{saveAnnouncement && <span key={saveAnnouncement.id}>{saveAnnouncement.message}</span>}</div>
+                <SaveChecklist key={editing.id} blockers={visibleBlockers} attempted={saveAttempted}
+                  hidden={quickMode && !editing.draftId && !trip.expenses.some(expense => expense.id === editing.id) && !saveAttempted && !uploading && !receiptProcessing && !offline && !editorConflict} />
                 <div>
                   <small>{quickMode ? "Total" : "Itemised total"}</small>
                   <strong>{editorOriginalTotal === null ? "Incomplete" : !editing.items.length ? "Not processed" : receiptMoney(editorOriginalTotal, editing.currency)}</strong>
@@ -3093,7 +3092,7 @@ export default function Home({ children }: { children: ReactNode }) {
                     className="primary"
                     disabled={saveDisabled}
                   >
-                    {saving ? "Saving…" : "Save expense"}
+                    {saving ? "Saving…" : reviewRequired && !editorBlockers.length ? "Confirm & save expense" : "Save expense"}
                   </button>
                 </div>
               </div>

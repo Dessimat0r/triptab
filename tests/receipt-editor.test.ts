@@ -7,8 +7,9 @@ import { createSourceFile, isFunctionDeclaration, isJsxElement, isJsxAttribute, 
 import * as ts from 'typescript';
 import { equalFinancialValue, equalSavedValue } from '../lib/client-ledger';
 import { buildReceiptPrompt } from '../lib/receipt-chatgpt';
-import { isBlankReceipt, isUnchangedInitialReceipt, matchingReceiptProposal, mayFillInitialReceipt, receiptEditableValue, receiptProposalEditor, receiptEditorTotal, userReceiptField, type ReceiptEditor } from '../lib/receipt-processing';
-import { receiptScanSaveError, receiptScanFingerprint } from '../lib/receipt-scan';
+import { isBlankReceipt, isUnchangedInitialReceipt, matchingReceiptProposal, mayFillInitialReceipt, receiptEditableValue, receiptProposalEditor, receiptEditorTotal, type ReceiptEditor } from '../lib/receipt-processing';
+import { acknowledgeReceiptReview, receiptScanSaveError } from '../lib/receipt-scan';
+import { expenseSaveBlockers, visibleExpenseBlockers } from '../lib/expense-readiness';
 import { itemSchema, draftItemSchema, expenseSchema, itemSplitError, ledgerSchema, receiptSplitError, total, validateLedger, type Draft, type Expense, type ReceiptMessage, type Trip } from '../lib/model';
 
 // Execute the actual page handlers against a small state/persistence boundary.
@@ -29,9 +30,11 @@ const controllerSource = `return function createController(initial, boundary) {
   let trip = structuredClone(initial), editing = null, processedReceipt = null, error = '', editorConflict = null;
   let receiptPending = false, receiptCopied = false, receiptPrompt = '', receiptHistoryOpen = false, restoration = null;
   let paste = '', fxError = '', referenceRate = null,captureNotes='',uploadOpen=false;
+  const setSaveAttempted=()=>{},setSaveAnnouncement=()=>{},focusExpenseTarget=()=>{};
+  const quickMode=false;const expenseSubmitInFlight={current:false};
   const setCaptureNotes=next=>{captureNotes=next},setUploadOpen=next=>{uploadOpen=next};
   let uploading = false, receiptProcessing = false, receiptItemized = false, receiptHandoffError = '', receiptHandoffOpened = false, receiptAIConnecting = false;
-  const saving = false, profile = {id:'owner'};
+  const saving = false, offline = false, profile = {id:'owner'};
   let receiptAI = null, clipboardFailure = false, failSave = false, network, statusNetwork;
   let commitAIState = true;
   let commitLayout = true, view = '', help = false;
@@ -45,7 +48,7 @@ const controllerSource = `return function createController(initial, boundary) {
   const receiptAIStatusRequest={current:0},receiptAIStatusInFlight={current:null};
   const updates = [], editorBaseline = {current:null};
   const latestSnapshot = {current:{data:{trips:[trip]},revision:0}};
-  const {canonicalJson,sha256Hex,itemSchema,draftItemSchema,expenseSchema,receiptScanSaveError,receiptEditorTotal,itemSplitError,receiptSplitError,total,equalFinancialValue,equalSavedValue,buildReceiptPrompt,isBlankReceipt,isUnchangedInitialReceipt,matchingReceiptProposal,mayFillInitialReceipt,receiptEditableValue,receiptProposalEditor} = boundary;
+  const {canonicalJson,sha256Hex,itemSchema,draftItemSchema,expenseSchema,acknowledgeReceiptReview,expenseSaveBlockers,visibleExpenseBlockers,receiptScanSaveError,receiptEditorTotal,itemSplitError,receiptSplitError,total,equalFinancialValue,equalSavedValue,buildReceiptPrompt,isBlankReceipt,isUnchangedInitialReceipt,matchingReceiptProposal,mayFillInitialReceipt,receiptEditableValue,receiptProposalEditor} = boundary;
   const uid = boundary.uid, today = () => '2026-10-04', localTime = () => '12:00';
   const money = (amount, currency) => currency+' '+amount/100;
   const previewTotal = entry => total(entry);
@@ -86,7 +89,7 @@ const controllerSource = `return function createController(initial, boundary) {
     updates.push(structuredClone(trip)); return true;
   }
   ${handlers}
-  return {${names.join(',')},get editing(){return editing},get trip(){return trip},get error(){return error},get fxError(){return fxError},get fxLoading(){return fxLoading},get referenceRate(){return referenceRate},get updates(){return updates},get baseline(){return editorBaseline.current},get processed(){return processedReceipt},
+  return {${names.join(',')},get editing(){return editing},get trip(){return trip},get blockers(){return editing?expenseSaveBlockers(editing,trip):[]},get error(){return error},get fxError(){return fxError},get fxLoading(){return fxLoading},get referenceRate(){return referenceRate},get updates(){return updates},get baseline(){return editorBaseline.current},get processed(){return processedReceipt},
     edit(next){editing={...editing,...next};activeReceiptEditor.current=editing},remote(next,revision=updates.length){trip=structuredClone(next);latestSnapshot.current={data:{trips:[trip]},revision}},
     get prompt(){return receiptPrompt},get handoffError(){return receiptHandoffError},get clipboard(){return clipboard},get requests(){return requests},get processing(){return receiptProcessing},get itemized(){return receiptItemized},get pending(){return receiptPending},get uploading(){return uploading},get connecting(){return receiptAIConnecting},
     network(next){network=next},clipboardUnavailable(){clipboardFailure=true},persistenceFailure(){failSave=true},persistenceRecovered(){failSave=false},
@@ -112,7 +115,7 @@ type Controller = {
   setNotes(text:string):void;captureNotes:string;
   reviewRestore(event: {tripId:string;entityType:string;entityId:string;actorName:string;createdAt:string;before:Expense}):Promise<void>;
   lookupFx():Promise<void>;fxError:string;fxLoading:boolean;referenceRate:unknown;
-  editing: Editing | null; trip: Trip; error: string; updates: Trip[]; baseline: { tripId: string; expense?: Expense } | null;
+  blockers: ReturnType<typeof expenseSaveBlockers>; editing: Editing | null; trip: Trip; error: string; updates: Trip[]; baseline: { tripId: string; expense?: Expense } | null;
   processed: Draft | null; edit(next: Partial<Editing>): void; remote(next: Trip,revision?:number): void; conflict(next: Expense | null): void;
   uploading:boolean;connecting:boolean;refreshReceiptAIStatus(accountId:string,fresh?:boolean):Promise<unknown>;prompt:string;handoffError:string;clipboard:string[];requests:{url:string;options?:RequestInit}[];processing:boolean;itemized:boolean;pending:boolean;
   network(next:(url:string,options?:RequestInit)=>Promise<unknown>):void;clipboardUnavailable():void;persistenceFailure():void;persistenceRecovered():void;aiConnected():void;accountSwitch():void;
@@ -120,7 +123,7 @@ type Controller = {
   restoring(): void; restoration: unknown;
 };
 const createController = new Function(compiled)() as (initial: Trip, boundary: object) => Controller;
-const controller = (trip: Trip) => createController(trip, { canonicalJson, sha256Hex, uid: randomUUID, ledgerSchema, itemSchema, draftItemSchema, expenseSchema, itemSplitError, receiptSplitError, total, validateLedger, equalFinancialValue, equalSavedValue, buildReceiptPrompt, isBlankReceipt, isUnchangedInitialReceipt, matchingReceiptProposal, mayFillInitialReceipt, receiptEditableValue, receiptProposalEditor, receiptEditorTotal, receiptScanSaveError });
+const controller = (trip: Trip) => createController(trip, { canonicalJson, sha256Hex, uid: randomUUID, ledgerSchema, itemSchema, draftItemSchema, expenseSchema, acknowledgeReceiptReview, expenseSaveBlockers, visibleExpenseBlockers, itemSplitError, receiptSplitError, total, validateLedger, equalFinancialValue, equalSavedValue, buildReceiptPrompt, isBlankReceipt, isUnchangedInitialReceipt, matchingReceiptProposal, mayFillInitialReceipt, receiptEditableValue, receiptProposalEditor, receiptEditorTotal, receiptScanSaveError });
 const stamp = '2026-10-04T12:00:00Z';
 const question: ReceiptMessage = { id: 'question', role: 'user', text: 'Check the replacement image', createdAt: stamp };
 const reply: ReceiptMessage = { id: 'reply', role: 'assistant', replyTo: question.id, text: 'Reviewed replacement image', createdAt: stamp };
@@ -618,7 +621,7 @@ test('incomplete scanned items and pending quantities persist without fabricated
   assert.deepEqual(stored?.items[0].members, []);
   assert.deepEqual(stored?.items[0].units?.allocations, {});
   await submit(editor);
-  assert.match(editor.error, /Complete unreadable receipt values/);
+  assert(editor.blockers.some(blocker=>blocker.key==='prices'));assert(editor.blockers.some(blocker=>blocker.key==='currency'));
   assert.equal(editor.trip.expenses.length, 0);
 });
 
@@ -629,9 +632,8 @@ test('Save checks independent totals and explicit reviewed differences before po
   draft.receiptScan = {version: 1, printedTotal: 1201, printedCurrency: 'GBP', status: 'matched', warnings: []};
   const initial = fixture(draft); initial.expenses = [];
   const editor = controller(initial); editor.openDraft(draft);
-  await submit(editor); assert.match(editor.error, /do not match the printed receipt/); assert.equal(editor.trip.expenses.length, 0);
-  editor.edit({receiptScan: {...editor.editing!.receiptScan!, acknowledgement: {fingerprint: receiptScanFingerprint(editor.editing!)}}});
   await submit(editor); assert.equal(editor.error, ''); assert.equal(editor.trip.expenses.length, 1);
+  assert.equal(editor.updates.length, 1);
   assert.equal(editor.trip.expenses[0].items[0].amount, 1200);
   assert.equal(editor.trip.expenses[0].receiptScan?.printedTotal, 1201);
 });
@@ -657,7 +659,7 @@ test('whole-receipt percentages save scanned pending quantities without inventin
   const saved = editor.trip.expenses[0]; assert.deepEqual(saved.items[0].members, []); assert.deepEqual(saved.items[0].units?.allocations, {});
   assert.deepEqual(saved.percentages, {a: 30, b: 70}); assert.equal(saved.items[0].quantity?.total, 2);
   editor.openExpense(saved); editor.edit({percentages: undefined}); await submit(editor);
-  assert.match(editor.error, /cost shares|person/); assert.deepEqual(editor.trip.expenses[0], saved, 'removing the override cannot silently post an unassigned item');
+  assert(editor.blockers.some(blocker=>blocker.key==='unassigned')); assert.deepEqual(editor.trip.expenses[0], saved, 'removing the override cannot silently post an unassigned item');
 });
 
 test('a question about unfinished pending quantities preserves the last complete draft allocation context', async () => {
@@ -721,24 +723,12 @@ test('concurrent AI status requests share one read, but a settings change reques
   assert.equal(editor.ai?.connected,true);
 });
 
-test('explicit confirmation of the same original currency keeps bank amount and exchange-rate details', () => {
-  let callback='';
-  function visit(node:import('typescript').Node) {
-    if (isJsxElement(node) && node.openingElement.tagName.getText(syntax)==='button' && node.children.some(child=>child.getText(syntax).includes('I checked the currency:'))) {
-      const attr=node.openingElement.attributes.properties.find(prop=>isJsxAttribute(prop)&&prop.name.getText(syntax)==='onClick');
-      assert(attr&&isJsxAttribute(attr)&&attr.initializer&&isJsxExpression(attr.initializer)&&attr.initializer.expression);
-      callback=attr.initializer.expression.getText(syntax);
-    }
-    node.forEachChild(visit);
-  }
-  visit(syntax); assert(callback);
-  const editing={...pending(),id:'edited',draftId:'replacement-draft',date:'2026-10-05',time:'12:00',timezone:'Europe/Paris',fieldSources:{currency:'default' as const}} as ReceiptEditor;
-  const original=structuredClone(editing); let next:ReceiptEditor|undefined;
-  const run=new Function('editing','setEditing','userReceiptField',transpileModule(`(${callback})();`,{compilerOptions:{target:ScriptTarget.ES2022}}).outputText);
-  run(editing,(value:ReceiptEditor)=>{next=value},userReceiptField);
-  assert(next); assert.equal(next.currency,original.currency);
-  assert.equal(next.bankAmount,original.bankAmount); assert.deepEqual(next.fx,original.fx);
-  assert.equal(next.fieldSources?.currency,'user');
+test('confirmation at submit time preserves the selected currency, bank amount and rate', () => {
+  const editing = {...pending(), receiptScan:{version:1 as const,printedTotal:null,status:'incomplete' as const,warnings:[{code:'ambiguous-currency' as const}]}, fieldSources:{currency:'ai' as const}} as ReceiptEditor;
+  const reviewed = acknowledgeReceiptReview(editing);
+  assert.equal(reviewed.currency,editing.currency);assert.equal(reviewed.bankAmount,editing.bankAmount);
+  assert.deepEqual(reviewed.fx,editing.fx);assert.equal(reviewed.fieldSources?.currency,'user');
+  assert.equal(receiptScanSaveError(reviewed),null);assert.equal(editing.receiptScan?.missingTotalAcknowledgement,undefined);
 });
 
 test('upload notes and optional place are saved before the first vision request and retained in editor context',async()=>{

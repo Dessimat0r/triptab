@@ -15,11 +15,15 @@ function elements(node: React.ReactNode): Element[] {
   if (Array.isArray(node)) return node.flatMap(elements);
   if (!React.isValidElement(node)) return [];
   const element = node as Element;
+  if (typeof element.type === 'function' && element.type.name === 'ReceiptReviewSummary') return elements((element.type as (props: Record<string, unknown>) => React.ReactNode)(element.props));
   return [element, ...elements(element.props.children as React.ReactNode)];
 }
 function text(node: React.ReactNode): string {
   if (Array.isArray(node)) return node.map(text).join(' ');
-  if (React.isValidElement(node)) return text((node as Element).props.children as React.ReactNode);
+  if (React.isValidElement(node)) {
+    const element = node as Element;
+    return text(typeof element.type === 'function' && element.type.name === 'ReceiptReviewSummary' ? (element.type as (props: Record<string, unknown>) => React.ReactNode)(element.props) : element.props.children as React.ReactNode);
+  }
   return typeof node === 'string' || typeof node === 'number' ? String(node) : '';
 }
 const source = await readFile(new URL('../components/receipt-scan-review.tsx', import.meta.url), 'utf8');
@@ -28,6 +32,7 @@ const exported = {exports: {} as {default: (props: {entry: ReceiptEditor; onChan
 new Function('require', 'module', 'exports', compiled)((name: string) => {
   if (name === 'react') return {useId: () => 'review-title', useMemo: (callback:()=>unknown) => callback(), useEffect() {}, useState: (initial: unknown) => [initial, () => {}]};
   if (name === 'react/jsx-runtime') return runtime;
+  if (name === '@/components/expense-quick-review') return {focusExpenseTarget() {}};
   if (name === '@/lib/model') return model;
   if (name === '@/lib/receipt-processing') return processing;
   if (name === '@/lib/receipt-scan') return scan;
@@ -78,29 +83,22 @@ test('printed currency is displayed independently and a wrong original currency 
   assert.doesNotMatch(ui.text, /Receipt totals match exactly/);
 });
 
-test('one-cent mismatch exposes a deliberate acknowledgement invalidated by a changed line price', () => {
+test('one-cent mismatch appears in the acceptance summary without an editing acknowledgement', () => {
   const value = entry({receiptScan: {version: 1, printedTotal: 1201, status: 'matched', warnings: []}});
-  const ui = render(value);
-  assert.match(ui.text, /Difference: -€0\.01/);
-  assert.match(ui.text, /Save the reviewed itemised amount despite this difference/);
-  const checkbox = ui.elements.find(element => element.type === 'input' && element.props.type === 'checkbox');
-  assert(checkbox);
-  (checkbox.props.onChange as (event: unknown) => void)({target: {checked: true}});
-  assert(ui.changed);
-  assert.equal(scan.receiptScanSaveError(ui.changed), null);
-  assert(scan.receiptScanSaveError({...ui.changed, items: [{...ui.changed.items[0], amount: 1100}]}));
+  const ui=render(value);
+  assert.match(ui.text,/Itemised total differs from printed total by €0.01/);
+  assert.match(ui.text,/Confirm & save expense accepts/);
+  assert.equal(ui.elements.filter(element=>element.type==='input' && element.props.type==='checkbox').length,0);
+  assert.equal(ui.changed,undefined);assert(scan.receiptScanSaveError(value));
+  const photo=ui.elements.find(element=>element.type==='a' && element.props.href==='/api/receipt?id=photo');assert(photo);
 });
 
-test('a generated unmapped source adjustment can only be resolved by explicit user review', () => {
-  const value = entry({receiptScan: {version: 1, printedTotal: 1200, status: 'matched', warnings: [], sourceLines: [{kind: 'adjustment', mappedTo: 'unmapped', amount: -100, observedText: 'Item coupon -1,00', lineIndex: 8}]}});
-  const ui = render(value);
-  assert.match(ui.text, /Correct the affected item's full line price and shares/);
-  const button = ui.elements.find(element => element.type === 'button' && element.props.children === 'I corrected and checked this adjustment');
-  assert(button);
-  assert(scan.receiptScanSaveError(value));
-  (button.props.onClick as () => void)();
-  assert(ui.changed?.receiptScan?.warnings.some(warning => warning.code === 'unmapped-adjustment' && warning.resolved));
-  assert.equal(scan.receiptScanSaveError(ui.changed!), null);
+test('an unmapped adjustment is named with its printed evidence for the final confirmation', () => {
+  const value=entry({receiptScan:{version:1,printedTotal:1200,status:'matched',warnings:[],sourceLines:[{kind:'adjustment',mappedTo:'unmapped',amount:-100,observedText:'Item coupon -1,00',lineIndex:8}]}});
+  const ui=render(value);assert.match(ui.text,/Correct the affected item's full line price and shares/);
+  assert.match(ui.text,/A discount, refund or charge needs checking/);assert.match(ui.text,/Item coupon -1,00/);assert.match(ui.text,/line 9/);
+  assert.equal(ui.elements.filter(element=>element.type==='button').length,0);assert.equal(ui.changed,undefined);
+  assert(scan.receiptScanSaveError(value));assert.equal(scan.receiptScanSaveError(scan.acknowledgeReceiptReview(value)),null);
 });
 
 test('correcting printed total requires a value from the photo and records user provenance', () => {
@@ -123,45 +121,32 @@ test('200-line review with long descriptions preserves ordered counts and struct
   assert.match(ui.text, /Receipt totals match exactly/);
 });
 
-test('checking one duplicate warning does not resolve a different pair of repeated lines', () => {
-  const value = entry({items: [{id: 'pizza', name: 'Pizza', amount: 1200, members: ['alice']}, {id: 'line-2', name: 'Pizza duplicate', amount: 0, members: ['alice']}, {id: 'line-3', name: 'Pizza similar', amount: 0, members: ['alice']}], receiptScan: {version: 1, printedTotal: 1200, status: 'needs-review', warnings: [{code: 'possible-duplicate', itemIds: ['pizza', 'line-2']}, {code: 'possible-duplicate', itemIds: ['pizza', 'line-3']}]}});
-  const ui = render(value);
-  const buttons = ui.elements.filter(element => element.type === 'button' && element.props.children === 'I checked this against the receipt');
-  assert.equal(buttons.length, 2); (buttons[0].props.onClick as () => void)();
-  assert.deepEqual(ui.changed?.receiptScan?.warnings.filter(warning => warning.code === 'possible-duplicate').map(warning => warning.resolved), [true, undefined]);
+test('duplicate warnings preserve both affected pairs and link to their item evidence', () => {
+  const value=entry({items:[{id:'pizza',name:'Pizza',amount:1200,members:['alice']},{id:'line-2',name:'Pizza duplicate',amount:0,members:['alice']},{id:'line-3',name:'Pizza similar',amount:0,members:['alice']}],receiptScan:{version:1,printedTotal:1200,status:'needs-review',warnings:[{code:'possible-duplicate',itemIds:['pizza','line-2']},{code:'possible-duplicate',itemIds:['pizza','line-3']}]}});
+  const ui=render(value);assert.match(ui.text,/Possible duplicate receipt lines: Pizza, Pizza duplicate/);assert.match(ui.text,/Possible duplicate receipt lines: Pizza, Pizza similar/);
+  assert(ui.elements.some(element=>element.type==='button' && text(element.props.children as React.ReactNode).replace(/\s+/g,' ').trim()==='Check Pizza similar'));
+  assert.equal(ui.elements.filter(element=>element.type==='a' && element.props.href==='/api/receipt?id=photo').length,1);
+  assert.equal(ui.changed,undefined);
 });
 
-test('missing printed total permits explicit item review without inventing printed evidence', () => {
+test('the missing total summary names the amount being saved without inventing evidence', () => {
   const value=entry({receiptScan:{version:1,printedTotal:null,printedCurrency:'EUR',status:'incomplete',warnings:[]}});
-  const ui=render(value); assert.match(ui.text,/The printed total is unavailable/);
-  const checkbox=ui.elements.find(element=>element.type==='input' && element.props.type==='checkbox'); assert(checkbox);
-  (checkbox.props.onChange as (event:unknown)=>void)({target:{checked:true}});
-  assert(ui.changed); assert.equal(ui.changed.receiptScan?.printedTotal,null);
-  assert.equal(scan.receiptScanSaveError(ui.changed),null);
-  assert.equal(scan.reconcileReceiptScan(ui.changed)?.status,'incomplete');
-  assert(scan.receiptScanSaveError({...ui.changed,items:[{...ui.changed.items[0],amount:1100}]}));
+  const ui=render(value);assert.match(ui.text,/Printed total not readable — saving the itemised €12.00/);
+  assert.equal(ui.elements.filter(element=>element.type==='input' && element.props.type==='checkbox').length,0);
+  assert.equal(ui.changed,undefined);assert.equal(value.receiptScan?.printedTotal,null);
 });
 
-test('difference checkbox fingerprints reconciled warnings exactly as Save does', () => {
-  const value=entry({items:[{id:'pizza',name:'Human checked name',amount:1200,members:['alice'],fieldSources:{name:'user'}}],receiptScan:{version:1,printedTotal:1201,printedCurrency:'EUR',status:'needs-review',warnings:[{code:'uncertain-description',itemId:'pizza'}]}});
-  const ui=render(value);
-  const checkbox=ui.elements.find(element=>element.type==='input' && element.props.type==='checkbox'); assert(checkbox);
-  (checkbox.props.onChange as (event:unknown)=>void)({target:{checked:true}});
-  assert(ui.changed); assert.equal(scan.receiptScanSaveError(ui.changed),null);
+test('ambiguous currency is visible alongside missing total and uncertain lines with no review controls', () => {
+  const value=entry({fieldSources:{currency:'ai'},items:[{id:'pizza',name:'Pizza',amount:1200,members:['alice'],scanSource:{confidence:'low'}}],receiptScan:{version:1,printedTotal:null,status:'incomplete',warnings:[{code:'ambiguous-currency'},{code:'image-may-be-incomplete'}]}});
+  const ui=render(value);assert.match(ui.text,/Currency read as EUR/);assert.match(ui.text,/Printed total not readable/);
+  assert.match(ui.text,/Receipt detail needs checking: Pizza/);assert.match(ui.text,/Receipt image may be incomplete/);
+  assert.equal(ui.elements.filter(element=>element.type==='input' && element.props.type==='checkbox').length,0);
+  assert(ui.elements.filter(element=>element.type==='button').every(element=>text(element.props.children as React.ReactNode).startsWith('Check ')));
+  assert.equal(ui.changed,undefined);assert.equal(scan.receiptScanSaveError(scan.acknowledgeReceiptReview(value)),null);
 });
 
-test('several review points can be confirmed with one action that satisfies Save', () => {
-  const value = entry({items: [{id: 'pizza', name: 'Pizza', amount: 1200, members: ['alice'], scanSource: {confidence: 'low'}}], receiptScan: {version: 1, printedTotal: 1201, printedCurrency: 'EUR', status: 'needs-review', warnings: [{code: 'image-may-be-incomplete'}]}});
-  const ui = render(value);
-  const button = ui.elements.find(element => element.type === 'button' && text(element.props.children as React.ReactNode).startsWith('I checked all'));
-  assert(button); assert.match(text(button.props.children as React.ReactNode), /I checked all 3 points/);
-  assert(scan.receiptScanSaveError(value));
-  (button.props.onClick as () => void)();
-  assert(ui.changed); assert.equal(scan.receiptScanSaveError(ui.changed), null);
-  assert.equal(scan.pendingReviewActions(ui.changed), 0);
-});
-
-test('a single review point keeps its own control without an extra confirm-all action', () => {
-  const ui = render(entry({receiptScan: {version: 1, printedTotal: 1201, status: 'matched', warnings: []}}));
-  assert.equal(ui.elements.filter(element => element.type === 'button' && text(element.props.children as React.ReactNode).startsWith('I checked all')).length, 0);
+test('an empty item name is a correction and never appears as an acceptance point', () => {
+  const value=entry({items:[{id:'pizza',name:'',amount:1200,members:['alice']}]});
+  const ui=render(value);assert.match(ui.text,/Item description needs checking/);assert.doesNotMatch(ui.text,/Confirm when saving/);
+  assert.equal(scan.pendingReviewActions(value),0);assert(scan.receiptScanSaveError(scan.acknowledgeReceiptReview(value)));
 });

@@ -54,9 +54,14 @@ for (const width of [320, 390, 1440]) {
       const dialog = page.getByRole('dialog', { name: 'Add a receipt', exact: true });
       await expect(dialog).toBeVisible();
       expect(await page.evaluate(() => (window as unknown as { __locationRequests: number }).__locationRequests)).toBe(0);
-      await dialog.locator('input[type=file]').last().setInputFiles(path.resolve('tests/fixtures/receipts/v1/images/long-receipt.png'));
-      expect(uploads).toBe(0); expect(reads).toBe(0);
       await dialog.getByRole('textbox', { name: /Who bought what/ }).fill('Gaz had a decaf, I had a cappuccino.');
+      const notesLabel = await dialog.locator(':scope > label').evaluate(label => {
+        const range = document.createRange(); range.selectNode(label.firstChild!);
+        const heading = range.getBoundingClientRect(), helper = label.querySelector('small')!.getBoundingClientRect();
+        return { overlaps: heading.left < helper.right && heading.right > helper.left && heading.top < helper.bottom && heading.bottom > helper.top,
+          marginTop: getComputedStyle(label.querySelector('small')!).marginTop };
+      });
+      expect(notesLabel).toEqual({ overlaps: false, marginTop: '0px' });
       await dialog.locator('summary').click();
       const locationLabelLayout = await dialog.locator('.receipt-place-fields > label').evaluate(label => {
         const text = label.firstChild;
@@ -83,7 +88,7 @@ for (const width of [320, 390, 1440]) {
       await dialog.getByRole('textbox', { name: /Receipt location/ }).fill('Bratislava');
       expect(await dialog.evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
       expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(1);
-      await dialog.getByRole('button', { name: 'Upload & read receipt', exact: true }).click();
+      await dialog.locator('input[type=file]').last().setInputFiles(path.resolve('tests/fixtures/receipts/v1/images/long-receipt.png'));
       await expect(dialog).toBeHidden();
       await expect(page.locator('.editor')).toBeVisible();
       await expect(page.getByRole('textbox', { name: 'Item 1 name', exact: true })).toHaveValue('Cappuccino');
@@ -92,6 +97,7 @@ for (const width of [320, 390, 1440]) {
       await expect(page.getByText('Read the coffee and proposed your share.', { exact: true })).toBeVisible();
       const trigger = page.locator('.editor .expense-icon-trigger');
       await expect(trigger).toHaveAttribute('aria-label', /Automatic: Meals · Orange/);
+      await expect(page.locator('.save-checklist')).toHaveCount(0);
       await trigger.click();
       const picker = page.getByRole('dialog', {name:'Choose an icon',exact:true});
       await expect(picker.getByText('Suggested from the receipt reading', {exact:true})).toBeVisible();

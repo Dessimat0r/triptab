@@ -46,6 +46,7 @@ async function openNew(page: Page) {
   await page.goto('/expenses', { waitUntil: 'domcontentloaded' });
   await page.getByRole('button', { name: 'Add expense', exact: true }).click();
   await expect(page.locator('.editor')).toBeVisible();
+  await expect(page.getByRole('textbox', { name: 'Expense name', exact: true })).toBeFocused();
 }
 
 test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
@@ -65,7 +66,7 @@ test('a shared taxi needs a name, an amount and Save', async ({ page }) => {
   await expect(page.locator('.receipt-view-switch')).toHaveCount(0);
   await expect(page.locator('.item')).toHaveCount(0);
   await expect(page.getByRole('textbox', { name: /Who bought what/ })).toBeHidden();
-  await expect(page.getByRole('button', { name: 'Save expense', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Save expense', exact: true })).toBeEnabled();
   await name.fill('Taxi');
   const amount = page.getByRole('textbox', { name: 'Amount', exact: true });
   await amount.pressSequentially('12,50');
@@ -167,12 +168,14 @@ test('a pending rate lookup never blocks a manual rate or the next expense', asy
   release();
 });
 
-test('the checklist and Save agree, and a blocker focuses its field', async ({ page }) => {
+test('Save stays available to explain blockers, and a blocker focuses its field', async ({ page }) => {
   await fixtures(page);
   await openNew(page);
   await page.getByRole('textbox', { name: 'Amount', exact: true }).fill('5');
   const save = page.getByRole('button', { name: 'Save expense', exact: true });
-  await expect(save).toBeDisabled();
+  await expect(save).toBeEnabled();
+  await expect(page.locator('.save-checklist')).toHaveCount(0);
+  await save.click();
   const checklist = page.locator('.save-checklist');
   await expect(checklist).toContainText('Add an expense name');
   await expect(checklist).not.toContainText('Name 1 item');
@@ -183,7 +186,7 @@ test('the checklist and Save agree, and a blocker focuses its field', async ({ p
   await page.getByRole('button', { name: 'Split by item', exact: true }).click();
   await page.getByRole('button', { name: 'Add item', exact: true }).click();
   await page.getByRole('textbox', { name: 'Expense name', exact: true }).fill('Lunch');
-  await expect(save).toBeDisabled();
+  await expect(save).toBeEnabled();
   // The first line still follows the expense name; only the new line needs one.
   await expect(page.getByRole('textbox', { name: 'Item 1 name', exact: true })).toHaveValue('Lunch');
   await checklist.getByRole('button', { name: /Name 1 item/ }).click();
@@ -397,8 +400,9 @@ for (const mobile of [true, false]) test.describe(`cancel item splitting on ${mo
     await activate(page.getByRole('button', { name: 'Use one amount', exact: true }));
     await expect(page.getByRole('textbox', { name: 'Amount', exact: true })).toBeFocused();
     await expect(page.getByRole('textbox', { name: 'Amount', exact: true })).toHaveValue('');
+    await page.getByRole('button', {name:'Save expense',exact:true}).click();
     await expect(page.locator('.save-checklist')).toContainText('Enter the amount');
-    await expect(page.getByRole('button', { name: 'Save expense', exact: true })).toBeDisabled();
+    await expect(page.getByRole('button', { name: 'Save expense', exact: true })).toBeEnabled();
     await expect(page.getByRole('button', { name: 'Gary', exact: true })).toHaveAttribute('aria-pressed', 'true');
     await expect(page.getByRole('button', { name: 'Sam', exact: true })).toHaveAttribute('aria-pressed', 'false');
   });
@@ -514,4 +518,41 @@ test('a processed receipt focuses QuickSplit and keeps its name above both views
   await page.locator('.save-checklist').getByRole('button', { name: /Add an expense name/ }).click();
   await expect(name).toBeFocused();
   await expect(name).toBeInViewport({ ratio: 1 });
+});
+
+test.describe('split mode focus timing', () => {
+  test.use({viewport:{width:1440,height:900},hasTouch:false,isMobile:false});
+  test('delayed callbacks cannot turn the next split-button Enter into an expense save', async ({page}) => {
+    const posted=await fixtures(page); await openNew(page);
+    await page.getByRole('textbox',{name:'Expense name',exact:true}).fill('Lunch');
+    await page.getByRole('textbox',{name:'Amount',exact:true}).fill('20');
+    await page.getByRole('button',{name:'Custom split',exact:true}).click();
+    await page.getByRole('button',{name:'Custom percentages',exact:true}).click();
+    await page.getByRole('textbox',{name:'Gary percentage for item 1',exact:true}).fill('75');
+    await page.getByRole('textbox',{name:'Sam percentage for item 1',exact:true}).fill('25');
+    await page.getByRole('button',{name:'Use one amount',exact:true}).click();
+    // Hold zero-delay callbacks to reproduce CI's pause between DOM commit and the next keypress.
+    await page.evaluate(()=>{
+      const original=window.setTimeout.bind(window), pending:{id:number;run:()=>void}[]=[];
+      window.setTimeout=((handler:TimerHandler,delay=0,...args:unknown[])=>{
+        if(delay===0 && typeof handler==='function') {
+          const id=original(()=>{},60_000);
+          pending.push({id,run:()=>Reflect.apply(handler,window,args)}); return id;
+        }
+        return original(handler,delay,...args);
+      }) as typeof window.setTimeout;
+      Object.defineProperty(window,'__releaseModeTimers',{value:()=>{
+        window.setTimeout=original;
+        for(const timer of pending.splice(0)) {clearTimeout(timer.id);timer.run();}
+      }});
+    });
+    await page.getByRole('dialog',{name:'Use one amount?'}).getByRole('button',{name:'Use one amount',exact:true}).click();
+    await expect(page.locator('.quick-shares')).toContainText('Gary £10.00 · Sam £10.00');
+    await page.getByRole('button',{name:'Split by item',exact:true}).focus();
+    await page.evaluate(()=>(window as unknown as {__releaseModeTimers:()=>void}).__releaseModeTimers());
+    await page.keyboard.press('Enter');
+    await expect(page.getByRole('textbox',{name:'Item 1 name',exact:true})).toBeFocused();
+    await expect(page.getByRole('button',{name:'Units',exact:true})).toBeVisible();
+    expect(posted).toHaveLength(0); await expect(page.locator('.saved-banner')).toHaveCount(0);
+  });
 });

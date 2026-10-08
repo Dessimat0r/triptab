@@ -1,16 +1,19 @@
-import { itemSplitError, receiptSplitError, total, type ReceiptMessage, type Trip } from './model';
+import { expenseSchema, itemSplitError, receiptSplitError, total, type ReceiptMessage, type Trip } from './model';
 import type { ReceiptEditor } from './receipt-processing';
-import { carryReviewAcknowledgements, pendingReviewActions, reconcileReceiptScan, receiptScanSaveError } from './receipt-scan';
+import { acknowledgeReceiptReview, carryReviewAcknowledgements, reconcileReceiptScan, receiptScanSaveError } from './receipt-scan';
 
 /** Stable element IDs the save checklist can move focus to. */
 export const EXPENSE_TARGETS = {
   title: 'expense-name-field',
   details: 'expense-purchase-details',
+  currency: 'expense-currency-field',
   review: 'expense-receipt-review',
   items: 'expense-items',
   split: 'expense-split-method',
   fx: 'expense-fx-panel',
   amount: 'expense-quick-amount',
+  capture: 'expense-receipt-capture',
+  conflict: 'expense-conflict-review',
   shared: 'expense-quick-shared',
 } as const;
 
@@ -21,7 +24,7 @@ export const expenseItemTarget = (itemId: string) => `expense-item-${itemId}`;
  * `target` is the element to scroll to; `focus` optionally selects the
  * control inside it that fixes the problem (otherwise its first control).
  */
-export type SaveBlocker = { key: string; message: string; target: string; focus?: string };
+export type SaveBlocker = { key: string; message: string; target?: string; focus?: string };
 
 export function unassignedItemIds(entry: Pick<ReceiptEditor, 'items' | 'percentages'>): string[] {
   return entry.percentages === undefined ? entry.items.filter(item => !item.members.length).map(item => item.id) : [];
@@ -42,19 +45,31 @@ export function assignUnassignedItems(entry: ReceiptEditor, memberIds: string[])
 const plural = (count: number, one: string, many = one + 's') => `${count} ${count === 1 ? one : many}`;
 
 /**
- * Everything that would currently stop Save, in the order a person can fix
- * it. Save remains the authority; this mirrors its checks so nothing is a
- * surprise, and an otherwise unexplained scan failure still gets an entry.
+ * The shared posting gate, in the order a person can fix each problem.
+ * Confirmation is projected here for readiness, and created only on submit.
  */
-export function expenseSaveBlockers(entry: ReceiptEditor, trip: Pick<Trip, 'currency'>): SaveBlocker[] {
+export type ExpenseSaveState = {
+  uploading?: boolean; processing?: boolean; conflict?: boolean; offline?: boolean; fxLookupPending?: boolean;
+};
+
+export function expenseSaveBlockers(entry: ReceiptEditor, trip: Pick<Trip, 'currency'>, state: ExpenseSaveState = {}): SaveBlocker[] {
   const blockers: SaveBlocker[] = [];
-  const add = (key: string, message: string, target: string, focus?: string) => blockers.push({ key, message, target, ...(focus ? { focus } : {}) });
+  const add = (key: string, message: string, target?: string, focus?: string) => blockers.push({ key, message, ...(target ? { target } : {}), ...(focus ? { focus } : {}) });
   const firstItem = (match: (item: ReceiptEditor['items'][number]) => boolean) => {
     const item = entry.items.find(match);
     return item ? expenseItemTarget(item.id) : EXPENSE_TARGETS.items;
   };
+  if (state.processing) add('processing', 'Reading the receipt…', EXPENSE_TARGETS.review);
+  else if (state.uploading) add('uploading', 'Uploading photo…', EXPENSE_TARGETS.capture);
+  if (state.conflict) add('conflict', 'Resolve the edit conflict above', EXPENSE_TARGETS.conflict);
+  if (state.offline) add('offline', 'You’re offline. Reconnect to save');
+  // The proposal will supply these values; wait for it before requesting edits.
+  if (state.processing || state.uploading) return blockers;
+  if (entry.bankAmount !== undefined && entry.currency === trip.currency) {
+    add('bank-currency', 'Remove the conversion bank charge for an expense in the holiday currency', EXPENSE_TARGETS.fx);
+  }
   if (!entry.title.trim()) add('title', 'Add an expense name', EXPENSE_TARGETS.title);
-  if (!entry.currency) add('currency', 'Choose the receipt currency', EXPENSE_TARGETS.details);
+  if (!entry.currency) add('currency', 'Choose the receipt currency', EXPENSE_TARGETS.currency);
   const unreadable = entry.items.filter(item => item.amount === null).length;
   if (unreadable) add('prices', `Enter ${plural(unreadable, 'unreadable price')}`, firstItem(item => item.amount === null), '.moneyinput input');
   const unnamed = entry.items.filter(item => !item.name.trim()).length;
@@ -62,10 +77,8 @@ export function expenseSaveBlockers(entry: ReceiptEditor, trip: Pick<Trip, 'curr
   if (unnamed) add('names', `Name ${plural(unnamed, 'item')}`, firstItem(item => !item.name.trim()), 'input[required]');
   const scan = entry.receiptScan && reconcileReceiptScan(entry);
   if (scan && entry.currency && scan.warnings.some(warning => !warning.resolved && warning.code === 'currency-mismatch')) {
-    add('scan-currency', 'Match the original currency to the printed currency', EXPENSE_TARGETS.review);
+    add('scan-currency', 'Match the original currency to the printed currency', EXPENSE_TARGETS.currency);
   }
-  const reviews = scan ? pendingReviewActions(entry) : 0;
-  if (reviews) add('review', `Confirm ${plural(reviews, 'receipt check')}`, EXPENSE_TARGETS.review);
   const unassigned = unassignedItemIds(entry).length;
   if (unassigned) add('unassigned', `Choose who shares ${plural(unassigned, 'item')}`, firstItem(item => !item.members.length), '.share-split button[aria-pressed]');
   const splitError = receiptSplitError(entry);
@@ -76,14 +89,15 @@ export function expenseSaveBlockers(entry: ReceiptEditor, trip: Pick<Trip, 'curr
   }
   if (entry.currency && entry.currency !== trip.currency) {
     if (entry.bankAmount === 0) add('bank', 'Enter the amount your bank charged', EXPENSE_TARGETS.fx);
-    else if (!entry.bankAmount && !entry.fx?.rate) add('fx', 'Add an exchange rate or the bank charge', EXPENSE_TARGETS.fx);
+    else if (!entry.bankAmount && !entry.fx?.rate) add('fx', state.fxLookupPending ? 'Finding an exchange rate…' : 'Add an exchange rate or the bank charge', EXPENSE_TARGETS.fx);
   }
   if (!unreadable && entry.items.length && total(entry) <= 0) add('total', 'The total must be more than zero', EXPENSE_TARGETS.items);
   if (!entry.items.length) add('items', 'Add at least one item', EXPENSE_TARGETS.items);
   if (!blockers.length) {
-    const scanError = receiptScanSaveError(entry, { allowAcknowledgement: true });
+    const scanError = receiptScanSaveError(acknowledgeReceiptReview(entry), { allowAcknowledgement: true });
     if (scanError) add('scan', scanError, EXPENSE_TARGETS.review);
   }
+  if (!blockers.length && !expenseSchema.safeParse(entry).success) add('values', 'Complete the purchase details and valid amounts before saving', EXPENSE_TARGETS.details);
   return blockers;
 }
 
@@ -95,4 +109,12 @@ export function expenseSaveBlockers(entry: ReceiptEditor, trip: Pick<Trip, 'curr
  */
 export function hasReceiptDiscussion(messages: ReceiptMessage[] = []): boolean {
   return messages.some(message => message.role === 'user' && !message.itemId);
+}
+
+/** The quick form exposes the single amount and sharing fields instead of item rows. */
+export function visibleExpenseBlockers(blockers: SaveBlocker[], quickMode: boolean): SaveBlocker[] {
+  return quickMode ? blockers.flatMap(blocker => blocker.key === 'names' ? []
+    : blocker.key === 'total' || blocker.key === 'items' ? [{ ...blocker, message: 'Enter the amount', target: EXPENSE_TARGETS.amount }]
+    : blocker.key === 'unassigned' || blocker.key === 'item-split' ? [{ ...blocker, target: EXPENSE_TARGETS.shared, focus: undefined }]
+    : [blocker]) : blockers;
 }
