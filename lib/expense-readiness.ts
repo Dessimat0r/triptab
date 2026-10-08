@@ -15,6 +15,8 @@ export const EXPENSE_TARGETS = {
   capture: 'expense-receipt-capture',
   conflict: 'expense-conflict-review',
   shared: 'expense-quick-shared',
+  splitStep: 'expense-split-step',
+  summary: 'expense-check-summary',
 } as const;
 
 /** The element that holds one receipt line's controls. */
@@ -77,12 +79,12 @@ export function expenseSaveBlockers(entry: ReceiptEditor, trip: Pick<Trip, 'curr
   if (unnamed) add('names', `Name ${plural(unnamed, 'item')}`, firstItem(item => !item.name.trim()), 'input[required]');
   const scan = entry.receiptScan && reconcileReceiptScan(entry);
   if (scan && entry.currency && scan.warnings.some(warning => !warning.resolved && warning.code === 'currency-mismatch')) {
-    add('scan-currency', 'Match the original currency to the printed currency', EXPENSE_TARGETS.currency);
+    add('scan-currency', 'Match the currency to the printed currency', EXPENSE_TARGETS.currency);
   }
   const unassigned = unassignedItemIds(entry).length;
   if (unassigned) add('unassigned', `Choose who shares ${plural(unassigned, 'item')}`, firstItem(item => !item.members.length), '.share-split button[aria-pressed]');
   const splitError = receiptSplitError(entry);
-  if (splitError) add('receipt-split', splitError, EXPENSE_TARGETS.split);
+  if (splitError) add('receipt-split', splitError, EXPENSE_TARGETS.split, '.share-split input[aria-invalid="true"], .share-split button[aria-pressed="true"]');
   else if (entry.percentages === undefined) {
     const index = entry.items.findIndex(item => item.members.length && itemSplitError(item));
     if (index >= 0) add('item-split', `Finish the split for item ${index + 1}`, expenseItemTarget(entry.items[index].id), '.share-split input[aria-invalid="true"], .share-split button[aria-pressed="true"]');
@@ -111,10 +113,17 @@ export function hasReceiptDiscussion(messages: ReceiptMessage[] = []): boolean {
   return messages.some(message => message.role === 'user' && !message.itemId);
 }
 
-/** The quick form exposes the single amount and sharing fields instead of item rows. */
-export function visibleExpenseBlockers(blockers: SaveBlocker[], quickMode: boolean): SaveBlocker[] {
-  return quickMode ? blockers.flatMap(blocker => blocker.key === 'names' ? []
-    : blocker.key === 'total' || blocker.key === 'items' ? [{ ...blocker, message: 'Enter the amount', target: EXPENSE_TARGETS.amount }]
-    : blocker.key === 'unassigned' || blocker.key === 'item-split' ? [{ ...blocker, target: EXPENSE_TARGETS.shared, focus: undefined }]
-    : [blocker]) : blockers;
+/**
+ * The single-amount layout shows one amount and one sharing control instead
+ * of item rows. A manual line takes the expense name, so its name is never a
+ * separate correction; a receipt line keeps its own name field beside the
+ * amount, so that blocker still leads there.
+ */
+export function visibleExpenseBlockers(blockers: SaveBlocker[], quickMode: boolean | 'manual' | 'receipt'): SaveBlocker[] {
+  if (!quickMode) return blockers;
+  return blockers.flatMap(blocker => blocker.key === 'names' && quickMode !== 'receipt' ? []
+    : blocker.key === 'total' || blocker.key === 'items' ? [{ ...blocker, message: 'Enter the amount', target: EXPENSE_TARGETS.amount, focus: undefined }]
+    : blocker.key === 'prices' ? [{ ...blocker, target: EXPENSE_TARGETS.amount, focus: undefined }]
+    : blocker.key === 'unassigned' || blocker.key === 'item-split' ? [{ ...blocker, target: EXPENSE_TARGETS.shared, focus: blocker.key === 'item-split' ? blocker.focus : undefined }]
+    : [blocker]);
 }

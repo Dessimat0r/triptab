@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { collapseToQuick, hasItemSplitDetail, isManualSingleLine, quickEligible } from '../lib/quick-expense';
+import { collapseToQuick, hasItemSplitDetail, isManualSingleLine, quickEligible, singleReceiptLineEligible } from '../lib/quick-expense';
 import type { ReceiptEditor } from '../lib/receipt-processing';
 
 const entry: ReceiptEditor = {
@@ -19,14 +19,14 @@ const entry: ReceiptEditor = {
   }],
 };
 
-test('collapse preserves the line and expense details while clearing item split data', () => {
+test('collapse keeps the line, its people and shares, and clears what one amount cannot show', () => {
   const before = structuredClone(entry);
   const collapsed = collapseToQuick(entry);
   assert(quickEligible(collapsed));
-  assert.equal(collapsed.percentages, undefined);
+  assert.equal(collapsed.percentages, undefined, 'whole-bill percentages do not apply to one amount');
   assert.deepEqual(collapsed.items[0], {
     id: 'line', name: 'Dinner', amount: 2000, members: ['sam'],
-    percentages: undefined, units: undefined, quantity: undefined,
+    percentages: { sam: 100 }, units: { total: 2, allocations: { sam: 2 } }, quantity: undefined,
     translations: undefined, scanSource: undefined,
     fieldSources: { name: 'user', amount: 'user' },
   });
@@ -59,7 +59,19 @@ test('a zero-priced line keeps its selected people and can collapse repeatedly',
 test('split detail is reported only when collapsing would discard it', () => {
   assert(hasItemSplitDetail(entry));
   assert(hasItemSplitDetail({ ...entry, items: [{ ...entry.items[0], percentages: undefined, units: undefined, quantity: undefined, translations: undefined }] }), 'whole-bill percentages');
+  assert(!hasItemSplitDetail({ ...entry, percentages: undefined, items: [{ ...entry.items[0], quantity: undefined, translations: undefined }] }), 'line shares survive collapsing');
   assert(!hasItemSplitDetail(collapseToQuick(entry)));
+});
+
+test('a single receipt line uses the single-amount layout without being renamed', () => {
+  const line = { ...entry, percentages: undefined, receiptId: 'photo' };
+  assert(singleReceiptLineEligible(line));
+  assert(!quickEligible(line), 'the manual quick form is for typed expenses only');
+  assert.equal(line.items[0].name, 'Other name');
+  assert(singleReceiptLineEligible({ ...line, items: [{ ...line.items[0], name: '', amount: null, members: [] }] }), 'unread lines still use it; their name and price are corrected beside the amount');
+  assert(!singleReceiptLineEligible({ ...line, items: [line.items[0], { ...line.items[0], id: 'other' }] }));
+  assert(!singleReceiptLineEligible({ ...line, percentages: { gary: 50, sam: 50 } }), 'a whole-bill split keeps the item list');
+  assert(!singleReceiptLineEligible(collapseToQuick(entry)), 'a typed expense is never a receipt line');
 });
 
 test('only a hand-entered single line can collapse', () => {

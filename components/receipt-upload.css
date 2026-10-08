@@ -1,5 +1,6 @@
 .receipt-upload-dialog { width: min(480px, 100%); min-width: 0; max-width: 100%; max-height: calc(100dvh - 32px); overflow-y: auto; overflow-x: hidden; overflow-wrap: anywhere; }
-.receipt-upload-dialog > label { display: block; margin-top: 16px; margin-bottom: 6px; }
+.receipt-upload-dialog > label { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 6px; row-gap: 2px; margin-top: 16px; margin-bottom: 6px; line-height: 1.4; }
+.receipt-upload-dialog > label > small { display: inline; margin: 0; line-height: inherit; }
 .receipt-upload-dialog textarea, .receipt-place-fields input { box-sizing: border-box; width: 100%; min-width: 0; max-width: 100%; }
 .receipt-upload-filename { font-size: .875rem; overflow-wrap: anywhere; margin: 8px 0; }
 .receipt-upload-place { margin: 16px 0; }
@@ -11,14 +12,7 @@
 .receipt-place-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; min-width: 0; }
 .receipt-place-actions button { min-height: 40px; min-width: 0; max-width: 100%; white-space: normal; }
 .receipt-place-fields > small { overflow-wrap: anywhere; }
-.receipt-capture-context { min-width: 0; display: grid; gap: 6px; margin-bottom: 12px; }
-.receipt-capture-context textarea { width: 100%; min-width: 0; box-sizing: border-box; }
 .receipt-chat-pending-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .receipt-chat-pending-row button { min-height: 36px; }
-
-.receipt-capture-tools { width: 100%; min-width: 0; }
-.receipt-capture-tools summary { min-height: 36px; cursor: pointer; font-size: .875rem; }
-.receipt-capture-tool-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-
-.receipt-upload-dialog > label { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 6px; row-gap: 2px; line-height: 1.4; }
-.receipt-upload-dialog > label > small { display: inline; margin: 0; line-height: inherit; }
+.receipt-upload-progress { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.receipt-upload-progress .footnote { flex-basis: 100%; }

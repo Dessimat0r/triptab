@@ -124,11 +124,12 @@ for (const edits of [false, true]) test(`one confirmation covers ambiguous curre
   const state = await fixtures(page, { draft }); await openDraft(page);
   const summary = page.getByRole('region', { name: 'Confirm when saving' });
   await expect(summary).toContainText('Currency read as EUR'); await expect(summary).toContainText('Printed total not readable');
-  await expect(page.getByRole('combobox', { name: 'Original currency' })).toBeVisible();
+  await expect(page.getByRole('combobox', { name: 'Currency', exact: true })).toBeVisible();
   await expect(page.locator('.receipt-scan-review input[type=checkbox]')).toHaveCount(0);
   await expect(summary.getByRole('button', {name:/I checked|Confirm/})).toHaveCount(0);
   if (edits) {
-    await page.getByRole('textbox', { name: 'Item 1 total', exact: true }).fill('43.10');
+    // A one-line receipt shows its line's price as the single amount.
+    await page.getByRole('textbox', { name: 'Amount', exact: true }).fill('43.10');
     await page.getByText('Check or correct printed totals', { exact: true }).click();
     await page.getByRole('textbox', { name: 'Printed subtotal (optional)', exact: true }).fill('43.11');
   }
@@ -143,7 +144,7 @@ for (const edits of [false, true]) test(`one confirmation covers ambiguous curre
 test('processing names only the ongoing read and cannot post incomplete incoming values', async ({ page }) => {
   const hold = deferred(); const state = await fixtures(page, { holdScan: hold.promise });
   await page.goto('/expenses'); await scan(page); await expect.poll(() => state.scans).toBe(1);
-  await expect(page.locator('.save-checklist')).toHaveText(/Before savingReading the receipt…/);
+  await expect(page.locator('.save-checklist')).toHaveText(/^Reading the receipt…$/);
   await save(page).click(); await expect(page.locator('.save-checklist')).toHaveAttribute('role', 'group');
   await expect(page.locator('.expense-save-announcement')).toContainText('Reading the receipt…');
   await expect(page.locator('.save-checklist')).not.toContainText('Add at least one item');
@@ -155,12 +156,14 @@ test('all hard blockers are revealed together and never accepted by confirmation
   const state = await fixtures(page, { draft: proposal({ receiptScan: { version: 1, printedTotal: null, printedCurrency: 'GBP', status: 'incomplete', warnings: [{ code: 'ambiguous-currency' }] },
     items: [{ id: 'coffee', name: '', amount: null, members: [] }] }) });
   await openDraft(page); await save(page).click(); const list = page.locator('.save-checklist');
-  for (const message of ['Enter 1 unreadable price', 'Name 1 item', 'Match the original currency', 'Choose who shares 1 item']) await expect(list).toContainText(message);
+  for (const message of ['Enter 1 unreadable price', 'Name 1 item', 'Match the currency', 'Choose who shares 1 item']) await expect(list).toContainText(message);
   await expect(list).toHaveAttribute('role', 'group');
-  await expect(page.locator('.expense-save-announcement')).toContainText('Enter 1 unreadable price'); await expect(page.getByRole('textbox', { name: 'Item 1 total' })).toBeFocused();
+  await expect(page.locator('.expense-save-announcement')).toContainText('Enter 1 unreadable price'); await expect(page.getByRole('textbox', { name: 'Amount', exact: true })).toBeFocused();
   expect(state.posts).toBe(0); await expect(save(page)).toHaveText('Save expense');
-  await list.getByRole('button', { name: /Match the original currency/ }).click();
-  await expect(page.getByRole('combobox', { name: 'Original currency' })).toBeFocused();
+  await list.getByRole('button', { name: /Match the currency/ }).click();
+  await expect(page.getByRole('combobox', { name: 'Currency', exact: true })).toBeFocused();
+  await list.getByRole('button', { name: /Name 1 item/ }).click();
+  await expect(page.getByRole('textbox', { name: 'Item 1 name', exact: true })).toBeFocused();
 });
 
 test('rapid repeated confirmation posts once and success waits for server acceptance', async ({ page }) => {
@@ -196,7 +199,7 @@ test('cancelled and replaced uploads cannot open their old photos or start extra
 test('suspicious manual FX appears before Save and confirmation needs no modal', async ({ page }) => {
   const state = await fixtures(page); await page.goto('/expenses'); await page.getByRole('button', { name: 'Add expense', exact: true }).click();
   await page.getByRole('textbox', { name: 'Expense name', exact: true }).fill('Taxi'); await page.getByRole('textbox', { name: 'Amount', exact: true }).fill('10');
-  await page.getByRole('combobox', { name: 'Original currency' }).selectOption('GBP');
+  await page.getByRole('combobox', { name: 'Currency', exact: true }).selectOption('GBP');
   await expect(page.locator('.rate-result')).toContainText('Daily reference rate');
   await page.locator('.manual-rate summary').click(); await page.getByRole('spinbutton', { name: /1 GBP in EUR/ }).fill('0.98');
   await expect(page.locator('.fx-panel')).toContainText('Manual rate differs from reference by 14%');
@@ -247,7 +250,9 @@ test('a failed draft save unlocks the retained photo and notes for retry', async
 test('item evidence jumps focus the field without adding a history entry, and photo access is shared', async ({ page }) => {
   const state=await fixtures(page,{draft:proposal({receiptScan:{version:1,printedTotal:null,printedCurrency:'EUR',status:'incomplete',warnings:[{code:'ambiguous-currency'}]},items:[{id:'coffee',name:'Coffee',amount:4210,members:['gary'],scanSource:{confidence:'low'}}]})});
   await openDraft(page); const summary=page.getByRole('region',{name:'Confirm when saving'});
-  await expect(summary.getByRole('link',{name:'View receipt photo',exact:true})).toHaveCount(1);
+  // One photo affordance: the receipt's thumbnail opens the zoomable photo.
+  await expect(page.getByRole('button',{name:'View receipt photo',exact:true})).toHaveCount(1);
+  await expect(summary.getByRole('link')).toHaveCount(0);
   const before={url:page.url(),history:await page.evaluate(()=>history.length)};
   await summary.getByRole('button',{name:'Check Coffee',exact:true}).click();
   await expect(page.getByRole('textbox',{name:'Item 1 name',exact:true})).toBeFocused();

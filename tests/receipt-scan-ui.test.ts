@@ -28,7 +28,7 @@ function text(node: React.ReactNode): string {
 }
 const source = await readFile(new URL('../components/receipt-scan-review.tsx', import.meta.url), 'utf8');
 const compiled = transpileModule(source, {compilerOptions: {module: ModuleKind.CommonJS, target: ScriptTarget.ES2022, jsx: JsxEmit.ReactJSX}}).outputText;
-const exported = {exports: {} as {default: (props: {entry: ReceiptEditor; onChange(entry: ReceiptEditor): void}) => React.ReactNode}};
+const exported = {exports: {} as {default: (props: {entry: ReceiptEditor; onChange(entry: ReceiptEditor): void}) => React.ReactNode; ReceiptReviewSummary: (props: {entry: ReceiptEditor}) => React.ReactNode}};
 new Function('require', 'module', 'exports', compiled)((name: string) => {
   if (name === 'react') return {useId: () => 'review-title', useMemo: (callback:()=>unknown) => callback(), useEffect() {}, useState: (initial: unknown) => [initial, () => {}]};
   if (name === 'react/jsx-runtime') return runtime;
@@ -42,10 +42,14 @@ new Function('require', 'module', 'exports', compiled)((name: string) => {
 function entry(overrides: Partial<ReceiptEditor> = {}): ReceiptEditor {
   return {id: 'draft', draftId: 'draft', receiptId: 'photo', title: 'Lunch', date: '2026-10-05', time: '12:00', timezone: 'Europe/Vienna', payer: 'alice', currency: 'EUR', items: [{id: 'pizza', name: 'Pizza slices', amount: 1200, members: ['alice']}], tax: 0, tip: 0, discount: 0, receiptScan: {version: 1, printedTotal: 1200, printedCurrency: 'EUR', status: 'matched', warnings: []}, ...overrides};
 }
+// The editor shows the receipt's evidence under Purchase and the points Save
+// confirms under Check & save; render both, as the editor does.
 function render(value: ReceiptEditor) {
   let changed: ReceiptEditor | undefined;
-  const tree = exported.exports.default({entry: value, onChange(next) {changed = next;}});
-  return {tree, elements: elements(tree), text: text(tree).replace(/\s+/g, " "), get changed() {return changed;}};
+  const evidence = exported.exports.default({entry: value, onChange(next) {changed = next;}});
+  const summary = exported.exports.ReceiptReviewSummary({entry: value});
+  const tree = [evidence, summary];
+  return {tree, evidence, elements: elements(tree), text: text(tree).replace(/\s+/g, " "), get changed() {return changed;}};
 }
 
 test('unprocessed photo shows no verified printed total or invented receipt line', () => {
@@ -57,11 +61,11 @@ test('unprocessed photo shows no verified printed total or invented receipt line
   assert.doesNotMatch(ui.text, /€0\.00|match exactly/);
 });
 
-test('matching receipt reports recognition separately from unassigned people and pending quantities', () => {
+test('matching receipt reports recognition without repeating who still needs assigning', () => {
   const ui = render(entry({items: [{id: 'pizza', name: 'Pizza slices', amount: 1200, members: [], quantity: {total: 2, label: 'slices'}, units: {total: 2, allocations: {}, label: 'slices'}}]}));
   assert.match(ui.text, /Receipt totals match exactly/);
-  assert.match(ui.text, /1 need people assigned/);
-  assert.match(ui.text, /Choose who owes/);
+  // The line, the bulk share and the Save checklist each say this once.
+  assert.doesNotMatch(ui.text, /need people assigned|Choose who owes/);
   assert.doesNotMatch(ui.text, /ready to save/i);
 });
 
@@ -79,7 +83,7 @@ test('printed currency is displayed independently and a wrong original currency 
   const ui = render(entry({currency: 'GBP'}));
   assert.match(ui.text, /Printed receipt total €12\.00/);
   assert.match(ui.text, /Itemised total £12\.00/);
-  assert.match(ui.text, /Original currency differs from the printed currency/);
+  assert.match(ui.text, /The selected currency differs from the printed currency/);
   assert.doesNotMatch(ui.text, /Receipt totals match exactly/);
 });
 
@@ -90,7 +94,8 @@ test('one-cent mismatch appears in the acceptance summary without an editing ack
   assert.match(ui.text,/Confirm & save expense accepts/);
   assert.equal(ui.elements.filter(element=>element.type==='input' && element.props.type==='checkbox').length,0);
   assert.equal(ui.changed,undefined);assert(scan.receiptScanSaveError(value));
-  const photo=ui.elements.find(element=>element.type==='a' && element.props.href==='/api/receipt?id=photo');assert(photo);
+  // The receipt's thumbnail is the one way to see the photo; the summary links to lines instead.
+  assert.equal(ui.elements.filter(element=>element.type==='a').length,0);
 });
 
 test('an unmapped adjustment is named with its printed evidence for the final confirmation', () => {
@@ -111,21 +116,24 @@ test('correcting printed total requires a value from the photo and records user 
   assert.equal(scan.receiptScanSaveError(ui.changed!), null);
 });
 
-test('200-line review with long descriptions preserves ordered counts and structured accessible warnings', () => {
+test('a 200-line receipt keeps one labelled summary instead of a message per unassigned line', () => {
   const items = Array.from({length: 200}, (_, index) => ({id: `line-${index}`, name: `Line ${index} ${'Long name '.repeat(15)}`, amount: 100, members: []}));
   const ui = render(entry({items, receiptScan: {version: 1, printedTotal: 20000, status: 'matched', warnings: []}}));
-  assert.match(ui.text, /200 lines · 200 need people assigned/);
-  assert.equal(ui.elements.filter(element => element.type === 'li').length, 200);
-  const section = ui.elements[0];
+  assert.doesNotMatch(ui.text, /need people assigned/);
+  assert.equal(ui.elements.filter(element => element.type === 'li').length, 0);
+  const section = elements(ui.evidence)[0];
   assert.equal(section.props['aria-labelledby'], 'review-title');
   assert.match(ui.text, /Receipt totals match exactly/);
+  assert.match(ui.text, /Itemised total €200\.00/);
+  const missing = render(entry({items: items.map((item, index) => index ? item : {...item, amount: null}), receiptScan: {version: 1, printedTotal: 20000, status: 'matched', warnings: []}}));
+  assert.match(missing.text, /200 lines · 1 missing price/, 'line counts appear when a price still needs entering');
 });
 
 test('duplicate warnings preserve both affected pairs and link to their item evidence', () => {
   const value=entry({items:[{id:'pizza',name:'Pizza',amount:1200,members:['alice']},{id:'line-2',name:'Pizza duplicate',amount:0,members:['alice']},{id:'line-3',name:'Pizza similar',amount:0,members:['alice']}],receiptScan:{version:1,printedTotal:1200,status:'needs-review',warnings:[{code:'possible-duplicate',itemIds:['pizza','line-2']},{code:'possible-duplicate',itemIds:['pizza','line-3']}]}});
   const ui=render(value);assert.match(ui.text,/Possible duplicate receipt lines: Pizza, Pizza duplicate/);assert.match(ui.text,/Possible duplicate receipt lines: Pizza, Pizza similar/);
   assert(ui.elements.some(element=>element.type==='button' && text(element.props.children as React.ReactNode).replace(/\s+/g,' ').trim()==='Check Pizza similar'));
-  assert.equal(ui.elements.filter(element=>element.type==='a' && element.props.href==='/api/receipt?id=photo').length,1);
+  assert.equal(ui.elements.filter(element=>element.type==='a').length,0);
   assert.equal(ui.changed,undefined);
 });
 

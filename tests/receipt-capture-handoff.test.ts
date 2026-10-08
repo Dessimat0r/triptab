@@ -14,8 +14,11 @@ const props: ReceiptCaptureProps = {
   onCapture() {}, onPrepare() {}, onRefresh() {}, onUseProcessed() {},
   onOpenChatGPT() {}, onConnectChatGPT() {},
 };
+// A stored receipt shows its status and next step with the receipt's totals,
+// and its photo tools and ChatGPT handoff under Receipt tools: render both.
 function render(overrides: Partial<ReceiptCaptureProps> = {}) {
-  return renderToStaticMarkup(createElement(ReceiptCapture, { ...props, ...overrides }));
+  return renderToStaticMarkup(createElement(ReceiptCapture, { ...props, ...overrides, part: 'status' }))
+    + renderToStaticMarkup(createElement(ReceiptCapture, { ...props, ...overrides, part: 'tools' }));
 }
 function visibleText(html: string) { return html.replace(/<[^>]*>/g, ' '); }
 
@@ -27,7 +30,7 @@ test('the saved receipt offers a native ChatGPT link and an immediately accessib
   assert.match(html, /<textarea[^>]*aria-label="Receipt assistant prompt"[^>]*readOnly=""/i);
   assert.match(html, /Read the stored receipt “Dinner &amp; drinks”\. Keep existing shares and ask about unclear prices\./);
   assert.match(visibleText(html), /open[s]? without the request.*copy this text.*send it with TripTab enabled/i);
-  assert.match(visibleText(html), /You can also enter items yourself/);
+  assert.match(visibleText(html), /enter items yourself/);
 });
 
 test('long and non-ASCII handoff requests open a bounded URL and retain the full copyable prompt', () => {
@@ -69,7 +72,8 @@ test('a ready proposal offers review and explains that saving applies the review
   assert.match(visibleText(html), /Review processed receipt/);
   assert.match(visibleText(html), /Saving the expense applies your reviewed items/);
   assert.doesNotMatch(html, /<a[^>]*href="https:\/\/chatgpt\.com\//);
-  assert.match(html, /href="\/api\/receipt\?id=receipt-image"/);
+  // The photo itself is shown once, with the receipt's totals, not repeated here.
+  assert.doesNotMatch(html, /href="\/api\/receipt\?id=receipt-image"/);
 });
 
 test('manual receipt questions keep their ChatGPT handoff even without an image', () => {
@@ -85,7 +89,7 @@ test('handoff errors leave the stored photo and readable request available', () 
   assert.match(html, /role="alert">Clipboard unavailable/);
   assert.match(html, /<details[^>]* open=""/);
   assert.match(html, /aria-label="Receipt assistant prompt"/);
-  assert.match(html, /Stored receipt image for review/);
+  assert.match(visibleText(html), /Replace the photo/, 'the stored photo stays attached and replaceable');
 });
 
 test('receipt proposals update automatically and show a retry only after refresh failure', () => {
@@ -137,19 +141,37 @@ test('an unavailable site client offers an explicit fallback without an enabled 
   assert.match(html, /<a[^>]*href="https:\/\/chatgpt\.com\//);
 });
 
-test('filled receipt details direct the participant to check and save rather than starting transcription again', () => {
+test('filled receipt details leave checking to the receipt summary rather than starting transcription again', () => {
+  const status = renderToStaticMarkup(createElement(ReceiptCapture, { ...props, aiConfigured: true, aiConnected: true, itemized: true, handoffOpened: true, onProcess() {}, onConnectPlan() {}, part: 'status' }));
   const html = render({ aiConfigured: true, aiConnected: true, itemized: true, handoffOpened: true, onProcess() {}, onConnectPlan() {} });
-  assert.match(visibleText(html), /Receipt details received\. Check printed totals, warnings and item shares before saving/);
+  // The receipt's own summary (totals, warnings, then the lines) is the next step.
+  assert.doesNotMatch(visibleText(status), /\w/, 'no second status competes with the receipt summary');
   assert.doesNotMatch(visibleText(html), /Read receipt with ChatGPT|Reading receipt with ChatGPT|Connect ChatGPT plan|Return here after it saves/);
   assert.doesNotMatch(html, /<a[^>]*href="https:\/\/chatgpt\.com\//);
-  assert(html.indexOf('Receipt details received') < html.indexOf('receipt-capture-inputs'), 'the completed status remains visible above the image and controls on mobile');
 });
 
 test('a new incoming proposal still requires review after earlier details were filled', () => {
   const html = render({ ready: true, itemized: true });
   assert.match(visibleText(html), /Review processed receipt/);
-  assert.match(visibleText(html), /Saving the expense applies your reviewed items/);
   assert.doesNotMatch(visibleText(html), /Receipt details received/);
+});
+
+test('before any photo, notes come before the two capture actions and one privacy line follows', () => {
+  const html = renderToStaticMarkup(createElement(ReceiptCapture, { ...props, receiptId: undefined, prompt: undefined, part: 'compact',
+    contextFields: createElement('textarea', { 'aria-label': 'Who bought what?' }) }));
+  const text = visibleText(html);
+  assert.match(text, /Have the receipt\?/);
+  assert(html.indexOf('Who bought what?') < html.indexOf('Scan receipt'), 'optional notes are offered before a photo starts uploading');
+  assert(html.indexOf('Scan receipt') < html.indexOf('Choose image'));
+  assert.match(text, /camera metadata is removed/);
+  assert.doesNotMatch(text, /ChatGPT/, 'the handoff belongs to a stored receipt, not to an empty form');
+});
+
+test('Receipt tools let a stored photo be replaced or removed without showing it again', () => {
+  const html = renderToStaticMarkup(createElement(ReceiptCapture, { ...props, onRemove() {}, part: 'tools' }));
+  assert.match(visibleText(html), /Replace the photo/);
+  assert.match(visibleText(html), /Remove receipt image/);
+  assert.doesNotMatch(html, /<img/);
 });
 
 test('an eligible owner can open API setup before a key is connected', () => {

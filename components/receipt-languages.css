@@ -30,13 +30,13 @@
   .editor .item-language-actions select { font-size: max(16px, 1rem); }
 }
 @media (max-width: 480px) {
-  .editor .item-top { display: grid; grid-template-columns: 16px minmax(0,1fr) 44px; }
-  .editor .item-top > .itemnumber { grid-column: 1; grid-row: 1; }
-  .editor .item-top > .item-bilingual-names { grid-column: 2 / -1; grid-row: 1; }
-  .editor .item-top > .item-bilingual-names--single { grid-column: 2; }
-  .editor .item-top { align-items: start; row-gap: 14px; }
-  .editor .item-top > .moneyinput { grid-column: 2; grid-row: 2; }
-  .editor .item-top > .iconbutton { grid-column: 3; grid-row: 2; }
+  
+  
+  
+  
+  
+  
+  
   /* Icon-only refresh keeps the name fields level with the amount field. */
   .editor .item-bilingual-names { column-gap: 8px; row-gap: 12px; }
   .editor .item-bilingual-names .translation-refresh { width: 44px; padding: 8px 0; }

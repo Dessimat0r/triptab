@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { assignUnassignedItems, expenseSaveBlockers, hasReceiptDiscussion, unassignedItemIds } from '../lib/expense-readiness';
+import { assignUnassignedItems, EXPENSE_TARGETS, expenseSaveBlockers, hasReceiptDiscussion, unassignedItemIds, visibleExpenseBlockers } from '../lib/expense-readiness';
 import { expenseSchema } from '../lib/model';
 import type { ReceiptEditor } from '../lib/receipt-processing';
 import { acknowledgeReceiptReview, carryReviewAcknowledgements, pendingReviewActions, receiptScanFingerprint, receiptScanSaveError } from '../lib/receipt-scan';
@@ -151,4 +151,19 @@ test('all hard blockers are listed together and confirmation cannot remove them'
   const entry=receipt({currency:'GBP',receiptScan:{version:1,printedTotal:null,printedCurrency:'EUR',status:'incomplete',warnings:[{code:'ambiguous-currency'}]},items:[{id:'coffee',name:'',amount:null,members:[]}]});
   assert.deepEqual(expenseSaveBlockers(entry,trip).map(blocker=>blocker.key),['prices','names','scan-currency','unassigned','fx']);
   assert.deepEqual(expenseSaveBlockers(acknowledgeReceiptReview(entry),trip),expenseSaveBlockers(entry,trip));
+});
+
+test('the single-amount layout leads every line correction to the field it shows', () => {
+  const line = receipt({ items: [{ id: 'coffee', name: '', amount: null, members: [] }] });
+  const blockers = expenseSaveBlockers(line, trip);
+  const manual = visibleExpenseBlockers(blockers, 'manual');
+  const scanned = visibleExpenseBlockers(blockers, 'receipt');
+  // A typed line takes the expense name; a receipt line keeps its own name field beside the amount.
+  assert(!manual.some(blocker => blocker.key === 'names'));
+  assert.equal(scanned.find(blocker => blocker.key === 'names')?.target, 'expense-item-coffee');
+  for (const shown of [manual, scanned]) {
+    assert.deepEqual(shown.find(blocker => blocker.key === 'prices'), { key: 'prices', message: 'Enter 1 unreadable price', target: EXPENSE_TARGETS.amount, focus: undefined });
+    assert.equal(shown.find(blocker => blocker.key === 'unassigned')?.target, EXPENSE_TARGETS.shared);
+  }
+  assert.deepEqual(visibleExpenseBlockers(blockers, false), blockers, 'the item list shows every line control');
 });

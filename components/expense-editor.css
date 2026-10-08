@@ -1,0 +1,1304 @@
+/* The expense editor: one layout for every route, in three steps
+   (1 Purchase, 2 Split, 3 Check & save). Spacing comes from the tokens in
+   globals.css, and stacks use `gap` rather than margins on their children. */
+
+/* ── Dialog ─────────────────────────────────────────────────────────────── */
+.editor {
+  position: relative;
+  min-width: 0;
+  max-width: min(1060px, 100%);
+  padding: 0;
+  overflow-x: hidden;
+  overflow-wrap: anywhere;
+  /* Focus and in-page jumps stop above the sticky footer, whose measured
+     height (with or without the checklist) is published by the editor. */
+  scroll-padding-top: var(--space-4);
+  scroll-padding-bottom: calc(var(--editor-footer-height, 96px) + var(--space-3));
+}
+/* A form without a photo needs no second column; a narrow dialog keeps its
+   fields a readable width on large screens. */
+.editor.editor--narrow {
+  max-width: min(680px, 100%);
+}
+.editor-overlay {
+  overflow-x: hidden;
+}
+.editor-overlay,
+.editor form,
+.receipt-details-view,
+.editor-body,
+.editor-footer,
+.editor-footer > div,
+.editor .modalheading > div {
+  min-width: 0;
+  max-width: 100%;
+}
+.editor input:not([type="checkbox"], [type="radio"], [type="file"]),
+.editor select,
+.editor textarea {
+  min-width: 0;
+  max-width: 100%;
+}
+/* WebKit can count native option text as overflow outside the select's box.
+   Isolate each dropdown field's layout without clipping its native menu. */
+.editor label:has(> select) {
+  contain: layout;
+}
+/* Fields are spaced by their stack's gap, not by margins on each control. */
+.editor label > input,
+.editor label > select,
+.editor label > textarea {
+  margin: var(--space-2) 0 0;
+}
+.editor label > small {
+  display: inline;
+  margin: 0 0 0 var(--space-1);
+  color: var(--muted);
+  font-weight: 400;
+}
+.expense-target,
+.edit-fields [id^="expense-"] {
+  scroll-margin-top: var(--space-4);
+}
+
+/* ── Header ─────────────────────────────────────────────────────────────── */
+.editor form > .modalheading {
+  margin: 0;
+  padding: var(--space-5) var(--space-5) var(--space-4);
+  border-bottom: 1px solid var(--line);
+}
+.editor .modalheading {
+  gap: var(--space-3);
+}
+.editor .modalheading > .iconbutton {
+  flex-shrink: 0;
+}
+.editor .modalheading > .expense-icon-trigger {
+  min-width: 44px;
+  min-height: 44px;
+}
+.editor .expense-heading-text {
+  flex: 1;
+  min-width: 0;
+}
+.expense-title-control {
+  position: relative;
+}
+.editor .expense-title-input {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  margin: 0;
+  padding: 2px 30px 2px 6px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-s);
+  background: transparent;
+  color: var(--ink);
+  font-size: var(--text-xl);
+  font-weight: 750;
+  text-overflow: ellipsis;
+}
+@media (hover: hover) {
+  .editor .expense-title-input:hover {
+    background: var(--bg);
+    border-bottom-color: var(--muted);
+  }
+}
+.editor .expense-title-input:focus {
+  background: var(--bg);
+  border-bottom-color: var(--muted);
+  text-overflow: clip;
+}
+/* The ring sits on the field's edge so it never covers the caption below. */
+.editor .expense-title-input:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 0;
+}
+.expense-title-pencil {
+  position: absolute;
+  top: 50%;
+  right: var(--space-2);
+  transform: translateY(-50%);
+  color: var(--muted);
+  pointer-events: none;
+}
+.editor .expense-heading-text h2 {
+  margin: var(--space-1) 6px 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  line-height: 1.4;
+}
+.editor .expense-title-suggestion {
+  margin: 0;
+  padding: var(--space-2) var(--space-5);
+}
+
+/* ── Body and steps ─────────────────────────────────────────────────────── */
+.editor-body {
+  padding: var(--space-5);
+  overflow: visible;
+}
+.editor-body > *,
+.edit-fields {
+  min-width: 0;
+  max-width: 100%;
+}
+.edit-fields {
+  display: grid;
+  gap: var(--space-5);
+  align-content: start;
+}
+.expense-step {
+  display: grid;
+  gap: var(--space-4);
+  min-width: 0;
+}
+.expense-step + .expense-step {
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--line);
+}
+.expense-step-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  font-size: var(--text-s);
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+.expense-step-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-3);
+  min-width: 0;
+}
+.split-scope-modes button {
+  padding: 0 var(--space-3);
+}
+.expense-step-title:focus {
+  outline: none;
+}
+.expense-step-title:focus-visible {
+  outline: 3px solid var(--primary);
+  outline-offset: 3px;
+}
+.expense-step-number {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--accent-surface);
+  color: var(--primary);
+  font-size: var(--text-xs);
+  font-weight: 750;
+}
+.editor .fieldpair {
+  gap: var(--space-3);
+}
+.editor .fieldpair > label {
+  min-width: 0;
+}
+.quick-amount input {
+  font-weight: 650;
+}
+.expense-payer {
+  max-width: calc(50% - var(--space-3) / 2);
+}
+
+/* ── Disclosure rows: a value, and Change to open it in place ────────────── */
+.purchase-details {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+}
+.purchase-details-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-width: 0;
+}
+.purchase-details-summary p {
+  min-width: 0;
+  margin: 0;
+  font-size: var(--text-s);
+  overflow-wrap: anywhere;
+}
+.purchase-details-done {
+  justify-self: start;
+}
+.textbutton,
+.purchase-details-summary .textbutton {
+  min-height: 44px;
+  font-weight: 600;
+}
+.editor details > summary {
+  cursor: pointer;
+}
+.manual-rate > summary,
+.split-method > summary,
+.receipt-printed-evidence > summary,
+.receipt-capture-tools > summary,
+.receipt-capture-prompt > summary,
+.import > summary,
+.item-conversation > summary {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: var(--space-2);
+  min-height: 44px;
+  font-size: var(--text-s);
+  color: var(--primary);
+  font-weight: 600;
+  list-style: none;
+}
+.manual-rate > summary::-webkit-details-marker,
+.split-method > summary::-webkit-details-marker,
+.receipt-printed-evidence > summary::-webkit-details-marker,
+.receipt-capture-tools > summary::-webkit-details-marker,
+.receipt-capture-prompt > summary::-webkit-details-marker,
+.import > summary::-webkit-details-marker,
+.item-conversation > summary::-webkit-details-marker,
+.item-edit > summary::-webkit-details-marker,
+.expense-more-options > summary::-webkit-details-marker,
+.receipt-capture-context-toggle > summary::-webkit-details-marker {
+  display: none;
+}
+
+/* ── Receipt evidence (Purchase) ────────────────────────────────────────── */
+.receipt-scan-review {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  min-width: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: var(--surface-raised);
+}
+.receipt-scan-review-body {
+  display: grid;
+  flex: 1 1 auto;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.receipt-scan-review h4 {
+  margin: 0;
+  font-size: var(--text-m);
+  font-weight: 700;
+}
+.receipt-scan-review-body > p {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+.receipt-scan-totals {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  font-size: var(--text-s);
+}
+.receipt-scan-totals > div {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 2px var(--space-3);
+}
+.receipt-scan-totals dd {
+  margin: 0;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.receipt-review-counts,
+.receipt-item-source {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+.receipt-scan-warnings {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding-left: 18px;
+  font-size: var(--text-s);
+}
+.receipt-scan-warnings li > span {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+.receipt-printed-evidence > p {
+  margin: 0 0 var(--space-2);
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+.receipt-photo-thumbnail {
+  display: block;
+  flex: 0 0 64px;
+  width: 64px;
+  height: 84px;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  background: #fff;
+}
+.receipt-photo-thumbnail img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: top;
+}
+.receipt-photo-column {
+  display: none;
+}
+.receipt-photo-panel {
+  display: grid;
+  gap: var(--space-2);
+  width: 100%;
+  padding: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  text-align: center;
+}
+.receipt-photo-panel img {
+  display: block;
+  width: 100%;
+  max-height: calc(100dvh - 280px);
+  object-fit: contain;
+  object-position: top;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: #fff;
+}
+.receipt-photo-panel-hint {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+}
+.receipt-no-items {
+  margin: 0;
+  padding: var(--space-4);
+  border: 1px dashed var(--field-border);
+  border-radius: var(--radius-m);
+  color: var(--muted);
+  font-size: var(--text-s);
+}
+
+/* What happens next to a stored receipt, inside its evidence block. */
+.receipt-capture-next {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.receipt-capture-status,
+.receipt-capture-hint {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: 1.6;
+}
+.receipt-capture-status:empty {
+  display: none;
+}
+.receipt-capture-status p,
+.receipt-capture-hint {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.receipt-capture-status p + p {
+  margin-top: var(--space-1);
+}
+.receipt-capture-processing {
+  display: grid;
+  gap: var(--space-2);
+}
+.receipt-capture-processing:empty {
+  display: none;
+}
+.receipt-capture-processing button,
+.receipt-capture-processing a,
+.receipt-capture-tool-actions button,
+.receipt-capture-tool-actions a {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  padding: 10px;
+  font-size: var(--text-s);
+  line-height: 1.4;
+  white-space: normal;
+  text-decoration: none;
+}
+.receipt-capture-processing svg,
+.receipt-capture-tool-actions svg {
+  flex-shrink: 0;
+}
+.receipt-capture-tool-actions {
+  display: grid;
+  gap: var(--space-2);
+}
+
+/* Before any photo: one compact block at the top of Purchase. */
+.receipt-capture--compact {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-3);
+  border: 1px dashed var(--field-border);
+  border-radius: var(--radius-m);
+}
+.receipt-capture--compact .receipt-capture-inputs {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.receipt-capture-title {
+  margin: 0;
+  font-size: var(--text-s);
+}
+.receipt-capture-context-toggle > summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-1) var(--space-3);
+  min-height: 32px;
+  font-size: var(--text-s);
+  list-style: none;
+}
+.receipt-capture-context-toggle > summary > span {
+  color: var(--primary);
+  font-weight: 600;
+}
+.receipt-capture-context-toggle > summary small {
+  color: var(--muted);
+  font-weight: 400;
+}
+.receipt-capture-context {
+  display: grid;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
+}
+
+/* Photo management, handoff and the request, under Receipt tools. */
+.receipt-capture--tools {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+}
+.receipt-capture--tools h4 {
+  margin: 0;
+  font-size: var(--text-s);
+}
+.receipt-capture-label {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+.receipt-capture--tools > .quiet {
+  justify-self: start;
+}
+.receipt-capture-prompt > p {
+  margin: 0 0 var(--space-2);
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+.receipt-capture-prompt textarea {
+  min-width: 0;
+  max-width: 100%;
+  min-height: 150px;
+  font-size: 16px;
+}
+
+/* A single receipt line beside its amount. */
+.receipt-line {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.receipt-item-quantity {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+  max-width: 100%;
+  margin: 0;
+  font-size: var(--text-s);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.receipt-item-quantity small {
+  color: var(--muted);
+  font-size: inherit;
+}
+
+/* ── Currency conversion: one line, details beneath ─────────────────────── */
+.fx-panel {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.rate-result {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-2);
+  margin: 0;
+  font-size: var(--text-s);
+}
+.rate-result strong {
+  font-size: var(--text-m);
+  font-variant-numeric: tabular-nums;
+}
+.rate-result small {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+.fx-panel .error {
+  margin: 0;
+}
+.manual-rate > summary {
+  justify-content: space-between;
+  color: var(--ink);
+  font-weight: 400;
+}
+.disclosure-change {
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: var(--primary);
+  font-weight: 600;
+}
+.manual-rate[open] {
+  display: grid;
+  gap: var(--space-3);
+  padding-bottom: var(--space-2);
+}
+.manual-rate[open] > :not(summary) {
+  justify-self: stretch;
+}
+.manual-rate > .quiet {
+  justify-self: start;
+}
+.manual-rate .footnote {
+  margin: 0;
+}
+.bank-diff {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+.bank-diff b {
+  color: var(--ink);
+}
+
+/* ── Sharing: people chips, then the split method ───────────────────────── */
+.share-split {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.share-split > legend:not(.sr-only) {
+  margin-bottom: var(--space-2);
+  padding: 0;
+  color: var(--label);
+  font-size: var(--text-s);
+  font-weight: 600;
+}
+.personchips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.personchips button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  max-width: 100%;
+  padding: 0 var(--space-3) 0 6px;
+  border: 1px solid var(--field-border);
+  border-radius: var(--radius-pill);
+  background: var(--surface-inset);
+  color: var(--muted);
+  font-size: var(--text-s);
+  overflow-wrap: anywhere;
+}
+.personchips button.chosen {
+  border-color: var(--chosen-border);
+  background: var(--accent-surface);
+  color: var(--chosen-ink);
+}
+.personchips .chipavatar {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+}
+.split-method > summary {
+  justify-content: space-between;
+  color: var(--ink);
+  font-weight: 500;
+}
+.split-method-change {
+  color: var(--primary);
+  font-weight: 600;
+}
+.split-method[open] {
+  display: grid;
+  gap: var(--space-3);
+}
+.split-modes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.split-modes button {
+  min-height: 44px;
+  padding: 0 var(--space-4);
+  border: 1px solid var(--field-border);
+  border-radius: var(--radius-pill);
+  background: var(--surface-inset);
+  color: var(--ink);
+  font-size: var(--text-s);
+  font-weight: 600;
+}
+.split-modes button.chosen {
+  border-color: var(--primary);
+  background: var(--accent-surface);
+  color: var(--primary);
+}
+.percentage-rows {
+  display: grid;
+  gap: var(--space-2);
+}
+.percentage-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-width: 0;
+  margin: 0;
+}
+.percentage-row > span:first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.percentage-input {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 6px;
+  width: 112px;
+}
+.editor .percentage-input input {
+  min-width: 0;
+  margin: 0;
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.percentage-input > span {
+  color: var(--muted);
+}
+.split-total {
+  display: grid;
+  gap: var(--space-1);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+.split-scope {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+}
+.split-scope > .footnote {
+  margin: 0;
+}
+
+/* ── Bulk sharing for unassigned lines ──────────────────────────────────── */
+.quick-split {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--chosen-border);
+  border-radius: var(--radius-m);
+  background: var(--accent-surface);
+}
+.quick-split h3 {
+  margin: 0;
+  font-size: var(--text-s);
+  overflow-wrap: anywhere;
+}
+.quick-split .footnote {
+  margin: 0;
+}
+.quick-split-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.quick-split-actions button {
+  flex: 1 1 180px;
+  justify-content: center;
+  gap: 6px;
+  min-width: 0;
+  min-height: 44px;
+  overflow-wrap: anywhere;
+}
+
+/* ── Item rows ──────────────────────────────────────────────────────────── */
+.items-list {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.items {
+  min-width: 0;
+  border-top: 1px solid var(--line);
+}
+.item {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-2) 0 var(--space-3);
+  border-bottom: 1px solid var(--line);
+}
+/* A line's people fit one row on a phone: smaller chips, still 44px tall. */
+.item .personchips {
+  gap: 6px;
+}
+.item .personchips button {
+  gap: var(--space-1);
+  padding: 0 10px 0 var(--space-1);
+  font-size: var(--text-xs);
+}
+.item .personchips .chipavatar {
+  width: 24px;
+  height: 24px;
+}
+.item .personchips button > svg {
+  display: none;
+}
+/* Nobody on the line yet: an accent edge rather than another message. */
+.item--unassigned {
+  padding-left: var(--space-3);
+  box-shadow: inset 3px 0 0 var(--warning-border);
+}
+.item-edit > summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto 18px;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 44px;
+  list-style: none;
+}
+.item-summary-name {
+  min-width: 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.item-summary-name small {
+  color: var(--muted);
+  font-weight: 400;
+}
+.item-summary-price {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.item-summary-chevron {
+  color: var(--muted);
+  transition: transform 0.15s ease;
+}
+.item-edit[open] .item-summary-chevron {
+  transform: rotate(180deg);
+}
+.item-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 2px var(--space-2);
+  border: 1px solid var(--warning-border);
+  border-radius: var(--radius-pill);
+  background: var(--surface-warning);
+  color: var(--ink);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+.item-body {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+  padding: var(--space-2) 0 0;
+}
+.item-body > .error {
+  margin: 0;
+}
+.item-top {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.item-top > .item-bilingual-names {
+  flex: 1 1 0;
+}
+.moneyinput {
+  flex: 0 0 112px;
+  width: 112px;
+}
+.editor .moneyinput input {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.item-top .iconbutton {
+  flex-shrink: 0;
+  min-width: 44px;
+  min-height: 44px;
+}
+.item-conversation {
+  min-width: 0;
+}
+.item-conversation .receipt-chat {
+  min-width: 0;
+}
+.missing-name-translations {
+  margin: 0;
+}
+
+/* ── Extra actions and adjustments ──────────────────────────────────────── */
+.expense-extra-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.expense-extra-actions button {
+  flex: 0 1 auto;
+  justify-content: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: var(--space-2) 14px;
+  font-size: var(--text-s);
+}
+.adjustments {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+.adjustments > label {
+  min-width: 0;
+}
+.expense-step > .footnote,
+.expense-step > .notification-status {
+  margin: 0;
+}
+
+/* ── Check & save ───────────────────────────────────────────────────────── */
+.expense-shares {
+  margin: 0;
+  font-size: var(--text-s);
+  line-height: 1.8;
+}
+.expense-shares b {
+  font-variant-numeric: tabular-nums;
+}
+.receipt-review-summary {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+  padding-left: var(--space-3);
+  border-left: 3px solid var(--warning-border);
+}
+.receipt-review-summary h4 {
+  margin: 0;
+  font-size: var(--text-s);
+}
+.receipt-review-summary p {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+.receipt-review-summary ul {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding-left: 18px;
+  font-size: var(--text-s);
+}
+.receipt-review-summary li {
+  overflow-wrap: anywhere;
+}
+.receipt-review-summary li span,
+.receipt-review-summary li small {
+  display: block;
+}
+.receipt-review-summary li small {
+  color: var(--muted);
+}
+.receipt-review-summary button {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  margin-top: var(--space-1);
+}
+.expense-more-options {
+  min-width: 0;
+  border-top: 1px solid var(--line);
+}
+.expense-more-options > summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px var(--space-2);
+  min-height: 44px;
+  padding: var(--space-3) 0;
+  font-size: var(--text-s);
+  font-weight: 600;
+  list-style: none;
+  overflow-wrap: anywhere;
+}
+.expense-more-options > summary small {
+  color: var(--muted);
+  font-weight: 400;
+}
+.expense-more-options-body {
+  display: grid;
+  gap: var(--space-4);
+  min-width: 0;
+  padding-bottom: var(--space-2);
+}
+.import {
+  min-width: 0;
+}
+.import > p {
+  margin: var(--space-2) 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+.import textarea {
+  margin-bottom: var(--space-3);
+}
+
+/* ── Footer ─────────────────────────────────────────────────────────────── */
+.editor-footer {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-3) var(--space-5);
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+}
+.editor-footer-total {
+  min-width: 0;
+}
+.editor-footer small {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+.editor-footer strong {
+  font-size: var(--text-xl);
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+}
+.footer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+.editor .footer-actions button {
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+}
+.editor form > .error {
+  margin: var(--space-3) var(--space-5);
+}
+/* The checklist takes the full footer width so totals and Save keep their row. */
+.save-checklist {
+  display: flex;
+  flex: 1 1 100%;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+  font-size: var(--text-s);
+}
+.save-checklist ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.save-checklist li {
+  min-width: 0;
+}
+.save-checklist-item,
+.save-checklist-more,
+.save-checklist-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 44px;
+  max-width: 100%;
+  padding: var(--space-1) var(--space-3);
+  overflow-wrap: anywhere;
+}
+.save-checklist-item,
+.save-checklist-more {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: inherit;
+  font-size: var(--text-s);
+  text-align: left;
+}
+.save-checklist-more {
+  color: var(--primary);
+}
+
+/* With room to spare, the next correction shares the row with Total and Save. */
+@media (min-width: 720px) {
+  .editor-footer > .save-checklist {
+    flex: 1 1 260px;
+  }
+}
+
+/* ── Receipt photo dialog ───────────────────────────────────────────────── */
+.receipt-photo-overlay {
+  z-index: 120;
+}
+.receipt-photo-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(760px, 100%);
+  min-width: 0;
+  max-height: calc(100dvh - 32px);
+  overflow: hidden;
+}
+.receipt-photo-dialog .modalheading {
+  gap: var(--space-3);
+  min-width: 0;
+}
+.receipt-photo-dialog .modalheading h2 {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.receipt-photo-dialog .modalheading button {
+  flex-shrink: 0;
+}
+.receipt-photo-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+.receipt-photo-controls button {
+  min-width: 44px;
+  min-height: 44px;
+}
+.receipt-photo-pan {
+  min-width: 0;
+  max-width: 100%;
+  max-height: 65dvh;
+  overflow: auto;
+  overscroll-behavior: contain;
+  border-radius: var(--radius-s);
+}
+.receipt-photo-pan img {
+  display: block;
+  height: auto;
+}
+
+/* ── Expense list entry points ──────────────────────────────────────────── */
+.expense-entry-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.expense-entry-actions button {
+  min-height: 44px;
+}
+.saved-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  margin-bottom: 22px;
+  padding: 10px var(--space-4);
+  border: 1px solid var(--green);
+  border-radius: var(--radius-s);
+  background: var(--mint);
+  color: var(--green);
+  font-weight: 600;
+}
+.saved-banner span {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.saved-banner button {
+  min-height: 44px;
+}
+@media (prefers-color-scheme: dark) {
+  .saved-banner {
+    border-color: #2f7a5c;
+    background: #12382a;
+    color: #b9f0d6;
+  }
+}
+
+/* ── Wide screens with a photo: the photo fills the left column ─────────── */
+@media (min-width: 1024px) {
+  .editor-body.with-receipt {
+    display: grid;
+    grid-template-columns: minmax(0, 360px) minmax(0, 1fr);
+    gap: var(--space-5);
+  }
+  .editor-body.with-receipt > .receipt-photo-column {
+    display: block;
+    position: sticky;
+    top: var(--space-4);
+    align-self: start;
+  }
+  .editor-body.with-receipt .receipt-photo-thumbnail {
+    display: none;
+  }
+}
+
+/* ── Phones ─────────────────────────────────────────────────────────────── */
+@media (max-width: 480px) {
+  .editor-overlay {
+    align-items: stretch;
+    padding: 0;
+  }
+  .editor,
+  .editor.editor--narrow {
+    height: 100dvh;
+    max-height: 100dvh;
+    border-radius: 0;
+  }
+  .editor form > .modalheading {
+    padding: 10px var(--space-4);
+  }
+  .editor .expense-title-input {
+    font-size: var(--text-l);
+  }
+  .editor .expense-title-suggestion {
+    padding: var(--space-2) var(--space-4);
+  }
+  .editor-body {
+    padding: var(--space-4);
+  }
+  .edit-fields,
+  .expense-step {
+    gap: var(--space-3);
+  }
+  .expense-step + .expense-step {
+    padding-top: var(--space-4);
+  }
+  .editor .fieldpair {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .editor .fieldpair.quick-amount {
+    grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
+  }
+  .editor .fieldpair.fieldpair--keep {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .expense-payer {
+    max-width: none;
+  }
+  .editor-footer {
+    padding: var(--space-3) var(--space-4);
+  }
+  /* Total and Save share one row even on a 320px phone. */
+  .editor-footer > div:not(.save-checklist) {
+    flex: 1 1 96px;
+  }
+  .editor-footer strong {
+    font-size: 1.3rem;
+  }
+  .footer-actions {
+    gap: 6px;
+  }
+  .footer-actions .danger span {
+    display: none;
+  }
+  .adjustments {
+    gap: var(--space-2);
+  }
+  .adjustments label {
+    font-size: 0.75rem;
+  }
+  /* The amount and removal sit under the name, sharing its right edge. */
+  .item-top {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 44px;
+    align-items: start;
+    gap: var(--space-3) var(--space-2);
+  }
+  .item-top > .item-bilingual-names {
+    grid-column: 1 / -1;
+    grid-row: 1;
+  }
+  .item-top > .item-bilingual-names--single {
+    grid-column: 1;
+  }
+  .item-top > .moneyinput {
+    grid-column: 1;
+    grid-row: 2;
+    width: 100%;
+    min-width: 0;
+  }
+  .item-top > .iconbutton {
+    grid-column: 2;
+    grid-row: 2;
+  }
+  .editor .item-bilingual-names {
+    gap: var(--space-3) var(--space-2);
+  }
+  .editor .item-bilingual-names .translation-refresh {
+    width: 44px;
+    padding: var(--space-2) 0;
+  }
+  .editor .item-bilingual-names .translation-refresh > span {
+    display: none;
+  }
+  .receipt-photo-dialog {
+    max-height: calc(100dvh - 20px);
+    padding: var(--space-4);
+  }
+}
+@media (max-width: 359px) {
+  .editor .fieldpair.fieldpair--keep,
+  .receipt-capture--compact .receipt-capture-inputs {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .item-summary-chevron {
+    transition: none;
+  }
+}
