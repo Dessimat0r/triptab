@@ -19,7 +19,7 @@ import ReceiptPhotoViewer from "@/components/receipt-photo-viewer";
 import ExpenseIconPicker from "@/components/expense-icon";
 import ReceiptScanReview, { receiptMoney } from "@/components/receipt-scan-review";
 import { carryReviewAcknowledgements, receiptScanSaveError } from "@/lib/receipt-scan";
-import { assignUnassignedItems, EXPENSE_TARGETS, expenseItemTarget, expenseSaveBlockers, hasReceiptDiscussion, unassignedItemIds } from "@/lib/expense-readiness";
+import { assignUnassignedItems, EXPENSE_TARGETS, expenseItemTarget, expenseSaveBlockers, visibleExpenseBlockers, hasReceiptDiscussion, unassignedItemIds } from "@/lib/expense-readiness";
 import { MoreOptions, PurchaseDetails, QuickSplit, ReadyToSave, SaveChecklist, focusExpenseTarget } from "@/components/expense-quick-review";
 import ItemReceiptConversation from "@/components/item-receipt-conversation";
 import PaymentEditor from "@/components/payment-editor";
@@ -240,6 +240,7 @@ export default function Home({ children }: { children: ReactNode }) {
     [receiptHandoffError, setReceiptHandoffError] = useState(""),
     [receiptItemized, setReceiptItemized] = useState(false),
     [receiptProcessing, setReceiptProcessing] = useState(false),
+    [saveAttempted, setSaveAttempted] = useState(false),
     [receiptAI, setReceiptAI] = useState<ReceiptAIState | null>(null),
     [receiptAIConnecting, setReceiptAIConnecting] = useState(false),
     [processedReceipt, setProcessedReceipt] = useState<Draft | null>(null),
@@ -749,6 +750,7 @@ export default function Home({ children }: { children: ReactNode }) {
     stageEditorReceiptPrompt(draft);
   }
   function resetReceiptReview() {
+    setSaveAttempted(false);
     receiptSession.current++;
     receiptProcessRequest.current++;
     receiptProcessInFlight.current = false;
@@ -1182,8 +1184,16 @@ export default function Home({ children }: { children: ReactNode }) {
   async function submitExpense(e: React.FormEvent) {
     e.preventDefault();
     if (receiptHistoryOpen) return;
-    if (!trip || !editing || uploading || saving || receiptProcessing) return;
-    if (!editorIsCurrent()) return;
+    if (!trip || !editing || saving) return;
+    const blockers = visibleExpenseBlockers(expenseSaveBlockers(editing, trip, {
+      uploading, processing: receiptProcessing, conflict: !!editorConflict, offline, fxLookupPending: fxLoading,
+    }), quickMode);
+    if (blockers.length) {
+      setSaveAttempted(true);
+      focusExpenseTarget(blockers[0].target, blockers[0].focus);
+      return;
+    }
+    if (!editorIsCurrent()) { setSaveAttempted(true); return; }
     const scanError = receiptScanSaveError(editing, { allowAcknowledgement: true, previous: editorBaseline.current?.expense });
     if (scanError) { setError(scanError); return; }
     const parsedExpense = expenseSchema.safeParse(editing);
@@ -1500,22 +1510,12 @@ export default function Home({ children }: { children: ReactNode }) {
   const editorTotal = useMemo(() => editing && trip ? previewTotal(editing, trip) : null, [editing, trip]);
   const editorOriginalTotal = useMemo(() => editing ? receiptEditorTotal(editing) : 0, [editing]);
   const editorScanError = useMemo(() => editing ? receiptScanSaveError(editing, { allowAcknowledgement: true, previous: editorBaseline.current?.expense }) : null, [editing]);
-  const editorBlockers = useMemo(() => editing && trip ? expenseSaveBlockers(editing, trip) : [], [editing, trip]);
-  // Save follows the same readiness model as the "Before saving" list, so the
-  // two never disagree. An optional reference-rate lookup does not block it:
-  // a manual rate or bank charge is already a complete conversion.
-  const saveDisabled = !editing || !trip || saving || !!editorConflict || uploading || receiptProcessing || offline
-    || editorBlockers.length > 0
-    || editing.bankAmount === 0 || (editing.bankAmount !== undefined && editing.currency === trip.currency)
-    || !!editorScanError || !!receiptSplitError(editing)
-    || (editing.percentages === undefined && editing.items.some(item => !!itemSplitError(item)))
-    || editorOriginalTotal === null || editorOriginalTotal <= 0
-    || (editing.currency !== trip.currency && editing.bankAmount === undefined && !editing.fx?.rate);
-  // The quick form has no item list: point its blockers at its own fields.
-  const visibleBlockers = quickMode ? editorBlockers.flatMap(blocker => blocker.key === "names" ? []
-    : blocker.key === "total" || blocker.key === "items" ? [{ ...blocker, message: "Enter the amount", target: EXPENSE_TARGETS.amount }]
-    : blocker.key === "unassigned" || blocker.key === "item-split" ? [{ ...blocker, target: EXPENSE_TARGETS.shared, focus: undefined }]
-    : [blocker]) : editorBlockers;
+  const editorBlockers = useMemo(() => editing && trip ? expenseSaveBlockers(editing, trip, {
+    uploading, processing: receiptProcessing, conflict: !!editorConflict, offline, fxLookupPending: fxLoading,
+  }) : [], [editing, trip, uploading, receiptProcessing, editorConflict, offline, fxLoading]);
+  // Save stays available to explain and focus blockers. Only a posting request disables it.
+  const saveDisabled = saving;
+  const visibleBlockers = visibleExpenseBlockers(editorBlockers, quickMode);
   // Collapsed purchase details open while a value is missing, or when a
   // processed receipt could not supply the date, time or currency itself.
   const purchaseDetailsNeedAttention = !!editing && (!editing.currency || !editing.date || !editing.time
@@ -2595,7 +2595,7 @@ export default function Home({ children }: { children: ReactNode }) {
             aria-modal="true"
             aria-labelledby="expense-title"
           >
-            <form onSubmit={async event => {
+            <form noValidate onSubmit={async event => {
               const title = editing.title.trim();
               if (await submitExpense(event)) setSavedNotice({ title, at: Date.now() });
             }}>
@@ -2996,7 +2996,7 @@ export default function Home({ children }: { children: ReactNode }) {
                     <p className="footnote">ChatGPT has proposed an update. Review the whole receipt, including any changes outside the item you discussed, before saving.</p>
                     <button type="button" className="primary" disabled={saving || uploading || receiptProcessing} onClick={reviewProcessedReceipt}>Review proposed changes</button>
                   </section>}
-                  {editing.bankAmount !== undefined && (editing.currency === trip.currency || editing.bankAmount <= 0) && <div className="error" role="alert"><p>The saved bank charge is {money(editing.bankAmount, trip.currency)}. {editing.currency === trip.currency ? "A receipt already in the holiday currency cannot use a currency-conversion bank charge." : "A bank charge must be greater than zero."} Review it before saving.</p><button type="button" className="quiet" onClick={() => setEditing({ ...editing, bankAmount: undefined })}>Remove bank charge</button></div>}
+                  {editing.bankAmount !== undefined && (editing.currency === trip.currency || editing.bankAmount <= 0) && <div id={editing.currency === trip.currency ? EXPENSE_TARGETS.fx : undefined} className="error" role="alert"><p>The saved bank charge is {money(editing.bankAmount, trip.currency)}. {editing.currency === trip.currency ? "A receipt already in the holiday currency cannot use a currency-conversion bank charge." : "A bank charge must be greater than zero."} Review it before saving.</p><button type="button" className="quiet" onClick={() => setEditing({ ...editing, bankAmount: undefined })}>Remove bank charge</button></div>}
                   {!quickMode && fxPanel}
                   {!quickMode && <div className="split-preview">
                     <h3>Each person’s share · {trip.currency}</h3>
@@ -3017,7 +3017,7 @@ export default function Home({ children }: { children: ReactNode }) {
                   {error}
                 </div>
               )}
-              {editorConflict && <section className="conflict-review" role="region" aria-labelledby="expense-conflict-title">
+              {editorConflict && <section id={EXPENSE_TARGETS.conflict} className="conflict-review" role="region" aria-labelledby="expense-conflict-title">
                 <h3 id="expense-conflict-title">Expense changed</h3>
                 <p>Another traveller changed this expense while you were editing. Compare the saved details with your edits before continuing.</p>
                 <div className="conflict-versions">
@@ -3049,9 +3049,7 @@ export default function Home({ children }: { children: ReactNode }) {
                 <p className="footnote">Review your split and press Save expense to commit your choice.</p>
               </section>}
               <div className="editor-footer" ref={editorFooterRef}>
-                {offline ? <p className="receipt-save-block" role="status">You’re offline. Reconnect to save; your entry stays here while this form is open.</p>
-                  // An untouched quick form needs no to-do list yet; Save is simply unavailable.
-                  : <SaveChecklist blockers={quickMode && !editorDirty ? [] : visibleBlockers} />}
+                <SaveChecklist key={editing.id} blockers={visibleBlockers} attempted={saveAttempted} />
                 <div>
                   <small>{quickMode ? "Total" : "Itemised total"}</small>
                   <strong>{editorOriginalTotal === null ? "Incomplete" : !editing.items.length ? "Not processed" : receiptMoney(editorOriginalTotal, editing.currency)}</strong>

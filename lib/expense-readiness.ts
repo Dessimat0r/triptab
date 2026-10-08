@@ -11,6 +11,8 @@ export const EXPENSE_TARGETS = {
   split: 'expense-split-method',
   fx: 'expense-fx-panel',
   amount: 'expense-quick-amount',
+  capture: 'expense-receipt-capture',
+  conflict: 'expense-conflict-review',
   shared: 'expense-quick-shared',
 } as const;
 
@@ -46,13 +48,26 @@ const plural = (count: number, one: string, many = one + 's') => `${count} ${cou
  * it. Save remains the authority; this mirrors its checks so nothing is a
  * surprise, and an otherwise unexplained scan failure still gets an entry.
  */
-export function expenseSaveBlockers(entry: ReceiptEditor, trip: Pick<Trip, 'currency'>): SaveBlocker[] {
+export type ExpenseSaveState = {
+  uploading?: boolean; processing?: boolean; conflict?: boolean; offline?: boolean; fxLookupPending?: boolean;
+};
+
+export function expenseSaveBlockers(entry: ReceiptEditor, trip: Pick<Trip, 'currency'>, state: ExpenseSaveState = {}): SaveBlocker[] {
   const blockers: SaveBlocker[] = [];
   const add = (key: string, message: string, target: string, focus?: string) => blockers.push({ key, message, target, ...(focus ? { focus } : {}) });
   const firstItem = (match: (item: ReceiptEditor['items'][number]) => boolean) => {
     const item = entry.items.find(match);
     return item ? expenseItemTarget(item.id) : EXPENSE_TARGETS.items;
   };
+  if (state.processing) add('processing', 'Reading the receipt…', EXPENSE_TARGETS.review);
+  else if (state.uploading) add('uploading', 'Uploading photo…', EXPENSE_TARGETS.capture);
+  if (state.conflict) add('conflict', 'Resolve the edit conflict above', EXPENSE_TARGETS.conflict);
+  if (state.offline) add('offline', 'You’re offline. Reconnect to save', EXPENSE_TARGETS.title);
+  // The proposal will supply these values; wait for it before requesting edits.
+  if (state.processing || state.uploading) return blockers;
+  if (entry.bankAmount !== undefined && entry.currency === trip.currency) {
+    add('bank-currency', 'Remove the conversion bank charge for an expense in the holiday currency', EXPENSE_TARGETS.fx);
+  }
   if (!entry.title.trim()) add('title', 'Add an expense name', EXPENSE_TARGETS.title);
   if (!entry.currency) add('currency', 'Choose the receipt currency', EXPENSE_TARGETS.details);
   const unreadable = entry.items.filter(item => item.amount === null).length;
@@ -76,7 +91,7 @@ export function expenseSaveBlockers(entry: ReceiptEditor, trip: Pick<Trip, 'curr
   }
   if (entry.currency && entry.currency !== trip.currency) {
     if (entry.bankAmount === 0) add('bank', 'Enter the amount your bank charged', EXPENSE_TARGETS.fx);
-    else if (!entry.bankAmount && !entry.fx?.rate) add('fx', 'Add an exchange rate or the bank charge', EXPENSE_TARGETS.fx);
+    else if (!entry.bankAmount && !entry.fx?.rate) add('fx', state.fxLookupPending ? 'Finding an exchange rate…' : 'Add an exchange rate or the bank charge', EXPENSE_TARGETS.fx);
   }
   if (!unreadable && entry.items.length && total(entry) <= 0) add('total', 'The total must be more than zero', EXPENSE_TARGETS.items);
   if (!entry.items.length) add('items', 'Add at least one item', EXPENSE_TARGETS.items);
@@ -95,4 +110,12 @@ export function expenseSaveBlockers(entry: ReceiptEditor, trip: Pick<Trip, 'curr
  */
 export function hasReceiptDiscussion(messages: ReceiptMessage[] = []): boolean {
   return messages.some(message => message.role === 'user' && !message.itemId);
+}
+
+/** The quick form exposes the single amount and sharing fields instead of item rows. */
+export function visibleExpenseBlockers(blockers: SaveBlocker[], quickMode: boolean): SaveBlocker[] {
+  return quickMode ? blockers.flatMap(blocker => blocker.key === 'names' ? []
+    : blocker.key === 'total' || blocker.key === 'items' ? [{ ...blocker, message: 'Enter the amount', target: EXPENSE_TARGETS.amount }]
+    : blocker.key === 'unassigned' || blocker.key === 'item-split' ? [{ ...blocker, target: EXPENSE_TARGETS.shared, focus: undefined }]
+    : [blocker]) : blockers;
 }

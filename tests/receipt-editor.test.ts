@@ -9,6 +9,7 @@ import { equalFinancialValue, equalSavedValue } from '../lib/client-ledger';
 import { buildReceiptPrompt } from '../lib/receipt-chatgpt';
 import { isBlankReceipt, isUnchangedInitialReceipt, matchingReceiptProposal, mayFillInitialReceipt, receiptEditableValue, receiptProposalEditor, receiptEditorTotal, userReceiptField, type ReceiptEditor } from '../lib/receipt-processing';
 import { receiptScanSaveError, receiptScanFingerprint } from '../lib/receipt-scan';
+import { expenseSaveBlockers, visibleExpenseBlockers } from '../lib/expense-readiness';
 import { itemSchema, draftItemSchema, expenseSchema, itemSplitError, ledgerSchema, receiptSplitError, total, validateLedger, type Draft, type Expense, type ReceiptMessage, type Trip } from '../lib/model';
 
 // Execute the actual page handlers against a small state/persistence boundary.
@@ -29,9 +30,11 @@ const controllerSource = `return function createController(initial, boundary) {
   let trip = structuredClone(initial), editing = null, processedReceipt = null, error = '', editorConflict = null;
   let receiptPending = false, receiptCopied = false, receiptPrompt = '', receiptHistoryOpen = false, restoration = null;
   let paste = '', fxError = '', referenceRate = null,captureNotes='',uploadOpen=false;
+  const setSaveAttempted=()=>{},focusExpenseTarget=()=>{};
+  const quickMode=false;
   const setCaptureNotes=next=>{captureNotes=next},setUploadOpen=next=>{uploadOpen=next};
   let uploading = false, receiptProcessing = false, receiptItemized = false, receiptHandoffError = '', receiptHandoffOpened = false, receiptAIConnecting = false;
-  const saving = false, profile = {id:'owner'};
+  const saving = false, offline = false, profile = {id:'owner'};
   let receiptAI = null, clipboardFailure = false, failSave = false, network, statusNetwork;
   let commitAIState = true;
   let commitLayout = true, view = '', help = false;
@@ -45,7 +48,7 @@ const controllerSource = `return function createController(initial, boundary) {
   const receiptAIStatusRequest={current:0},receiptAIStatusInFlight={current:null};
   const updates = [], editorBaseline = {current:null};
   const latestSnapshot = {current:{data:{trips:[trip]},revision:0}};
-  const {canonicalJson,sha256Hex,itemSchema,draftItemSchema,expenseSchema,receiptScanSaveError,receiptEditorTotal,itemSplitError,receiptSplitError,total,equalFinancialValue,equalSavedValue,buildReceiptPrompt,isBlankReceipt,isUnchangedInitialReceipt,matchingReceiptProposal,mayFillInitialReceipt,receiptEditableValue,receiptProposalEditor} = boundary;
+  const {canonicalJson,sha256Hex,itemSchema,draftItemSchema,expenseSchema,expenseSaveBlockers,visibleExpenseBlockers,receiptScanSaveError,receiptEditorTotal,itemSplitError,receiptSplitError,total,equalFinancialValue,equalSavedValue,buildReceiptPrompt,isBlankReceipt,isUnchangedInitialReceipt,matchingReceiptProposal,mayFillInitialReceipt,receiptEditableValue,receiptProposalEditor} = boundary;
   const uid = boundary.uid, today = () => '2026-10-04', localTime = () => '12:00';
   const money = (amount, currency) => currency+' '+amount/100;
   const previewTotal = entry => total(entry);
@@ -120,7 +123,7 @@ type Controller = {
   restoring(): void; restoration: unknown;
 };
 const createController = new Function(compiled)() as (initial: Trip, boundary: object) => Controller;
-const controller = (trip: Trip) => createController(trip, { canonicalJson, sha256Hex, uid: randomUUID, ledgerSchema, itemSchema, draftItemSchema, expenseSchema, itemSplitError, receiptSplitError, total, validateLedger, equalFinancialValue, equalSavedValue, buildReceiptPrompt, isBlankReceipt, isUnchangedInitialReceipt, matchingReceiptProposal, mayFillInitialReceipt, receiptEditableValue, receiptProposalEditor, receiptEditorTotal, receiptScanSaveError });
+const controller = (trip: Trip) => createController(trip, { canonicalJson, sha256Hex, uid: randomUUID, ledgerSchema, itemSchema, draftItemSchema, expenseSchema, expenseSaveBlockers, visibleExpenseBlockers, itemSplitError, receiptSplitError, total, validateLedger, equalFinancialValue, equalSavedValue, buildReceiptPrompt, isBlankReceipt, isUnchangedInitialReceipt, matchingReceiptProposal, mayFillInitialReceipt, receiptEditableValue, receiptProposalEditor, receiptEditorTotal, receiptScanSaveError });
 const stamp = '2026-10-04T12:00:00Z';
 const question: ReceiptMessage = { id: 'question', role: 'user', text: 'Check the replacement image', createdAt: stamp };
 const reply: ReceiptMessage = { id: 'reply', role: 'assistant', replyTo: question.id, text: 'Reviewed replacement image', createdAt: stamp };

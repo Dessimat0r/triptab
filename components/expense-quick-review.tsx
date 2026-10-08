@@ -68,13 +68,13 @@ export function QuickSplit({ tripId, unassigned, members, currentMemberId, disab
 }
 
 /** The short, actionable reasons Save is unavailable, each linking to its field. */
-export function SaveChecklist({ blockers }: { blockers: SaveBlocker[] }) {
+export function SaveChecklist({ blockers, attempted = false }: { blockers: SaveBlocker[]; attempted?: boolean }) {
   const [expanded, setExpanded] = useState(false);
   if (!blockers.length) return null;
   // The first blocker is the next thing to fix; the rest are one tap away so
   // the pinned footer stays small on phones.
-  const shown = expanded ? blockers : blockers.slice(0, 1);
-  return <div className="save-checklist" role="status" aria-label="Before you can save">
+  const shown = expanded || attempted ? blockers : blockers.slice(0, 1);
+  return <div className="save-checklist" role={attempted ? "alert" : "status"} aria-label="Before you can save">
     <span className="save-checklist-title">Before saving</span>
     <ul>
       {shown.map(blocker => <li key={blocker.key}>
@@ -83,7 +83,7 @@ export function SaveChecklist({ blockers }: { blockers: SaveBlocker[] }) {
         </button>
       </li>)}
     </ul>
-    {blockers.length > 1 && <button type="button" className="save-checklist-more" aria-expanded={expanded} onClick={() => setExpanded(value => !value)}>
+    {blockers.length > 1 && !attempted && <button type="button" className="save-checklist-more" aria-expanded={expanded} onClick={() => setExpanded(value => !value)}>
       {expanded ? "Show fewer" : `${blockers.length - 1} more`}
     </button>}
   </div>;

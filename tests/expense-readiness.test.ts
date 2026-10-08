@@ -112,3 +112,25 @@ test('routine scan summaries keep More options closed; a traveller\'s receipt me
   assert.equal(hasReceiptDiscussion([note, { ...summary, replyTo: 'note' }]), true, 'the reply to an upload note is shown');
   assert.equal(hasReceiptDiscussion([summary, { id: 'q', role: 'user', text: 'Is service included?', createdAt: at }]), true);
 });
+
+
+test('every transient state has a reason and receipt processing suppresses incoming field requests', () => {
+  const blank = receipt({ title: '', currency: null, items: [] });
+  for (const [state, key, message] of [
+    [{ processing: true }, 'processing', 'Reading the receipt…'],
+    [{ uploading: true }, 'uploading', 'Uploading photo…'],
+    [{ conflict: true }, 'conflict', 'Resolve the edit conflict above'],
+    [{ offline: true }, 'offline', 'You’re offline. Reconnect to save'],
+  ] as const) {
+    const blockers = expenseSaveBlockers(blank, trip, state);
+    assert.equal(blockers[0].key, key); assert.equal(blockers[0].message, message);
+    if ('processing' in state || 'uploading' in state) assert.equal(blockers.length, 1);
+  }
+  const ready = assignUnassignedItems(receipt(), ['alice']);
+  for (let flags = 0; flags < 32; flags++) {
+    const state = { uploading: !!(flags & 1), processing: !!(flags & 2), conflict: !!(flags & 4), offline: !!(flags & 8), fxLookupPending: !!(flags & 16) };
+    assert.equal(expenseSaveBlockers(ready, trip, state).length > 0, !!(flags & 15), JSON.stringify(state));
+  }
+  assert(expenseSaveBlockers({ ...ready, bankAmount: 100 }, trip).some(blocker => blocker.key === 'bank-currency'));
+  assert.match(expenseSaveBlockers({ ...ready, currency: 'GBP', receiptScan: undefined }, trip, { fxLookupPending: true }).at(-1)!.message, /Finding an exchange rate/);
+});
