@@ -93,9 +93,9 @@ export function SaveChecklist({ blockers, attempted = false }: { blockers: SaveB
  * A compact confirmation once nothing blocks Save: what was bought, what it
  * costs in the holiday currency and who owes what.
  */
-export function ReadyToSave({ title, originalTotal, convertedTotal, payerName, shares, disabled, onEdit }: {
+export function ReadyToSave({ title, originalTotal, convertedTotal, payerName, shares, onEdit }: {
   title: string; originalTotal: string; convertedTotal?: string; payerName: string;
-  shares: { id: string; name: string; amount: string }[]; disabled?: boolean; onEdit: () => void;
+  shares: { id: string; name: string; amount: string }[]; onEdit: () => void;
 }) {
   return <section className="ready-to-save" aria-labelledby="ready-to-save-title">
     <div className="ready-to-save-heading">
@@ -109,7 +109,6 @@ export function ReadyToSave({ title, originalTotal, convertedTotal, payerName, s
       {shares.map(share => <div key={share.id}><dt>{share.name}</dt><dd>{share.amount}</dd></div>)}
     </dl>}
     <div className="ready-to-save-actions">
-      <button type="submit" className="primary" disabled={disabled}>Save expense now</button>
       <button type="button" className="quiet" onClick={onEdit}>Check details</button>
     </div>
   </section>;

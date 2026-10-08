@@ -2670,7 +2670,7 @@ export default function Home({ children }: { children: ReactNode }) {
                     convertedTotal={editing.currency !== trip.currency && editorTotal !== null ? money(editorTotal, trip.currency) : undefined}
                     payerName={name(editing.payer)}
                     shares={trip.members.flatMap((member, index) => editorShares?.[index] ? [{ id: member.id, name: member.name, amount: money(editorShares[index], trip.currency) }] : [])}
-                    disabled={saveDisabled} onEdit={() => editing.items[0] ? focusExpenseTarget(expenseItemTarget(editing.items[0].id)) : focusExpenseTarget(EXPENSE_TARGETS.items)} />}
+                    onEdit={() => editing.items[0] ? focusExpenseTarget(expenseItemTarget(editing.items[0].id)) : focusExpenseTarget(EXPENSE_TARGETS.items)} />}
                   {quickMode && <>
                     <div className="fieldpair quick-amount">
                       <label>
