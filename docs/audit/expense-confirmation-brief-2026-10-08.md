@@ -2,6 +2,8 @@
 
 8 October 2026 · Base: `f7537fa` · Follows Sol's "Expense confirmation and click-efficiency audit" (same date)
 
+> **Status: implemented** in [#43](https://github.com/Dessimat0r/triptab/pull/43) (merged as `4d19185`); see `expense-confirmation-2026-10-08.md` for what was built. File and line references below point at `f7537fa`, before that change.
+
 ## What Gary asked for
 
 > Adding an expense: minimise the clicks to confirm, perhaps one "check all details are correct before submitting" type box. Cover every route, including scanning a receipt.
