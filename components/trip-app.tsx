@@ -263,6 +263,7 @@ export default function Home({ children }: { children: ReactNode }) {
     [referenceRate, setReferenceRate] = useState<{ rate: number; currency: Currency; date: string; time: string; timezone: string } | null>(null);
   const editorBaseline = useRef<{ tripId: string; expense?: Expense } | null>(null);
   const scanReceiptInput = useRef<HTMLInputElement>(null);
+  const pendingEditorFocus = useRef<{ editorId: string; target: string; focus: string } | null>(null);
   const expenseSubmitInFlight = useRef(false);
   const receiptSession = useRef(0);
   const receiptSessionScope = useRef<{ accountId: string; tripId: string }>({ accountId: "", tripId: "" });
@@ -1474,17 +1475,23 @@ export default function Home({ children }: { children: ReactNode }) {
   function itemiseEditor(focus: "name" | "split") {
     if (!editing) return;
     const itemId = editing.items[0]?.id;
+    pendingEditorFocus.current = itemId ? { editorId: editing.id, target: expenseItemTarget(itemId), focus: focus === "name" ? "input[required]" : ".share-split button[aria-pressed]" } : null;
     setEditorMode({ id: editing.id, quick: false });
-    if (itemId) setTimeout(() => focusExpenseTarget(expenseItemTarget(itemId), focus === "name" ? "input[required]" : ".share-split button[aria-pressed]"), 0);
   }
   async function stopItemSplitting() {
     if (!editing || !canCollapseToQuick || !editing.items[0].members.length) return;
     const id = editing.id;
     if (hasItemSplitDetail(editing) && !await confirm({ title: "Use one amount?", message: "This removes the custom percentages, units and quantities for this expense. It will be shared equally between the people chosen.", confirmLabel: "Use one amount", cancelLabel: "Keep splitting", destructive: true })) return;
+    pendingEditorFocus.current = { editorId: id, target: EXPENSE_TARGETS.amount, focus: "input" };
     setEditing(prev => prev && prev.id === id ? carryReviewAcknowledgements(prev, collapseToQuick(prev)) : prev);
     setEditorMode({ id, quick: true });
-    setTimeout(() => focusExpenseTarget(EXPENSE_TARGETS.amount, "input"), 0);
   }
+  useLayoutEffect(() => {
+    const request = pendingEditorFocus.current;
+    if (!request) return;
+    pendingEditorFocus.current = null;
+    if (editing?.id === request.editorId) focusExpenseTarget(request.target, request.focus);
+  });
   const editorShares = useMemo(() => editing && trip ? previewShares(editing, trip) : null, [editing, trip]);
   const editorTotal = useMemo(() => editing && trip ? previewTotal(editing, trip) : null, [editing, trip]);
   const editorOriginalTotal = useMemo(() => editing ? receiptEditorTotal(editing) : 0, [editing]);

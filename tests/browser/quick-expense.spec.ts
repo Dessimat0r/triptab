@@ -519,3 +519,40 @@ test('a processed receipt focuses QuickSplit and keeps its name above both views
   await expect(name).toBeFocused();
   await expect(name).toBeInViewport({ ratio: 1 });
 });
+
+test.describe('split mode focus timing', () => {
+  test.use({viewport:{width:1440,height:900},hasTouch:false,isMobile:false});
+  test('delayed callbacks cannot turn the next split-button Enter into an expense save', async ({page}) => {
+    const posted=await fixtures(page); await openNew(page);
+    await page.getByRole('textbox',{name:'Expense name',exact:true}).fill('Lunch');
+    await page.getByRole('textbox',{name:'Amount',exact:true}).fill('20');
+    await page.getByRole('button',{name:'Custom split',exact:true}).click();
+    await page.getByRole('button',{name:'Custom percentages',exact:true}).click();
+    await page.getByRole('textbox',{name:'Gary percentage for item 1',exact:true}).fill('75');
+    await page.getByRole('textbox',{name:'Sam percentage for item 1',exact:true}).fill('25');
+    await page.getByRole('button',{name:'Use one amount',exact:true}).click();
+    // Hold zero-delay callbacks to reproduce CI's pause between DOM commit and the next keypress.
+    await page.evaluate(()=>{
+      const original=window.setTimeout.bind(window), pending:{id:number;run:()=>void}[]=[];
+      window.setTimeout=((handler:TimerHandler,delay=0,...args:unknown[])=>{
+        if(delay===0 && typeof handler==='function') {
+          const id=original(()=>{},60_000);
+          pending.push({id,run:()=>Reflect.apply(handler,window,args)}); return id;
+        }
+        return original(handler,delay,...args);
+      }) as typeof window.setTimeout;
+      Object.defineProperty(window,'__releaseModeTimers',{value:()=>{
+        window.setTimeout=original;
+        for(const timer of pending.splice(0)) {clearTimeout(timer.id);timer.run();}
+      }});
+    });
+    await page.getByRole('dialog',{name:'Use one amount?'}).getByRole('button',{name:'Use one amount',exact:true}).click();
+    await expect(page.locator('.quick-shares')).toContainText('Gary £10.00 · Sam £10.00');
+    await page.getByRole('button',{name:'Split by item',exact:true}).focus();
+    await page.evaluate(()=>(window as unknown as {__releaseModeTimers:()=>void}).__releaseModeTimers());
+    await page.keyboard.press('Enter');
+    await expect(page.getByRole('textbox',{name:'Item 1 name',exact:true})).toBeFocused();
+    await expect(page.getByRole('button',{name:'Units',exact:true})).toBeVisible();
+    expect(posted).toHaveLength(0); await expect(page.locator('.saved-banner')).toHaveCount(0);
+  });
+});

@@ -27,7 +27,8 @@ Validation:
 - Production build and `npx tsc --noEmit` pass.
 - Lint has zero errors and the four existing warnings.
 - Full unit suite: 1,210 passed and four existing `pwa-live-refresh.test.ts` failures. The same four failures were reproduced with unchanged PWA sources on the base.
-- Full Playwright suite: 226 passed across Chromium and WebKit. The final run permitted one retry but used none. Earlier WebKit runs intermittently missed pointer actions or stalled navigation; these did not recur in the final full run.
+- Full Playwright suite: 228 passed across Chromium and WebKit. The final run permitted one retry but used none. Earlier WebKit runs intermittently missed pointer actions or stalled navigation; these did not recur in the final full run.
+- A further CI timing regression showed an old zero-delay focus callback could redirect the next split-button Enter to Amount and submit the expense. Mode-change focus now runs during the layout commit. The new delayed-callback test fails on the previous PR head and passes on the fix in both engines.
 - Review follow-up tests hold the draft POST after image upload, try a late picker result and Escape, exercise a failed draft save/retry, verify quiet new forms, check focus without history entries, count announcement mutations after typing and confirm the offline notice has no field-jump action.
 - Coverage includes a 64-state rendered Save/blocker matrix, D1–D4, hard blockers together, final acknowledgement fingerprints after edits, browser versus MCP acceptance, click budgets, double-submit protection, server rejection, upload cancellation/replacement across both phases, retained-note retries, static Save announcements and inline FX review.
 
