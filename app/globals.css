@@ -2272,6 +2272,8 @@ footer {
   border: 1px solid var(--field-border);
   border-radius: var(--radius-s);
   cursor: pointer;
+  /* WebKit lets a file input's own button overflow its box at large text sizes. */
+  overflow: hidden;
 }
 .receipt-capture-action svg {
   flex-shrink: 0;
