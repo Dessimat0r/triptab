@@ -45,6 +45,7 @@ function controller(initial: TestItem) {
     members: Trip['members']; selected: string[]; percentages?: Record<string, number>;
     units?: Item['units']; quantity?: Quantity; scope: string;
     onChange: (selected: string[], percentages?: Record<string, number>, units?: Item['units']) => void;
+    keepOne?: boolean; showMethods?: boolean;
   };
   const loaded = { exports: {} as { default: (props: Props) => React.ReactNode } };
   new Function('require', 'module', 'exports', compiled)((name: string) => {
@@ -56,18 +57,22 @@ function controller(initial: TestItem) {
   return {
     get item() { return item; },
     get changes() { return changes; },
-    click(label: string) {
+    render(extra: Partial<Props> = {}) {
       index = 0;
-      const tree = loaded.exports.default({
+      return elements(loaded.exports.default({
         members, selected: item.members, percentages: item.percentages,
         units: item.units, quantity: item.quantity, scope: 'item Pizza slices',
         onChange(selected, percentages, units) {
           changes.push({ selected, percentages, units });
           item = { ...item, members: selected, percentages, units };
         },
-      });
-      const button = elements(tree).find(element => element.type === 'button' && element.props.children === label);
-      assert(button, `The production component exposes the ${label} mode button`);
+        ...extra,
+      }));
+    },
+    click(label: string, extra: Partial<Props> = {}) {
+      const button = this.render(extra).find(element => element.type === 'button' && (element.props.children === label
+        || (Array.isArray(element.props.children) && element.props.children.includes(label))));
+      assert(button, `The production component exposes the ${label} button`);
       (button.props.onClick as () => void)();
     },
   };
@@ -77,10 +82,10 @@ function pizza(overrides: Partial<TestItem> = {}): TestItem {
   return { id: 'pizza', name: 'Pizza slices', amount: 1390, members: ['alice', 'bob'], ...overrides };
 }
 
-test('Units uses the detected two slices and divides the full printed line price', () => {
+test('By quantity uses the detected two slices and divides the full printed line price', () => {
   const quantity = Object.freeze({ total: 2, label: 'slices', sourceText: '2 x Stck' });
   const ui = controller(pizza({ quantity }));
-  ui.click('Units');
+  ui.click('By quantity');
   assert.deepEqual(ui.item.units, { total: 2, allocations: { alice: 1, bob: 1 }, label: 'slices' });
   assert.equal(ui.item.amount, 1390, 'purchase quantity must never multiply the item line price');
   assert.equal(ui.item.quantity, quantity, 'the original printed quantity remains separate from allocations');
@@ -89,7 +94,7 @@ test('Units uses the detected two slices and divides the full printed line price
 
 test('manual items without a detected quantity retain the one-unit default', () => {
   const ui = controller(pizza());
-  ui.click('Units');
+  ui.click('By quantity');
   assert.deepEqual(ui.item.units, { total: 1, allocations: { alice: 0.5, bob: 0.5 } });
   assert.equal(ui.item.quantity, undefined);
   assert.equal(model.itemSplitError(ui.item), null);
@@ -97,45 +102,45 @@ test('manual items without a detected quantity retain the one-unit default', () 
 
 test('a detected count without a known label initializes units without inventing a name', () => {
   const ui = controller(pizza({ quantity: { total: 2, sourceText: '2 x' } }));
-  ui.click('Units');
+  ui.click('By quantity');
   assert.deepEqual(ui.item.units, { total: 2, allocations: { alice: 1, bob: 1 } });
 });
 
 test('detected quantity is allocated only to the currently selected travellers', () => {
   const ui = controller(pizza({ members: ['alice', 'chris'], quantity: { total: 2, label: 'slices' } }));
-  ui.click('Units');
+  ui.click('By quantity');
   assert.deepEqual(ui.item.members, ['alice', 'chris']);
   assert.deepEqual(ui.item.units, { total: 2, allocations: { alice: 1, chris: 1 }, label: 'slices' });
   assert.equal(model.itemSplitError(ui.item), null);
 });
 
-test('choosing Units preserves existing traveller allocations and their edited unit label', () => {
+test('choosing By quantity preserves existing traveller allocations and their edited unit label', () => {
   const units = { total: 4, allocations: { alice: 0.75, bob: 3.25 }, label: 'pieces' };
   const quantity = Object.freeze({ total: 2, label: 'slices', sourceText: '2 x Stck' });
   const ui = controller(pizza({ quantity, units }));
-  ui.click('Units');
+  ui.click('By quantity');
   assert.equal(ui.item.units, units, 'reselecting the mode must retain the original allocation map');
   assert.equal(ui.item.quantity, quantity);
   assert.equal(model.itemSplitError(ui.item), null);
 });
 
 test('equal and custom percentage modes clear allocations but preserve detected receipt quantity', () => {
-  for (const mode of ['Equal', 'Custom percentages']) {
+  for (const mode of ['Equally', 'By percentage']) {
     const quantity = Object.freeze({ total: 2, label: 'slices', sourceText: '2 x Stck' });
     const ui = controller(pizza({ quantity, units: { total: 2, allocations: { alice: 1, bob: 1 }, label: 'slices' } }));
     ui.click(mode);
     assert.equal(ui.item.units, undefined);
     assert.equal(ui.item.quantity, quantity, `${mode} must not erase printed quantity evidence`);
-    assert.deepEqual(ui.item.percentages, mode === 'Equal' ? undefined : { alice: 50, bob: 50 });
-    ui.click('Units');
-    assert.deepEqual(ui.item.units, { total: 2, allocations: { alice: 1, bob: 1 }, label: 'slices' }, 'returning to Units uses the saved printed quantity');
+    assert.deepEqual(ui.item.percentages, mode === 'Equally' ? undefined : { alice: 50, bob: 50 });
+    ui.click('By quantity');
+    assert.deepEqual(ui.item.units, { total: 2, allocations: { alice: 1, bob: 1 }, label: 'slices' }, 'returning to By quantity uses the saved printed quantity');
     assert.equal(ui.item.quantity, quantity);
   }
 });
 
 test('detected units allocate the exact millionth remainder across three travellers', () => {
   const ui = controller(pizza({ members: ['alice', 'bob', 'chris'], quantity: { total: 2, label: 'slices' } }));
-  ui.click('Units');
+  ui.click('By quantity');
   assert.deepEqual(ui.item.units, {
     total: 2, allocations: { alice: 0.666667, bob: 0.666667, chris: 0.666666 }, label: 'slices',
   });
@@ -147,8 +152,35 @@ test('detected units allocate the exact millionth remainder across three travell
 
 test('choosing quantity mode for an unassigned scanned line leaves traveller consumption pending', () => {
   const ui = controller(pizza({members: [], quantity: {total: 2, label: 'slices'}}));
-  ui.click('Units');
+  ui.click('By quantity');
   assert.deepEqual(ui.item.members, []);
   assert.deepEqual(ui.item.units, {total: 2, allocations: {}, label: 'slices'});
   assert(model.itemSplitError(ui.item), 'pending allocations are not a valid posted financial split');
+});
+
+test('a line with nobody chosen shows no selected method and no error, only its people', () => {
+  const ui = controller(pizza({ members: [] }));
+  const tree = ui.render();
+  const modes = tree.filter(element => element.type === 'button' && ['Equally', 'By percentage', 'By quantity'].includes(element.props.children as string));
+  assert.equal(modes.length, 3);
+  assert(modes.every(element => element.props['aria-pressed'] === false), 'no method looks chosen before anyone is');
+  const text = JSON.stringify(tree.map(element => element.props.children).filter(value => typeof value === 'string'));
+  assert.doesNotMatch(text, /Unassigned|at least one person|0% \/ 100%/);
+  assert(!tree.some(element => element.props.role === 'status'), 'no split status is announced for an untouched line');
+});
+
+test('a collapsed line shows its people without the split methods', () => {
+  const ui = controller(pizza());
+  const tree = ui.render({ showMethods: false });
+  assert(tree.some(element => element.type === 'button' && element.props['aria-pressed'] === true), 'people chips stay available');
+  assert(!tree.some(element => element.type === 'details'));
+});
+
+test('the single-amount form keeps the last person on the purchase', () => {
+  const ui = controller(pizza({ members: ['alice'] }));
+  ui.click('Alice', { keepOne: true });
+  assert.deepEqual(ui.item.members, ['alice']);
+  assert.equal(ui.changes.length, 0);
+  ui.click('Bob', { keepOne: true });
+  assert.deepEqual(ui.item.members, ['alice', 'bob'], 'people keep the holiday order');
 });

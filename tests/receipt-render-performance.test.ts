@@ -14,6 +14,7 @@ import * as expenseFxReview from '../lib/expense-fx-review';
 import * as expenseReadiness from '../lib/expense-readiness';
 import * as quickExpense from '../lib/quick-expense';
 import * as dataUtils from '../lib/data-utils';
+import * as receiptLanguages from '../lib/receipt-languages';
 import { createSourceFile, isArrayBindingPattern, isBindingElement, isCallExpression, isFunctionDeclaration, isIdentifier, isVariableStatement, JsxEmit, ModuleKind, ScriptKind, ScriptTarget, transpileModule } from 'typescript';
 
 // Run Home's actual render and event handlers with a small hook boundary. Child
@@ -92,6 +93,7 @@ function controller(trip: model.Trip, fetcher?: typeof fetch) {
     if (name === '@/lib/expense-readiness') return expenseReadiness;
     if (name === '@/lib/quick-expense') return quickExpense;
     if (name === '@/lib/data-utils') return dataUtils;
+    if (name === '@/lib/receipt-languages') return receiptLanguages;
     if (name === '@/components/receipt-scan-review') return {__esModule: true, default: component, receiptMoney: (amount: number, currency: string | null) => currency ? moneyFormat.formatMoney(amount, currency) : String(amount / 100)};
     if (name === '@/lib/receipt-chatgpt') return receiptChatgpt;
     if (name === '@/components/trip-routing') return {

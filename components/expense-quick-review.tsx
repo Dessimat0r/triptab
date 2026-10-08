@@ -1,9 +1,8 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
-import { Check, ChevronRight, Users, User } from "lucide-react";
+import { ChevronRight, Users, User } from "lucide-react";
 import type { SaveBlocker } from "@/lib/expense-readiness";
-import "./expense-quick-review.css";
 
 type QuickChoice = "everyone" | "me";
 const preferenceKey = (tripId: string) => `triptab:quick-split:${tripId}`;
@@ -59,7 +58,6 @@ export function QuickSplit({ tripId, unassigned, members, currentMemberId, disab
   const ordered = remembered ? [...choices].sort((a, b) => Number(b.key === remembered) - Number(a.key === remembered)) : choices;
   return <section className="quick-split" aria-labelledby="quick-split-title">
     <h3 id="quick-split-title">{unassigned === 1 ? "1 item needs" : `${unassigned} items need`} people</h3>
-    <p className="footnote">Only items with nobody on them yet change. You can still adjust any item below.</p>
     <div className="quick-split-actions">
       {ordered.map((choice, index) => <button key={choice.key} type="button" className={index === 0 ? "primary" : "quiet"} disabled={disabled}
         data-autofocus={autoFocus && index === 0 ? true : undefined}
@@ -67,7 +65,6 @@ export function QuickSplit({ tripId, unassigned, members, currentMemberId, disab
         {choice.icon}{choice.label}
       </button>)}
     </div>
-    {remembered && <p className="quick-split-memory">Your last choice on this holiday is listed first.</p>}
   </section>;
 }
 
@@ -79,7 +76,6 @@ export function SaveChecklist({ blockers, attempted = false, hidden = false }: {
   // the pinned footer stays small on phones.
   const shown = expanded || attempted ? blockers : blockers.slice(0, 1);
   return <div className="save-checklist" role="group" aria-label="Before you can save">
-    <span className="save-checklist-title">Before saving</span>
     <ul>
       {shown.map(blocker => <li key={blocker.key}>
         {blocker.target ? <button type="button" className="save-checklist-item" onClick={() => focusExpenseTarget(blocker.target!, blocker.focus)}>
@@ -94,34 +90,9 @@ export function SaveChecklist({ blockers, attempted = false, hidden = false }: {
 }
 
 /**
- * A compact confirmation once nothing blocks Save: what was bought, what it
- * costs in the holiday currency and who owes what.
- */
-export function ReadyToSave({ title, originalTotal, convertedTotal, payerName, shares, onEdit }: {
-  title: string; originalTotal: string; convertedTotal?: string; payerName: string;
-  shares: { id: string; name: string; amount: string }[]; onEdit: () => void;
-}) {
-  return <section className="ready-to-save" aria-labelledby="ready-to-save-title">
-    <div className="ready-to-save-heading">
-      <span className="ready-to-save-icon" aria-hidden="true"><Check size={18} /></span>
-      <div>
-        <h3 id="ready-to-save-title">Ready to save</h3>
-        <p>{title} · {payerName} paid {originalTotal}{convertedTotal ? ` (${convertedTotal})` : ""}</p>
-      </div>
-    </div>
-    {!!shares.length && <dl className="ready-to-save-shares">
-      {shares.map(share => <div key={share.id}><dt>{share.name}</dt><dd>{share.amount}</dd></div>)}
-    </dl>}
-    <div className="ready-to-save-actions">
-      <button type="button" className="quiet" onClick={onEdit}>Check details</button>
-    </div>
-  </section>;
-}
-
-/**
- * Purchase details that are usually right (payer, date, time, currency and
- * time zone) collapse to a single line. They open by themselves while any of
- * them needs attention; Done collapses them again once nothing is missing.
+ * The purchase time (date, time and time zone) is usually right, so it
+ * collapses to one line. It opens by itself while a value is missing or a
+ * receipt left a default in place; Done collapses it again.
  */
 export function PurchaseDetails({ id, summary, needsAttention, children }: {
   id: string; summary: string; needsAttention: boolean; children: ReactNode;
@@ -136,7 +107,7 @@ export function PurchaseDetails({ id, summary, needsAttention, children }: {
   return <section id={id} className="purchase-details" aria-label="Purchase details">
     {!shown && <div className="purchase-details-summary">
       <p>{summary}</p>
-      <button type="button" className="quiet" aria-expanded={false} onClick={() => setOpen(true)}>Edit</button>
+      <button type="button" className="textbutton" aria-expanded={false} onClick={() => setOpen(true)}>Change</button>
     </div>}
     {shown && children}
     {shown && !needsAttention && <button type="button" className="quiet purchase-details-done" aria-expanded={true} onClick={() => setOpen(false)}>Done</button>}
@@ -144,9 +115,9 @@ export function PurchaseDetails({ id, summary, needsAttention, children }: {
 }
 
 /** Rarely needed tools stay one tap away instead of lengthening every expense. */
-export function MoreOptions({ defaultOpen, children }: { defaultOpen: boolean; children: ReactNode }) {
+export function MoreOptions({ defaultOpen, title = "More options", hint, children }: { defaultOpen: boolean; title?: string; hint: string; children: ReactNode }) {
   return <details className="expense-more-options" open={defaultOpen || undefined}>
-    <summary>More options <small>receipt language, conversation, import</small></summary>
+    <summary>{title} <small>{hint}</small></summary>
     <div className="expense-more-options-body">{children}</div>
   </details>;
 }

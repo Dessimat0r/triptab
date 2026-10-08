@@ -1,26 +1,29 @@
+/* Receipt history is a header action beside Close; it swaps the editor body. */
 .receipt-view-switch {
   display: flex;
-  gap: 8px;
-  padding: 16px clamp(16px, 3vw, 28px);
+  flex-shrink: 0;
   min-width: 0;
 }
 .receipt-view-switch > button {
-  flex: 1;
-  min-width: 0;
+  min-width: 44px;
   min-height: 44px;
-  justify-content: center;
-  white-space: normal;
+  border-radius: var(--radius-s);
+  color: var(--muted);
 }
 .receipt-view-switch > button[aria-pressed="true"] {
   color: var(--primary);
-  border-color: var(--primary);
-  background: var(--bg);
+  background: var(--accent-surface);
 }
 .receipt-history-view {
+  display: grid;
+  gap: var(--space-3);
   min-width: 0;
   max-width: 100%;
-  padding: 0 clamp(16px, 3vw, 28px) 24px;
+  padding: var(--space-4) clamp(16px, 3vw, 28px) 24px;
   overflow-wrap: anywhere;
+}
+.receipt-history-back {
+  justify-self: start;
 }
 .receipt-details-view > .error {
   margin: 12px clamp(16px, 3vw, 28px);

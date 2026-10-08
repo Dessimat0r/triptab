@@ -83,9 +83,14 @@ export async function prepareReceiptImage(file: File, onQualityWarnings?: (warni
 
 export type ReceiptCaptureProps = {
   receiptId?: string;
-  /** Before any photo or request exists: just the two capture actions, with
-   * reading notes and location tucked into an optional disclosure. */
-  compact?: boolean;
+  /**
+   * Which part to render. `compact`: before any photo exists, the two capture
+   * actions with optional notes first. `status`: what is happening to a
+   * stored receipt and the one next step, shown with the receipt's totals.
+   * `tools`: replacing or removing the photo, its place and the ChatGPT
+   * handoff, kept under Receipt tools.
+   */
+  part?: "compact" | "status" | "tools";
   contextFields?: ReactNode;
   busy: boolean;
   stored: boolean;
@@ -122,7 +127,7 @@ export type ReceiptCaptureProps = {
 
 export default function ReceiptCapture({
   receiptId,
-  compact = false,
+  part = "tools",
   contextFields,
   busy,
   stored,
@@ -263,87 +268,77 @@ export default function ReceiptCapture({
       />
     </label>
   </div>;
-  const problems = <>
+  const captureProblems = <>
     {captureError && <p id={errorId} className="receipt-chat-error" role="alert">{captureError}</p>}
     {captureWarnings.length > 0 && <div className="receipt-capture-hint" role="status" aria-live="polite">
       {captureWarnings.map(warning => <p key={warning.code}>{warning.message}</p>)}
       <p>Your image can still be uploaded and reviewed.</p>
     </div>}
-    {assistantError && <p className="receipt-chat-error" role="alert">{assistantError}</p>}
   </>;
-
-  if (compact && !receiptUrl && !prompt) return (
-    <section className="receipt-capture receipt-capture--compact" aria-labelledby={titleId} aria-busy={locked}>
-      <h3 id={titleId}>Have a receipt?</h3>
-      <div className="receipt-capture-status" role="status" aria-live="polite" aria-atomic="true">
-        {locked && <p>{processing ? readingText : (preparing ? "Preparing receipt photo…" : "Please wait…")}</p>}
-      </div>
-      {inputs}
-      {contextFields && <details className="receipt-capture-context-toggle">
-        <summary>Add notes for reading the photo <small>optional</small></summary>
+  const privacy = <p id={hintId} className="receipt-capture-hint">Photos are resized and camera metadata is removed before uploading.</p>;
+  const busyText = <p>{processing ? readingText : (preparing ? "Preparing receipt photo…" : "Please wait…")}</p>;
+  if (part === "compact") return (
+    <section id="expense-receipt-capture" className="receipt-capture receipt-capture--compact" aria-labelledby={titleId} aria-busy={locked}>
+      {contextFields ? <details className="receipt-capture-context-toggle">
+        <summary><strong id={titleId}>Have the receipt?</strong><span>Add notes first</span></summary>
         {contextFields}
-      </details>}
-      <p id={hintId} className="receipt-capture-hint">
-        {aiConnected ? "TripTab reads the photo and suggests items for you to check. " : ""}
-        Photos are resized and camera metadata is removed before uploading.
-      </p>
-      {problems}
+      </details> : <p className="receipt-capture-title"><strong id={titleId}>Have the receipt?</strong></p>}
+      <div className="receipt-capture-status" role="status" aria-live="polite" aria-atomic="true">{locked && busyText}</div>
+      {inputs}
+      {privacy}
+      {captureProblems}
+      {assistantError && <p className="receipt-chat-error" role="alert">{assistantError}</p>}
     </section>
   );
-
-  return (
-    <section className="receipt-capture" aria-labelledby={titleId} aria-busy={locked}>
-      <h3 id={titleId}>Receipt image</h3>
-      {!aiConnected && <p className="receipt-capture-hint">Upload a photo or enter items yourself. Connected ChatGPT tools are also available when enabled in your conversation.</p>}
+  if (part === "status") return (
+    <div id="expense-receipt-capture" className="receipt-capture-next" aria-busy={locked}>
       <div className="receipt-capture-status" role="status" aria-live="polite" aria-atomic="true">
-        {locked ? <p>{processing ? readingText : (preparing ? "Preparing receipt photo…" : "Please wait…")}</p> : (receiptUrl || prompt) && (
+        {locked ? busyText : (receiptUrl || prompt) && !itemized && (
           <>
-            <p>{receiptUrl
-              ? (stored ? "Receipt image stored with this receipt." : "Receipt attached. Save your expense to keep it.")
-              : (stored ? "Receipt details saved for ChatGPT." : "Save your receipt details before sending the request to ChatGPT.")}</p>
+            {!receiptUrl && <p>{stored ? "Receipt details saved for ChatGPT." : "Save your receipt details before sending the request to ChatGPT."}</p>}
+            {receiptUrl && !stored && <p>Receipt attached. Save your expense to keep it.</p>}
             <p>{assistanceStatus}</p>
-            {handoffOpened && receiptUrl && !ready && !itemized && <p>{handoffStatus}</p>}
-            {copied && !ready && !itemized && <p>Receipt request copied. Paste and send it in a ChatGPT or Codex conversation with TripTab tools enabled.</p>}
+            {handoffOpened && receiptUrl && !ready && <p>{handoffStatus}</p>}
+            {copied && !ready && <p>Receipt request copied. Paste and send it in a ChatGPT or Codex conversation with TripTab tools enabled.</p>}
           </>
         )}
       </div>
+      {assistantError && <p className="receipt-chat-error" role="alert">{assistantError}</p>}
+      {(receiptUrl || prompt) && <div className="receipt-capture-processing">
+        {ready && <button type="button" className="primary" disabled={locked} onClick={onUseProcessed}>
+          Review processed receipt
+        </button>}
+        {!ready && !itemized && receiptUrl && automaticAvailable && aiConnected && onProcess && <button type="button" className="primary" disabled={locked || !stored} onClick={onProcess}>
+          <RefreshCw size={17} aria-hidden="true" />
+          {processing ? readingText : (assistantError ? "Retry reading receipt" : (aiProvider === "api" ? "Read receipt with AI" : "Read receipt with ChatGPT"))}
+        </button>}
+        {!ready && !itemized && receiptUrl && aiManageable && aiProvider === "api" && !aiConnected && onConnectPlan && <button type="button" className="primary" disabled={locked} onClick={onConnectPlan}>
+          Set up receipt AI
+        </button>}
+        {!ready && !itemized && receiptUrl && !aiManageable && !aiConnected && aiManagementReason === "verification_required" && onConnectPlan && <button type="button" className="primary" disabled={locked} onClick={onConnectPlan}>
+          Verify receipt AI setup
+        </button>}
+        {!ready && !itemized && receiptUrl && automaticAvailable && aiProvider === "siwc" && !aiConnected && onConnectPlan && <button type="button" className="primary" disabled={locked} onClick={onConnectPlan}>
+          Connect ChatGPT plan
+        </button>}
+      </div>}
+    </div>
+  );
+  return (
+    <section className="receipt-capture receipt-capture--tools" aria-labelledby={receiptUrl ? titleId : undefined} aria-busy={locked}>
+      {receiptUrl && <>
+        <h4 id={titleId}>Receipt photo</h4>
+        <p className="receipt-capture-label">Replace the photo</p>
+        {inputs}
+        {onRemove && <button type="button" className="quiet danger" disabled={locked} onClick={onRemove}>
+          <Trash2 size={17} aria-hidden="true" /> Remove receipt image
+        </button>}
+        {privacy}
+        {captureProblems}
+      </>}
       {contextFields}
-      {inputs}
-      {receiptUrl && (
-        <div className="receipt-capture-original">
-          <img src={receiptUrl} alt="Stored receipt image for review" loading="lazy" />
-          <a href={receiptUrl} target="_blank" rel="noreferrer">
-            Open stored receipt image
-          </a>
-          {onRemove && <button type="button" className="quiet wide danger" disabled={locked} onClick={onRemove}>
-            <Trash2 size={17} aria-hidden="true" /> Remove receipt image
-          </button>}
-        </div>
-      )}
-      <p id={hintId} className="receipt-capture-hint">
-        Photos are resized to a readable JPEG copy and camera metadata is removed before uploading. {" "}
-        When receipt AI is connected, TripTab reads uploaded receipts automatically and suggests items. {" "}
-        Review the items here before choosing Save expense. You can also enter items yourself.
-      </p>
-      {problems}
       {(receiptUrl || prompt) && (
         <div className="receipt-capture-processing">
-          {ready && <button type="button" className="primary" disabled={locked} onClick={onUseProcessed}>
-            Review processed receipt
-          </button>}
-          {!ready && !itemized && receiptUrl && automaticAvailable && aiConnected && onProcess && <button type="button" className="primary" disabled={locked || !stored} onClick={onProcess}>
-            <RefreshCw size={17} aria-hidden="true" />
-            {processing ? readingText : (assistantError ? "Retry reading receipt" : (aiProvider === "api" ? "Read receipt with AI" : "Read receipt with ChatGPT"))}
-          </button>}
-          {!ready && !itemized && receiptUrl && aiManageable && aiProvider === "api" && !aiConnected && onConnectPlan && <button type="button" className="primary" disabled={locked} onClick={onConnectPlan}>
-            Set up receipt AI
-          </button>}
-          {!ready && !itemized && receiptUrl && !aiManageable && !aiConnected && aiManagementReason === "verification_required" && onConnectPlan && <button type="button" className="primary" disabled={locked} onClick={onConnectPlan}>
-            Verify receipt AI setup
-          </button>}
-          {!ready && !itemized && receiptUrl && automaticAvailable && aiProvider === "siwc" && !aiConnected && onConnectPlan && <button type="button" className="primary" disabled={locked} onClick={onConnectPlan}>
-            Connect ChatGPT plan
-          </button>}
           <details className="receipt-capture-tools" open={!aiConnected && !ready && !itemized}><summary>Connected ChatGPT tools</summary><div className="receipt-capture-tool-actions">
           {!ready && !itemized && connected && stored && prompt && chatgptUrl && (
             locked ? <button type="button" className={aiConfigured ? "quiet" : "primary"} disabled>

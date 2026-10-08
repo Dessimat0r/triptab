@@ -153,7 +153,13 @@ for (const { width, height, touch } of viewports) {
           // A new expense opens as the quick form; it must fit too before itemising.
           await expect(page.getByRole('textbox', { name: 'Amount', exact: true })).toBeVisible();
           await fits(page);
-          await page.getByRole('button', { name: 'Split by item', exact: true }).click();
+          await page.locator('.split-method > summary').click();
+          await fits(page);
+          await page.getByRole('button', { name: 'By item', exact: true }).click();
+          await page.getByRole('button', { name: 'Add item', exact: true }).click();
+        } else {
+          // Lines open to edit; the first two hold the name, translation and display controls.
+          for (const row of [0, 1]) await page.locator('.item-edit > summary').nth(row).click();
         }
         if (receipt) await expect(page.getByRole('combobox', { name: 'Show first for item 1', exact: true })).toBeEnabled();
         // Typed lines with no language evidence keep one canonical name field.
@@ -170,13 +176,13 @@ for (const { width, height, touch } of viewports) {
             elements.filter(element => element.getClientRects().length && parseFloat(getComputedStyle(element).fontSize) < 16).length);
           expect(smallControls).toBe(0);
         }
-        await page.getByRole('button', { name: 'One person', exact: true }).first().click();
+        // Collapsed lines are one row each; every split method of an open line fits too.
+        await page.locator('.item .split-method > summary').first().click();
+        await page.getByRole('button', { name: 'By percentage', exact: true }).first().click();
         await fits(page);
-        await page.getByRole('button', { name: 'Custom percentages', exact: true }).first().click();
+        await page.getByRole('button', { name: 'By quantity', exact: true }).first().click();
         await fits(page);
-        await page.getByRole('button', { name: 'Units', exact: true }).first().click();
-        await fits(page);
-        await page.locator('.receipt-split > label > select').selectOption('receipt');
+        await page.getByRole('button', { name: 'Whole bill', exact: true }).click();
         await fits(page);
         await page.evaluate(() => { document.documentElement.style.fontSize = '32px'; });
         await fits(page);
@@ -197,6 +203,7 @@ test.describe('same-language receipt item', () => {
     await fixtures(page, () => sameLanguageTrip);
     await page.goto('/expenses?receiptDraft=layout-draft&receiptTrip=layout-trip');
     const firstItem = page.locator('.item').first();
+    await firstItem.locator('.item-edit > summary').click();
     await expect(firstItem.getByRole('textbox', { name: 'Item 1 name', exact: true })).toHaveValue(originalName);
     await expect(firstItem.locator('.item-bilingual-names input')).toHaveCount(1);
     await expect(page.getByRole('combobox', { name: 'Show first for item 1', exact: true })).toHaveCount(0);

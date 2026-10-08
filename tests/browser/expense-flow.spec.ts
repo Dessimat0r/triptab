@@ -64,10 +64,13 @@ test('a scanned foreign receipt fetches its rate, splits in one tap and stays ti
   await expect(page.locator('.rate-result')).toContainText('Daily reference rate');
   await expect(page.locator('.expense-more-options')).not.toHaveAttribute('open', '');
   await expect(page.locator('.purchase-details')).toHaveCount(1);
-  await expect(page.locator('.purchase-details-summary')).toContainText('Gary paid');
+  // Payer and currency are always visible in Purchase, whichever layout is shown.
+  await expect(page.getByRole('combobox', { name: 'Paid by' })).toHaveValue('flow-gary');
+  await expect(page.getByRole('combobox', { name: 'Currency', exact: true })).toHaveValue('EUR');
   await page.getByRole('button', { name: 'Share the remaining item equally' }).click();
   await expect(page.locator('.quick-split')).toHaveCount(0);
-  await expect(page.locator('.ready-to-save')).toContainText('Ready to save');
+  await expect(page.locator('.expense-shares')).toContainText('Gary');
+  await expect(page.locator('.expense-shares')).toContainText('Sam');
   await expect(page.locator('.receipt-proposal')).toHaveCount(0);
   await expect(page.locator('.save-checklist')).toHaveCount(0);
   expect(errors).toEqual([]);
@@ -81,16 +84,17 @@ test('a rate typed while the automatic lookup is pending is kept', async ({ page
   await fixtures(page, () => { requested(); return released; });
   await openDraft(page);
   await rateRequested;
-  const lookupButton = page.locator('.fx-panel > button.wide');
-  await expect(lookupButton).toHaveText(/Finding rate/);
+  await expect(page.locator('.rate-result')).toContainText('Finding the EUR to GBP rate');
   await page.locator('.manual-rate summary').click();
   const manual = page.getByRole('spinbutton', { name: /1 EUR in GBP/ });
   await manual.fill('0.75');
   await expect(page.locator('.rate-result')).toContainText('Manual rate');
+  // With a manual rate, the reference lookup is offered beside it and still pending.
+  const lookupButton = page.locator('.manual-rate > button.quiet');
   await expect(lookupButton).toHaveText(/Finding rate/, { timeout: 1 });
   release();
   // The lookup has been answered and handled once the button is idle again.
-  await expect(lookupButton).toHaveText('Look up historical rate');
+  await expect(lookupButton).toHaveText('Use the daily reference rate');
   await expect(lookupButton).toBeEnabled();
   await expect(manual).toHaveValue('0.75');
   await expect(page.locator('.rate-result')).toContainText('Manual rate');
