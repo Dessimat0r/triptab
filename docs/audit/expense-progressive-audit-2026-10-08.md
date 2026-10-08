@@ -2,6 +2,8 @@
 
 8 October 2026 · Base: `main` at `b239d34` · Audit only: no application code has changed.
 
+> **Status: implemented.** Every recommendation is built on `claude/expense-progressive-flow`; see `expense-progressive-2026-10-08-implementation.md` for what changed and the measured results. File and line references below point at `b239d34`.
+
 This audit reviews Sol's "Expense Entry UX and Design Audit" from the same day, then audits the add-expense flow against Gary's brief. It is written as a handoff for Opus to implement.
 
 > Audit adding a new expense in detail. The interface seems rather cluttered and the CSS isn't great. It needs to be as simple as possible for the user, with the steps clearly laid out for ease of use. Make the steps truly progressive instead of feeling haphazard.

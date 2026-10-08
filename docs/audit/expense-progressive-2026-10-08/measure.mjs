@@ -62,7 +62,8 @@ async function measure(page) {
   return page.evaluate(() => {
     const editor = document.querySelector('.editor') || document.querySelector('.modal');
     if (!editor) return null;
-    const visible = el => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el); return r.width > 0 && r.height > 0 && s.visibility !== 'hidden'; };
+    // Content inside a closed <details> still has a layout box in Chromium; checkVisibility excludes it.
+    const visible = el => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el); return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && (!el.checkVisibility || el.checkVisibility({ contentVisibilityAuto: true })); };
     const all = Array.from(editor.querySelectorAll('*')).filter(visible);
     const controls = all.filter(el => el.matches('button, input:not([type=hidden]):not([type=file]), select, textarea, summary, a[href], label.receipt-capture-action'));
     const boxed = all.filter(el => {
@@ -131,13 +132,15 @@ async function run(viewport, prefix, mobile) {
   // C. Typed name/amount + foreign currency
   await page.getByRole('textbox', { name: 'Expense name', exact: true }).fill('Dinner');
   await page.getByRole('textbox', { name: 'Amount', exact: true }).fill('84.00');
-  await page.getByLabel('Original currency').selectOption('EUR');
+  await page.locator('#expense-currency-field').selectOption('EUR');
   await page.waitForTimeout(1200);
   await shot(page, `${prefix}-c-foreign`);
   await shot(page, `${prefix}-c-foreign`, { tall: true });
 
   // D. Custom split -> itemised editor
-  await page.getByRole('button', { name: 'Custom split', exact: true }).click();
+  // Before: a "Custom split" link. After: the split method opens in place.
+  if (await page.getByRole('button', { name: 'Custom split', exact: true }).count()) await page.getByRole('button', { name: 'Custom split', exact: true }).click();
+  else { await page.locator('.split-method > summary').first().click(); await page.getByRole('button', { name: 'By percentage', exact: true }).click(); }
   await page.waitForTimeout(300);
   await shot(page, `${prefix}-d-custom-split`);
   await shot(page, `${prefix}-d-custom-split`, { tall: true });
@@ -150,7 +153,8 @@ async function run(viewport, prefix, mobile) {
   await page.getByRole('button', { name: 'Add expense', exact: true }).click();
   await page.locator('.editor').waitFor();
   await page.getByRole('textbox', { name: 'Expense name', exact: true }).fill('Groceries');
-  await page.getByRole('button', { name: 'Split by item' }).click();
+  if (await page.getByRole('button', { name: 'Split by item' }).count()) await page.getByRole('button', { name: 'Split by item' }).click();
+  else { await page.locator('.split-method > summary').first().click(); await page.getByRole('button', { name: 'By item', exact: true }).click(); }
   await page.waitForTimeout(200);
   await page.getByRole('button', { name: 'Add item' }).click();
   await page.getByRole('button', { name: 'Add item' }).click();
@@ -164,6 +168,17 @@ async function run(viewport, prefix, mobile) {
   await page.goto(base + '/expenses?receiptDraft=audit-draft&receiptTrip=audit-trip');
   await page.locator('.editor').waitFor();
   await page.waitForTimeout(1500);
+  results[`${prefix}-f-positions`] = await page.evaluate(() => {
+    const editor = document.querySelector('.editor');
+    const top = el => el ? Math.round(el.getBoundingClientRect().top + editor.scrollTop - editor.getBoundingClientRect().top) : null;
+    const item = document.querySelector('.item');
+    return { openScrollTop: editor.scrollTop, quickSplit: top(document.querySelector('.quick-split')), firstItem: top(item),
+      itemHeight: item ? Math.round(item.getBoundingClientRect().height) : null,
+      itemControls: item ? Array.from(item.querySelectorAll('button, input, select, summary')).filter(el => el.getClientRects().length && (!el.checkVisibility || el.checkVisibility({ contentVisibilityAuto: true }))).length : null,
+      footerHeight: Math.round(document.querySelector('.editor-footer').getBoundingClientRect().height),
+      unassignedMentions: (editor.innerText.match(/need(s)? people|owes this item|Unassigned|people assigned|Choose who shares|at least one person/gi) || []).length,
+      photoAffordances: Array.from(editor.querySelectorAll('button[aria-label="View receipt photo"], .receipt-view-photo, a[href^="/api/receipt"], .receipt-capture-original img')).filter(el => el.getClientRects().length && (!el.checkVisibility || el.checkVisibility({ contentVisibilityAuto: true }))).length };
+  });
   await shot(page, `${prefix}-f-receipt`);
   await shot(page, `${prefix}-f-receipt`, { tall: true });
 
