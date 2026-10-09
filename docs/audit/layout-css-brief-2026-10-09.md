@@ -8,7 +8,7 @@
 
 > I want you to fully audit the layout and css of triptab. See if everything lines up evenly and can be clearly read. Particularly in mobile view. Some suggestions include making buttons in the same row like add expense and scan receipt spaced across the entire row. Also, pagination would be useful on panels with long lists or potential lists, for example your expenses.
 
-The audit confirmed both suggestions and found more. This brief turns the findings into 25 fixes, in five phases, each with the files to change, the change itself and a test of when it is done.
+The audit confirmed both suggestions and found more. This brief turns the findings into 25 fixes in five phases, preceded by a Phase 0 that adds the layout tests. Each fix gives the files to change, the change itself and a measurable test of when it is done.
 
 ## The problem in brief
 
@@ -42,7 +42,8 @@ Baseline numbers you will move:
 | Expense list height (24 rows) | 4,153px | 3,046px | 20 rows shown, then Show more |
 | Empty space right of Add expense / Scan receipt | wraps unevenly | 53px | 0px (row filled) |
 | Language preferences card padding | 0px | 0px | 20px on phones, 24px on desktop |
-| Right rail height below every tab | — | 839px | Hidden on phones |
+| Right rail height below every tab | — | 839px | Hidden on phones and narrow tablets (Fix 8) |
+| Payment row height, average | 168px | 163px | ≤ 120px at 390px (Fix 10) |
 | Travellers tab height | 6,321px | 5,960px | Fix 21 reduces it |
 | Expense date line contrast | 2.79:1 | 2.79:1 | ≥ 4.5:1 |
 
@@ -51,7 +52,7 @@ The "After" images in the evidence folder came from injecting [`preview.css`](la
 ## Ground rules for every phase
 
 1. **Use the tokens.** Write new or edited rules with `--space-1`…`--space-6` (4–32px), `--text-xs`…`--text-xl` and `--radius-s`/`--radius-m` (`globals.css:27-40`). Two values are deliberately not tokens: 20px panel padding on phones (Fix 22 adds `--panel-padding`) and 44px tap targets.
-2. **Reuse the existing breakpoints.** Use 700px for the phone layout, 480px for narrow phones and 359px for "stack pairs". The editor already stacks pairs at 359px (`expense-editor.css:1311-1316`). Do not add new widths.
+2. **Reuse the existing breakpoints.** Use 700px for the phone layout, 480px for narrow phones and 359px for "stack pairs". The editor already stacks pairs at 359px (`expense-editor.css:1311-1316`). The only new widths are the two rail thresholds in Fix 8 (815px and 901–1015px), which come from measurements.
 3. **Never hide overflow to pass a test.** The layout suite asserts that containers do not clip (`expense-layout.spec.ts`, the `clipping` checks). Fix the layout instead.
 4. **Keep tap targets at 44×44px or larger**, and keep text in overlays at 16px or more so iOS does not zoom (`globals.css:2015-2023`).
 5. **Do not add hard-coded colours.** Use `var(--surface)`, `var(--muted)`, `var(--line)` and the other variables, so dark mode needs no override. Check every change in both themes.
@@ -61,7 +62,12 @@ The "After" images in the evidence folder came from injecting [`preview.css`](la
 
 ## Implementation plan
 
-Write the Fix 17 spec first. It fails on base and should go green phase by phase.
+Start with a **Phase 0 PR** that adds the Fix 17 spec and nothing else. Then follow this protocol, so that every PR is green and nothing is silently left out:
+
+1. **Tag every case with its phase and fix**, e.g. `test('[P1·F3] action row fills the row', …)`. Commit cases for later phases as `test.fixme(…)`, with a comment naming the fix that activates them.
+2. **Record a baseline.** Before marking anything `fixme`, run the spec on base `60b39a5` in both engines. List every case that fails on base, with the reason, in the Phase 0 PR description. A case that fails on base but is not on that list is a bug in the test, not a known failure.
+3. **Each phase PR activates its own cases.** It turns its `test.fixme` into `test`, and must pass every active case plus the rest of `npm run test:layout`. It may never mark an already-active case `fixme`.
+4. **The last phase closes the gate.** Phase 5 adds a unit test in `tests/` that reads `tests/browser/main-layout.spec.ts` and fails if any `test.fixme(` remains. If Gary declines a fix (for example Fix 21), delete its cases rather than leaving them pending.
 
 ### Phase 1: CSS-only quick wins (Fixes 1–5)
 
@@ -217,35 +223,66 @@ The result on a phone:
 
 **Done when.** At 320px, a same-currency row's title column is at least 125px, and with the Appendix A fixture rows average 140px or less (125px or less at 390px). "Edit split" is hidden at or below 480px and visible above. The row is still one button plus the icon picker (two tab stops). Desktop is unchanged. The preview gave a 131px title at 320px and 201px at 390px.
 
-#### Fix 8. The right rail is out of reach on phones (M5)
+#### Fix 8. The right rail squeezes the list on phones and narrow tablets (M5)
 
-**Finding.** Below 700px, the rail (`aside.right-rail`, `trip-app.tsx:2342-2403`) stacks under every tab. It holds the group balance card (533px at 390px) and the "Snap it. Check it. Split it." card (290px): 839px in all. On Expenses it starts 3,538px down at 390px (4,715px at 320px). Its Upload receipt button repeats Scan receipt.
+**Finding on phones.** Below 700px, the rail (`aside.right-rail`, `trip-app.tsx:2342-2403`) stacks under every tab. It holds the group balance card (533px at 390px) and the "Snap it. Check it. Split it." card (290px): 839px in all. On Expenses it starts 3,538px down at 390px (4,715px at 320px). Its Upload receipt button repeats Scan receipt.
+
+**Finding at tablet and small-desktop widths.** Whenever the layout has two columns, the rail is 270–280px wide. Measured with the Appendix A fixture:
+
+| Viewport | Sidebar | List width | Narrowest title | Average row | Tallest row |
+| --- | --- | ---: | ---: | ---: | ---: |
+| 701px | drawer | 355px | 129px | 150px | 223px |
+| 768px | drawer | 422px | 196px | 129px | 173px |
+| 820px | drawer | 474px | 248px | 124px | 137px |
+| 900px | drawer | 554px | 328px | 120px | 137px |
+| 901px | 210px | 355px | 129px | 150px | 223px |
+| 1024px | 210px | 478px | 252px | 124px | 137px |
+| 1150px | 210px | 604px | 378px | 120px | 137px |
+| 1440px | 248px | 776px | 550px | 119px | 119px |
+
+At 701px and 901px the list is as narrow as a 390px phone before Fix 6. Rows settle at about 124px once the list is about 470px wide. So the rail should give way whenever the list would be narrower than about 470px: up to 815px, and from 901px to 1015px.
 
 **Change.**
 
-1. In `Home`, build the balance card JSX once (`2343-2382`) as `const groupBalance = (inline: boolean) => …`. Render `groupBalance(false)` in the rail as now.
-2. At the top of the `"balances"` case (`1632`), render `groupBalance(true)`. Give it the extra class `balance-card--inline`, and leave out its "View settlements" button, since you are already on that tab.
-3. CSS:
+1. In `Home`, build the balance card JSX once (`2343-2382`), as `const groupBalance = (inline: boolean) => …`. Render `groupBalance(false)` in the rail as now.
+2. At the top of the `"balances"` case (`1632`), render `groupBalance(true)`. Give it the extra class `balance-card--inline`, and leave out its "View settlements" button, since you are already on that tab. Once Fix 7's `<ShowMore>` exists (Phase 3), show 8 travellers in the inline card and then Show more (list key `balance`).
+3. CSS. These widths follow from the table: the sidebar is a drawer up to 900px and takes 210px from 901px.
 
-```css
-.balance-card--inline { display: none; }
-@media (max-width: 700px) {
-  .right-rail { display: none; }
-  .balance-card--inline { display: block; margin-bottom: var(--space-5); }
-}
-```
+   ```css
+   .balance-card--inline { display: none; }
+   @media (max-width: 815px), (min-width: 901px) and (max-width: 1015px) {
+     .content-grid { display: flex; flex-direction: column; gap: 24px; }
+     .right-rail { display: none; }
+     .balance-card--inline { display: block; margin-bottom: var(--space-5); }
+   }
+   ```
 
-Then delete the rail's ≤700px rules that no longer apply (`globals.css:1243-1258`).
+   A container query on a wrapper around `.content-grid` would express "content narrower than X" directly, and is acceptable: the icon picker portals its overlay to `document.body` (`expense-icon.tsx:81`). Never put `container-type` on `main`, though. It contains the fixed tab bar, and containment can turn `main` into the tab bar's containing block.
+4. Delete the rail's ≤700px rules that no longer apply (`globals.css:1243-1258`).
 
-**Done when.** At or below 700px, no `.right-rail` is visible on any tab, Balances shows the group balance above "Settle up", and the Expenses page is about 839px shorter. Above 700px nothing changes.
+**Done when.**
+- In those ranges (phones, 701–815px, 901–1015px), no `.right-rail` is visible on any tab, and Balances shows the group balance above "Settle up".
+- At 816–900px and from 1016px, the rail shows and the list is at least 470px wide.
+- At 768px the narrowest expense title is at least 250px.
+- From Phase 3, with 50 travellers, the inline card shows 8 travellers and Show more.
+- Measure at 701, 768, 815, 816, 820, 900, 901, 1015, 1016 and 1024px, and in landscape at 844×390.
 
 #### Fix 9. Statement links lose alignment (M6)
 
-**Finding.** `.statement-link` (`globals.css:1490-1516`; markup `trip-app.tsx:1673`) is a wrapping flex row. When a name wraps ("Maximiliana Konstantinopoulou"), "View statement" drops to the left under it, while every other row right-aligns it. See `05-statements-travellers-downloads.png`.
+**Finding.** `.statement-link` (`globals.css:1490-1516`; markup `trip-app.tsx:1673`) is a wrapping flex row with `overflow-wrap: anywhere`. When a name wraps ("Maximiliana Konstantinopoulou"), "View statement" drops to the left under it, while every other row right-aligns it. See `05-statements-travellers-downloads.png`.
 
-**Change.** Replace `display: flex; flex-wrap: wrap; justify-content: space-between;` with `display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: var(--space-4);`. Add `white-space: nowrap` to `.statement-link > span:last-child`.
+**Change.** Keep the wrapping flex row, and push the link right whether it wraps or not:
 
-**Done when.** At 320–430px, the right edge of "View statement" is identical (±1px) on every row, including the long name.
+```css
+.statement-link { overflow-wrap: break-word; }   /* was anywhere: split a word only when it is wider than the whole row */
+.statement-link > span:last-child { margin-left: auto; white-space: nowrap; }
+```
+
+Do not use a two-column grid here. At 320px an `auto` column for "View statement" leaves about 120px for the name, and "Konstantinopoulou" would split. With the flex row, a long name takes the first line, and "View statement" wraps to a second line that is still right-aligned.
+
+These results come from injecting this CSS, with the Appendix A fixture. At 100% and 200% text, every row's right edge is identical (281px at 320px, 351px at 390px), with no split words and no overflow. At 200% text, all 6 rows wrap at 320px and 2 wrap at 390px, and they stay aligned.
+
+**Done when.** At 320–430px and at 200% text, the right edge of "View statement" is identical (±1px) on every row, and no word is split unless that word alone is wider than the row.
 
 #### Fix 12. Traveller rows break emails mid-word (M11)
 
@@ -287,24 +324,36 @@ Optional, only if it stays small: make "Not linked" a text button, "Invite", tha
 
 #### Fix 7. Pagination with "Show more" (Gary's suggestion)
 
-**Finding.** Only History is paged (20 per request, `activity-panel.tsx:462`). Everything else renders in full, while the schema allows 1,000 expenses, 1,000 payments and 100 drafts (`lib/model.ts:320-321`):
+**Finding.** Only the two activity histories are paged: holiday History (`activity-panel.tsx:462`) and private account history in Profile & app settings (`account-activity-panel.tsx:63`, "Load older account changes"). Both fetch 20 events at a time from the server. Everything else renders in full, while the schema allows 50 travellers, 1,000 expenses, 1,000 payments and 100 drafts (`lib/model.ts:319-321`). The whole ledger is already in the browser, so paging these is a rendering change, with no API work.
 
-| List | Where | Measured at 390px | Page size |
-| --- | --- | --- | ---: |
-| Your expenses | `trip-app.tsx:1572` | 24 rows, 3,046px | 20 |
-| Statement expenses | `member-statement.tsx:73-74` | 24 entries, 4,540px inside the dialog | 10 |
-| Statement payments | `member-statement.tsx:92-93` | 5 entries, 433px | 10 |
-| Recorded payments | `trip-app.tsx:1679` | 9 rows, 1,470px | 5 |
-| Receipt inbox | `trip-app.tsx:1723` | 6 drafts, 655px | 10 |
-| Activity | `activity-panel.tsx:453-462` | 20 events, 2,951px | Keep server paging (Fix 16 restyles it) |
+| List | Where | Measured at 390px | Decision |
+| --- | --- | --- | --- |
+| Your expenses | `trip-app.tsx:1572` | 24 rows, 3,046px | Page by 20 |
+| Statement expenses | `member-statement.tsx:73-74` | 24 entries, 4,540px inside the dialog | Page by 10 |
+| Statement payments | `member-statement.tsx:92-93` | 5 entries, 433px | Page by 10 |
+| Recorded payments | `trip-app.tsx:1679` | 9 rows, 1,470px | Page by 5 |
+| Receipt inbox | `trip-app.tsx:1723` | 6 drafts, 655px | Page by 10 |
+| Travellers | `trip-app.tsx:1805` | 6 rows, 567px; **50 travellers: 3,603px** | Page by 10; the add-traveller form stays visible below |
+| Traveller display names | `trip-details.tsx:120-125` | 6 forms; **50 travellers: 9,821px** | Page by 10; Fix 14 also removes the idle Save buttons |
+| Group balance, inline on phones | Fix 8 | 6 rows, 533px; **50 travellers: 3,393px** | Show 8, then Show more (Fix 8) |
+| Holiday History | `activity-panel.tsx:453-462` | 20 events, 2,951px | Keep server paging; restyle (Fix 16) |
+| Account history | `account-activity-panel.tsx:63` | — | Keep server paging; full-width button on phones (Fix 13) |
+| Active invitations | `trip-sharing.tsx:119-144` | 1 | **Out of scope.** The list API returns the first 200 rows and a `hasMore` flag, with no cursor (`app/api/invite/route.ts:139`), so the UI can only show "More older invitations exist". Paging needs API work. Track it as a follow-up. |
 
-The whole ledger is already in the browser, so this is a rendering change only, with no API work.
+With 50 travellers the Travellers tab is 20,369px tall at 390px, which is why both of its lists are paged.
+
+**Order: "Recently added".** Payments and drafts are appended when saved (`trip-app.tsx:1371`, `912`, `1176`), and neither has a recorded-at field (`lib/model.ts:309-312`). Reversing them at render time therefore means "most recently added first". That is what this fix needs, because it guarantees a just-saved entry is on the first page. It is **not** date order: a backdated payment recorded today comes first, and a ledger whose stored order is not entry order (an import, or MCP writes) shows its stored order reversed.
+
+- Render `[...trip.payments].reverse()` and `[...trip.drafts].reverse()`. Never change the stored order.
+- Label these lists "Recently added", not "Newest first".
+- Expenses already prepend on save (`trip-app.tsx:1254`), so their current "Newest first" label means the same thing. Relabel it "Recently added", so all three lists say what they do. Do not change the Expenses order: whether it should sort by transaction date is Gary's open question.
+- Test: a backdated payment appears first; editing a payment keeps its position; a newly uploaded draft appears first; a stored order that isn't entry order renders exactly reversed.
 
 **Pattern.** A "Show more" button adds the next page in place. Do not use numbered pages: Show more keeps the scroll position, gives one large tap target, and matches Load older changes.
 
 **Implementation.**
 
-1. **New `components/paged-list.tsx`** exporting a footer component:
+1. **New `components/paged-list.tsx`** with the footer:
 
    ```tsx
    export function ShowMore({ shown, total, step, noun, onMore }: {
@@ -312,29 +361,42 @@ The whole ledger is already in the browser, so this is a rendering change only, 
    }) {
      if (shown >= total) return null;
      return <div className="list-more">
-       <p className="muted" aria-live="polite">Showing {shown} of {total} {noun}</p>
+       <p className="muted">Showing {shown} of {total} {noun}</p>
        <button type="button" className="quiet" onClick={onMore}>Show {Math.min(step, total - shown)} more</button>
      </div>;
    }
    ```
 
-2. **State lives in `Home`** (rule 7). Use one map, so counts survive tab switches and each holiday starts fresh:
+2. **State lives in `Home`** (rule 7), scoped to the account *and* the holiday. Use the derived-state pattern of `useActivityPages` (`activity-panel.tsx:61`):
 
    ```tsx
-   const [shownCounts, setShownCounts] = useState<Record<string, number>>({});
-   const shownCount = (key: string, step: number) => shownCounts[key] ?? step;
-   const showMore = (key: string, step: number) => setShownCounts(c => ({ ...c, [key]: (c[key] ?? step) + step }));
+   const pageScope = `${profile?.id ?? ""}:${trip?.id ?? ""}`;
+   const [paging, setPaging] = useState<{ scope: string; counts: Record<string, number> }>({ scope: "", counts: {} });
+   const counts = paging.scope === pageScope ? paging.counts : {};
+   const shownCount = (list: string, step: number) => counts[list] ?? step;
+   const showMore = (list: string, step: number) => setPaging(previous => {
+     const current = previous.scope === pageScope ? previous.counts : {};
+     return { scope: pageScope, counts: { ...current, [list]: (current[list] ?? step) + step } };
+   });
    ```
 
-   Keys are `${trip.id}:expenses`, `${trip.id}:payments` and `${trip.id}:drafts`. `MemberStatement` is its own component, mounted per open, so a local `useState` per section is fine there.
+   The resulting behaviour:
+   - Switching tabs within a holiday keeps every count.
+   - Switching holiday, or account (including sign-out and sign-in), starts every list on its first page. Returning to a holiday (A→B→A) also starts on the first page.
+   - A background refresh keeps the count. Display `Math.min(count, total)`, so deleted entries never leave a stale "Showing 20 of 18".
 
-3. **Render** `list.slice(0, shownCount(key, step))`. Put `<ShowMore>` inside the list's `.panel`, after the last row, so it reads as part of the list.
+   `MemberStatement` keeps its own `useState` per section; it remounts each time it opens.
 
-4. **Order, so a new entry is never hidden.** Expenses are already newest first (`trip-app.tsx:1254` prepends). Payments (`1371`) and drafts (`912`, `1176`) are appended, so a new one would land beyond page one. Render both reversed: `[...trip.payments].reverse()` and `[...trip.drafts].reverse()`. Do not change the stored order. Add "Newest first" to the Recorded payments and Receipt inbox headings, as Expenses has (`trip-app.tsx:1568`).
+3. **Render** `list.slice(0, shownCount(key, step))`, with `<ShowMore>` inside the list's `.panel` after the last row. Give each row `data-entry-id={entry.id}`.
 
-5. **Focus.** After Show more, move focus to the first newly revealed row's main control (`.expense-open`, a draft's Review button, a payment's Edit button). Store the previous count in a ref, and focus in a `useEffect` after the new rows render.
+4. **Focus and scroll.**
+   - On Show more, read the ID of the first entry about to appear (index `shown`). After the render, focus that entry's main control by ID with `focus({ preventScroll: true })`. The entry renders where the button was, so the page does not move. Then call `scrollIntoView({ block: "nearest" })`, which only scrolls if the focus ring is off-screen.
+   - Do this for keyboard and touch alike. It also stops focus falling to `<body>` when the button disappears on the final batch.
+   - If that entry has gone by the time it renders (a refresh removed it), focus the entry now at that index, or the list's heading if none remains.
+   - A background refresh that inserts a row at the top shifts the slice by one. It must not move focus or announce anything.
+   - Announce "Showing 40 of 57 expenses" through one visually hidden `role="status"` element, updated only by a Show more press. The visible count line is not a live region, so refreshes stay silent.
 
-6. **CSS** in `globals.css`:
+5. **CSS** in `globals.css`:
 
    ```css
    .list-more { display: grid; gap: var(--space-2); justify-items: center; padding: var(--space-4); border-top: 1px solid var(--line); text-align: center; }
@@ -342,79 +404,112 @@ The whole ledger is already in the browser, so this is a rendering change only, 
    @media (max-width: 700px) { .list-more { justify-items: stretch; } }
    ```
 
-**Not in this fix:** search, filters, server paging, and date headers on Expenses (see Open question).
+**Not in this fix:** search, filters, server paging, invitation paging, and date headings on Expenses.
 
 **Done when.** With the Appendix A fixture:
 
-- Expenses shows 20 rows, "Showing 20 of 24 expenses" and "Show 4 more". Pressing it shows 24 rows, hides the footer and focuses row 21.
-- Switching to Balances and back still shows 24 rows. Switching holiday resets to 20.
+- Expenses shows 20 rows, "Showing 20 of 24 expenses" and "Show 4 more". Pressing it shows 24 rows, hides the footer and focuses row 21. The scroll position is unchanged (±2px), whether pressed by pointer or keyboard.
+- Switching to Balances and back keeps 24. A→B→A and an account switch both reset to 20.
+- A background refresh that adds an expense keeps the count, moves no focus and announces nothing.
 - A newly saved expense, payment or draft appears first.
-- Recorded payments shows 5 of 9, and Receipts shows all 6 with no footer.
-- The statement dialog shows 10 of 24 expenses.
+- Recorded payments shows 5 of 9; Receipts shows all 6 with no footer.
+- The statement dialog shows 10 of 24 expenses and follows the same focus rules.
+- With 50 travellers, Travellers and Display names each show 10, and the inline group balance shows 8.
 
 #### Fix 10. Payment rows take three lines and show raw dates (M7)
 
 **Finding.** Each row (`trip-app.tsx:1679-1705`) puts "Jordan paid Alex", the raw ISO date `2026-07-10` and the method on separate lines. On phones it adds a second grid row for the amount and buttons (`globals.css:1700-1722`), so rows are 163px each. See `06-payments-history.png`.
 
-**Change.** Use this markup (the class `payment-actions` is already taken by the payment dialog, `globals.css:1481`):
+**Change.** Two flex lines per row. The class `payment-actions` is already taken by the payment dialog (`globals.css:1481`), so the row's buttons get a new name.
 
 ```tsx
-<div className="payment" key={p.id}>
-  <span className="payment-summary">{name(p.from)} paid {name(p.to)}</span>
-  <b className="payment-amount">{money(p.amount, trip.currency)}</b>
-  <small className="payment-meta">{formatCalendarDate(p.date)}{p.time ? ` · ${p.time}` : ""}{p.method ? ` · ${p.method}` : ""}</small>
-  <span className="payment-row-actions">{/* Edit, Undo recorded payment: unchanged */}</span>
+<div className="payment" key={p.id} data-entry-id={p.id}>
+  <div className="payment-line">
+    <span className="payment-summary">{name(p.from)} paid {name(p.to)}</span>
+    <b className="payment-amount">{money(p.amount, trip.currency)}</b>
+  </div>
+  <div className="payment-line">
+    <small className="payment-meta">{formatCalendarDate(p.date)}{p.time ? ` · ${p.time}` : ""}{p.method ? ` · ${p.method}` : ""}</small>
+    <span className="payment-row-actions">{/* Edit and Undo recorded payment, unchanged */}</span>
+  </div>
   {p.note && <small className="payment-note">{p.note}</small>}
 </div>
 ```
 
 ```css
-.payment {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  grid-template-areas: "summary amount" "meta actions" "note note";
-  column-gap: var(--space-3);
-  row-gap: var(--space-1);
-  align-items: center;
-}
-.payment-summary { grid-area: summary; overflow-wrap: break-word; }
-.payment-amount { grid-area: amount; text-align: right; font-variant-numeric: tabular-nums; }
-.payment-meta { grid-area: meta; color: var(--muted); }
-.payment-row-actions { grid-area: actions; display: flex; gap: var(--space-2); justify-content: flex-end; }
-.payment-note { grid-area: note; color: var(--muted); overflow-wrap: break-word; }
+.payment { display: block; padding: var(--space-4) 22px; }
+.payment-line { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-3); min-width: 0; }
+.payment-line + .payment-line { margin-top: var(--space-1); }
+.payment-line > :first-child { flex: 1 1 12em; min-width: 0; overflow-wrap: break-word; }
+.payment-line > :last-child { flex: 0 1 auto; min-width: 0; margin-left: auto; }
+.payment-amount { font-variant-numeric: tabular-nums; overflow-wrap: anywhere; text-align: right; }
+.payment-meta { color: var(--muted); margin: 0; }
+.payment-row-actions { display: flex; gap: var(--space-2); }
+.payment-note { margin-top: var(--space-1); color: var(--muted); overflow-wrap: break-word; }
 ```
 
 Delete the old `.payment` rules (`724-738`, `1517-1520`) and the ≤480px block (`1700-1722`).
 
-**Done when.** At 390px a row without a note is at most 110px. Dates read "10 Jul 2026". The order is newest first (Fix 7).
+Why flex rather than a grid: the `12em` basis grows with text size. At 320px, below 360px, or at 200% text, the amount and then the buttons wrap onto their own lines, still right-aligned, without a breakpoint. A grid with an `auto` column for the buttons squeezes the name instead.
+
+These results come from rebuilding the rows in the browser with this markup and CSS. The first row carries the worst case: a 50-character name ("Bartholomew Alexander Fitzgerald-Montgomery Smythe"), an 80-character method, the maximum amount (€1,000,000.00, `MAX_AMOUNT`, `lib/model.ts:51`) and a 300-character note.
+
+| Viewport | Text | Worst-case row | Other rows, average | Overflow | Split words | Buttons |
+| --- | --- | ---: | ---: | --- | --- | --- |
+| 320px | 100% | 338px | 148px | None | None | 44px, right-aligned |
+| 320px | 200% | 1,148px | 337px | None | None | 44px, right-aligned |
+| 390px | 100% | 265px | 114px | None | None | 44px, right-aligned |
+| 390px | 200% | 831px | 297px | None | None | 44px, right-aligned |
+
+Today the average is 168px at 320px and 163px at 390px. "Split words" counts only a word that fits the line but was broken anyway; a break after a hyphen ("Fitzgerald-" / "Montgomery") is allowed. 200% text was approximated by setting the root font size to 32px, so the few px-sized texts did not scale. Check real browser text zoom in WebKit.
+
+**Done when.** At 320px and 390px, at 100% and 200% text, and with the worst-case row above: no overflow, no split words, buttons at least 44px and right-aligned. A row without a note is at most 120px at 390px. Dates read "10 Jul 2026", and the order is Recently added (Fix 7).
 
 #### Fix 11. One date format (G3)
 
-**Finding.** Dates are formatted in seven places, three different ways:
+**Finding.** Dates are formatted in ten places, four different ways. Keep two kinds strictly apart: **calendar dates** (stored `YYYY-MM-DD`: expense, payment, holiday and FX dates), which must never shift with the viewer's time zone; and **instants** (ISO timestamps: activity, refresh, messages, invitations), which show in the viewer's zone.
 
-| Where | Output |
-| --- | --- |
-| `trip-app.tsx:94-98` (`expenseDate`), `member-statement.tsx:14-17` (`displayDate`) | "28 Jul 2026" (en-GB), duplicated |
-| `trip-app.tsx:1683` (payments) | Raw `2026-07-10` |
-| `activity-panel.tsx:169-174` (`auditTimestamp`, not exact), `account-activity-panel.tsx:47`, `restoration-notice.tsx:7` | Device locale, `timeStyle: "long"`: seconds and a zone name, e.g. "28 Jul 2026, 18:00:00 BST", and US order on en-US devices |
-| `trip-sharing.tsx:124`, `receipt-chat.tsx:32` | Device locale, short time |
+| Call site | Shows today | Kind | Replace with |
+| --- | --- | --- | --- |
+| `trip-app.tsx:94-98` `expenseDate` (used at `1594`, `2716`) | "28 Jul 2026" | Calendar | `formatCalendarDate` |
+| `member-statement.tsx:14-17` `displayDate` (used at `77`, `86`, `98`) | "28 Jul 2026" | Calendar | `formatCalendarDate` |
+| `trip-app.tsx:1683` recorded payments | Raw "2026-07-10" | Calendar | `formatCalendarDate` |
+| `trip-app.tsx:2220` holiday start in the page heading | "4 Jul" (`toLocaleDateString("en-GB")`) | Calendar | `formatCalendarDate(value, { year: false })` |
+| `trip-app.tsx:2223` "Refreshed 08:00" | `toLocaleTimeString("en-GB")` | Instant | `formatClockTime` |
+| `activity-panel.tsx:169-174` `auditTimestamp` without `exact` (used at `457`) and `account-activity-panel.tsx:47` | Device locale, seconds and zone name: "28 Jul 2026, 18:00:00 BST" | Instant | `formatInstant`; History rows show the time only, under day headings (Fix 16) |
+| `restoration-notice.tsx:7` | Device locale, seconds and zone name | Instant | `formatInstant` |
+| `trip-sharing.tsx:124` invitation expiry | Device locale, short | Instant | `formatInstant` |
+| `receipt-chat.tsx:28-38` `messageTime` | Device locale, no year: "Jul 28, 06:00 PM" | Instant | `formatInstant(value, { year: false })`. Text only; the editor layout is out of scope. |
 
-**Change.** Add two helpers to `lib/dates.ts` and use them everywhere above:
+**Exceptions, which stay as they are:**
+- `auditTimestamp(value, true)`, the exact ISO form with "(UTC)" used in activity details and records (`activity-panel.tsx:244`, `266`, `315`, `363`, `377`, `409`; `account-activity-panel.tsx:51`).
+- Export and CSV formats.
+- Time-zone detection with `Intl.DateTimeFormat().resolvedOptions().timeZone` (`trip-app.tsx:693`, `740`, `1358`; `payment-editor.tsx:37`).
+- Number formatting with `toLocaleString` (`share-split.tsx:205`, `activity-panel.tsx:375`).
+- The vendored `components/ui/*`.
+
+**Change.** Add these to `lib/dates.ts` and use them at every site in the table:
 
 ```ts
-const calendarFormat = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
-/** "28 Jul 2026" for a stored YYYY-MM-DD calendar date. */
-export function formatCalendarDate(value: string): string {
-  return validCalendarDate(value) ? calendarFormat.format(new Date(`${value}T00:00:00Z`)) : 'Invalid date';
-}
-const instantFormat = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
-/** "28 Jul 2026, 18:00" for an instant, in the viewer's own time zone. */
-export function formatInstant(value: string | Date): string { /* invalid → 'Date unavailable' */ }
+/** "28 Jul 2026" (or "28 Jul") for a stored YYYY-MM-DD calendar date; never shifted by the viewer's zone. */
+export function formatCalendarDate(value: string, options: { year?: boolean } = {}): string
+/** "28 Jul 2026, 18:00" (or "28 Jul, 18:00") for an instant, in the viewer's zone or `timeZone`. */
+export function formatInstant(value: string | Date, options: { year?: boolean; timeZone?: string } = {}): string
+/** "18:00" for an instant, in the viewer's zone or `timeZone`. */
+export function formatClockTime(value: string | Date, options: { timeZone?: string } = {}): string
+/** "Tue 28 Jul 2026" for an instant's local day (History day headings, Fix 16). */
+export function formatInstantDay(value: string | Date, options: { timeZone?: string } = {}): string
 ```
 
-Keep `auditTimestamp(value, true)`, the exact ISO form, unchanged. Activity details and exports rely on it.
+Format calendar dates as `${value}T00:00:00Z` with `timeZone: 'UTC'`, as `member-statement.tsx` does now. Use `en-GB` for all four, with `hourCycle: 'h23'`. Invalid input returns "Invalid date" (calendar) or "Date unavailable" (instants), matching the current wording.
 
-**Done when.** No component calls `toLocaleString` or `toLocaleDateString` for display, apart from the vendored `components/ui/*`. Unit tests in `tests/` cover both helpers, including invalid input.
+**Done when.**
+- No display code outside the exceptions calls `toLocaleString`, `toLocaleDateString` or `toLocaleTimeString`, or builds its own `Intl.DateTimeFormat`.
+- Unit tests in `tests/` cover:
+  - invalid input for each helper;
+  - a calendar date formatted with the process in `Pacific/Kiritimati` (UTC+14) and in `Pacific/Pago_Pago` (UTC−11), each still giving the same day;
+  - an instant near midnight UTC passed with explicit `timeZone` values on either side of midnight, giving different days;
+  - `auditTimestamp(value, true)` output unchanged.
 
 #### Fix 16. History heading, spacing and paging button (G5, M15)
 
@@ -425,7 +520,7 @@ Keep `auditTimestamp(value, true)`, the exact ISO form, unchanged. Activity deta
 - Use the same heading markup as the other tabs: `div.sectionheading` > `h2` + `span.muted` ("Updates automatically").
 - Remove the top margin, padding and border for `.activity-panel:not(.receipt-activity)`.
 - Put the event list in a `.panel` with `padding: 0 var(--panel-padding)`. The last event has no bottom border.
-- Group events under day headings: an `h3` with the date of `createdAt` in the viewer's time zone (add a `formatDay` helper beside Fix 11's, e.g. "Tue 28 Jul 2026"). Show only the time ("18:00") on each event row. Keep `li.activity-event` (tests use it).
+- Group events under day headings: an `h3` with the date of `createdAt` in the viewer's time zone, via `formatInstantDay` from Fix 11 ("Tue 28 Jul 2026"). Show only the time ("18:00") on each event row. Keep `li.activity-event` (tests use it).
 - On phones, make "Load older changes" full width (Fix 13's `.phone-wide`).
 
 **Done when.** "Activity" starts at the same y as "Your expenses" does on the Expenses tab (±2px). Events sit in a card under day headings. Load older changes still loads page 2.
@@ -458,7 +553,7 @@ Keep `auditTimestamp(value, true)`, the exact ISO form, unchanged. Activity deta
 | Create invite link | `trip-sharing.tsx:106` | `phone-wide` |
 | Replace link · Revoke | `trip-sharing.tsx:~127` | Already a 2-column grid (`globals.css:2848-2852`); switch it to `button-row` and delete that rule |
 | Save holiday details | `trip-details.tsx:114-117` | Make it `primary` and `phone-wide`. Move the "saved" `<p>` out of the row, below it. |
-| Load older changes | `activity-panel.tsx:462` | `phone-wide` |
+| Load older changes, Load older account changes | `activity-panel.tsx:462`, `account-activity-panel.tsx:63` | `phone-wide` |
 
 **Done when.** On the Travellers tab at 390px, every button in a `.button-row` is exactly the width of its grid column, and a single button is full width. Above 700px the buttons look as they do today.
 
@@ -476,23 +571,33 @@ Keep `auditTimestamp(value, true)`, the exact ISO form, unchanged. Activity deta
 
 **Change.**
 
-1. Make `.payment-editor .payment-actions` stick to the bottom of the scrolling `.modal`:
+1. **Reuse the editor's sticky-footer hook.** `useStickyFooterReveal(scroller)` (`components/editor-footer-reveal.ts`) already does the hard part for the expense editor:
+   - it publishes the footer's live height as `--editor-footer-height` on the scrolling dialog;
+   - it scrolls a focused control back into view when the footer would cover it;
+   - it re-reveals the focused control when a phone keyboard shrinks the dialog.
+
+   Attach it to the payment dialog's actions: `const footerRef = useStickyFooterReveal(".payment-editor")` and `<div className="payment-actions" ref={footerRef}>`. Do not rely on a fixed `scroll-padding-bottom`.
+2. **CSS**, following `.editor-footer` (`expense-editor.css:998-1010`):
 
    ```css
+   .payment-editor { scroll-padding-bottom: calc(var(--editor-footer-height, 96px) + var(--space-3)); }
    .payment-editor .payment-actions {
      position: sticky; bottom: 0; z-index: 1;
      margin: var(--space-5) -28px 0; padding: var(--space-3) 28px;
      background: var(--surface); border-top: 1px solid var(--line);
    }
    @media (max-width: 700px) { .payment-editor .payment-actions { margin-inline: -22px; padding-inline: 22px; } }
-   .payment-editor { scroll-padding-bottom: 96px; }
    ```
 
-   The negative margins match `.modal`'s padding (`globals.css:923`, `1320`).
+   The negative margins match `.modal`'s padding (`globals.css:923`, `1320`). The dialog keeps its single scroll area, and `.modal`'s `max-height` already follows `--viewport-height` (`globals.css:925`, `1322`).
+3. **Keep Date and Time side by side down to 360px.** Add `fieldpair--keep` to that pair (`payment-editor.tsx:159`). Then add global rules: `.fieldpair.fieldpair--keep` gets two columns at or below 480px and stacks below 360px. Leave Paid by / Paid to stacked, because long names truncate in a half-width select.
 
-2. Keep Date and Time side by side down to 360px. Add `fieldpair--keep` to that pair (`payment-editor.tsx:159`), then add a global rule: `@media (max-width: 480px) { .fieldpair.fieldpair--keep { grid-template-columns: repeat(2, minmax(0, 1fr)); } }` and stack it below 360px. Leave Paid by / Paid to stacked, since long names truncate in a half-width select.
-
-**Done when.** At 390×844 the main button is visible without scrolling, in both the details and review steps. A focused field is never hidden behind the footer (mirror the editor test, `quick-expense.spec.ts` "a focused field is never left behind the pinned footer"). The keyboard tests on `/balances` in `expense-layout.spec.ts` still pass.
+**Done when.** At 320×568 and 390×844, in both the details step and the review step:
+- The main button is visible without scrolling, with the keyboard closed.
+- With the keyboard open (use the visual-viewport harness in `expense-layout.spec.ts` "phone keyboard"), focusing the Note textarea leaves it fully visible above the footer, and the footer stays above the keyboard.
+- An error message shown after Review payment is visible, with the button reachable.
+- Exactly one element scrolls, and the page does not show behind the dialog (`html[data-keyboard-open]` still hides `.shell`).
+- The existing tests "keeps a centred dialog above the keyboard" and "landscape payment" still pass.
 
 #### Fix 18. Add a receipt: capture buttons stack early; "optional" wraps (M17)
 
@@ -502,24 +607,47 @@ Keep `auditTimestamp(value, true)`, the exact ISO form, unchanged. Activity deta
 
 **Done when.** At 390px both dialogs show the pair side by side, and at 320px both stack. "Receipt location optional" is on one line. `expense-progressive.spec.ts` "the inbox and the editor offer the same capture actions and wording" still passes.
 
-#### Fix 19. The holiday drawer has no backdrop (M18)
+#### Fix 19. The holiday drawer is not a proper drawer (M18)
 
-**Finding.** When the drawer opens below 900px (`trip-app.tsx:2070-2146`, `menu` state), the page beside it stays bright and looks tappable.
+**Finding.** Below 900px the sidebar opens as a drawer (`trip-app.tsx:2070-2146`, `menu` state), but it does not behave like one:
+- there is no backdrop, so the page beside it stays bright and looks tappable;
+- Escape does nothing, focus stays on "Open holidays", and Tab moves through the page behind;
+- closing the drawer does not restore focus;
+- the page behind can still scroll.
 
-**Change.** After `</aside>`, render `{menu && <div className="sidebar-backdrop" aria-hidden="true" onClick={() => setMenu(false)} />}`.
+**Change.** Treat the open drawer as a modal navigation layer.
 
-```css
-.sidebar-backdrop { display: none; }
-@media (max-width: 900px) {
-  .sidebar-backdrop { display: block; position: fixed; inset: 0; z-index: 35; background: #19213f70; }
-  .sidebar.visible { z-index: 40; }
-}
-@media (prefers-color-scheme: dark) { .sidebar-backdrop { background: #040812b8; } }
-```
+1. **Share the modal behaviour.** `ModalA11y` (`components/modal-accessibility.tsx:41-120`) already provides:
+   - Escape to close;
+   - a Tab trap;
+   - focus moved inside on open and restored on close;
+   - scroll locking on `html` and `body`;
+   - stacking with other modals.
 
-The z-order is: topbar 25, tab bar 30, backdrop 35, drawer 40, dialogs 50. The colours match `.overlay` (`globals.css:888`, `2238`).
+   Extract that effect into a hook, `useModalLayer(rootRef, { active, onClose })`, with `ModalA11y` calling it unchanged. Then call it from `Home` for the sidebar, with `active: menu && narrow`.
+2. **`narrow`** comes from `matchMedia("(max-width: 900px)")`. If the window widens past 900px while the drawer is open, close it (`setMenu(false)`), so nothing stays locked.
+3. **Make the page inert.** While the drawer is open, set `inert` on `.workspace` (React 19 accepts the `inert` prop, already used at `trip-app.tsx:2660`). That covers the tab bar too, since it sits inside `.workspace`.
+4. **Backdrop.** After `</aside>`, render `{menu && <div className="sidebar-backdrop" aria-hidden="true" onClick={() => setMenu(false)} />}`. It is pointer-only; keyboard users have Escape and the close button.
 
-**Done when.** Tapping the backdrop closes the drawer, and the tab bar is dimmed under it. `sidebar-assistant.spec.ts` still passes.
+   ```css
+   .sidebar-backdrop { display: none; }
+   @media (max-width: 900px) {
+     .sidebar-backdrop { display: block; position: fixed; inset: 0; z-index: 35; background: #19213f70; }
+     .sidebar.visible { z-index: 40; overflow-y: auto; overscroll-behavior: contain; }
+   }
+   @media (prefers-color-scheme: dark) { .sidebar-backdrop { background: #040812b8; } }
+   ```
+
+   The z-order is: topbar 25, tab bar 30, backdrop 35, drawer 40, dialogs 50 (`.overlay`), icon picker 110. The colours match `.overlay` (`globals.css:888`, `2238`).
+5. **Initial focus** goes to the current holiday's button, or to "Close holiday menu".
+
+**Done when.**
+- Tab and Shift+Tab stay inside the open drawer.
+- Escape, the close button, the backdrop, and choosing a holiday each close it, and focus returns to "Open holidays".
+- A wheel or touch scroll over the backdrop does not move the page; the drawer scrolls on its own.
+- At 320×568, with the account-setup card showing, the account button at the bottom of the drawer can be scrolled to and pressed.
+- `sidebar-assistant.spec.ts` still passes.
+- Check manually with VoiceOver in Safari on an iPhone.
 
 #### Fix 20. Main actions in dialogs on phones (M19)
 
@@ -531,7 +659,7 @@ The z-order is: topbar 25, tab bar 30, backdrop 35, drawer 40, dialogs 50. The c
 
 ### Phase 5: Structure and cleanup (Fixes 21–25)
 
-#### Fix 21. Shorten the Travellers tab (M14). Check with Gary before starting.
+#### Fix 21. Shorten the Travellers tab (M14). Gary decides; do not implement without his go-ahead.
 
 **Finding.** The tab is 5,960px at 390px. Measured section heights: Holiday details with display names 2,126px, Invite 824px, Travellers 567px, Download 517px, Language 284px.
 
@@ -542,7 +670,7 @@ The z-order is: topbar 25, tab bar 30, backdrop 35, drawer 40, dialogs 50. The c
 - Your receipt language preferences
 - Download your data
 
-Open a section automatically while it shows an error, a success message or unsaved edits. Reuse the editor's chevron (`expense-editor.css:822-829`). This is a UX change, so confirm it with Gary first.
+Open a section automatically while it shows an error, a success message or unsaved edits. Reuse the editor's chevron (`expense-editor.css:822-829`). This is a product decision, so it is Gary's to make; Fix 7 already pages both long lists either way. Another option to put to him: merge display-name editing into the traveller rows, since today the same people are listed twice.
 
 #### Fix 22. One padded card pattern (G4)
 
@@ -582,28 +710,40 @@ Also:
 
 #### Fix 25. Move `globals.css` onto the tokens (G1)
 
-Collapse the 23 font sizes (0.65rem to 1.9rem) to the scale: 0.75, 0.875, 1, 1.25, 1.5, and 2rem for the page title. Add `--text-2xl: 2rem`. Replace raw spacing with `--space-*`, rounding to the nearest token; where a value sits between two tokens (18px, 22px), pick by eye at 390px and 1440px. Do it component by component, one commit each, with a screenshot pair per commit. This is the largest fix and the least urgent. Do it last, and do not mix it with behaviour changes.
+This is a visual change, not a mechanical cleanup. Do it last, in its own PRs, after the functional fixes have settled.
+
+1. **Inventory first.** Commit a table of every raw length and font size in `globals.css`: its selector, value, and the token it would map to. Do this with a script, not by eye.
+2. **Map exact matches mechanically.** For example, 16px becomes `--space-4` and 0.875rem becomes `--text-s`. These commits must change no geometry.
+3. **Treat values between tokens (18px, 22px, 0.95rem) as design decisions.** Either add a named token with a reason (such as `--panel-padding` or `--row-padding`), or round to a neighbour and list the visual change in the PR description. Never round silently.
+4. **Make one component per commit:** top bar, stats, tabs, expense list, and so on.
+5. **For each commit, compare geometry before and after.** Record the bounding boxes of that component's elements with a script, at 320px, 390px, 768px and 1440px, in light and dark mode, and at 200% text. Screenshots alone are not enough. Unintended movement over 1px fails the commit.
+6. **Do not mix this with any behaviour change**, and do not let it alter the breakpoints or row heights that the earlier phases fixed. The Fix 17 spec must stay green throughout.
+
+Collapse font sizes towards 0.75, 0.875, 1, 1.25 and 1.5rem, plus 2rem for the page title (add `--text-2xl`), only where step 3 accepts the change.
 
 ## Fix 17: the layout spec to write first
 
-Create `tests/browser/main-layout.spec.ts`, using the Appendix A fixture and `fixtures()` routing. Run it at 320×740, 375×667, 390×844 and 430×932 (touch), plus 768×1024 and 1440×900. Repeat the checks marked † in dark mode at 390px. Playwright already runs both Chromium and WebKit.
+Create `tests/browser/main-layout.spec.ts`, using the Appendix A fixture and `fixtures()` routing, in the Phase 0 PR (see "Implementation plan" for the gating protocol). Run it at 320×740, 375×667, 390×844 and 430×932 (touch), plus 768×1024 and 1440×900. Repeat the checks marked † in dark mode at 390px, and the checks marked ‡ at 200% text. Playwright already runs Chromium and WebKit.
 
-| # | Assertion | Covers |
-| --- | --- | --- |
-| 1 | On each tab, `scrollWidth <= clientWidth` for the document † | Fix 4 |
-| 2 | **No word split across lines** in `.expense-details b`, `.draft` text, `.member-identity b`, `.statement-link > span:first-child`, `.payment-summary`. For each word (split on whitespace; skip tokens over 24 characters and emails), create a `Range` over it; `getClientRects()` must return exactly 1 rect † | Fixes 1, 6, 10, 12 |
-| 3 | `.expense-entry-actions` from 360px to 700px: buttons equal width (±1px), spanning the row edge to edge; below 360px stacked, each full width; above 700px natural width | Fix 3 |
-| 4 | Every `.button-row` child at or below 700px equals its column width; a lone child is full width | Fix 13 |
-| 5 | `.personal-language-settings`, `.sharing-panel` and `.trip-details-panel` have `padding-left` of at least 20px, and their headings share one x (±1px) | Fixes 2, 22 |
-| 6 | "View statement" right edges are equal (±1px) on all rows | Fix 9 |
-| 7 | **Contrast:** for every visible text element in `main`, `.tabs` and `.topbar`, the contrast of its colour against the nearest opaque ancestor background is at least 4.5:1 (3:1 for 24px+, or 18.66px+ bold) † | Fix 5 |
-| 8 | All visible buttons, links and summaries on the five tabs are at least 44×44px | Ground rule 4 |
-| 9 | Pagination: the "Done when" list in Fix 7 | Fix 7 |
-| 10 | At or below 700px, `.right-rail` is hidden and Balances shows `.balance-card--inline`; above 700px the reverse | Fix 8 |
-| 11 | At 320px, the draft text column is at least 120px and the expense title column at least 125px; average expense row height at most 140px | Fixes 1, 6 |
-| 12 | The drawer backdrop closes the drawer | Fix 19 |
+Measure geometry; do not compare screenshots. The assertions must catch real defects without forcing awkward layouts:
 
-Measure, don't screenshot-compare: the existing specs measure geometry, and so should this one.
+| # | Phase | Assertion | Covers |
+| --- | --- | --- | --- |
+| 1 | P1 | On each tab, the document's `scrollWidth <= clientWidth` † ‡ | Fix 4 |
+| 2 | P1–P3 | **No avoidable word splits and no clipping** in `.expense-details b`, the `.draft` text, `.member-identity b`, `.statement-link > span:first-child`, `.payment-summary` and `.payment-meta`. Split text into words on whitespace, treating a hyphen as the end of a word, since breaking after a hyphen is allowed. For each word, build a `Range` and read `getClientRects()`. A word with more than one rect fails **only if its total width is at most the element's content width**: a word wider than its whole box may break. Also, each element's `scrollWidth <= clientWidth`, and no ancestor up to the row clips it (`overflow` not hidden or clip). Activate per list as its fix lands: drafts in P1, expenses in P2, traveller names and statement links in P2, payments in P3. † ‡ | Fixes 1, 6, 9, 10, 12 |
+| 3 | P1 | `.expense-entry-actions`: from 360px to 700px, buttons have equal width (±1px) and span the row edge to edge; below 360px they stack, each full width; above 700px they keep their natural width. ‡ (at 200% text, stacking is allowed) | Fix 3 |
+| 4 | P1 | `.personal-language-settings` has `padding-left` of at least 20px, and its heading's x matches the Holiday details heading (±1px). P5 extends this to `.sharing-panel`, `.trip-details-panel` and the compact export card. | Fixes 2, 22 |
+| 5 | P1 | **Contrast:** for each visible text element in `main`, `.tabs` and `.topbar`, its colour against the nearest ancestor with an opaque background is at least 4.5:1, or 3:1 for text that is 24px+, or 18.66px+ bold. Skip disabled controls (WCAG exempts them). † | Fix 5 |
+| 6 | P2 | "View statement" right edges are equal (±1px) on all rows. ‡ | Fix 9 |
+| 7 | P2 | In the rail ranges of Fix 8, `.right-rail` is hidden and Balances shows `.balance-card--inline`; outside them, the reverse | Fix 8 |
+| 8 | P2 | At 320px, the expense title column is at least 125px for a same-currency row, and the average row height is at most 140px | Fix 6 |
+| 9 | P3 | Pagination, order and focus: every item in the Fix 7 "Done when" list | Fix 7 |
+| 10 | P4 | Every `.button-row` child at or below 700px equals its column width, and a lone child is full width | Fix 13 |
+| 11 | P4 | Drawer: every item in the Fix 19 "Done when" list, except the VoiceOver check | Fix 19 |
+| 12 | P4 | Record payment: every item in the Fix 15 "Done when" list | Fix 15 |
+| 13 | P1 | **Tap targets:** intended tap targets are at least 44×44px. That means `button`, `.quiet`, `.primary`, `.iconbutton`, `.textbutton`, the tab bar's links, `summary` elements used as disclosure controls, and form controls. **Inline links inside a sentence are exempt**, as WCAG 2.5.8 allows (e.g. the links in `.footnote` and `.error`). For those, check instead that no two inline targets are closer than 24px edge to edge. Keep the list of exempt selectors in the spec, with the reason for each. | Ground rule 4 |
+
+Before relying on a new assertion, prove it fails: run it against a version with the bug (base `60b39a5` for most cases) and confirm it fails for the right reason.
 
 ## Rules that must not regress
 
@@ -616,7 +756,9 @@ Measure, don't screenshot-compare: the existing specs measure geometry, and so s
 
 ## Decisions taken in this brief (Gary can overrule)
 
-- Payments and receipt drafts render newest first, to match Expenses, so paging never hides a new entry.
+- Payments and receipt drafts render **Recently added** first (stored order reversed at render time), so paging never hides a new entry. Expenses already work this way; all three lists are labelled "Recently added" instead of "Newest first" (Fix 7). This is entry order, not date order.
+- Active invitations stay unpaged, because the API has no cursor (Fix 7).
+- The rail gives way at 701–815px and 901–1015px as well as on phones, based on the measurements in Fix 8.
 - Display names keep per-row saving; Save simply hides until it is needed (Fix 14).
 - Phones lose the "Snap it. Check it. Split it." card (Fix 8): Scan receipt and the Receipts tab already cover it.
 
