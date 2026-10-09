@@ -1911,7 +1911,7 @@ export default function Home({ children }: { children: ReactNode }) {
     <ReceiptCapture
       part={part}
       contextFields={part === "status" ? undefined : <div className="receipt-capture-context">
-        {!entry.receiptId && <><label htmlFor="receipt-upload-notes">Who bought what? <small>optional</small></label><textarea id="receipt-upload-notes" rows={3} maxLength={4000} value={captureNotes} disabled={uploading || saving || receiptProcessing} placeholder="Gary had a decaf, I had a cappuccino. We each had 2 croissants." onChange={event => setCaptureNotes(event.target.value)} /></>}
+        {!entry.receiptId && <><label htmlFor="receipt-upload-notes">Who bought what? <small>optional</small></label><textarea id="receipt-upload-notes" autoComplete="off" rows={3} maxLength={4000} value={captureNotes} disabled={uploading || saving || receiptProcessing} placeholder="Gary had a decaf, I had a cappuccino. We each had 2 croissants." onChange={event => setCaptureNotes(event.target.value)} /></>}
         <ReceiptLocationFields key={`${profile?.id}:${current.id}:${entry.id}:${receiptSession.current}`} value={{ location: entry.location, locationHint: entry.locationHint }} onChange={setEditorPlace} disabled={uploading || saving || receiptProcessing} />
       </div>}
       receiptId={entry.receiptId}
@@ -2951,6 +2951,7 @@ export default function Home({ children }: { children: ReactNode }) {
                         </p>
                         <textarea
                           aria-label="Itemised JSON"
+                          autoComplete="off"
                           value={paste}
                           onChange={(e) => setPaste(e.target.value)}
                           placeholder="Paste the items from your assistant"

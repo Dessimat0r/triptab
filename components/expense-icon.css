@@ -4,7 +4,7 @@
 .expense-icon-trigger:hover .expense-symbol { box-shadow: 0 0 0 3px var(--line); }
 .expense-open { display: flex; align-items: center; gap: 15px; min-width: 0; flex: 1; width: 100%; padding: 0; border: 0; background: transparent; color: var(--ink); text-align: left; cursor: pointer; }
 .overlay.icon-picker-overlay { z-index: 110; padding: 16px; }
-.modal.icon-picker { max-width: 560px; max-height: calc(100dvh - 32px); padding: 24px; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; }
+.modal.icon-picker { max-width: 560px; max-height: calc(var(--viewport-height, 100dvh) - 32px); padding: 24px; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; }
 .icon-picker .modalheading { align-items: center; margin-bottom: 18px; }
 .icon-picker .modalheading h2 { font-size: 1.25rem; }
 .icon-picker-preview { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }

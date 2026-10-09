@@ -46,7 +46,7 @@ export default function ReceiptUploadDialog({ busy, nativeAvailable, error, onCl
     <section className="modal receipt-upload-dialog" role="dialog" aria-modal="true" aria-labelledby={titleId} aria-busy={locked}>
       <div className="modalheading"><h2 id={titleId}>Add a receipt</h2><button type="button" className="iconbutton" aria-label="Close receipt upload" disabled={persisting} onClick={close}><X /></button></div>
       <label htmlFor={noteId}>Who bought what? <small>optional</small></label>
-      <textarea id={noteId} rows={3} maxLength={4000} value={notes} disabled={locked} placeholder="In Bratislava. Gary had a decaf, I had a cappuccino. We each had 2 croissants." onChange={event => setNotes(event.target.value)} />
+      <textarea id={noteId} autoComplete="off" rows={3} maxLength={4000} value={notes} disabled={locked} placeholder="In Bratislava. Gary had a decaf, I had a cappuccino. We each had 2 croissants." onChange={event => setNotes(event.target.value)} />
       <p className="footnote">Use your own words, including nicknames. The assistant uses the holiday’s travellers and remembered context.</p>
       <details className="receipt-upload-place"><summary>Receipt location <small>optional</small></summary><ReceiptLocationFields value={place} onChange={setPlace} disabled={locked} /></details>
       <div className="receipt-capture-inputs">

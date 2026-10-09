@@ -1094,7 +1094,7 @@
   flex-direction: column;
   width: min(760px, 100%);
   min-width: 0;
-  max-height: calc(100dvh - 32px);
+  max-height: calc(var(--viewport-height, 100dvh) - 32px);
   overflow: hidden;
 }
 .receipt-photo-dialog .modalheading {
@@ -1189,18 +1189,24 @@
 
 /* ── Phones ─────────────────────────────────────────────────────────────── */
 @media (max-width: 480px) {
-  .editor-overlay {
+  /* The editor fills the screen, so the backdrop only shows behind a
+     translucent keyboard, where it should read as the editor's own surface. */
+  .overlay.editor-overlay {
     align-items: stretch;
     padding: 0;
+    background: var(--surface);
+    backdrop-filter: none;
   }
+  /* Only the area above the keyboard: the footer stays on screen and the page
+     never shows below it. */
   .editor,
   .editor.editor--narrow {
-    height: 100dvh;
-    max-height: 100dvh;
+    height: var(--viewport-height, 100dvh);
+    max-height: var(--viewport-height, 100dvh);
     border-radius: 0;
   }
   .editor form > .modalheading {
-    padding: 10px var(--space-4);
+    padding: calc(10px + env(safe-area-inset-top)) var(--space-4) 10px;
   }
   .editor .expense-title-input {
     font-size: var(--text-l);
@@ -1230,8 +1236,10 @@
   .expense-payer {
     max-width: none;
   }
+  /* Clear the home indicator, unless the keyboard already covers it. */
   .editor-footer {
-    padding: var(--space-3) var(--space-4);
+    padding: var(--space-3) var(--space-4)
+      calc(var(--space-3) + max(0px, env(safe-area-inset-bottom) - var(--keyboard-inset, 0px)));
   }
   /* Total and Save share one row even on a 320px phone. */
   .editor-footer > div:not(.save-checklist) {
@@ -1287,7 +1295,7 @@
     display: none;
   }
   .receipt-photo-dialog {
-    max-height: calc(100dvh - 20px);
+    max-height: calc(var(--viewport-height, 100dvh) - 20px);
     padding: var(--space-4);
   }
 }

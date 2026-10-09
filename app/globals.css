@@ -875,9 +875,16 @@ label > small {
 .error button {
   margin-left: 12px;
 }
+/* Overlays follow the visible area above a phone keyboard; see
+   components/visual-viewport.ts. Moving `bottom` with `top` keeps the overlay
+   screen-tall, and the transparent bottom border keeps content out from under
+   the keyboard while the overlay's background still covers the page there. */
 .overlay {
   position: fixed;
   inset: 0;
+  top: var(--viewport-top, 0px);
+  bottom: calc(0px - var(--viewport-top, 0px));
+  border-bottom: var(--keyboard-inset, 0px) solid transparent;
   background: #19213f70;
   backdrop-filter: blur(3px);
   z-index: 50;
@@ -892,7 +899,7 @@ label > small {
   border-radius: 18px;
   padding: 28px;
   box-shadow: 0 20px 80px #14204230;
-  max-height: calc(100dvh - 48px);
+  max-height: calc(var(--viewport-height, 100dvh) - 48px);
   overflow: auto;
   width: 100%;
 }
@@ -1289,7 +1296,7 @@ input[type="datetime-local"]::-webkit-date-and-time-value {
   .modal {
     padding: 22px;
     border-radius: 14px;
-    max-height: calc(100dvh - 30px);
+    max-height: calc(var(--viewport-height, 100dvh) - 30px);
   }
   
   

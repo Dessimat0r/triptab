@@ -294,3 +294,103 @@ for (const [width,columns] of [[360,3],[361,4],[480,4],[481,5]] as const) {
     });
   });
 }
+
+/**
+ * iOS opens the keyboard by shrinking the visual viewport and panning it down,
+ * which carries a fixed overlay up the screen. No desktop engine shows that
+ * keyboard, so this reports the same viewport geometry iOS does. Layout
+ * coordinates here are screen coordinates shifted by the pan.
+ */
+async function setKeyboard(page: Page, keyboard: { height: number; pan: number } | null) {
+  await page.evaluate(keyboard => {
+    const viewport = window.visualViewport!;
+    if (keyboard) {
+      Object.defineProperty(viewport, 'height', { configurable: true, get: () => innerHeight - keyboard.height });
+      Object.defineProperty(viewport, 'offsetTop', { configurable: true, get: () => keyboard.pan });
+    } else {
+      delete (viewport as unknown as Record<string, unknown>).height;
+      delete (viewport as unknown as Record<string, unknown>).offsetTop;
+    }
+    viewport.dispatchEvent(new Event('resize'));
+  }, keyboard);
+}
+
+test.describe('phone keyboard', () => {
+  // An iPhone 16/17 Pro; 396 px is its keyboard with the AutoFill bar.
+  const screen = { width: 402, height: 874 };
+  const keyboard = 396;
+  test.use({ viewport: screen, hasTouch: true, isMobile: true });
+  for (const pan of [keyboard, 0]) {
+    test(`keeps the editor above the keyboard and covers the page behind it${pan ? ' when iOS pans the viewport' : ''}`, async ({ page }) => {
+      await fixtures(page);
+      await page.goto('/expenses');
+      await page.locator('.expense-open').first().click();
+      await expect(page.locator('.editor')).toBeVisible();
+      await expect(page.getByRole('textbox', { name: 'Expense name', exact: true })).toBeFocused();
+      await page.locator('.item-edit > summary').first().click();
+      // A field on screen where the keyboard will appear, the case that makes iOS pan.
+      const found = await page.locator('.editor').evaluate((editor, target) => {
+        const field = Array.from(editor.querySelectorAll<HTMLElement>('.editor-body :is(input:not([type=checkbox], [type=radio], [type=file]), textarea)'))
+          .find(element => element.checkVisibility() && element.getBoundingClientRect().top + editor.scrollTop >= target);
+        if (field) editor.scrollTop = field.getBoundingClientRect().top + editor.scrollTop - target;
+        field?.setAttribute('data-keyboard-field', '');
+        return !!field;
+      }, screen.height - keyboard + 40);
+      expect(found).toBe(true);
+      const field = page.locator('[data-keyboard-field]');
+      await field.focus();
+      await expect(field).toBeFocused();
+      expect((await field.boundingBox())!.y).toBeGreaterThan(screen.height - keyboard);
+      await setKeyboard(page, { height: keyboard, pan });
+      const visibleBottom = pan + screen.height - keyboard;
+      await expect.poll(() => page.locator('.editor').evaluate(editor => Math.round(editor.getBoundingClientRect().bottom))).toBe(visibleBottom);
+      const geometry = await page.locator('.editor').evaluate(editor => {
+        const overlay = editor.closest<HTMLElement>('.editor-overlay')!;
+        const footer = editor.querySelector('.editor-footer')!.getBoundingClientRect();
+        const focused = document.activeElement!.getBoundingClientRect();
+        const style = getComputedStyle(overlay);
+        return {
+          overlay: [overlay.getBoundingClientRect().top, overlay.getBoundingClientRect().bottom].map(Math.round),
+          editorTop: Math.round(editor.getBoundingClientRect().top),
+          footerBottom: Math.round(footer.bottom),
+          focusedVisible: focused.top >= editor.getBoundingClientRect().top && focused.bottom <= footer.top,
+          keyboardInset: style.borderBottomWidth,
+          opaque: !/rgba\(.*, 0(\.\d+)?\)/.test(style.backgroundColor),
+          overlayScroll: overlay.scrollHeight - overlay.clientHeight,
+        };
+      });
+      // The overlay spans the whole screen, keyboard included, so no page shows.
+      expect(geometry.overlay).toEqual([pan, pan + screen.height]);
+      expect(geometry.opaque).toBe(true);
+      expect(geometry.keyboardInset).toBe(`${keyboard}px`);
+      expect(geometry.overlayScroll).toBeLessThanOrEqual(1);
+      // The editor fills the visible area, with Save directly above the keyboard.
+      expect(geometry.editorTop).toBe(pan);
+      expect(geometry.footerBottom).toBe(visibleBottom);
+      expect(geometry.focusedVisible).toBe(true);
+
+      // Closing the keyboard restores the full-screen editor with no leftover offset.
+      await setKeyboard(page, null);
+      await expect.poll(() => page.locator('.editor').evaluate(editor => {
+        const bounds = editor.getBoundingClientRect();
+        return [Math.round(bounds.top), Math.round(bounds.bottom)];
+      })).toEqual([0, screen.height]);
+      expect(await page.locator('.editor-overlay').evaluate(overlay => getComputedStyle(overlay).borderBottomWidth)).toBe('0px');
+    });
+  }
+
+  test('keeps a centred dialog above the keyboard', async ({ page }) => {
+    await fixtures(page);
+    await page.goto('/balances');
+    await page.getByRole('button', { name: 'Record payment', exact: true }).click();
+    const dialog = page.locator('.payment-editor');
+    await expect(dialog).toBeVisible();
+    await dialog.locator('textarea').focus();
+    await setKeyboard(page, { height: keyboard, pan: keyboard });
+    // The dialog moves with the pan and fits between the top of the screen and the keyboard.
+    await expect.poll(() => dialog.evaluate((element, [top, bottom]) => {
+      const bounds = element.getBoundingClientRect();
+      return bounds.top >= top && bounds.bottom <= bottom;
+    }, [keyboard, screen.height])).toBe(true);
+  });
+});

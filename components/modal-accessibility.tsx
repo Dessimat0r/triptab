@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, type ReactNode } from 'react';
+import { useVisualViewportBounds } from '@/components/visual-viewport';
 
 const openModals: HTMLElement[] = [];
 let originalOverflow: { body: string; document: string } | null = null;
@@ -51,6 +52,7 @@ export default function ModalA11y({ children, onClose, className }: {
   );
 
   useEffect(() => { closeRef.current = onClose; }, [onClose]);
+  useVisualViewportBounds(rootRef);
 
   useEffect(() => {
     const root = rootRef.current;

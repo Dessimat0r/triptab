@@ -26,6 +26,6 @@
 }
 @media (max-width: 480px) {
   .confirmation-overlay { padding: 16px; }
-  .confirmation-sheet { padding: 20px; max-height: calc(100dvh - 32px); }
+  .confirmation-sheet { padding: 20px; max-height: calc(var(--viewport-height, 100dvh) - 32px); }
   .confirmation-actions button { flex: 1 1 100px; }
 }
