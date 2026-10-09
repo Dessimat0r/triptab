@@ -314,7 +314,12 @@ export default function Home({ children }: { children: ReactNode }) {
     update(); query.addEventListener("change", update);
     return () => query.removeEventListener("change", update);
   }, []);
-  useModalLayer(sidebarRef, { active: menu && narrow, onClose: () => setMenu(false) });
+  const menuButton = useRef<HTMLButtonElement>(null);
+  // Start on the current holiday and return to "Open holidays": Safari does not
+  // focus a tapped button, so the element focused on open may be <body>.
+  useModalLayer(sidebarRef, { active: menu && narrow, onClose: () => setMenu(false),
+    initialFocus: root => root.querySelector<HTMLElement>(".tripnav button.active") ?? root.querySelector<HTMLElement>(".sidebar-close"),
+    restoreFocus: () => menuButton.current });
   const languageSettings = useTripLanguagePreferences(profile?.id || "", trip?.id || "");
   const [newTripLanguage,setNewTripLanguage] = useState<ReceiptLanguage | "auto">("auto");
   const createForm = useRef<HTMLFormElement>(null);
@@ -1565,14 +1570,7 @@ export default function Home({ children }: { children: ReactNode }) {
   ])), [editing?.timezone]);
   const name = (id: string) =>
     trip?.members.find((m) => m.id === id)?.name || "Unknown";
-  const groupBalance = (inline: boolean) => trip ? (
-                  <div className={"group-balance" + (inline ? " balance-card--inline" : "")}>
-                    <div className="sectionheading">
-                      <h2>The group balance</h2>
-                      <Users size={18} />
-                    </div>
-                    <div className="panel balance-card">
-                    <PagedList {...page(inline ? "balance" : "rail-balance", inline ? 8 : 50)} step={8} noun="travellers">{trip.members.map((m, i) => (
+  const balanceRow = (m: Trip["members"][number], i: number) => (
                       <div className="balance-row" key={m.id} data-entry-id={m.id} tabIndex={-1}>
                         <span className={"avatar color" + (i % 5)}>
                           {m.name.slice(0, 1).toUpperCase()}
@@ -1596,10 +1594,20 @@ export default function Home({ children }: { children: ReactNode }) {
                                 : "muted"
                           }
                         >
-                          {calculationError ? "—" : money(Math.abs(balance[i]), trip.currency)}
+                          {calculationError ? "—" : money(Math.abs(balance[i]), trip!.currency)}
                         </b>
                       </div>
-                    ))}</PagedList>
+  );
+  const groupBalance = (inline: boolean) => trip ? (
+                  <div className={"group-balance" + (inline ? " balance-card--inline" : "")}>
+                    <div className="sectionheading">
+                      <h2>The group balance</h2>
+                      <Users size={18} />
+                    </div>
+                    <div className="panel balance-card">
+                    {inline
+                      ? <PagedList {...page("balance", 8)} noun="travellers" items={trip.members} itemKey={m => m.id} renderItem={balanceRow} />
+                      : trip.members.map(balanceRow)}
                     {!inline && <button
                       className="wide quiet"
                       onClick={() => setView("balances")}
@@ -1619,7 +1627,7 @@ export default function Home({ children }: { children: ReactNode }) {
                       </div>
                       <div className="panel expense-list">
                         {trip.expenses.length ? (
-                          <PagedList {...page("expenses", 20)} step={20} noun="expenses">{trip.expenses.map((e) => (
+                          <PagedList {...page("expenses", 20)} noun="expenses" items={trip.expenses} itemKey={e => e.id} renderItem={(e) => (
                             <div
                               className="expense"
                               key={e.id} data-entry-id={e.id} tabIndex={-1}
@@ -1664,7 +1672,7 @@ export default function Home({ children }: { children: ReactNode }) {
                               </span>
                               </button>
                             </div>
-                          ))}</PagedList>
+                          )} />
                         ) : (
                           <div className="empty">
                             <Receipt size={30} />
@@ -1688,7 +1696,7 @@ export default function Home({ children }: { children: ReactNode }) {
                       <p className="footnote">Suggested transfers simplify the balances. Record what was actually transferred; partial payments and different pairs are supported.</p>
                       <div className="panel">
                         {calculationError ? <p className="error">Review the flagged receipts before using settlement suggestions.</p> : due.length ? (
-                          <PagedList {...page("settlements", 10)} step={10} noun="suggested transfers">{due.map((d, i) => (
+                          <PagedList {...page("settlements", 10)} noun="suggested transfers" items={due} itemKey={d => `${d.from}:${d.to}`} renderItem={(d, i) => (
                             <div className="settlement" key={i} data-entry-id={`${d.from}:${d.to}`} tabIndex={-1}>
                               <div>
                                 <strong>{name(d.from)}</strong>
@@ -1703,7 +1711,7 @@ export default function Home({ children }: { children: ReactNode }) {
                                 <Check size={16} /> Record paid
                               </button>
                             </div>
-                          ))}</PagedList>
+                          )} />
                         ) : (
                           <div className="empty">
                             <CheckCircle2 size={30} />
@@ -1721,13 +1729,13 @@ export default function Home({ children }: { children: ReactNode }) {
                       </p>
                       <h2 className="subheading">Traveller statements</h2>
                       <div className="panel">
-                        <PagedList {...page("statements", 10)} step={10} noun="traveller statements">{trip.members.map(member => <button key={member.id} data-entry-id={member.id} className="statement-link" onClick={() => setStatement(member.id)}><span>{member.name}</span><span>View statement</span></button>)}</PagedList>
+                        <PagedList {...page("statements", 10)} noun="traveller statements" items={trip.members} itemKey={member => member.id} renderItem={member => <button key={member.id} data-entry-id={member.id} className="statement-link" onClick={() => setStatement(member.id)}><span>{member.name}</span><span>View statement</span></button>} />
                       </div>
                       {trip.payments.length > 0 && (
                         <>
                           <h2 className="subheading">Recorded payments<small className="muted">Recently added</small></h2>
                           <div className="panel">
-                            <PagedList {...page("payments", 5)} step={5} noun="payments">{[...trip.payments].reverse().map((p) => (
+                            <PagedList {...page("payments", 5)} noun="payments" items={[...trip.payments].reverse()} itemKey={p => p.id} renderItem={(p) => (
                               <div className="payment" key={p.id} data-entry-id={p.id} tabIndex={-1}>
                                 <div className="payment-line"><span className="payment-summary">{name(p.from)} paid {name(p.to)}</span>
                                 <b className="payment-amount">{money(p.amount, trip.currency)}</b></div>
@@ -1752,7 +1760,7 @@ export default function Home({ children }: { children: ReactNode }) {
                                 </button></span></div>
                                 {p.note && <small className="payment-note">{p.note}</small>}
                               </div>
-                            ))}</PagedList>
+                            )} />
                           </div>
                         </>
                       )}
@@ -1769,7 +1777,7 @@ export default function Home({ children }: { children: ReactNode }) {
                       </div>
                       <div className="panel">
                         {trip.drafts.length ? (
-                          <PagedList {...page("drafts", 10)} step={10} noun="receipt drafts">{[...trip.drafts].reverse().map((d) => (
+                          <PagedList {...page("drafts", 10)} noun="receipt drafts" items={[...trip.drafts].reverse()} itemKey={d => d.id} renderItem={(d) => (
                             <div className="draft" key={d.id} data-entry-id={d.id} tabIndex={-1}>
                               <div className="draft-visual">
                               {d.receiptId && (
@@ -1818,7 +1826,7 @@ export default function Home({ children }: { children: ReactNode }) {
                                 <X size={17} />
                               </button>
                             </div>
-                          ))}</PagedList>
+                          )} />
                         ) : (
                           <div className="empty">
                             <Sparkles size={30} />
@@ -1851,7 +1859,7 @@ export default function Home({ children }: { children: ReactNode }) {
                         </span>
                       </div>
                       <div className="panel members">
-                        <PagedList {...page("members", 10)} step={10} noun="travellers">{trip.members.map((m, i) => (
+                        <PagedList {...page("members", 10)} noun="travellers" items={trip.members} itemKey={m => m.id} renderItem={(m, i) => (
                           <div className="member" key={m.id} data-entry-id={m.id} tabIndex={-1}>
                             <span className={"avatar color" + (i % 5)}>
                               {m.name.slice(0, 1).toUpperCase()}
@@ -1859,7 +1867,7 @@ export default function Home({ children }: { children: ReactNode }) {
                             <div className="member-identity"><b>{m.name}</b>{m.email && <small>{m.email}</small>}</div>
                             <span className={"member-status" + (m.userId ? " connected" : "")}>{m.userId ? "Account connected" : "Not linked"}</span>
                           </div>
-                        ))}</PagedList>
+                        )} />
                         <form
                           className="add-member"
                           onSubmit={async (e) => {
@@ -2196,6 +2204,7 @@ export default function Home({ children }: { children: ReactNode }) {
         <header className="topbar">
           <div>
             <button
+              ref={menuButton}
               className="mobile-menu iconbutton"
               aria-label="Open holidays"
               aria-expanded={menu}

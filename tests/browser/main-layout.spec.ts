@@ -305,3 +305,65 @@ test('payment review and focused Note remain reachable above a simulated phone k
   const confirm = await dialog.getByRole('button', { name: 'Confirm payment', exact: true }).boundingBox();
   expect(confirm!.y + confirm!.height).toBeLessThanOrEqual(844);
 });
+
+test('drawer starts on the current holiday and returns to its opener however it closes', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 }); await fixtures(page); await page.goto('/expenses');
+  const open = page.getByRole('button', { name: 'Open holidays' });
+  const current = page.locator('#holiday-sidebar .tripnav button.active');
+  await open.click(); await expect(current).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  expect(await page.locator('#holiday-sidebar').evaluate(el => el.contains(document.activeElement))).toBe(true);
+  await page.getByRole('button', { name: 'Close holiday menu' }).click(); await expect(open).toBeFocused();
+  // Safari does not focus a tapped button, so open without focusing it: focus must still come back.
+  await open.evaluate(button => { (document.activeElement as HTMLElement | null)?.blur(); (button as HTMLButtonElement).click(); });
+  await expect(current).toBeFocused();
+  await page.locator('.sidebar-backdrop').click({ position: { x: 370, y: 400 } }); await expect(open).toBeFocused();
+});
+
+test('paged rows keep their row borders and lists contain only list items', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 }); await fixtures(page);
+  await page.goto('/travellers');
+  const names = page.locator('.trip-traveller-names .traveller-name-form');
+  await expect(names).toHaveCount(6);
+  expect(await names.evaluateAll(forms => forms.map(form => getComputedStyle(form).borderBottomWidth))).toEqual(['1px', '1px', '1px', '1px', '1px', '0px']);
+  await page.goto('/balances');
+  expect(await page.locator('.statement-link').last().evaluate(link => getComputedStyle(link).borderBottomWidth)).toBe('0px');
+  // 5 of 9 payments show: the last row's border and the Show more footer's border are one line.
+  expect(await page.locator('.payment').last().evaluate(row =>
+    Math.round(row.closest('.paged-list')!.querySelector('.list-more')!.getBoundingClientRect().top - row.getBoundingClientRect().bottom))).toBe(-1);
+  expect(await page.locator('.payment-meta').first().evaluate(meta => getComputedStyle(meta).marginTop)).toBe('0px');
+  await page.locator('.statement-link').first().click();
+  const roles = await page.getByRole('dialog').getByRole('list').first().evaluate(list => Array.from(list.children, child => child.getAttribute('role')));
+  expect(roles.length).toBe(10);
+  expect(new Set(roles)).toEqual(new Set(['listitem']));
+  await page.keyboard.press('Escape');
+  await page.goto('/history'); await expect(page.locator('.activity-event')).toHaveCount(20);
+  await expect(page.locator('#panel-history').getByText(/updates automatically/i)).toHaveCount(1);
+});
+
+test('saving a traveller name keeps focus in its row', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 }); await fixtures(page); await page.goto('/travellers');
+  const input = page.getByRole('textbox', { name: 'Traveller 2 name', exact: true });
+  await input.fill('Samuel');
+  await page.getByRole('button', { name: 'Save traveller 2 name', exact: true }).focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('button', { name: 'Save traveller 2 name', exact: true })).toHaveCount(0);
+  await expect(input).toBeFocused();
+});
+
+test('closing a dialog with the phone keyboard open returns focus to its opener', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 }); await fixtures(page); await page.goto('/expenses');
+  const opener = page.getByRole('button', { name: 'Add expense', exact: true });
+  await opener.click();
+  await page.getByRole('textbox', { name: 'Expense name', exact: true }).focus();
+  await page.evaluate(() => {
+    const viewport = window.visualViewport!;
+    Object.defineProperty(viewport, 'height', { configurable: true, get: () => innerHeight - 396 });
+    viewport.dispatchEvent(new Event('resize'));
+  });
+  await expect(page.locator('html')).toHaveAttribute('data-keyboard-open', '');
+  // The page is hidden while the keyboard is open; it must be shown again before focus returns to it.
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(opener).toBeFocused();
+});

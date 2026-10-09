@@ -31,15 +31,25 @@ export function validCalendarDate(value: string): boolean {
   return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
 }
 
+// Constructing a DateTimeFormat costs far more than formatting with one, and
+// lists format a date per row, so reuse one formatter per option set.
+const formatters = new Map<string, Intl.DateTimeFormat>();
+function formatter(options: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {
+  const key = JSON.stringify(options);
+  let cached = formatters.get(key);
+  if (!cached) formatters.set(key, cached = new Intl.DateTimeFormat('en-GB', options));
+  return cached;
+}
+
 /** Stored calendar dates have no viewer time zone. */
 export function formatCalendarDate(value: string, options: { year?: boolean } = {}): string {
   if (!validCalendarDate(value)) return 'Invalid date';
-  return new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', ...(options.year === false ? {} : { year: 'numeric' }), timeZone: 'UTC' }).format(new Date(`${value}T00:00:00Z`));
+  return formatter({ day: 'numeric', month: 'short', ...(options.year === false ? {} : { year: 'numeric' }), timeZone: 'UTC' }).format(new Date(`${value}T00:00:00Z`));
 }
 function displayInstant(value: string | Date, options: Intl.DateTimeFormatOptions): string {
   const date = value instanceof Date ? value : new Date(value);
   if (!Number.isFinite(date.getTime())) return 'Date unavailable';
-  try { return new Intl.DateTimeFormat('en-GB', options).format(date); }
+  try { return formatter(options).format(date); }
   catch { return 'Date unavailable'; }
 }
 export function formatInstant(value: string | Date, options: { year?: boolean; timeZone?: string } = {}): string {

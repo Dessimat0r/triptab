@@ -19,7 +19,15 @@ root.walkDecls(declaration => {
     rows.push({ selector, context, property: declaration.prop, value, exactToken: token });
   }
 });
-writeFileSync(new URL('../docs/audit/layout-css-implementation-2026-10-09/token-inventory.md', import.meta.url), '# Raw CSS lengths before exact token migration\n\nNo values are rounded. A dash means the value needs a separate design decision or is a dimension outside the spacing/type scale.\n\n| Selector | Context | Property | Value | Exact token |\n| --- | --- | --- | --- | --- |\n' + rows.map(row => `| ${row.selector.replaceAll('\n', ' ').replaceAll('|', '\\|')} | ${row.context.join('; ')} | ${row.property} | ${row.value} | ${row.exactToken ?? '—'} |`).join('\n') + '\n');
+// The committed docs/audit/layout-css-implementation-2026-10-09/token-inventory.md
+// records globals.css before the migration. Write a new inventory only to a
+// file named with --out, so a later run cannot overwrite that evidence.
+const report = '# Raw CSS lengths in app/globals.css\n\nNo values are rounded. A dash means the value needs a separate design decision or is a dimension outside the spacing/type scale.\n\n| Selector | Context | Property | Value | Exact token |\n| --- | --- | --- | --- | --- |\n' + rows.map(row => `| ${row.selector.replaceAll('\n', ' ').replaceAll('|', '\\|')} | ${row.context.join('; ')} | ${row.property} | ${row.value} | ${row.exactToken ?? '—'} |`).join('\n') + '\n';
+const out = process.argv.indexOf('--out');
+if (out !== -1) {
+  if (!process.argv[out + 1]) throw new Error('--out needs a file path');
+  writeFileSync(process.argv[out + 1], report);
+}
 console.log(`${rows.length} raw lengths; ${rows.filter(row => row.exactToken).length} exact token matches. No values rounded.`);
 
 if (process.argv.includes('--apply')) {

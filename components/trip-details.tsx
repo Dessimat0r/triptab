@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import PagedList from "./paged-list";
 import { Check } from "lucide-react";
 import { validCalendarDate } from "@/lib/dates";
@@ -10,7 +10,7 @@ import type { Trip } from "@/lib/model";
 
 export type TripDetailsProps = {
   trip: Trip;
-  paging: { shown: number; onMore: () => void };
+  paging: { shown: number; step: number; onMore: () => void };
   accountId?: string;
   busy: boolean;
   error?: string;
@@ -29,9 +29,15 @@ function TravellerName({ trip, member, index, busy, onSave }: {
   const [saved, setSaved] = useState(false);
   const value = draft ?? member.name;
   const locked = busy || submitting;
-  return <form className="traveller-name-form" onSubmit={async event => {
+  const form = useRef<HTMLFormElement>(null), input = useRef<HTMLInputElement>(null);
+  // Saving disables the row and a saved name removes Save, so focus would fall to
+  // <body>. Return it to the name field once the row is editable again.
+  const refocus = useRef(false);
+  useEffect(() => { if (refocus.current && !locked) { refocus.current = false; input.current?.focus(); } });
+  return <form ref={form} className="traveller-name-form" data-entry-id={member.id} tabIndex={-1} onSubmit={async event => {
     event.preventDefault();
     if (locked) return;
+    refocus.current = !!form.current?.contains(document.activeElement);
     setError("");
     setSaved(false);
     const name = value.trim();
@@ -52,7 +58,7 @@ function TravellerName({ trip, member, index, busy, onSave }: {
     <span className={`avatar color${index % 5}`} aria-hidden="true">{member.name.slice(0, 1).toUpperCase()}</span>
     <div className="traveller-name-fields">
       <label htmlFor={`${id}-name`}>Traveller {index + 1} name
-        <input id={`${id}-name`} value={value} required maxLength={50} disabled={locked} autoComplete="off" aria-describedby={`${id}-account${error ? " " + id + "-error" : ""}`} onChange={event => {
+        <input ref={input} id={`${id}-name`} value={value} required maxLength={50} disabled={locked} autoComplete="off" aria-describedby={`${id}-account${error ? " " + id + "-error" : ""}`} onChange={event => {
           setDraft(event.target.value); setError(""); setSaved(false);
         }} />
       </label>
@@ -122,7 +128,8 @@ function TripDetailsForm({ trip, paging, accountId, busy, error: externalError, 
     <div className="trip-traveller-names">
       <h3>Traveller display names</h3>
       <p className="footnote">These labels belong to this holiday. Connected accounts and personal profiles keep their identities.</p>
-      <PagedList {...paging} step={10} noun="traveller names">{trip.members.map((member, index) => <div key={member.id} data-entry-id={member.id} tabIndex={-1}><TravellerName trip={trip} member={member} index={index} busy={locked} onSave={onSave} /></div>)}</PagedList>
+      <PagedList {...paging} noun="traveller names" items={trip.members} itemKey={member => member.id}
+        renderItem={(member, index) => <TravellerName key={member.id} trip={trip} member={member} index={index} busy={locked} onSave={onSave} />} />
     </div>
   </section>;
 }

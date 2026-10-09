@@ -38,8 +38,16 @@ function focusFirst(root: HTMLElement, preferInput = false) {
     .focus({ preventScroll: true });
 }
 
-export function useModalLayer(rootRef: RefObject<HTMLElement | null>, { active, onClose }: { active: boolean; onClose: () => void }) {
+export function useModalLayer(rootRef: RefObject<HTMLElement | null>, { active, onClose, initialFocus, restoreFocus }: {
+  active: boolean;
+  onClose: () => void;
+  /** Where focus starts; by default the first field, then the first focusable element. */
+  initialFocus?: (root: HTMLElement) => HTMLElement | null;
+  /** Where focus returns on close; by default the element focused when the layer opened. */
+  restoreFocus?: () => HTMLElement | null;
+}) {
   const closeRef = useRef(onClose);
+  const focusTargets = useRef({ initialFocus, restoreFocus });
   // Capture before React applies autofocus to a child during the commit.
   const previousFocusRef = useRef<HTMLElement | null>(
     active && typeof document !== 'undefined' && document.activeElement instanceof HTMLElement
@@ -47,6 +55,7 @@ export function useModalLayer(rootRef: RefObject<HTMLElement | null>, { active, 
   );
 
   useEffect(() => { closeRef.current = onClose; }, [onClose]);
+  useEffect(() => { focusTargets.current = { initialFocus, restoreFocus }; }, [initialFocus, restoreFocus]);
 
   useEffect(() => {
     const root = rootRef.current;
@@ -91,7 +100,9 @@ export function useModalLayer(rootRef: RefObject<HTMLElement | null>, { active, 
 
     document.addEventListener('keydown', onKeyDown);
     document.addEventListener('focusin', onFocusIn);
-    focusFirst(root, true);
+    const initial = focusTargets.current.initialFocus?.(root);
+    if (initial) initial.focus({ preventScroll: true });
+    else focusFirst(root, true);
 
     return () => {
       previousFocusRef.current = null;
@@ -108,7 +119,8 @@ export function useModalLayer(rootRef: RefObject<HTMLElement | null>, { active, 
       }
       if (wasTop) {
         const remaining = openModals[openModals.length - 1];
-        if (previousFocus?.isConnected && (!remaining || remaining.contains(previousFocus))) previousFocus.focus({ preventScroll: true });
+        const target = focusTargets.current.restoreFocus?.() ?? previousFocus;
+        if (target?.isConnected && (!remaining || remaining.contains(target))) target.focus({ preventScroll: true });
         else if (remaining) focusFirst(remaining);
       }
     };
@@ -122,8 +134,10 @@ export default function ModalA11y({ children, onClose, className }: {
   className: string;
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
-  useModalLayer(rootRef, { active: true, onClose });
+  // Declared first so that on close its cleanup clears data-keyboard-open, which
+  // hides the page, before the layer restores focus to an element on that page.
   useVisualViewportBounds(rootRef);
+  useModalLayer(rootRef, { active: true, onClose });
 
   return <div ref={rootRef} className={className} role="none" tabIndex={-1}>{children}</div>;
 }

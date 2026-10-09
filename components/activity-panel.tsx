@@ -442,10 +442,13 @@ export default function ActivityPanel({ tripId, accountId, expenseId, draftId, t
   const help = description ?? (scope
     ? "See who changed this receipt, its reviews and images, with the complete details before and after each change."
     : "See who changed this holiday and the complete details before and after each change. Earlier records remain in the history.");
+  // Each event's local day, formatted once; holiday History starts a heading where it changes.
+  const grouped = !scope;
+  const days = useMemo(() => grouped ? history.events.map(event => formatInstantDay(event.createdAt)) : null, [grouped, history.events]);
   return <section className={`activity-panel${scope ? " receipt-activity" : ""}`} aria-label={scope ? heading : "Holiday activity"} aria-busy={history.loading}>
     {scope ? <h2 className="subheading">{heading}</h2> : <div className="sectionheading"><h2>{heading}</h2><span className="muted">Updates automatically</span></div>}
     {help && <p className="footnote">{help}</p>}
-    {history.error ? <button type="button" className="quiet" disabled={history.loading} onClick={history.retry}>{scope ? "Retry receipt history" : "Retry activity"}</button> : <p className="footnote">History updates automatically.</p>}
+    {history.error ? <button type="button" className="quiet" disabled={history.loading} onClick={history.retry}>{scope ? "Retry receipt history" : "Retry activity"}</button> : scope && <p className="footnote">History updates automatically.</p>}
     {history.loading && !history.events.length && <p role="status">Loading activity…</p>}
     {history.loading && !!history.events.length && <p role="status">Checking for changes…</p>}
     {history.error && <p className="error" role="alert">{history.error}</p>}
@@ -453,7 +456,7 @@ export default function ActivityPanel({ tripId, accountId, expenseId, draftId, t
     <ol className={"activity-list" + (scope ? "" : " panel")}>{history.events.map((event, index) => {
       const actor = event.actorName || "Traveller", tripName = actorMemberNames[event.actorId];
       return <li key={event.id} className="activity-event">
-        {!scope && (index === 0 || formatInstantDay(history.events[index - 1].createdAt) !== formatInstantDay(event.createdAt)) && <h3 className="activity-day">{formatInstantDay(event.createdAt)}</h3>}
+        {days && days[index] !== days[index - 1] && <h3 className="activity-day">{days[index]}</h3>}
         <p><strong>{actor}{tripName && tripName !== actor ? ` (${tripName})` : ""}</strong> {({ create: "created", update: "updated", delete: "removed" }[event.action]) || "changed"} <strong>{eventLabel(event, currency)}</strong></p>
         <p className="footnote"><time dateTime={event.createdAt}>{scope ? auditTimestamp(event.createdAt) : formatClockTime(event.createdAt)}</time> · {auditSource(event.source)}</p>
         <ActivityEventDetails event={event} currency={currency} memberNames={memberNames} actorMemberNames={actorMemberNames} />

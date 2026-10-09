@@ -70,8 +70,8 @@ export default function MemberStatement({ trip, memberId, onClose }: MemberState
         <section className="statement-section" aria-labelledby={`${id}-expenses`}>
           <h3 id={`${id}-expenses`}>Expenses</h3>
           <p className="footnote">Cost shares include receipt percentages, item assignments, tax, tips, discounts and currency conversion. Every penny follows the holiday’s saved split.</p>
-          {expenses.length ? <PagedList {...page("expenses", 10)} className="statement-entries" role="list" step={10} noun="expenses">
-            {expenses.map(({ expense, cost, paid }) => <div key={expense.id} data-entry-id={expense.id} role="listitem" tabIndex={-1} className="statement-entry">
+          {expenses.length ? <PagedList {...page("expenses", 10)} className="statement-entries" role="list" noun="expenses"
+            items={expenses} itemKey={entry => entry.expense.id} renderItem={({ expense, cost, paid }) => <div key={expense.id} data-entry-id={expense.id} role="listitem" tabIndex={-1} className="statement-entry">
               <div className="statement-entry-heading">
                 <strong>{expense.title}</strong>
                 <time dateTime={expense.date}>{displayDate(expense.date)} · {expense.time}</time>
@@ -84,21 +84,19 @@ export default function MemberStatement({ trip, memberId, onClose }: MemberState
               {expense.currency !== trip.currency && <p className="footnote">{expense.bankAmount !== undefined
                 ? `Uses the recorded bank charge of ${money(expense.bankAmount)} for the whole receipt.`
                 : expense.fx ? `${expense.fx.source === "reference" ? "Daily reference" : "Manual"} exchange rate: ${expense.fx.rate} ${trip.currency} per ${expense.currency}, dated ${displayDate(expense.fx.asOf)}.` : ""}</p>}
-            </div>)}
-          </PagedList> : <p className="statement-empty">No expenses involving this traveller yet.</p>}
+            </div>} /> : <p className="statement-empty">No expenses involving this traveller yet.</p>}
         </section>
         <section className="statement-section" aria-labelledby={`${id}-payments`}>
           <h3 id={`${id}-payments`}>Recorded payments</h3>
-          {payments.length ? <PagedList {...page("payments", 10)} className="statement-entries" role="list" step={10} noun="payments">
-            {payments.map(payment => <div key={payment.id} data-entry-id={payment.id} role="listitem" tabIndex={-1} className="statement-entry">
+          {payments.length ? <PagedList {...page("payments", 10)} className="statement-entries" role="list" noun="payments"
+            items={payments} itemKey={payment => payment.id} renderItem={payment => <div key={payment.id} data-entry-id={payment.id} role="listitem" tabIndex={-1} className="statement-entry">
               <div className="statement-entry-heading">
                 <strong>{payment.from === memberId ? `Sent to ${traveller(payment.to)}` : `Received from ${traveller(payment.from)}`}</strong>
                 <span>{money(payment.amount)}</span>
               </div>
               <p className="footnote"><time dateTime={payment.date}>{displayDate(payment.date)}{payment.time ? ` · ${payment.time}` : ""}</time>{payment.timezone ? ` · ${payment.timezone}` : ""}{payment.method ? ` · ${payment.method}` : ""}</p>
               {payment.note && <p className="statement-payment-note">{payment.note}</p>}
-            </div>)}
-          </PagedList> : <p className="statement-empty">No payments sent or received yet.</p>}
+            </div>} /> : <p className="statement-empty">No payments sent or received yet.</p>}
           <p className="footnote">Recorded payments describe money already transferred between travellers.</p>
         </section>
       </>}

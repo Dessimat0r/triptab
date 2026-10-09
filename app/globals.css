@@ -552,10 +552,7 @@ main {
 .balance-card {
   padding: 22px;
 }
-.balance-card h2 {
-  font-size: 0.95rem;
-}
-.balance-card .sectionheading > svg {
+.group-balance > .sectionheading > svg {
   color: var(--muted);
 }
 .balance-row {
@@ -716,10 +713,6 @@ main {
 .payment {
   border-bottom: 1px solid var(--line);
   font-size: 0.9rem;
-}
-.payment small {
-  color: var(--muted);
-  margin-top: 5px;
 }
 .draft {
   display: flex;
@@ -2635,7 +2628,8 @@ footer {
 .personal-language-settings, .sharing-panel, .trip-details-panel, .data-export.compact { padding: var(--panel-padding); }
 .personal-language-settings > .footnote { margin-bottom: var(--space-4); }
 .paged-list { min-width: 0; }
-.list-more { display: grid; gap: var(--space-2); justify-items: center; padding: var(--space-4); border-top: 1px solid var(--line); text-align: center; }
+/* The 1px overlap keeps one line where the last row also has a bottom border. */
+.list-more { display: grid; gap: var(--space-2); justify-items: center; margin-top: -1px; padding: var(--space-4); border-top: 1px solid var(--line); text-align: center; }
 .list-more .muted { margin: 0; }
 .draft > div { overflow-wrap: break-word; }
 .statement-link { display: grid; grid-template-columns: minmax(0, 1fr) auto; }
