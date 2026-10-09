@@ -387,8 +387,10 @@ test.describe('phone keyboard', () => {
     await expect(dialog).toBeVisible();
     await dialog.locator('textarea').focus();
     await setKeyboard(page, { height: keyboard, pan: keyboard });
-    const visibleBottom = screen.height;
-    await expect.poll(() => dialog.evaluate(element => Math.round(element.getBoundingClientRect().bottom))).toBeLessThanOrEqual(visibleBottom);
-    expect(await dialog.evaluate(element => Math.round(element.getBoundingClientRect().top))).toBeGreaterThanOrEqual(keyboard);
+    // The dialog moves with the pan and fits between the top of the screen and the keyboard.
+    await expect.poll(() => dialog.evaluate((element, [top, bottom]) => {
+      const bounds = element.getBoundingClientRect();
+      return bounds.top >= top && bounds.bottom <= bottom;
+    }, [keyboard, screen.height])).toBe(true);
   });
 });
