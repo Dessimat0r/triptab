@@ -1,4 +1,5 @@
 "use client";
+import { formatInstant } from "@/lib/dates";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useLiveRefresh } from "./use-live-refresh";
 import { Link, Copy, Users, Check } from "lucide-react";
@@ -103,7 +104,7 @@ export function TripSharing({ trip, profile, onChanged }: { trip: Trip; profile:
         <input type="email" value={email} disabled={busy} onChange={event => setEmail(event.target.value)} placeholder="traveller@example.com" autoComplete="off" />
         <small>If supplied, the account email must match. Email addresses are not verified by TripTab, so share the link only with the intended traveller.</small>
       </label>
-      <button className="quiet" disabled={busy}><Link size={16} aria-hidden="true" />{busy ? "Creating…" : "Create invite link"}</button>
+      <button className="quiet phone-wide" disabled={busy}><Link size={16} aria-hidden="true" />{busy ? "Creating…" : "Create invite link"}</button>
     </form> : <p className="footnote">All travellers are linked to an account. Add another traveller to invite someone new.</p>}
     {link && <div className="invite-link">
       <input readOnly value={link} aria-label="Invitation link" onFocus={event => event.currentTarget.select()} />
@@ -121,9 +122,9 @@ export function TripSharing({ trip, profile, onChanged }: { trip: Trip; profile:
           <div className="invite-management-details">
             <strong>{memberName(invitation)}</strong>
             {invitation.email && <small>{invitation.email}</small>}
-            <small>Expires <time dateTime={invitation.expiresAt}>{new Date(invitation.expiresAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}</time></small>
+            <small>Expires <time dateTime={invitation.expiresAt}>{formatInstant(invitation.expiresAt)}</time></small>
           </div>
-          <div className="invite-management-actions">
+          <div className="invite-management-actions button-row">
             <button type="button" className="quiet" disabled={busy || confirming} onClick={() => void createLink(invitation.memberId, invitation.email || "")}>Replace link</button>
             <button type="button" className="danger quiet" disabled={busy || confirming} onClick={async () => {
               if (busy || !await confirm({ title: "Revoke invitation?", message: `Revoke the invitation for ${memberName(invitation)}? Its link will stop working.`, confirmLabel: "Revoke invitation", destructive: true })) return;

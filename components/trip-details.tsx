@@ -1,6 +1,7 @@
 "use client";
 
 import { useId, useState } from "react";
+import PagedList from "./paged-list";
 import { Check } from "lucide-react";
 import { validCalendarDate } from "@/lib/dates";
 import { TripReceiptLanguage } from "@/components/receipt-language-select";
@@ -9,6 +10,7 @@ import type { Trip } from "@/lib/model";
 
 export type TripDetailsProps = {
   trip: Trip;
+  paging: { shown: number; onMore: () => void };
   accountId?: string;
   busy: boolean;
   error?: string;
@@ -58,11 +60,11 @@ function TravellerName({ trip, member, index, busy, onSave }: {
       {error && <p id={`${id}-error`} className="trip-details-error" role="alert">{error}</p>}
       {saved && <p className="trip-details-success" role="status"><Check size={15} aria-hidden="true" /> Traveller name saved.</p>}
     </div>
-    <button type="submit" className="quiet" disabled={locked || value.trim() === member.name} aria-label={`Save traveller ${index + 1} name`}>{submitting ? "Saving…" : "Save"}</button>
+    {(value.trim() !== member.name || submitting || error) && <button type="submit" className="quiet" disabled={locked || value.trim() === member.name} aria-label={`Save traveller ${index + 1} name`}>{submitting ? "Saving…" : "Save"}</button>}
   </form>;
 }
 
-function TripDetailsForm({ trip, accountId, busy, error: externalError, onSave }: TripDetailsProps) {
+function TripDetailsForm({ trip, paging, accountId, busy, error: externalError, onSave }: TripDetailsProps) {
   const id = useId();
   const [draft, setDraft] = useState<Partial<{ name: string; startDate: string; endDate: string; receiptLanguage: string }>>({});
   const [submitting, setSubmitting] = useState(false);
@@ -112,7 +114,7 @@ function TripDetailsForm({ trip, accountId, busy, error: externalError, onSave }
       <TripReceiptLanguage value={receiptLanguageSchema.parse(values.receiptLanguage)} onChange={value=>change("receiptLanguage",value)} destination={()=>values.name} busy={locked} accountId={accountId} tripId={trip.id} />
       {(error || externalError) && <p className="error" role="alert">{externalError || error}</p>}
       <div className="holiday-details-actions">
-        <button type="submit" className="quiet" disabled={locked || !changed}>{submitting ? "Saving…" : "Save holiday details"}</button>
+        <button type="submit" className="primary phone-wide" disabled={locked || !changed}>{submitting ? "Saving…" : "Save holiday details"}</button>
         {saved && <p className="trip-details-success" role="status"><Check size={15} aria-hidden="true" /> Holiday details saved.</p>}
       </div>
     </form>
@@ -120,7 +122,7 @@ function TripDetailsForm({ trip, accountId, busy, error: externalError, onSave }
     <div className="trip-traveller-names">
       <h3>Traveller display names</h3>
       <p className="footnote">These labels belong to this holiday. Connected accounts and personal profiles keep their identities.</p>
-      {trip.members.map((member, index) => <TravellerName key={member.id} trip={trip} member={member} index={index} busy={locked} onSave={onSave} />)}
+      <PagedList {...paging} step={10} noun="traveller names">{trip.members.map((member, index) => <div key={member.id} data-entry-id={member.id} tabIndex={-1}><TravellerName trip={trip} member={member} index={index} busy={locked} onSave={onSave} /></div>)}</PagedList>
     </div>
   </section>;
 }

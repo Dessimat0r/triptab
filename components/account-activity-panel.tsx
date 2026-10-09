@@ -60,6 +60,6 @@ export default function AccountActivityPanel({ refreshKey = 0, accountId }: { re
         <ActivityChanges fields={accountChanges(event)} before={!!event.before} after={!!event.after} />
       </details>
     </li>)}</ol>
-    {history.nextCursor !== null && <button type="button" className="quiet" disabled={history.loading} onClick={history.loadOlder}>{history.loading ? "Loading…" : "Load older account changes"}</button>}
+    {history.nextCursor !== null && <button type="button" className="quiet phone-wide" disabled={history.loading} onClick={history.loadOlder}>{history.loading ? "Loading…" : "Load older account changes"}</button>}
   </section>;
 }

@@ -1,4 +1,5 @@
 "use client";
+import { formatInstant, formatInstantDay, formatClockTime } from "@/lib/dates";
 import { languageName } from "@/lib/receipt-languages";
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -165,12 +166,11 @@ export function auditText(value: unknown): string { return typeof value === "str
 export function auditRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
 }
-let timestampFormatter: Intl.DateTimeFormat | undefined;
 export function auditTimestamp(value: unknown, exact = false): string {
   const text = auditText(value);
   const date = new Date(text);
   if (!text || !Number.isFinite(date.getTime())) return "Date unavailable";
-  return exact ? date.toISOString() + " (UTC)" : (timestampFormatter ??= new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "long" })).format(date);
+  return exact ? date.toISOString() + " (UTC)" : formatInstant(date);
 }
 export function auditSource(value: string): string {
   return value === "chatgpt" ? "via ChatGPT/Codex" : value === "system" ? "by TripTab system" : "in TripTab";
@@ -443,22 +443,23 @@ export default function ActivityPanel({ tripId, accountId, expenseId, draftId, t
     ? "See who changed this receipt, its reviews and images, with the complete details before and after each change."
     : "See who changed this holiday and the complete details before and after each change. Earlier records remain in the history.");
   return <section className={`activity-panel${scope ? " receipt-activity" : ""}`} aria-label={scope ? heading : "Holiday activity"} aria-busy={history.loading}>
-    <h2 className="subheading">{heading}</h2>
+    {scope ? <h2 className="subheading">{heading}</h2> : <div className="sectionheading"><h2>{heading}</h2><span className="muted">Updates automatically</span></div>}
     {help && <p className="footnote">{help}</p>}
     {history.error ? <button type="button" className="quiet" disabled={history.loading} onClick={history.retry}>{scope ? "Retry receipt history" : "Retry activity"}</button> : <p className="footnote">History updates automatically.</p>}
     {history.loading && !history.events.length && <p role="status">Loading activity…</p>}
     {history.loading && !!history.events.length && <p role="status">Checking for changes…</p>}
     {history.error && <p className="error" role="alert">{history.error}</p>}
     {!history.loading && !history.error && !history.events.length && <p className="footnote">{emptyText ?? (scope ? "No recorded changes for this receipt yet." : "No recorded changes yet. Activity starts when this version of TripTab saves a change.")}</p>}
-    <ol className="activity-list">{history.events.map(event => {
+    <ol className={"activity-list" + (scope ? "" : " panel")}>{history.events.map((event, index) => {
       const actor = event.actorName || "Traveller", tripName = actorMemberNames[event.actorId];
       return <li key={event.id} className="activity-event">
+        {!scope && (index === 0 || formatInstantDay(history.events[index - 1].createdAt) !== formatInstantDay(event.createdAt)) && <h3 className="activity-day">{formatInstantDay(event.createdAt)}</h3>}
         <p><strong>{actor}{tripName && tripName !== actor ? ` (${tripName})` : ""}</strong> {({ create: "created", update: "updated", delete: "removed" }[event.action]) || "changed"} <strong>{eventLabel(event, currency)}</strong></p>
-        <p className="footnote"><time dateTime={event.createdAt}>{auditTimestamp(event.createdAt)}</time> · {auditSource(event.source)}</p>
+        <p className="footnote"><time dateTime={event.createdAt}>{scope ? auditTimestamp(event.createdAt) : formatClockTime(event.createdAt)}</time> · {auditSource(event.source)}</p>
         <ActivityEventDetails event={event} currency={currency} memberNames={memberNames} actorMemberNames={actorMemberNames} />
         {onRestore && event.action === "delete" && event.before && ["expense", "payment"].includes(event.entityType) && <button type="button" className="quiet" disabled={busy} onClick={() => onRestore(event)}>Review {event.entityType} to restore</button>}
       </li>;
     })}</ol>
-    {history.nextCursor !== null && <button type="button" className="quiet" disabled={history.loading} onClick={history.loadOlder}>{history.loading ? "Loading…" : "Load older changes"}</button>}
+    {history.nextCursor !== null && <button type="button" className="quiet phone-wide" disabled={history.loading} onClick={history.loadOlder}>{history.loading ? "Loading…" : "Load older changes"}</button>}
   </section>;
 }

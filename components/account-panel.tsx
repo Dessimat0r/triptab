@@ -138,7 +138,7 @@ export default function AccountPanel({
                   {error}
                 </p>
               )}
-              <button className="quiet" disabled={busy}>
+              <button className="quiet phone-wide" disabled={busy}>
                 {busy ? "Saving…" : "Save profile"}
               </button>
             </form>
@@ -232,7 +232,7 @@ export default function AccountPanel({
                     {passwordError}
                   </p>
                 )}
-                <button className="quiet" disabled={passwordBusy}>
+                <button className="quiet phone-wide" disabled={passwordBusy}>
                   {passwordBusy
                     ? "Saving password…"
                     : profile.hasPassword

@@ -101,6 +101,8 @@ function controller(trip: model.Trip, fetcher?: typeof fetch) {
       useTripTabEntryQuery: () => '',
       useTripTabNavigation: () => ({ view: state.view, navigate: (next: string) => {state.view = next;}, replaceEntryUrl() {} }),
     };
+    if (name === '@/components/modal-accessibility') return { __esModule: true, default: component, useModalLayer() {} };
+    if (name === '@/components/paged-list') return { __esModule: true, default: component, useListPaging: () => (_key: string, step: number) => ({ shown: step, onMore() {} }) };
     if (name === '@/components/editor-footer-reveal') return { useStickyFooterReveal: () => () => {} };
     if (name === '@/components/confirmation-dialog') return { useConfirmation: () => ({ confirm: async () => true, dialog: null, confirming: false }) };
     if (name === 'lucide-react') return new Proxy({}, { get: () => component });

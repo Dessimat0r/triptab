@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, type ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode, type RefObject } from 'react';
 import { useVisualViewportBounds } from '@/components/visual-viewport';
 
 const openModals: HTMLElement[] = [];
@@ -38,26 +38,20 @@ function focusFirst(root: HTMLElement, preferInput = false) {
     .focus({ preventScroll: true });
 }
 
-export default function ModalA11y({ children, onClose, className }: {
-  children: ReactNode;
-  onClose: () => void;
-  className: string;
-}) {
-  const rootRef = useRef<HTMLDivElement>(null);
+export function useModalLayer(rootRef: RefObject<HTMLElement | null>, { active, onClose }: { active: boolean; onClose: () => void }) {
   const closeRef = useRef(onClose);
   // Capture before React applies autofocus to a child during the commit.
   const previousFocusRef = useRef<HTMLElement | null>(
-    typeof document !== 'undefined' && document.activeElement instanceof HTMLElement
+    active && typeof document !== 'undefined' && document.activeElement instanceof HTMLElement
       ? document.activeElement : null,
   );
 
   useEffect(() => { closeRef.current = onClose; }, [onClose]);
-  useVisualViewportBounds(rootRef);
 
   useEffect(() => {
     const root = rootRef.current;
-    if (!root) return;
-    const previousFocus = previousFocusRef.current;
+    if (!active || !root) return;
+    const previousFocus = previousFocusRef.current ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
     const dialog = root.querySelector<HTMLElement>('[role="dialog"]');
     const dialogTabIndex = dialog?.getAttribute('tabindex');
     if (dialog && dialogTabIndex === null) dialog.tabIndex = -1;
@@ -100,6 +94,7 @@ export default function ModalA11y({ children, onClose, className }: {
     focusFirst(root, true);
 
     return () => {
+      previousFocusRef.current = null;
       const wasTop = isTopModal();
       document.removeEventListener('keydown', onKeyDown);
       document.removeEventListener('focusin', onFocusIn);
@@ -117,7 +112,18 @@ export default function ModalA11y({ children, onClose, className }: {
         else if (remaining) focusFirst(remaining);
       }
     };
-  }, []);
+  }, [active, rootRef]);
+
+}
+
+export default function ModalA11y({ children, onClose, className }: {
+  children: ReactNode;
+  onClose: () => void;
+  className: string;
+}) {
+  const rootRef = useRef<HTMLDivElement>(null);
+  useModalLayer(rootRef, { active: true, onClose });
+  useVisualViewportBounds(rootRef);
 
   return <div ref={rootRef} className={className} role="none" tabIndex={-1}>{children}</div>;
 }

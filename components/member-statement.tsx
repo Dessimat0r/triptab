@@ -1,5 +1,7 @@
 "use client";
 
+import PagedList, { useListPaging } from "./paged-list";
+import { formatCalendarDate } from "@/lib/dates";
 import { useId } from "react";
 import { X } from "lucide-react";
 import { balances, expenseShares, expenseTotal, type Trip } from "@/lib/model";
@@ -11,13 +13,11 @@ export type MemberStatementProps = {
   onClose: () => void;
 };
 
-function displayDate(date: string) {
-  return new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" })
-    .format(new Date(date + "T00:00:00Z"));
-}
+const displayDate = formatCalendarDate;
 
 export default function MemberStatement({ trip, memberId, onClose }: MemberStatementProps) {
   const id = useId();
+  const page = useListPaging(`${trip.id}:${memberId}`);
   const index = trip.members.findIndex(member => member.id === memberId);
   const member = trip.members[index];
   const money = (value: number) => new Intl.NumberFormat("en-GB", {
@@ -70,8 +70,8 @@ export default function MemberStatement({ trip, memberId, onClose }: MemberState
         <section className="statement-section" aria-labelledby={`${id}-expenses`}>
           <h3 id={`${id}-expenses`}>Expenses</h3>
           <p className="footnote">Cost shares include receipt percentages, item assignments, tax, tips, discounts and currency conversion. Every penny follows the holiday’s saved split.</p>
-          {expenses.length ? <ul className="statement-entries">
-            {expenses.map(({ expense, cost, paid }) => <li key={expense.id} className="statement-entry">
+          {expenses.length ? <PagedList {...page("expenses", 10)} className="statement-entries" role="list" step={10} noun="expenses">
+            {expenses.map(({ expense, cost, paid }) => <div key={expense.id} data-entry-id={expense.id} role="listitem" tabIndex={-1} className="statement-entry">
               <div className="statement-entry-heading">
                 <strong>{expense.title}</strong>
                 <time dateTime={expense.date}>{displayDate(expense.date)} · {expense.time}</time>
@@ -84,21 +84,21 @@ export default function MemberStatement({ trip, memberId, onClose }: MemberState
               {expense.currency !== trip.currency && <p className="footnote">{expense.bankAmount !== undefined
                 ? `Uses the recorded bank charge of ${money(expense.bankAmount)} for the whole receipt.`
                 : expense.fx ? `${expense.fx.source === "reference" ? "Daily reference" : "Manual"} exchange rate: ${expense.fx.rate} ${trip.currency} per ${expense.currency}, dated ${displayDate(expense.fx.asOf)}.` : ""}</p>}
-            </li>)}
-          </ul> : <p className="statement-empty">No expenses involving this traveller yet.</p>}
+            </div>)}
+          </PagedList> : <p className="statement-empty">No expenses involving this traveller yet.</p>}
         </section>
         <section className="statement-section" aria-labelledby={`${id}-payments`}>
           <h3 id={`${id}-payments`}>Recorded payments</h3>
-          {payments.length ? <ul className="statement-entries">
-            {payments.map(payment => <li key={payment.id} className="statement-entry">
+          {payments.length ? <PagedList {...page("payments", 10)} className="statement-entries" role="list" step={10} noun="payments">
+            {payments.map(payment => <div key={payment.id} data-entry-id={payment.id} role="listitem" tabIndex={-1} className="statement-entry">
               <div className="statement-entry-heading">
                 <strong>{payment.from === memberId ? `Sent to ${traveller(payment.to)}` : `Received from ${traveller(payment.from)}`}</strong>
                 <span>{money(payment.amount)}</span>
               </div>
               <p className="footnote"><time dateTime={payment.date}>{displayDate(payment.date)}{payment.time ? ` · ${payment.time}` : ""}</time>{payment.timezone ? ` · ${payment.timezone}` : ""}{payment.method ? ` · ${payment.method}` : ""}</p>
               {payment.note && <p className="statement-payment-note">{payment.note}</p>}
-            </li>)}
-          </ul> : <p className="statement-empty">No payments sent or received yet.</p>}
+            </div>)}
+          </PagedList> : <p className="statement-empty">No payments sent or received yet.</p>}
           <p className="footnote">Recorded payments describe money already transferred between travellers.</p>
         </section>
       </>}

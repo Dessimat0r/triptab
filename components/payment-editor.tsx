@@ -4,6 +4,7 @@ import { useId, useState } from "react";
 import { X } from "lucide-react";
 import { balances, paymentSchema, type Payment, type Trip } from "@/lib/model";
 import { localDate } from "@/lib/dates";
+import { useStickyFooterReveal } from "./editor-footer-reveal";
 import ModalA11y from "./modal-accessibility";
 import RestorationNotice, { type RestorationInfo } from "./restoration-notice";
 
@@ -28,6 +29,7 @@ function amountInMinorUnits(value: string): number {
 
 export default function PaymentEditor({ trip, initial, busy, error, restoredFrom, onClose, onSave }: PaymentEditorProps) {
   const id = useId();
+  const footerRef = useStickyFooterReveal(".payment-editor");
   const [paymentId] = useState(initial.id);
   const [from, setFrom] = useState(initial.from);
   const [to, setTo] = useState(initial.to);
@@ -156,7 +158,7 @@ export default function PaymentEditor({ trip, initial, busy, error, restoredFrom
               <label htmlFor={`${id}-amount`}>Amount ({trip.currency})
                 <input id={`${id}-amount`} value={amount} disabled={locked} required inputMode="decimal" maxLength={16} placeholder="0.00" onChange={event => setAmount(event.target.value)} />
               </label>
-              <div className="fieldpair">
+              <div className="fieldpair fieldpair--keep">
                 <label htmlFor={`${id}-date`}>Date
                   <input id={`${id}-date`} type="date" value={date} disabled={locked} required onChange={event => setDate(event.target.value)} />
                 </label>
@@ -176,7 +178,7 @@ export default function PaymentEditor({ trip, initial, busy, error, restoredFrom
             </>
           )}
           {(localError || error) && <p className="error" role="alert">{localError || error}</p>}
-          <div className="payment-actions">
+          <div className="payment-actions" ref={footerRef}>
             {review && <button type="button" className="quiet" disabled={locked} onClick={() => { setReview(null); setLocalError(""); }}>Edit details</button>}
             <button className="primary" disabled={locked}>{locked ? "Saving…" : review ? "Confirm payment" : "Review payment"}</button>
           </div>

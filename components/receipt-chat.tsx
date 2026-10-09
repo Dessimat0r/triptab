@@ -1,4 +1,5 @@
 "use client";
+import { formatInstant } from "@/lib/dates";
 
 import { useId, useRef, useState } from "react";
 import { MessageCircle, RefreshCw } from "lucide-react";
@@ -25,17 +26,7 @@ export type ReceiptChatProps = {
   onRefresh: () => void;
 };
 
-function messageTime(createdAt: string) {
-  const date = new Date(createdAt);
-  return Number.isNaN(date.getTime())
-    ? "Time unavailable"
-    : date.toLocaleString(undefined, {
-        month: "short",
-        day: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-      });
-}
+function messageTime(value: string) { return formatInstant(value, { year: false }); }
 
 export default function ReceiptChat({ messages, busy, itemId, scopeLabel, contextTitle, itemNames, memberNames, currentMemberId, memory, error, refreshError, offline, nativeAvailable = false, onRetry, onSend, onRefresh }: ReceiptChatProps) {
   const titleId = useId();

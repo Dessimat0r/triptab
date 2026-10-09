@@ -2,7 +2,7 @@
 
 9 October 2026 · Base: `60b39a5` · Follows Claude's "TripTab Layout & CSS Audit" (same date)
 
-> **Status: not implemented.** File and line references point at `60b39a5`. This brief is self-contained; you do not need the audit document. Evidence is in [`layout-css-2026-10-09/`](layout-css-2026-10-09/). Labels such as M4 or G2 are the finding IDs used in the audit document.
+> **Status: implementation added in PR 48.** See [the implementation audit](layout-css-implementation-2026-10-09/review.md) for fixes, verification and the remaining product/device checks. File and line references below describe the original base `60b39a5`. This brief is self-contained; you do not need the audit document. Evidence is in [`layout-css-2026-10-09/`](layout-css-2026-10-09/). Labels such as M4 or G2 are the finding IDs used in the audit document.
 
 ## What Gary asked for
 
