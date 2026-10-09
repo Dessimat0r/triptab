@@ -143,6 +143,7 @@ export default function ReceiptChat({ messages, busy, itemId, scopeLabel, contex
       <textarea
         id={questionId}
         value={question}
+        autoComplete="off"
         maxLength={4000}
         rows={3}
         aria-describedby={visibleError ? `${hintId} ${errorId}` : hintId}

@@ -171,7 +171,7 @@ export default function PaymentEditor({ trip, initial, busy, error, restoredFrom
                 <input id={`${id}-method`} value={method} disabled={locked} maxLength={80} placeholder="Bank transfer, cash…" onChange={event => setMethod(event.target.value)} />
               </label>
               <label htmlFor={`${id}-note`}>Note (optional)
-                <textarea id={`${id}-note`} value={note} disabled={locked} maxLength={500} rows={3} placeholder="Add any useful details" onChange={event => setNote(event.target.value)} />
+                <textarea id={`${id}-note`} autoComplete="off" value={note} disabled={locked} maxLength={500} rows={3} placeholder="Add any useful details" onChange={event => setNote(event.target.value)} />
               </label>
             </>
           )}
