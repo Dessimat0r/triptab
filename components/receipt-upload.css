@@ -4,15 +4,15 @@
 .receipt-upload-dialog textarea, .receipt-place-fields input { box-sizing: border-box; width: 100%; min-width: 0; max-width: 100%; }
 .receipt-upload-filename { font-size: .875rem; overflow-wrap: anywhere; margin: 8px 0; }
 .receipt-upload-place { margin: 16px 0; }
-.receipt-upload-place summary { min-height: 36px; cursor: pointer; }
+.receipt-upload-place summary { min-height: 44px; cursor: pointer; }
 .receipt-place-fields { min-width: 0; display: grid; gap: 6px; margin: 8px 0; }
 .receipt-place-fields > label { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 6px; row-gap: 2px; line-height: 1.4; }
 .receipt-place-fields > label > small { display: inline; margin: 0; line-height: inherit; }
 .receipt-place-fields label small, .receipt-upload-dialog label small, .receipt-upload-place summary small { font-weight: normal; opacity: .7; }
 .receipt-place-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; min-width: 0; }
-.receipt-place-actions button { min-height: 40px; min-width: 0; max-width: 100%; white-space: normal; }
+.receipt-place-actions button { min-height: 44px; min-width: 0; max-width: 100%; white-space: normal; }
 .receipt-place-fields > small { overflow-wrap: anywhere; }
 .receipt-chat-pending-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.receipt-chat-pending-row button { min-height: 36px; }
+.receipt-chat-pending-row button { min-height: 44px; }
 .receipt-upload-progress { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .receipt-upload-progress .footnote { flex-basis: 100%; }

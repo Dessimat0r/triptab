@@ -4,7 +4,8 @@ import { TripTabLink as Link } from "@/components/trip-routing";
 import { TripTabRouteProvider, TripTabNavigation, useTripTabNavigation, useTripTabEntryQuery } from "@/components/trip-routing";
 import type { TripSection } from "@/lib/trip-routes";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import ModalA11y from "@/components/modal-accessibility";
+import PagedList, { useListPaging } from "@/components/paged-list";
+import ModalA11y, { useModalLayer } from "@/components/modal-accessibility";
 import { useStickyFooterReveal } from "@/components/editor-footer-reveal";
 import { useConfirmation } from "@/components/confirmation-dialog";
 import AccountPanel, { profileFromAuth, type Profile, type AuthResponse } from "@/components/account-panel";
@@ -39,7 +40,7 @@ import DataExport from "@/components/data-export";
 import { PwaUpdates } from "@/components/pwa-controls";
 import { dispatchLiveRefresh, useLiveRefresh } from "@/components/use-live-refresh";
 import { sampleTrip } from "@/lib/sample-trip";
-import { localDate, localTime } from "@/lib/dates";
+import { localDate, localTime, formatCalendarDate, formatClockTime } from "@/lib/dates";
 import { equalFinancialValue, equalSavedValue, hasNewMatchingPayment, rebaseLedger } from "@/lib/client-ledger";
 import { buildReceiptPrompt, chatgptReceiptUrl } from "@/lib/receipt-chatgpt";
 import { isBlankReceipt, isUnchangedInitialReceipt, matchingReceiptProposal, mayFillInitialReceipt, receiptEditableValue, receiptProposalEditor, receiptEditorTotal, userReceiptField, type ReceiptEditor, type InitialReceiptReview } from "@/lib/receipt-processing";
@@ -91,11 +92,7 @@ import {
 import { formatMoney as money } from "@/lib/money-format";
 const uid = () => crypto.randomUUID();
 const today = (timezone?: string) => localDate(new Date(), timezone);
-const expenseDateFormatter = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric" });
-function expenseDate(date: string) {
-  const value = new Date(date + "T12:00:00");
-  return Number.isNaN(value.getTime()) ? "Invalid Date" : expenseDateFormatter.format(value);
-}
+const expenseDate = formatCalendarDate;
 function previewShares(e: ReceiptEditor, t: Trip) {
   const parsed = expenseSchema.safeParse(e);
   try { return parsed.success && total(parsed.data) > 0 ? expenseShares(parsed.data, t.members, t.currency) : null; }
@@ -308,6 +305,21 @@ export default function Home({ children }: { children: ReactNode }) {
     return true;
   }, []);
   const trip = ledger.trips.find((t) => t.id === selected) || ledger.trips[0];
+  const page = useListPaging(`${profile?.id ?? ""}:${trip?.id ?? ""}`);
+  const sidebarRef = useRef<HTMLElement>(null);
+  const [narrow, setNarrow] = useState(false);
+  useEffect(() => {
+    const query = matchMedia("(max-width: 900px)");
+    const update = () => { setNarrow(query.matches); if (!query.matches) setMenu(false); };
+    update(); query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, []);
+  const menuButton = useRef<HTMLButtonElement>(null);
+  // Start on the current holiday and return to "Open holidays": Safari does not
+  // focus a tapped button, so the element focused on open may be <body>.
+  useModalLayer(sidebarRef, { active: menu && narrow, onClose: () => setMenu(false),
+    initialFocus: root => root.querySelector<HTMLElement>(".tripnav button.active") ?? root.querySelector<HTMLElement>(".sidebar-close"),
+    restoreFocus: () => menuButton.current });
   const languageSettings = useTripLanguagePreferences(profile?.id || "", trip?.id || "");
   const [newTripLanguage,setNewTripLanguage] = useState<ReceiptLanguage | "auto">("auto");
   const createForm = useRef<HTMLFormElement>(null);
@@ -1558,6 +1570,52 @@ export default function Home({ children }: { children: ReactNode }) {
   ])), [editing?.timezone]);
   const name = (id: string) =>
     trip?.members.find((m) => m.id === id)?.name || "Unknown";
+  const balanceRow = (m: Trip["members"][number], i: number) => (
+                      <div className="balance-row" key={m.id} data-entry-id={m.id} tabIndex={-1}>
+                        <span className={"avatar color" + (i % 5)}>
+                          {m.name.slice(0, 1).toUpperCase()}
+                        </span>
+                        <span>
+                          {m.name}
+                          <small>
+                            {calculationError ? "Needs review" : balance[i] > 0
+                              ? "Gets back"
+                              : balance[i] < 0
+                                ? "Owes"
+                                : "Settled"}
+                          </small>
+                        </span>
+                        <b
+                          className={
+                            balance[i] > 0
+                              ? "positive"
+                              : balance[i] < 0
+                                ? "negative"
+                                : "muted"
+                          }
+                        >
+                          {calculationError ? "—" : money(Math.abs(balance[i]), trip!.currency)}
+                        </b>
+                      </div>
+  );
+  const groupBalance = (inline: boolean) => trip ? (
+                  <div className={"group-balance" + (inline ? " balance-card--inline" : "")}>
+                    <div className="sectionheading">
+                      <h2>The group balance</h2>
+                      <Users size={18} />
+                    </div>
+                    <div className="panel balance-card">
+                    {inline
+                      ? <PagedList {...page("balance", 8)} noun="travellers" items={trip.members} itemKey={m => m.id} renderItem={balanceRow} />
+                      : trip.members.map(balanceRow)}
+                    {!inline && <button
+                      className="wide quiet"
+                      onClick={() => setView("balances")}
+                    >
+                      View settlements
+                    </button>}</div>
+                  </div>
+  ) : null;
   const renderSection = (section: TripSection) => {
     if (!trip) return null;
     switch (section) {
@@ -1565,14 +1623,14 @@ export default function Home({ children }: { children: ReactNode }) {
                     <>
                       <div className="sectionheading">
                         <h2>Your expenses</h2>
-                        <span className="muted">Newest first</span>
+                        <span className="muted">Recently added</span>
                       </div>
                       <div className="panel expense-list">
                         {trip.expenses.length ? (
-                          trip.expenses.map((e) => (
+                          <PagedList {...page("expenses", 20)} noun="expenses" items={trip.expenses} itemKey={e => e.id} renderItem={(e) => (
                             <div
                               className="expense"
-                              key={e.id}
+                              key={e.id} data-entry-id={e.id} tabIndex={-1}
                             >
                               <ExpenseIconPicker entry={e} disabled={saving || loading} onChange={icon => updateTrip({ ...trip,
                                 expenses: trip.expenses.map(expense => expense.id === e.id ? { ...expense, icon } : expense),
@@ -1605,16 +1663,16 @@ export default function Home({ children }: { children: ReactNode }) {
                                 <b>
                                   {expensePreviews.get(e.id)?.total === null ? "Needs review" : money(expensePreviews.get(e.id)!.total!, trip.currency)}
                                 </b>
-                                <small>
+                                <small className={e.currency !== trip.currency ? "expense-original" : "expense-edit-hint"}>
                                   {e.currency !== trip.currency
                                     ? money(total(e), e.currency) + " original"
                                     : "Edit split"}
                                 </small>
-                                {currentMemberIndex >= 0 && <small>Your share {expensePreviews.get(e.id)?.shares ? money(expensePreviews.get(e.id)!.shares![currentMemberIndex], trip.currency) : "needs review"}</small>}
+                                {currentMemberIndex >= 0 && <small className="expense-share">Your share {expensePreviews.get(e.id)?.shares ? money(expensePreviews.get(e.id)!.shares![currentMemberIndex], trip.currency) : "needs review"}</small>}
                               </span>
                               </button>
                             </div>
-                          ))
+                          )} />
                         ) : (
                           <div className="empty">
                             <Receipt size={30} />
@@ -1630,6 +1688,7 @@ export default function Home({ children }: { children: ReactNode }) {
                   );
       case "balances": return (
                     <>
+                      {groupBalance(true)}
                       <div className="sectionheading">
                         <h2>Settle up</h2>
                         <button className="quiet" disabled={saving || loading || trip.members.length < 2} onClick={() => void openPayment()}><Plus size={16} /> Record payment</button>
@@ -1637,8 +1696,8 @@ export default function Home({ children }: { children: ReactNode }) {
                       <p className="footnote">Suggested transfers simplify the balances. Record what was actually transferred; partial payments and different pairs are supported.</p>
                       <div className="panel">
                         {calculationError ? <p className="error">Review the flagged receipts before using settlement suggestions.</p> : due.length ? (
-                          due.map((d, i) => (
-                            <div className="settlement" key={i}>
+                          <PagedList {...page("settlements", 10)} noun="suggested transfers" items={due} itemKey={d => `${d.from}:${d.to}`} renderItem={(d, i) => (
+                            <div className="settlement" key={i} data-entry-id={`${d.from}:${d.to}`} tabIndex={-1}>
                               <div>
                                 <strong>{name(d.from)}</strong>
                                 <span> pays {name(d.to)}</span>
@@ -1652,7 +1711,7 @@ export default function Home({ children }: { children: ReactNode }) {
                                 <Check size={16} /> Record paid
                               </button>
                             </div>
-                          ))
+                          )} />
                         ) : (
                           <div className="empty">
                             <CheckCircle2 size={30} />
@@ -1670,21 +1729,18 @@ export default function Home({ children }: { children: ReactNode }) {
                       </p>
                       <h2 className="subheading">Traveller statements</h2>
                       <div className="panel">
-                        {trip.members.map(member => <button key={member.id} className="statement-link" onClick={() => setStatement(member.id)}><span>{member.name}</span><span>View statement</span></button>)}
+                        <PagedList {...page("statements", 10)} noun="traveller statements" items={trip.members} itemKey={member => member.id} renderItem={member => <button key={member.id} data-entry-id={member.id} className="statement-link" onClick={() => setStatement(member.id)}><span>{member.name}</span><span>View statement</span></button>} />
                       </div>
                       {trip.payments.length > 0 && (
                         <>
-                          <h2 className="subheading">Recorded payments</h2>
+                          <h2 className="subheading">Recorded payments<small className="muted">Recently added</small></h2>
                           <div className="panel">
-                            {trip.payments.map((p) => (
-                              <div className="payment" key={p.id}>
-                                <span>
-                                  {name(p.from)} paid {name(p.to)}
-                                  <small>{p.date}</small>
-                                  {p.method && <small>{p.method}</small>}
-                                  {p.note && <small>{p.note}</small>}
-                                </span>
-                                <b>{money(p.amount, trip.currency)}</b>
+                            <PagedList {...page("payments", 5)} noun="payments" items={[...trip.payments].reverse()} itemKey={p => p.id} renderItem={(p) => (
+                              <div className="payment" key={p.id} data-entry-id={p.id} tabIndex={-1}>
+                                <div className="payment-line"><span className="payment-summary">{name(p.from)} paid {name(p.to)}</span>
+                                <b className="payment-amount">{money(p.amount, trip.currency)}</b></div>
+                                <div className="payment-line"><small className="payment-meta">{expenseDate(p.date)}{p.time ? ` · ${p.time}` : ""}{p.method ? ` · ${p.method}` : ""}</small>
+                                <span className="payment-row-actions">
                                 <button className="quiet" disabled={saving || loading} onClick={() => void openPayment(undefined, p)}>Edit</button>
                                 <button
                                   aria-label="Undo recorded payment"
@@ -1701,9 +1757,10 @@ export default function Home({ children }: { children: ReactNode }) {
                                   }}
                                 >
                                   <Trash2 size={17} />
-                                </button>
+                                </button></span></div>
+                                {p.note && <small className="payment-note">{p.note}</small>}
                               </div>
-                            ))}
+                            )} />
                           </div>
                         </>
                       )}
@@ -1713,15 +1770,15 @@ export default function Home({ children }: { children: ReactNode }) {
       case "receipts": return (
                     <>
                       <div className="sectionheading">
-                        <h2>Receipt inbox</h2>
+                        <div className="heading-with-order"><h2>Receipt inbox</h2><span className="muted">Recently added</span></div>
                         <button type="button" className="quiet" disabled={uploading || saving} onClick={() => { setError(""); setUploadOpen(true); }}>
                           <Upload size={16} aria-hidden="true" />{uploading ? "Uploading…" : "Add receipt"}
                         </button>
                       </div>
                       <div className="panel">
                         {trip.drafts.length ? (
-                          trip.drafts.map((d) => (
-                            <div className="draft" key={d.id}>
+                          <PagedList {...page("drafts", 10)} noun="receipt drafts" items={[...trip.drafts].reverse()} itemKey={d => d.id} renderItem={(d) => (
+                            <div className="draft" key={d.id} data-entry-id={d.id} tabIndex={-1}>
                               <div className="draft-visual">
                               {d.receiptId && (
                                 <img
@@ -1769,7 +1826,7 @@ export default function Home({ children }: { children: ReactNode }) {
                                 <X size={17} />
                               </button>
                             </div>
-                          ))
+                          )} />
                         ) : (
                           <div className="empty">
                             <Sparkles size={30} />
@@ -1802,22 +1859,15 @@ export default function Home({ children }: { children: ReactNode }) {
                         </span>
                       </div>
                       <div className="panel members">
-                        {trip.members.map((m, i) => (
-                          <div className="member" key={m.id}>
+                        <PagedList {...page("members", 10)} noun="travellers" items={trip.members} itemKey={m => m.id} renderItem={(m, i) => (
+                          <div className="member" key={m.id} data-entry-id={m.id} tabIndex={-1}>
                             <span className={"avatar color" + (i % 5)}>
                               {m.name.slice(0, 1).toUpperCase()}
                             </span>
-                            <b>{m.name}</b>
-                            <span className="member-account">
-                              {m.email || "Not linked"}
-                              <small>
-                                {m.userId
-                                  ? "Account connected"
-                                  : "Invite to join"}
-                              </small>
-                            </span>
+                            <div className="member-identity"><b>{m.name}</b>{m.email && <small>{m.email}</small>}</div>
+                            <span className={"member-status" + (m.userId ? " connected" : "")}>{m.userId ? "Account connected" : "Not linked"}</span>
                           </div>
-                        ))}
+                        )} />
                         <form
                           className="add-member"
                           onSubmit={async (e) => {
@@ -1855,7 +1905,7 @@ export default function Home({ children }: { children: ReactNode }) {
                         </form>
                       </div>
                       <TripSharing key={`${trip.id}:${profile?.id || "anonymous"}`} trip={trip} profile={profile} onChanged={() => load({ background: true })} />
-                      <TripDetails key={trip.id} trip={trip} accountId={profile?.id} busy={saving || loading} error={error} onSave={updateTrip} />
+                      <TripDetails paging={page("names", 10)} key={`${trip.id}:${profile?.id || ""}`} trip={trip} accountId={profile?.id} busy={saving || loading} error={error} onSave={updateTrip} />
                       <PersonalLanguageSettings settings={languageSettings} />
                       <DataExport key={`${profile?.id || "anonymous"}:${trip.id}`} tripId={trip.id} compact />
                     </>
@@ -2068,6 +2118,11 @@ export default function Home({ children }: { children: ReactNode }) {
   return (
     <div className="shell">
       <aside
+        ref={sidebarRef}
+        role={menu && narrow ? "dialog" : undefined}
+        aria-modal={menu && narrow ? true : undefined}
+        aria-label="Holidays"
+        inert={narrow && !menu}
         id="holiday-sidebar"
         className={"sidebar " + (menu ? "visible" : "")}
       >
@@ -2144,10 +2199,12 @@ export default function Home({ children }: { children: ReactNode }) {
           </button>
         </div>
       </aside>
-      <div className="workspace">
+      {menu && narrow && <div className="sidebar-backdrop" aria-hidden="true" onClick={() => setMenu(false)} />}
+      <div className="workspace" inert={menu && narrow}>
         <header className="topbar">
           <div>
             <button
+              ref={menuButton}
               className="mobile-menu iconbutton"
               aria-label="Open holidays"
               aria-expanded={menu}
@@ -2157,7 +2214,7 @@ export default function Home({ children }: { children: ReactNode }) {
               <Menu />
             </button>
             <span className="breadcrumb">
-              Holidays <span>/</span>{" "}
+              Holidays <span aria-hidden="true">/</span>{" "}
               <b>{trip?.name || "Your next adventure"}</b>
             </span>
           </div>
@@ -2170,7 +2227,7 @@ export default function Home({ children }: { children: ReactNode }) {
               {profile?.displayName.slice(0, 1).toUpperCase() || "Y"}
             </span>
           </button>
-          <small className="muted">Updates automatically</small>
+          <small className="muted topbar-status">Updates automatically</small>
         </header>
         <main>
           {process.env.NEXT_PUBLIC_TRIPTAB_ENVIRONMENT === "staging" && <p className="connection-banner" role="status">
@@ -2217,10 +2274,10 @@ export default function Home({ children }: { children: ReactNode }) {
               <h1>{trip?.name || "Every trip starts together."}</h1>
               <p>
                 {trip
-                  ? `${trip.members.length} travellers · Settle in ${trip.currency}${trip.startDate ? " · " + new Date(trip.startDate + "T12:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : ""}`
+                  ? `${trip.members.length} travellers · Settle in ${trip.currency}${trip.startDate ? " · " + formatCalendarDate(trip.startDate, { year: false }) : ""}`
                   : "Create a holiday, add your people, and keep the tabs fair."}
               </p>
-              {trip && lastRefreshed && <small className="muted">Refreshed {lastRefreshed.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}</small>}
+              {trip && lastRefreshed && <small className="muted">Refreshed {formatClockTime(lastRefreshed)}</small>}
               {trip && refreshError && <small className="error" role="status">{refreshError} <button className="quiet" disabled={loading} onClick={() => void load({ background: true, fresh: true })}>Retry refresh</button></small>}
             </div>
             {trip && <div className="expense-entry-actions">
@@ -2340,46 +2397,7 @@ export default function Home({ children }: { children: ReactNode }) {
               <div className="content-grid">
                 <TripTabRouteProvider renderSection={renderSection}>{children}</TripTabRouteProvider>
                 <aside className="right-rail">
-                  <div className="panel balance-card">
-                    <div className="sectionheading">
-                      <h2>The group balance</h2>
-                      <Users size={18} />
-                    </div>
-                    {trip.members.map((m, i) => (
-                      <div className="balance-row" key={m.id}>
-                        <span className={"avatar color" + (i % 5)}>
-                          {m.name.slice(0, 1).toUpperCase()}
-                        </span>
-                        <span>
-                          {m.name}
-                          <small>
-                            {calculationError ? "Needs review" : balance[i] > 0
-                              ? "Gets back"
-                              : balance[i] < 0
-                                ? "Owes"
-                                : "Settled"}
-                          </small>
-                        </span>
-                        <b
-                          className={
-                            balance[i] > 0
-                              ? "positive"
-                              : balance[i] < 0
-                                ? "negative"
-                                : "muted"
-                          }
-                        >
-                          {calculationError ? "—" : money(Math.abs(balance[i]), trip.currency)}
-                        </b>
-                      </div>
-                    ))}
-                    <button
-                      className="wide quiet"
-                      onClick={() => setView("balances")}
-                    >
-                      View settlements
-                    </button>
-                  </div>
+                  {groupBalance(false)}
                   <div className="receipt-card">
                     <span className="mini-tag">
                       <Sparkles size={14} /> WITH YOUR ASSISTANT

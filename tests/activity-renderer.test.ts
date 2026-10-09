@@ -20,6 +20,7 @@ const compiled = transpileWithSharedImports(source + '\nexport { changes, Activi
   .replace('from "@/lib/money-format"', `from ${JSON.stringify(import.meta.resolve('../lib/money-format.ts'))}`)
   .replace('from "@/lib/receipt-scan"', `from ${JSON.stringify(import.meta.resolve('../lib/receipt-scan.ts'))}`);
 const renderer = await import('data:text/javascript;base64,' + Buffer.from(compiled).toString('base64')) as {
+  auditTimestamp(value: unknown, exact?: boolean): string;
   changes(event: ActivityEvent, currency: 'GBP', names: Record<string, string>, accountNames: Record<string, string>): AuditChange[];
   ActivityChanges: ComponentType<{ fields: AuditChange[]; before: boolean; after: boolean }>;
   ActivityEventDetails: ComponentType<HistoryDetailProps>;
@@ -198,3 +199,5 @@ test('receipt translation-only history shows original and changed reading names'
   change.after!.items=[{...(change.before!.items as Record<string,unknown>[])[0],translations:{en:{text:'Sparkling water',sourceText:'Acqua',pairedText:'Water',sourceLanguage:'it',provenance:'user'}}}];
   const {fields,html}=render(change);assert.equal(fields.length,1);assert.match(html,/Original language: Italian/);assert.match(html,/English: Water/);assert.match(html,/English: Sparkling water/);assert.match(html,/Translation origin: user/);
 });
+
+test('exact audit timestamps keep their UTC form', () => { assert.equal(renderer.auditTimestamp('2026-07-28T00:30:00Z', true), '2026-07-28T00:30:00.000Z (UTC)'); });

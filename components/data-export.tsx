@@ -68,10 +68,10 @@ export default function DataExport({ trips = [], tripId, compact = false }: Data
     }
   }
 
-  return <section className={`account-section data-export${compact ? " compact" : ""}`} aria-labelledby={`${id}-title`}>
+  return <section className={`${compact ? "panel" : "account-section"} data-export${compact ? " compact" : ""}`} aria-labelledby={`${id}-title`}>
     <h3 id={`${id}-title`}>Download your data</h3>
     <p className="footnote">Keep a copy of your profile and holidays you can currently access, including shared records. Photos and sign-in credentials are excluded.</p>
-    <div className="data-export-actions">
+    <div className="data-export-actions button-row">
       <button type="button" className="quiet" disabled={busy} onClick={() => download("account", "json")}><Download size={17} aria-hidden="true" />Account JSON</button>
       {!compact && <>
         <button type="button" className="quiet" disabled={busy} onClick={() => download("account-activity", "json")}><Download size={17} aria-hidden="true" />Account history JSON</button>
@@ -89,7 +89,7 @@ export default function DataExport({ trips = [], tripId, compact = false }: Data
       <label className="checklabel" htmlFor={`${id}-receipts`}>
         <input id={`${id}-receipts`} type="checkbox" checked={receipts} disabled={busy} onChange={event => setReceipts(event.target.checked)} />Include attached receipt details in holiday JSON
       </label>
-      <div className="data-export-actions">
+      <div className="data-export-actions button-row">
         <button type="button" className="quiet" disabled={busy || !selectedTrip} onClick={() => download("trip", "json")}><Download size={17} aria-hidden="true" />Holiday JSON</button>
         <button type="button" className="quiet" disabled={busy || !selectedTrip} onClick={() => download("trip", "csv")}><Download size={17} aria-hidden="true" />Expenses & payments CSV</button>
         <button type="button" className="quiet" disabled={busy || !selectedTrip} onClick={() => download("activity", "csv")}><Download size={17} aria-hidden="true" />Latest history CSV</button>

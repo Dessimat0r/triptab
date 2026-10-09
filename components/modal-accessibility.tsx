@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, type ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode, type RefObject } from 'react';
 import { useVisualViewportBounds } from '@/components/visual-viewport';
 
 const openModals: HTMLElement[] = [];
@@ -38,26 +38,29 @@ function focusFirst(root: HTMLElement, preferInput = false) {
     .focus({ preventScroll: true });
 }
 
-export default function ModalA11y({ children, onClose, className }: {
-  children: ReactNode;
+export function useModalLayer(rootRef: RefObject<HTMLElement | null>, { active, onClose, initialFocus, restoreFocus }: {
+  active: boolean;
   onClose: () => void;
-  className: string;
+  /** Where focus starts; by default the first field, then the first focusable element. */
+  initialFocus?: (root: HTMLElement) => HTMLElement | null;
+  /** Where focus returns on close; by default the element focused when the layer opened. */
+  restoreFocus?: () => HTMLElement | null;
 }) {
-  const rootRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef(onClose);
+  const focusTargets = useRef({ initialFocus, restoreFocus });
   // Capture before React applies autofocus to a child during the commit.
   const previousFocusRef = useRef<HTMLElement | null>(
-    typeof document !== 'undefined' && document.activeElement instanceof HTMLElement
+    active && typeof document !== 'undefined' && document.activeElement instanceof HTMLElement
       ? document.activeElement : null,
   );
 
   useEffect(() => { closeRef.current = onClose; }, [onClose]);
-  useVisualViewportBounds(rootRef);
+  useEffect(() => { focusTargets.current = { initialFocus, restoreFocus }; }, [initialFocus, restoreFocus]);
 
   useEffect(() => {
     const root = rootRef.current;
-    if (!root) return;
-    const previousFocus = previousFocusRef.current;
+    if (!active || !root) return;
+    const previousFocus = previousFocusRef.current ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
     const dialog = root.querySelector<HTMLElement>('[role="dialog"]');
     const dialogTabIndex = dialog?.getAttribute('tabindex');
     if (dialog && dialogTabIndex === null) dialog.tabIndex = -1;
@@ -97,9 +100,12 @@ export default function ModalA11y({ children, onClose, className }: {
 
     document.addEventListener('keydown', onKeyDown);
     document.addEventListener('focusin', onFocusIn);
-    focusFirst(root, true);
+    const initial = focusTargets.current.initialFocus?.(root);
+    if (initial) initial.focus({ preventScroll: true });
+    else focusFirst(root, true);
 
     return () => {
+      previousFocusRef.current = null;
       const wasTop = isTopModal();
       document.removeEventListener('keydown', onKeyDown);
       document.removeEventListener('focusin', onFocusIn);
@@ -113,11 +119,25 @@ export default function ModalA11y({ children, onClose, className }: {
       }
       if (wasTop) {
         const remaining = openModals[openModals.length - 1];
-        if (previousFocus?.isConnected && (!remaining || remaining.contains(previousFocus))) previousFocus.focus({ preventScroll: true });
+        const target = focusTargets.current.restoreFocus?.() ?? previousFocus;
+        if (target?.isConnected && (!remaining || remaining.contains(target))) target.focus({ preventScroll: true });
         else if (remaining) focusFirst(remaining);
       }
     };
-  }, []);
+  }, [active, rootRef]);
+
+}
+
+export default function ModalA11y({ children, onClose, className }: {
+  children: ReactNode;
+  onClose: () => void;
+  className: string;
+}) {
+  const rootRef = useRef<HTMLDivElement>(null);
+  // Declared first so that on close its cleanup clears data-keyboard-open, which
+  // hides the page, before the layer restores focus to an element on that page.
+  useVisualViewportBounds(rootRef);
+  useModalLayer(rootRef, { active: true, onClose });
 
   return <div ref={rootRef} className={className} role="none" tabIndex={-1}>{children}</div>;
 }

@@ -1,0 +1,44 @@
+/* Preview only: the CSS injected into a local build of 60b39a5 to produce the
+   "After" images in this folder. It is a starting point, not final code.
+   `.edit-hint` was added to the "Edit split" <small> by script for the preview;
+   the real change gives that element a class in components/trip-app.tsx. */
+/* Proposed fixes, injected for preview only. */
+@media (max-width: 700px) {
+  /* M1: drop the duplicate status note from the phone top bar */
+  .topbar > small.muted { display: none; }
+  /* M2 + B1: spaced, full-width paired actions */
+  .page-heading .expense-entry-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-2);
+    margin-top: var(--space-4);
+  }
+  .page-heading .expense-entry-actions button { width: 100%; padding-inline: var(--space-3); white-space: nowrap; }
+}
+@media (max-width: 359px) {
+  .page-heading .expense-entry-actions { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 480px) {
+  /* M4: expense row — title and amount share line one; "Edit split" is dropped */
+  .expense { padding: 14px 15px; align-items: start; }
+  .expense-open { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: var(--space-3); row-gap: 2px; align-items: baseline; }
+  .expense-details, .expense-amount { display: contents; }
+  .expense-details b { grid-column: 1; grid-row: 1; }
+  .expense-amount b { grid-column: 2; grid-row: 1; text-align: right; }
+  .expense-details > span { grid-column: 1; grid-row: 2; margin: 2px 0 0; }
+  .expense-details small { grid-column: 1 / -1; grid-row: 3; }
+  .expense-amount small { grid-column: 2; grid-row: 2; margin-top: 0; text-align: right; }
+  .expense-amount small:last-of-type { grid-column: 1 / -1; grid-row: 4; text-align: left; margin-top: 2px; }
+  .expense-amount .edit-hint { display: none; }
+  /* M9: receipt draft row — text gets the full width, actions on their own row */
+  .draft { display: grid; grid-template-columns: 52px minmax(0, 1fr) 44px; grid-template-areas: "visual text remove" "visual review review"; column-gap: 12px; row-gap: 8px; align-items: start; }
+  .draft > .draft-visual { grid-area: visual; }
+  .draft > div:not(.draft-visual) { grid-area: text; overflow-wrap: break-word; }
+  .draft > .quiet { grid-area: review; width: 100%; }
+  .draft > .iconbutton { grid-area: remove; justify-self: end; }
+}
+/* M10: the language panel gets the same padding as its neighbours */
+.personal-language-settings { padding: 24px; }
+@media (max-width: 700px) { .personal-language-settings { padding: 20px; } }
+/* G2: secondary text at AA contrast */
+.expense-details small, footer { color: var(--muted); }

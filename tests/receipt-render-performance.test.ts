@@ -34,10 +34,14 @@ const states = home.body.statements.filter(isVariableStatement).flatMap(statemen
   });
 const compiled = transpileModule(source, { compilerOptions: { module: ModuleKind.CommonJS, target: ScriptTarget.ES2022, jsx: JsxEmit.ReactJSX } }).outputText;
 type Element = React.ReactElement<Record<string, unknown>>;
+// PagedList builds its visible rows itself, from items and renderItem.
+type PagedProps = { items: unknown[]; renderItem: (item: unknown, index: number) => React.ReactNode; shown: number };
+const pagedList = ({ items, renderItem, shown }: PagedProps) => items.slice(0, shown).map(renderItem);
 function elements(value: unknown): Element[] {
   if (Array.isArray(value)) return value.flatMap(elements);
   if (!React.isValidElement<Record<string, unknown>>(value)) return [];
-  return [value, ...elements(value.props.children)];
+  const rows = value.type === pagedList ? pagedList(value.props as unknown as PagedProps) : [];
+  return [value, ...elements(value.props.children), ...elements(rows)];
 }
 function fixture(count = 100): model.Trip {
   const members = [{ id: 'alice', name: 'Alice', userId: 'account-alice' }, { id: 'bob', name: 'Bob' }];
@@ -101,6 +105,8 @@ function controller(trip: model.Trip, fetcher?: typeof fetch) {
       useTripTabEntryQuery: () => '',
       useTripTabNavigation: () => ({ view: state.view, navigate: (next: string) => {state.view = next;}, replaceEntryUrl() {} }),
     };
+    if (name === '@/components/modal-accessibility') return { __esModule: true, default: component, useModalLayer() {} };
+    if (name === '@/components/paged-list') return { __esModule: true, default: pagedList, useListPaging: () => (_key: string, step: number) => ({ shown: step, step, onMore() {} }) };
     if (name === '@/components/editor-footer-reveal') return { useStickyFooterReveal: () => () => {} };
     if (name === '@/components/confirmation-dialog') return { useConfirmation: () => ({ confirm: async () => true, dialog: null, confirming: false }) };
     if (name === 'lucide-react') return new Proxy({}, { get: () => component });

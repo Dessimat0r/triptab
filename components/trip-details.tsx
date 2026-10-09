@@ -1,6 +1,7 @@
 "use client";
 
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
+import PagedList from "./paged-list";
 import { Check } from "lucide-react";
 import { validCalendarDate } from "@/lib/dates";
 import { TripReceiptLanguage } from "@/components/receipt-language-select";
@@ -9,6 +10,7 @@ import type { Trip } from "@/lib/model";
 
 export type TripDetailsProps = {
   trip: Trip;
+  paging: { shown: number; step: number; onMore: () => void };
   accountId?: string;
   busy: boolean;
   error?: string;
@@ -27,9 +29,15 @@ function TravellerName({ trip, member, index, busy, onSave }: {
   const [saved, setSaved] = useState(false);
   const value = draft ?? member.name;
   const locked = busy || submitting;
-  return <form className="traveller-name-form" onSubmit={async event => {
+  const form = useRef<HTMLFormElement>(null), input = useRef<HTMLInputElement>(null);
+  // Saving disables the row and a saved name removes Save, so focus would fall to
+  // <body>. Return it to the name field once the row is editable again.
+  const refocus = useRef(false);
+  useEffect(() => { if (refocus.current && !locked) { refocus.current = false; input.current?.focus(); } });
+  return <form ref={form} className="traveller-name-form" data-entry-id={member.id} tabIndex={-1} onSubmit={async event => {
     event.preventDefault();
     if (locked) return;
+    refocus.current = !!form.current?.contains(document.activeElement);
     setError("");
     setSaved(false);
     const name = value.trim();
@@ -50,7 +58,7 @@ function TravellerName({ trip, member, index, busy, onSave }: {
     <span className={`avatar color${index % 5}`} aria-hidden="true">{member.name.slice(0, 1).toUpperCase()}</span>
     <div className="traveller-name-fields">
       <label htmlFor={`${id}-name`}>Traveller {index + 1} name
-        <input id={`${id}-name`} value={value} required maxLength={50} disabled={locked} autoComplete="off" aria-describedby={`${id}-account${error ? " " + id + "-error" : ""}`} onChange={event => {
+        <input ref={input} id={`${id}-name`} value={value} required maxLength={50} disabled={locked} autoComplete="off" aria-describedby={`${id}-account${error ? " " + id + "-error" : ""}`} onChange={event => {
           setDraft(event.target.value); setError(""); setSaved(false);
         }} />
       </label>
@@ -58,11 +66,11 @@ function TravellerName({ trip, member, index, busy, onSave }: {
       {error && <p id={`${id}-error`} className="trip-details-error" role="alert">{error}</p>}
       {saved && <p className="trip-details-success" role="status"><Check size={15} aria-hidden="true" /> Traveller name saved.</p>}
     </div>
-    <button type="submit" className="quiet" disabled={locked || value.trim() === member.name} aria-label={`Save traveller ${index + 1} name`}>{submitting ? "Saving…" : "Save"}</button>
+    {(value.trim() !== member.name || submitting || error) && <button type="submit" className="quiet" disabled={locked || value.trim() === member.name} aria-label={`Save traveller ${index + 1} name`}>{submitting ? "Saving…" : "Save"}</button>}
   </form>;
 }
 
-function TripDetailsForm({ trip, accountId, busy, error: externalError, onSave }: TripDetailsProps) {
+function TripDetailsForm({ trip, paging, accountId, busy, error: externalError, onSave }: TripDetailsProps) {
   const id = useId();
   const [draft, setDraft] = useState<Partial<{ name: string; startDate: string; endDate: string; receiptLanguage: string }>>({});
   const [submitting, setSubmitting] = useState(false);
@@ -112,7 +120,7 @@ function TripDetailsForm({ trip, accountId, busy, error: externalError, onSave }
       <TripReceiptLanguage value={receiptLanguageSchema.parse(values.receiptLanguage)} onChange={value=>change("receiptLanguage",value)} destination={()=>values.name} busy={locked} accountId={accountId} tripId={trip.id} />
       {(error || externalError) && <p className="error" role="alert">{externalError || error}</p>}
       <div className="holiday-details-actions">
-        <button type="submit" className="quiet" disabled={locked || !changed}>{submitting ? "Saving…" : "Save holiday details"}</button>
+        <button type="submit" className="primary phone-wide" disabled={locked || !changed}>{submitting ? "Saving…" : "Save holiday details"}</button>
         {saved && <p className="trip-details-success" role="status"><Check size={15} aria-hidden="true" /> Holiday details saved.</p>}
       </div>
     </form>
@@ -120,7 +128,8 @@ function TripDetailsForm({ trip, accountId, busy, error: externalError, onSave }
     <div className="trip-traveller-names">
       <h3>Traveller display names</h3>
       <p className="footnote">These labels belong to this holiday. Connected accounts and personal profiles keep their identities.</p>
-      {trip.members.map((member, index) => <TravellerName key={member.id} trip={trip} member={member} index={index} busy={locked} onSave={onSave} />)}
+      <PagedList {...paging} noun="traveller names" items={trip.members} itemKey={member => member.id}
+        renderItem={(member, index) => <TravellerName key={member.id} trip={trip} member={member} index={index} busy={locked} onSave={onSave} />} />
     </div>
   </section>;
 }
