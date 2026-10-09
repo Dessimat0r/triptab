@@ -76,8 +76,27 @@ for (const width of [320, 375, 390, 430, 768, 820, 901, 1024, 1440]) {
       expect(Math.abs(boxes[0].width - boxes[1].width)).toBeLessThanOrEqual(1);
       if (width < 360) expect(boxes[1].y).toBeGreaterThan(boxes[0].y);
       else expect(boxes[1].y).toBe(boxes[0].y);
-      const heights = await page.locator('.expense').evaluateAll(rows => rows.map(row => row.getBoundingClientRect().height));
-      expect(heights.reduce((a, b) => a + b, 0) / heights.length).toBeLessThanOrEqual(width === 320 ? 140 : 125);
+      // Row height depends on the fallback font: CI's WebKit rows match DejaVu Sans, which wraps
+      // more than Inter or Liberation Sans (320px average 151px, against 137-139px). So the row
+      // layout is checked structurally, which holds in every font and fails on the old rows at
+      // every phone width; only 320px keeps a height budget, between the fixed rows (at most
+      // 152px) and the old ones (at least 171px).
+      const rows = await page.locator('.expense').evaluateAll(rows => rows.map(row => {
+        const title = row.querySelector('.expense-details b')!.getBoundingClientRect();
+        const amount = row.querySelector('.expense-amount b')!.getBoundingClientRect();
+        const hintShown = Array.from(row.querySelectorAll('.expense-amount small'))
+          .some(small => small.textContent?.trim() === 'Edit split' && small.getClientRects().length > 0);
+        return { height: row.getBoundingClientRect().height, titleWidth: title.width, sameLine: Math.abs(amount.top - title.top),
+          foreign: /original/.test(row.querySelector('.expense-amount')!.textContent || ''), hintShown };
+      }));
+      for (const row of rows) {
+        expect(row.sameLine).toBeLessThanOrEqual(2);
+        expect(row.hintShown).toBe(false);
+      }
+      if (width === 320) {
+        expect(Math.min(...rows.filter(row => !row.foreign).map(row => row.titleWidth))).toBeGreaterThanOrEqual(125);
+        expect(rows.reduce((sum, row) => sum + row.height, 0) / rows.length).toBeLessThanOrEqual(160);
+      }
     }
     for (const path of ['/balances', '/receipts', '/travellers', '/history']) {
       await page.goto(path);
