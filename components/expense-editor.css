@@ -1197,6 +1197,15 @@
     background: var(--surface);
     backdrop-filter: none;
   }
+  /* Nothing of the page is visible around the full-screen editor, so it is
+     hidden and its background matches the editor wherever iOS reveals it. */
+  html:has(.editor-overlay) .shell {
+    visibility: hidden;
+  }
+  html:has(.editor-overlay),
+  html:has(.editor-overlay) body {
+    background: var(--surface);
+  }
   /* Only the area above the keyboard: the footer stays on screen and the page
      never shows below it. */
   .editor,

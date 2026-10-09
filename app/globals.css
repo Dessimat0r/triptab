@@ -894,6 +894,29 @@ label > small {
   padding: 24px;
   overflow-y: auto;
 }
+/* WebKit may not paint a fixed overlay below the layout viewport, which is
+   where iOS shows the page while its keyboard is open. The page hides itself
+   then, so only the overlay or a plain background can show there. */
+html[data-keyboard-open] .shell {
+  visibility: hidden;
+}
+.shell .overlay {
+  visibility: visible;
+}
+/* Shown with ?viewport-debug, to read the keyboard geometry on a device. */
+.viewport-debug {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 1;
+  margin: 0;
+  padding: 4px 6px;
+  background: #000c;
+  color: #9f9;
+  font: 11px/1.4 ui-monospace, monospace;
+  white-space: pre;
+  pointer-events: none;
+}
 .modal {
   background: #fff;
   border-radius: 18px;
