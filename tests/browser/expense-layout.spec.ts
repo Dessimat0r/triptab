@@ -368,6 +368,16 @@ test.describe('phone keyboard', () => {
       expect(geometry.editorTop).toBe(pan);
       expect(geometry.footerBottom).toBe(visibleBottom);
       expect(geometry.focusedVisible).toBe(true);
+      // WebKit may not paint the overlay below the layout viewport, so the page
+      // hides itself; only the editor and a matching background can show there.
+      const page_ = await page.evaluate(() => ({
+        shell: getComputedStyle(document.querySelector('.shell')!).visibility,
+        overlay: getComputedStyle(document.querySelector('.editor-overlay')!).visibility,
+        background: getComputedStyle(document.body).backgroundColor,
+        surface: getComputedStyle(document.querySelector('.editor')!).backgroundColor,
+        keyboard: document.documentElement.hasAttribute('data-keyboard-open'),
+      }));
+      expect(page_).toEqual({ shell: 'hidden', overlay: 'visible', background: page_.surface, surface: page_.surface, keyboard: true });
 
       // Closing the keyboard restores the full-screen editor with no leftover offset.
       await setKeyboard(page, null);
@@ -376,8 +386,26 @@ test.describe('phone keyboard', () => {
         return [Math.round(bounds.top), Math.round(bounds.bottom)];
       })).toEqual([0, screen.height]);
       expect(await page.locator('.editor-overlay').evaluate(overlay => getComputedStyle(overlay).borderBottomWidth)).toBe('0px');
+      expect(await page.evaluate(() => document.documentElement.hasAttribute('data-keyboard-open'))).toBe(false);
+      // The page comes back once the editor closes.
+      await page.getByRole('button', { name: 'Close editor', exact: true }).click();
+      await expect(page.locator('.editor')).toHaveCount(0);
+      await expect(page.locator('.expense-open').first()).toBeVisible();
     });
   }
+
+  test('shows the viewport readout only when asked', async ({ page }) => {
+    await fixtures(page);
+    await page.goto('/balances');
+    await page.getByRole('button', { name: 'Record payment', exact: true }).click();
+    await expect(page.locator('.payment-editor')).toBeVisible();
+    await expect(page.locator('.viewport-debug')).toHaveCount(0);
+    await page.keyboard.press('Escape');
+    await page.goto('/balances?viewport-debug');
+    await page.getByRole('button', { name: 'Record payment', exact: true }).click();
+    await setKeyboard(page, { height: keyboard, pan: keyboard });
+    await expect(page.locator('.viewport-debug')).toContainText(`visual ${screen.height - keyboard} @ ${keyboard}`);
+  });
 
   test('keeps a centred dialog above the keyboard', async ({ page }) => {
     await fixtures(page);
@@ -392,5 +420,10 @@ test.describe('phone keyboard', () => {
       const bounds = element.getBoundingClientRect();
       return bounds.top >= top && bounds.bottom <= bottom;
     }, [keyboard, screen.height])).toBe(true);
+    // The page behind the keyboard is hidden while typing and returns after.
+    expect(await page.evaluate(() => getComputedStyle(document.querySelector('.shell')!).visibility)).toBe('hidden');
+    await setKeyboard(page, null);
+    await expect.poll(() => page.evaluate(() => getComputedStyle(document.querySelector('.shell')!).visibility)).toBe('visible');
+    await expect(dialog).toBeVisible();
   });
 });

@@ -37,3 +37,18 @@ iOS opens the keyboard by shrinking only the visual viewport. It then pans that 
   - that nothing but the editor is visible above or behind the keyboard;
   - that Save stays above the keyboard;
   - that no offset remains after closing.
+
+## Follow-up: the page still showed on a device
+
+After #46 was deployed, a screen recording (iPhone, decimal keypad, amount field) still showed the expenses list below Total / Save, scrolling under the keyboard. The list was crisp and undimmed, so it was outside the overlay. The editor itself sat correctly above the keyboard.
+
+Two explanations fit the recording, and the device's measurements were not available to tell them apart:
+
+- The app was still running the previous build. The service worker caches no app code, but an installed app left open keeps the old page.
+- WebKit does not paint a fixed element beyond the layout viewport. The overlay's extension behind the keyboard is then clipped, and the page shows there anyway.
+
+The fix no longer depends on that painting:
+
+- **Phone editor:** while it is open, the page (`.shell`) is hidden and the page background matches the editor. Nothing of the page is visible around the editor anyway, so only the editor's colour can show behind the keyboard.
+- **Other dialogs:** while a keyboard is open over one, `data-keyboard-open` on the root element hides the page. The page returns when the keyboard closes.
+- **`?viewport-debug`:** shows the visual viewport, window and overlay measurements on the device for the rest of the tab. It makes the next physical check conclusive.
