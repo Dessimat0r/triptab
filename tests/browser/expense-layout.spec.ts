@@ -326,7 +326,9 @@ test.describe('phone keyboard', () => {
       await page.goto('/expenses');
       await page.locator('.expense-open').first().click();
       await expect(page.locator('.editor')).toBeVisible();
-      await expect(page.getByRole('textbox', { name: 'Expense name', exact: true })).toBeFocused();
+      // A saved expense opens for reading, so no field raises the keyboard.
+      await expect(page.locator('.editor[role="dialog"]')).toBeFocused();
+      await expect(page.getByRole('textbox', { name: 'Expense name', exact: true })).not.toBeFocused();
       await page.locator('.item-edit > summary').first().click();
       // A field on screen where the keyboard will appear, the case that makes iOS pan.
       const found = await page.locator('.editor').evaluate((editor, target) => {

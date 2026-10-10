@@ -1713,7 +1713,8 @@ footer {
     background: var(--surface);
     border-top: 1px solid var(--line);
     border-bottom: 0;
-    padding: 9px 10px calc(9px + env(safe-area-inset-bottom));
+    /* The home indicator sits inside the inset, so the icons can share part of it. */
+    padding: 9px 10px max(9px, calc(env(safe-area-inset-bottom) - 4px));
     margin: 0;
     display: grid;
     grid-template-columns: repeat(5, minmax(0, 1fr));

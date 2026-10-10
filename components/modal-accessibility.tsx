@@ -128,16 +128,17 @@ export function useModalLayer(rootRef: RefObject<HTMLElement | null>, { active, 
 
 }
 
-export default function ModalA11y({ children, onClose, className }: {
+export default function ModalA11y({ children, onClose, className, initialFocus }: {
   children: ReactNode;
   onClose: () => void;
   className: string;
+  initialFocus?: (root: HTMLElement) => HTMLElement | null;
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
   // Declared first so that on close its cleanup clears data-keyboard-open, which
   // hides the page, before the layer restores focus to an element on that page.
   useVisualViewportBounds(rootRef);
-  useModalLayer(rootRef, { active: true, onClose });
+  useModalLayer(rootRef, { active: true, onClose, initialFocus });
 
   return <div ref={rootRef} className={className} role="none" tabIndex={-1}>{children}</div>;
 }

@@ -1496,6 +1496,8 @@ export default function Home({ children }: { children: ReactNode }) {
   // A manual line takes the expense name; a receipt line keeps the name it was read with.
   const quickMode: false | "manual" | "receipt" = !editing || itemised ? false
     : quickEligible(editing) ? "manual" : singleReceiptLineEligible(editing) ? "receipt" : false;
+  // An expense already in the ledger, or a receipt update to one.
+  const editingSaved = !!editing && (!!editing.expenseId || !!trip?.expenses.some(expense => expense.id === editing.id));
   const canCollapseToQuick = !!editing && itemised && editing.items.length === 1
     && (isManualSingleLine(editing) || singleReceiptLineEligible(editing));
   // Once shown (asked for, or holding a value), adjustments stay open for this
@@ -2616,6 +2618,9 @@ export default function Home({ children }: { children: ReactNode }) {
         <ModalA11y
           className="overlay editor-overlay"
           onClose={() => void requestCloseEditor()}
+          // Opening a saved expense is mostly for reading, so start on the dialog
+          // rather than a field that would raise the phone keyboard.
+          initialFocus={editingSaved ? root => root.querySelector<HTMLElement>("[data-autofocus]:not(:disabled)") ?? root.querySelector<HTMLElement>('[role="dialog"]') : undefined}
         >
           <section
             className={"modal editor " + (editing.receiptId ? "editor--with-photo" : "editor--narrow")}
@@ -2636,7 +2641,7 @@ export default function Home({ children }: { children: ReactNode }) {
                       aria-label="Expense name"
                       className="expense-title-input"
                       // QuickSplit keeps receipt review's initial focus and the keyboard closed.
-                      data-autofocus={!unassignedItemIds(editing).length || !trip.members.length ? true : undefined}
+                      data-autofocus={!editingSaved && (!unassignedItemIds(editing).length || !trip.members.length) ? true : undefined}
                       value={editing.title}
                       required
                       maxLength={200}
