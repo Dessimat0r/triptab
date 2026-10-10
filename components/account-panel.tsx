@@ -20,7 +20,7 @@ export type Profile = {
   chatgptConnected?: boolean;
   chatgptAvailable?: boolean;
   emailVerified?: boolean;
-  uiLanguage?: "en"|"es";
+  uiLanguage?: "en"|"es"|"fr"|"de";
 };
 export type AuthResponse = {
   profile?: Profile;

@@ -75,7 +75,7 @@ export function bucket() {
 }
 
 type ProfileRow = { id: string; email: string; display_name: string; created_at: string };
-export type Profile = { id: string; email: string; displayName: string; createdAt: string; authMethod: 'password' | 'chatgpt'; hasPassword: boolean; chatgptConnected: boolean; chatgptAvailable: boolean; emailVerified: boolean; uiLanguage?: "en"|"es" };
+export type Profile = { id: string; email: string; displayName: string; createdAt: string; authMethod: 'password' | 'chatgpt'; hasPassword: boolean; chatgptConnected: boolean; chatgptAvailable: boolean; emailVerified: boolean; uiLanguage?: "en"|"es"|"fr"|"de" };
 type StoredTrip = { id: string; owner: string; data: string };
 type MembershipRow = { trip_id: string; user_id: string; member_id: string; email: string | null };
 

@@ -234,23 +234,33 @@ test('a staged shared image offers attachment without posting an expense automat
   await expect(page.locator('.shared-photo')).toHaveCount(0);
 });
 
-test('Spanish interface keeps traveller and expense names intact', async ({
-  page,
-}) => {
-  await fixtures(page);
-  await page.goto('/expenses');
-  await page.setViewportSize({ width: 1280, height: 900 });
-  await page.getByRole('button', { name: 'More holiday options' }).click();
-  await page.getByLabel('Interface language').selectOption('es');
-  await page.getByRole('button', { name: 'Cerrar', exact: true }).click();
-  await expect(
-    page.getByRole('button', { name: 'Añadir gasto', exact: true }),
-  ).toBeVisible();
-  await expect(
-    page.getByRole('link', { name: 'Viajeros', exact: true }),
-  ).toBeVisible();
-  await expect(page.locator('.expense').first()).toContainText(
-    'Dinner at the river',
-  );
-  await expect(page.locator('html')).toHaveAttribute('lang', 'es');
-});
+for (const [language, add, travellers, close] of [
+  ['es', 'Añadir gasto', 'Viajeros', 'Cerrar'],
+  ['fr', 'Ajouter une dépense', 'Voyageurs', 'Fermer'],
+  ['de', 'Ausgabe hinzufügen', 'Reisende', 'Schließen'],
+]) {
+  test(`${language} interface keeps traveller and expense names intact`, async ({
+    page,
+  }) => {
+    await fixtures(page);
+    await page.goto('/expenses');
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.getByRole('button', { name: 'More holiday options' }).click();
+    await page.getByLabel('Interface language').selectOption(language);
+    await page.getByRole('button', { name: close, exact: true }).click();
+    await expect(
+      page.getByRole('button', { name: add, exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole('link', { name: travellers, exact: true }),
+    ).toBeVisible();
+    await expect(page.locator('.expense').first()).toContainText(
+      'Dinner at the river',
+    );
+    await expect(page.locator('html')).toHaveAttribute('lang', language);
+    await page.reload();
+    await expect(
+      page.getByRole('button', { name: add, exact: true }),
+    ).toBeVisible();
+  });
+}

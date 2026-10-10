@@ -14,7 +14,7 @@ export async function POST(request: Request) {
       body = JSON.parse(
         new TextDecoder().decode(await readBoundedBody(request, 4096)),
       );
-    if (body.language !== 'en' && body.language !== 'es')
+    if (!['en', 'es', 'fr', 'de'].includes(body.language))
       throw new RequestError('Choose an available interface language.');
     const previous = await db()
       .prepare('SELECT ui_language FROM profiles WHERE id=?')

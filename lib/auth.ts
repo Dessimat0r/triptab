@@ -28,7 +28,7 @@ export class AuthError extends Error {
 
 export type AuthProfile = {
   id: string; email: string; displayName: string; createdAt: string;
-  authMethod?: 'password' | 'chatgpt'; hasPassword?: boolean; chatgptConnected?: boolean; emailVerified?: boolean; uiLanguage?: "en"|"es";
+  authMethod?: 'password' | 'chatgpt'; hasPassword?: boolean; chatgptConnected?: boolean; emailVerified?: boolean; uiLanguage?: "en"|"es"|"fr"|"de";
 };
 export type AuthIdentity = { id: string; email?: string; displayName?: string; kind: 'session' | 'chatgpt'; chatgptId?: string; emailVerified?: boolean };
 export type AuthState = {
@@ -212,7 +212,7 @@ export async function readAuthContext(request: Request, database: D1Database, op
   return { identity, state: {
     authenticated: true, profile: {
       id: row.id, email: row.email, displayName: row.display_name, createdAt: row.created_at,
-      authMethod: identity.kind === 'session' ? 'password' : 'chatgpt', hasPassword, chatgptConnected: chatgptLinked, emailVerified, uiLanguage:row.ui_language==='es'?'es':'en',
+      authMethod: identity.kind === 'session' ? 'password' : 'chatgpt', hasPassword, chatgptConnected: chatgptLinked, emailVerified, uiLanguage:['en','es','fr','de'].includes(row.ui_language||'')?(row.ui_language as AuthProfile['uiLanguage']):'en',
     },
     hasPassword, chatgptLinked, chatgptAvailable: !!provider, emailVerified,
   } };

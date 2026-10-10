@@ -4,7 +4,7 @@ A mobile-friendly holiday expense splitter with itemised receipts, shared trips 
 
 **Live app:** [triptab-holidays.dessimat0r.chatgpt.site](https://triptab-holidays.dessimat0r.chatgpt.site)
 
-The recovered audit implementation adds expense filters and spending breakdowns, payment links/reminders, holiday lifecycle controls, account recovery and deletion, budgets and summaries, weighted travellers, repeat purchases, offline capture, photo sharing, imports and a Spanish interface preview. [Behaviour and deployment requirements](docs/audit/CLAUDE-CONTINUATION.md).
+The recovered audit implementation adds expense filters and spending breakdowns, payment links/reminders, holiday lifecycle controls, account recovery and deletion, budgets and summaries, weighted travellers, repeat purchases, offline capture, photo sharing, imports and Spanish, French and German interface previews. [Behaviour and deployment requirements](docs/audit/CLAUDE-CONTINUATION.md).
 
 ## Features
 

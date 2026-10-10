@@ -48,11 +48,17 @@ export default function InterfaceLanguage({
         >
           <option value="en">English</option>
           <option value="es">Español</option>
+          <option value="fr">Français</option>
+          <option value="de">Deutsch</option>
         </select>
       </label>
-      {value === 'es' && (
+      {value !== 'en' && (
         <small>
-          La ayuda avanzada que aún no está traducida se muestra en inglés.
+          {value === 'es'
+            ? 'La ayuda avanzada que aún no está traducida se muestra en inglés.'
+            : value === 'fr'
+              ? 'L’aide avancée non encore traduite s’affiche en anglais.'
+              : 'Noch nicht übersetzte erweiterte Hilfetexte erscheinen auf Englisch.'}
         </small>
       )}
       {error && <p role="alert">{error}</p>}
