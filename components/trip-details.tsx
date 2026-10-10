@@ -19,6 +19,15 @@ export type TripDetailsProps = {
 
 type Member = Trip["members"][number];
 
+/** Budget text in hundredths; undefined when empty and null when unreadable. */
+export function parseBudget(text: string): number | undefined | null {
+  const value = text.trim().replace(",", ".");
+  if (!value) return undefined;
+  if (!/^\d+(\.\d{0,2})?$/.test(value)) return null;
+  const hundredths = Math.round(Number(value) * 100);
+  return Number.isSafeInteger(hundredths) && hundredths > 0 && hundredths <= 100000000 ? hundredths : null;
+}
+
 function TravellerName({ trip, member, index, busy, onSave }: {
   trip: Trip; member: Member; index: number; busy: boolean; onSave: TripDetailsProps["onSave"];
 }) {
@@ -72,19 +81,21 @@ function TravellerName({ trip, member, index, busy, onSave }: {
 
 function TripDetailsForm({ trip, paging, accountId, busy, error: externalError, onSave }: TripDetailsProps) {
   const id = useId();
-  const [draft, setDraft] = useState<Partial<{ name: string; startDate: string; endDate: string; receiptLanguage: string }>>({});
+  const [draft, setDraft] = useState<Partial<{ name: string; startDate: string; endDate: string; receiptLanguage: string; budget: string }>>({});
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [saved, setSaved] = useState(false);
   const locked = busy || submitting;
-  const values = { name: draft.name ?? trip.name, startDate: draft.startDate ?? trip.startDate ?? "", endDate: draft.endDate ?? trip.endDate ?? "", receiptLanguage: draft.receiptLanguage ?? trip.receiptLanguage ?? "auto" };
-  const changed = values.name.trim() !== trip.name || values.startDate !== (trip.startDate || "") || values.endDate !== (trip.endDate || "") || values.receiptLanguage !== (trip.receiptLanguage || "auto");
+  const values = { name: draft.name ?? trip.name, startDate: draft.startDate ?? trip.startDate ?? "", endDate: draft.endDate ?? trip.endDate ?? "", receiptLanguage: draft.receiptLanguage ?? trip.receiptLanguage ?? "auto",
+    budget: draft.budget ?? (trip.budget ? (trip.budget / 100).toFixed(2) : "") };
+  const parsedBudget = parseBudget(values.budget);
+  const changed = values.name.trim() !== trip.name || values.startDate !== (trip.startDate || "") || values.endDate !== (trip.endDate || "") || values.receiptLanguage !== (trip.receiptLanguage || "auto") || parsedBudget !== (trip.budget ?? undefined);
   function change(field: keyof typeof values, value: string) {
     setDraft(previous => ({ ...previous, [field]: value })); setError(""); setSaved(false);
   }
   return <section className="panel trip-details-panel" aria-labelledby={`${id}-heading`}>
     <h3 id={`${id}-heading`}>Holiday details</h3>
-    <p className="footnote">Travellers in this holiday can update its name, dates and display names.</p>
+    <p className="footnote">Travellers in this holiday can update its name, dates, budget and display names.</p>
     <form className="holiday-details-form" onSubmit={async event => {
       event.preventDefault();
       if (locked) return;
@@ -98,6 +109,8 @@ function TripDetailsForm({ trip, paging, accountId, busy, error: externalError, 
       if (values.receiptLanguage !== (trip.receiptLanguage || "auto")) next.receiptLanguage = receiptLanguageSchema.parse(values.receiptLanguage);
       if (values.startDate) next.startDate = values.startDate; else delete next.startDate;
       if (values.endDate) next.endDate = values.endDate; else delete next.endDate;
+      if (parsedBudget === null) { setError("Enter the budget as an amount such as 1500 or 1500.00, or leave it empty."); return; }
+      if (parsedBudget) next.budget = parsedBudget; else delete next.budget;
       setSubmitting(true);
       try {
         if (await onSave(next)) { setDraft({}); setSaved(true); }
@@ -117,6 +130,9 @@ function TripDetailsForm({ trip, paging, accountId, busy, error: externalError, 
           <input id={`${id}-end`} type="date" value={values.endDate} min={values.startDate || undefined} disabled={locked} onChange={event => change("endDate", event.target.value)} />
         </label>
       </div>
+      <label htmlFor={`${id}-budget`}>Group budget in {trip.currency} (optional)
+        <input id={`${id}-budget`} inputMode="decimal" autoComplete="off" value={values.budget} disabled={locked} placeholder="e.g. 2000" onChange={event => change("budget", event.target.value)} />
+      </label>
       <TripReceiptLanguage value={receiptLanguageSchema.parse(values.receiptLanguage)} onChange={value=>change("receiptLanguage",value)} destination={()=>values.name} busy={locked} accountId={accountId} tripId={trip.id} />
       {(error || externalError) && <p className="error" role="alert">{externalError || error}</p>}
       <div className="holiday-details-actions">

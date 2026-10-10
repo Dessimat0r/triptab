@@ -7,7 +7,7 @@ export function formatMoney(amount: number, currency: string): string {
     formatter = new Intl.NumberFormat("en-GB", {
       style: "currency", currency, minimumFractionDigits: 2, maximumFractionDigits: 2,
     });
-    if (currencyFormatters.size >= 32) currencyFormatters.clear();
+    if (currencyFormatters.size >= 64) currencyFormatters.clear();
     currencyFormatters.set(currency, formatter);
   }
   return formatter.format(amount / 100);

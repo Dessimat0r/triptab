@@ -31,6 +31,9 @@ import RestorationNotice, { type RestorationInfo } from "@/components/restoratio
 import "@/components/receipt-history-view.css";
 import "@/components/expense-editor.css";
 import MemberStatement from "@/components/member-statement";
+import TripSummary, { BudgetCard } from "@/components/trip-summary";
+import RepeatExpenseDialog from "@/components/repeat-expense-dialog";
+import TravellerOptions from "@/components/traveller-options";
 import TripDetails from "@/components/trip-details";
 import PaymentDetailsPanel, { SettlementPayActions } from "@/components/payment-details";
 import { ExpenseFilterBar, SpendingBreakdownPanel } from "@/components/expense-insights";
@@ -71,6 +74,9 @@ import {
   CircleHelp,
   CheckCircle2,
   History,
+  Undo2,
+  Repeat,
+  ClipboardList,
 } from "lucide-react";
 import {
   balances,
@@ -78,6 +84,9 @@ import {
   total,
   expenseTotal,
   expenseShares,
+  CURRENT_CALCULATION_RULE,
+  stampCalculationRules,
+  defaultParticipants,
   itemSchema,
   draftItemSchema,
   expenseSchema,
@@ -97,9 +106,10 @@ import { formatMoney as money } from "@/lib/money-format";
 const uid = () => crypto.randomUUID();
 const today = (timezone?: string) => localDate(new Date(), timezone);
 const expenseDate = formatCalendarDate;
-function previewShares(e: ReceiptEditor, t: Trip) {
+/** Saved entries keep their own rule; an open editor previews what saving will stamp. */
+function previewShares(e: ReceiptEditor, t: Trip, saved = false) {
   const parsed = expenseSchema.safeParse(e);
-  try { return parsed.success && total(parsed.data) > 0 ? expenseShares(parsed.data, t.members, t.currency) : null; }
+  try { return parsed.success && total(parsed.data) > 0 ? expenseShares(saved ? parsed.data : stampCalculationRules(parsed.data, t.members), t.members, t.currency) : null; }
   catch { return null; }
 }
 function previewTotal(e: ReceiptEditor, t: Trip) {
@@ -216,6 +226,10 @@ function mergeReceiptConversation(stored?: ReceiptMessage[], local?: ReceiptMess
   for (const message of local || []) if (!messages.some(value => value.id === message.id)) messages.push(message);
   return messages.length ? messages : undefined;
 }
+type UndoNotice = {
+  id: number; tripId: string; message: string;
+  expenses: { entry: Expense; index: number }[]; payments: { entry: Payment; index: number }[]; drafts: { entry: Draft; index: number }[];
+};
 function hasPendingReceiptQuestions(messages?: ReceiptMessage[]) {
   const answered = new Set(messages?.filter(message => message.role === "assistant").map(message => message.replyTo));
   return !!messages?.some(message => message.role === "user" && !answered.has(message.id));
@@ -271,6 +285,9 @@ export default function Home({ children }: { children: ReactNode }) {
     [receiptHistoryOpen, setReceiptHistoryOpen] = useState(false),
     [statement, setStatement] = useState(""),
     [savedNotice, setSavedNotice] = useState<{ title: string; at: number } | null>(null),
+    [undoNotice, setUndoNotice] = useState<UndoNotice | null>(null),
+    [summaryOpen, setSummaryOpen] = useState(false),
+    [repeatOpen, setRepeatOpen] = useState(""),
     [referenceRate, setReferenceRate] = useState<{ rate: number; currency: Currency; date: string; time: string; timezone: string } | null>(null);
   const editorBaseline = useRef<{ tripId: string; expense?: Expense } | null>(null);
   const scanReceiptInput = useRef<HTMLInputElement>(null);
@@ -639,6 +656,46 @@ export default function Home({ children }: { children: ReactNode }) {
       trips: ledger.trips.map((t) => (t.id === next.id ? next : t)),
     });
   }
+  /** Delete entries, then offer Undo for a few seconds (F-12). */
+  async function deleteWithUndo(current: Trip, removal: Omit<UndoNotice, "id" | "tripId">) {
+    const removed = { expenses: new Set(removal.expenses.map(entry => entry.entry.id)), payments: new Set(removal.payments.map(entry => entry.entry.id)), drafts: new Set(removal.drafts.map(entry => entry.entry.id)) };
+    const ok = await updateTrip({ ...current,
+      expenses: current.expenses.filter(entry => !removed.expenses.has(entry.id)),
+      payments: current.payments.filter(entry => !removed.payments.has(entry.id)),
+      drafts: current.drafts.filter(entry => !removed.drafts.has(entry.id)),
+    });
+    if (ok) setUndoNotice({ ...removal, id: Date.now(), tripId: current.id });
+    return ok;
+  }
+  async function undoDeletion(notice: UndoNotice) {
+    setUndoNotice(null);
+    const current = latestSnapshot.current.data.trips.find(value => value.id === notice.tripId);
+    if (!current) { setError("This holiday is no longer available, so the deletion can’t be undone."); return; }
+    if ([...notice.expenses, ...notice.payments, ...notice.drafts].some(({ entry }) => [...current.expenses, ...current.payments, ...current.drafts].some(value => value.id === entry.id))) {
+      setError("That entry is already back in the holiday."); return;
+    }
+    const lostPhotos = new Set<string>();
+    for (const { entry } of [...notice.expenses, ...notice.drafts]) {
+      if (!entry.receiptId || lostPhotos.has(entry.receiptId)) continue;
+      try {
+        const response = await fetch("/api/receipt?id=" + encodeURIComponent(entry.receiptId), { cache: "no-store" });
+        await response.body?.cancel();
+        if (response.status === 404) lostPhotos.add(entry.receiptId);
+      } catch { setError("Unable to check the receipt photo. Restore the entry from History instead."); return; }
+    }
+    const withoutLostPhoto = <Entry extends { receiptId?: string }>(entry: Entry): Entry => {
+      if (!entry.receiptId || !lostPhotos.has(entry.receiptId)) return structuredClone(entry);
+      const copy = structuredClone(entry); delete copy.receiptId; return copy;
+    };
+    const insert = <Entry,>(list: Entry[], restored: { entry: Entry; index: number }[]) => {
+      const next = [...list];
+      for (const value of [...restored].sort((a, b) => a.index - b.index)) next.splice(Math.min(value.index, next.length), 0, withoutLostPhoto(value.entry as Entry & { receiptId?: string }));
+      return next;
+    };
+    const ok = await updateTrip({ ...current,
+      expenses: insert(current.expenses, notice.expenses), payments: insert(current.payments, notice.payments), drafts: insert(current.drafts, notice.drafts) });
+    if (ok && lostPhotos.size) setError("Restored. The receipt photo had already been deleted; upload it again if you need it.");
+  }
   function editorIsCurrent(current: Trip | undefined = trip) {
     const baseline = editorBaseline.current;
     if (baseline && current?.id !== baseline.tripId) { setError("This holiday is no longer available. Your edits are still here."); return false; }
@@ -670,7 +727,7 @@ export default function Home({ children }: { children: ReactNode }) {
     editorBaseline.current = { tripId: trip.id, expense: structuredClone(expense) };
     setEditorConflict(null); setReferenceRate(null); resetReceiptReview();
     if (pending) editorDraftBinding.current = { draftId: pending.id, receiptId: pending.receiptId, expenseId: pending.expenseId };
-    setEditing(structuredClone({ ...expense, adjustmentAllocation: "receipt-total", expenseId: expense.id,
+    setEditing(structuredClone({ ...expense, adjustmentAllocation: CURRENT_CALCULATION_RULE, expenseId: expense.id,
       draftId: pending?.id, conversation: mergeReceiptConversation(expense.conversation, pending?.conversation),
       memory: pending?.memory ?? expense.memory,
     }));
@@ -711,7 +768,7 @@ export default function Home({ children }: { children: ReactNode }) {
       id: uid(),
       title: "",
       source: "manual",
-      adjustmentAllocation: "receipt-total",
+      adjustmentAllocation: CURRENT_CALCULATION_RULE,
       date: today(timezone),
       time: localTime(new Date(), timezone),
       timezone,
@@ -722,7 +779,7 @@ export default function Home({ children }: { children: ReactNode }) {
           id: uid(),
           name: "",
           amount: 0,
-          members: trip.members.map((m) => m.id),
+          members: defaultParticipants(trip.members, today(timezone)),
         },
       ],
       tax: 0,
@@ -748,7 +805,7 @@ export default function Home({ children }: { children: ReactNode }) {
     const entry: ReceiptEditor = {
       ...draft,
       languageViewId: draft.languageViewId || existing?.languageViewId || draft.expenseId || draft.id,
-      adjustmentAllocation: "receipt-total",
+      adjustmentAllocation: CURRENT_CALCULATION_RULE,
       id: draft.expenseId || draft.id,
       date: draft.date || existing?.date || today(),
       time: draft.time || existing?.time || "12:00",
@@ -920,7 +977,7 @@ export default function Home({ children }: { children: ReactNode }) {
       bankAmount: source.bankAmount,
       fx: source.fx,
       source: source.source || "manual",
-      adjustmentAllocation: source.adjustmentAllocation || "receipt-total",
+      adjustmentAllocation: source.adjustmentAllocation || CURRENT_CALCULATION_RULE,
       status: keepProposal && previous ? previous.status : "waiting",
     };
     const saved = await updateTrip({
@@ -1421,7 +1478,7 @@ export default function Home({ children }: { children: ReactNode }) {
     }
     setRestoration({ actorName: event.actorName, createdAt: event.createdAt, adjustments });
     setCaptureNotes("");
-    setEditing({ ...expense, adjustmentAllocation: "receipt-total", expenseId: undefined });
+    setEditing({ ...expense, adjustmentAllocation: CURRENT_CALCULATION_RULE, expenseId: undefined });
   }
   // Saved balances do not depend on form keystrokes or which panel is open.
   const { balance, due, spent, calculationError } = useMemo(() => {
@@ -1443,10 +1500,10 @@ export default function Home({ children }: { children: ReactNode }) {
     || (!!receiptAI && receiptAI.accountId === profile?.id && receiptAI.provider === "siwc" && receiptAI.connected);
   const memberNames = useMemo(() => Object.fromEntries(trip?.members.map(member => [member.id, member.name]) || []), [trip?.members]);
   const actorMemberNames = useMemo(() => Object.fromEntries(trip?.members.filter(member => member.userId).map(member => [member.userId!, member.name]) || []), [trip?.members]);
-  // Every traveller's share feeds the row's "Your share", the people filter and the breakdown.
+// Every traveller's share feeds the row's "Your share", the people filter and the breakdown.
   const expensePreviews = useMemo(() => new Map(trip?.expenses.map(expense => {
     const total = previewTotal(expense, trip);
-    return [expense.id, { total, shares: total === 0 ? trip.members.map(() => 0) : previewShares(expense, trip) }];
+    return [expense.id, { total, shares: total === 0 ? trip.members.map(() => 0) : previewShares(expense, trip, true) }];
   }) || []), [trip]);
   // Search and filters belong to one holiday; another holiday starts unfiltered.
   const [expenseFilterState, setExpenseFilterState] = useState<{ tripId: string; filter: ExpenseFilter }>({ tripId: "", filter: NO_EXPENSE_FILTER });
@@ -1499,6 +1556,11 @@ export default function Home({ children }: { children: ReactNode }) {
     const timer = setTimeout(() => setSavedNotice(current => current === savedNotice ? null : current), 8000);
     return () => clearTimeout(timer);
   }, [savedNotice]);
+  useEffect(() => {
+    if (!undoNotice) return;
+    const timer = setTimeout(() => setUndoNotice(current => current === undoNotice ? null : current), 12000);
+    return () => clearTimeout(timer);
+  }, [undoNotice]);
   // One layout serves every entry. While it has one line, the Split step shows
   // a single amount; splitting by item (or opening an entry that already has
   // several lines) lists the lines instead, and stays that way for this entry.
@@ -1730,6 +1792,11 @@ export default function Home({ children }: { children: ReactNode }) {
                   );
       case "balances": return (
                     <>
+                      <div className="sectionheading">
+                        <h2>Spending</h2>
+                        <button type="button" className="quiet" onClick={() => setSummaryOpen(true)}><ClipboardList size={16} aria-hidden="true" /> Trip summary</button>
+                      </div>
+                      <BudgetCard trip={trip} />
                       {groupBalance(true)}
                       <div className="sectionheading">
                         <h2>Settle up</h2>
@@ -1795,12 +1862,8 @@ export default function Home({ children }: { children: ReactNode }) {
                                   disabled={saving}
                                   onClick={async () => {
                                     if (!await confirm({ title: "Remove recorded payment?", message: `Remove the recorded payment of ${money(p.amount, trip.currency)} from ${name(p.from)} to ${name(p.to)}? It will remain in activity history.`, confirmLabel: "Remove payment", destructive: true })) return;
-                                    void updateTrip({
-                                      ...trip,
-                                      payments: trip.payments.filter(
-                                        (x) => x.id !== p.id,
-                                      ),
-                                    });
+                                    void deleteWithUndo(trip, { message: `Removed the payment from ${name(p.from)} to ${name(p.to)}.`, expenses: [], drafts: [],
+                                      payments: [{ entry: p, index: trip.payments.findIndex(x => x.id === p.id) }] });
                                   }}
                                 >
                                   <Trash2 size={17} />
@@ -1862,12 +1925,8 @@ export default function Home({ children }: { children: ReactNode }) {
                                 disabled={saving}
                                 onClick={async () => {
                                   if (!await confirm({ title: "Remove receipt draft?", message: `Remove the receipt draft “${d.title}”? Its removal will appear in activity history.`, confirmLabel: "Remove draft", destructive: true })) return;
-                                  void updateTrip({
-                                    ...trip,
-                                    drafts: trip.drafts.filter(
-                                      (x) => x.id !== d.id,
-                                    ),
-                                  });
+                                  void deleteWithUndo(trip, { message: `Removed the receipt draft “${d.title || "Untitled"}”.`, expenses: [], payments: [],
+                                    drafts: [{ entry: d, index: trip.drafts.findIndex(x => x.id === d.id) }] });
                                 }}
                               >
                                 <X size={17} />
@@ -1951,6 +2010,7 @@ export default function Home({ children }: { children: ReactNode }) {
                           </button>
                         </form>
                       </div>
+                      <TravellerOptions trip={trip} busy={saving || loading} paging={page("traveller-options", 10)} onSave={updateTrip} confirm={confirm} />
                       <TripSharing key={`${trip.id}:${profile?.id || "anonymous"}`} trip={trip} profile={profile} onChanged={() => load({ background: true })} />
                       <PaymentDetailsPanel key={`pay:${trip.id}:${profile?.id || ""}`} paging={page("payment-details", 10)} trip={trip} accountId={profile?.id} busy={saving || loading} onSave={updateTrip} />
                       <TripDetails paging={page("names", 10)} key={`${trip.id}:${profile?.id || ""}`} trip={trip} accountId={profile?.id} busy={saving || loading} error={error} onSave={updateTrip} />
@@ -2289,6 +2349,11 @@ export default function Home({ children }: { children: ReactNode }) {
             This holiday is no longer available in this view. Its open form has been kept separate from other holidays.
             <button type="button" className="quiet" onClick={() => { closeReceiptEditor(); setPaymentEditor(null); }}>Close unavailable form</button>
           </p>}
+          {undoNotice && undoNotice.tripId === trip?.id && !editing && <p className="saved-banner" role="status">
+            <Trash2 size={18} aria-hidden="true" />
+            <span>{undoNotice.message}</span>
+            <button type="button" className="quiet" disabled={saving} onClick={() => void undoDeletion(undoNotice)}><Undo2 size={16} aria-hidden="true" /> Undo</button>
+          </p>}
           {savedNotice && !editing && <p className="saved-banner" role="status">
             <CheckCircle2 size={18} aria-hidden="true" />
             <span>Saved “{savedNotice.title}”.</span>
@@ -2484,6 +2549,9 @@ export default function Home({ children }: { children: ReactNode }) {
       </div>
       {paymentEditor && trip?.id === paymentEditor.tripId && <PaymentEditor key={paymentEditor.key} trip={trip} initial={paymentEditor.entry} restoredFrom={paymentEditor.restoredFrom} busy={saving || loading} error={error} onClose={() => setPaymentEditor(null)} onSave={savePayment} />}
       {statement && trip && <MemberStatement trip={trip} memberId={statement} onClose={() => setStatement("")} />}
+      {summaryOpen && trip && <TripSummary trip={trip} onClose={() => setSummaryOpen(false)} />}
+      {repeatOpen && trip && trip.expenses.some(expense => expense.id === repeatOpen) && <RepeatExpenseDialog trip={trip} expense={trip.expenses.find(expense => expense.id === repeatOpen)!} busy={saving}
+        onClose={() => setRepeatOpen("")} onRepeat={copies => updateTrip({ ...trip, expenses: [...trip.expenses, ...copies] })} />}
       {create && (
         <ModalA11y className="overlay" onClose={() => setCreate(false)}>
           <section
@@ -3061,7 +3129,7 @@ export default function Home({ children }: { children: ReactNode }) {
                 <div className="conflict-versions">
                   {[{ label: "Your edits", value: editing }, { label: "Latest saved", value: editorConflict.latest }].map(version => {
                     const value = version.value;
-                    const costs = value && previewShares(value, trip);
+                    const costs = value && previewShares(value, trip, version.value !== editing);
                     return <div key={version.label}>
                       <h4>{version.label}</h4>
                       {value ? <>
@@ -3105,15 +3173,10 @@ export default function Home({ children }: { children: ReactNode }) {
                       onClick={async () => {
                         if (!editorIsCurrent()) return;
                         if (!await confirm({ title: "Delete expense?", message: `Delete “${editing.title}” (${money(previewTotal(editing, trip) || 0, trip.currency)})? Its previous details will remain in activity history.`, confirmLabel: "Delete expense", destructive: true })) return;
-                        if (
-                          await updateTrip({
-                            ...trip,
-                            expenses: trip.expenses.filter(
-                              (x) => x.id !== editing.id,
-                            ),
-                            drafts: trip.drafts.filter(draft => draft.expenseId !== editing.id),
-                          })
-                        )
+                        const saved = trip.expenses.find(x => x.id === editing.id)!;
+                        if (await deleteWithUndo(trip, { message: `Deleted “${saved.title}”.`, payments: [],
+                          expenses: [{ entry: saved, index: trip.expenses.indexOf(saved) }],
+                          drafts: trip.drafts.flatMap((draft, index) => draft.expenseId === editing.id ? [{ entry: draft, index }] : []) }))
                           closeReceiptEditor();
                       }}
                     >
@@ -3121,6 +3184,12 @@ export default function Home({ children }: { children: ReactNode }) {
                       <span>Delete</span>
                     </button>
                   )}
+                  {trip.expenses.some((e) => e.id === editing.id) && <button type="button" className="quiet" disabled={saving}
+                    title="Copy the saved expense onto later days"
+                    onClick={() => {
+                      if (editorDirty) { setError("Save or discard your changes first. Repeat copies the saved expense."); return; }
+                      const id = editing.id; closeReceiptEditor(); setRepeatOpen(id);
+                    }}><Repeat size={16} aria-hidden="true" /><span>Repeat</span></button>}
                   <button
                     className="primary"
                     disabled={saveDisabled}

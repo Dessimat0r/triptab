@@ -287,6 +287,7 @@ function updateDescription(event: NotificationChange): { title: string; summary:
     add('the holiday currency', 'Holiday currency changed', ['currency']);
     add('the receipt language', 'Holiday language changed', ['receiptLanguage']);
     add('the holiday name', 'Holiday renamed', ['name']);
+    add('the group budget', 'Holiday budget changed', ['budget']);
     add('the display order', 'Holiday order changed', ['expenseOrder', 'paymentOrder', 'memberOrder', 'draftOrder']);
   }
   if (!details.length) return null;

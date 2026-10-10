@@ -300,7 +300,7 @@ test('seeded mixed-currency trips conserve every penny through allocation, JSON 
       }));
       const percentages = random(3) === 0 ? { [ids[0]]: 60, [ids[1]]: 40 } : undefined;
       if (random(2)) items[0] = { ...items[0], members: [ids[0], ids[1]], percentages: { [ids[0]]: 33.33, [ids[1]]: 66.67 } };
-      return expense({ id: `expense-${index}`, adjustmentAllocation: 'receipt-total', currency, payer: ids[random(ids.length)], items, tax: random(200), tip: random(200), discount: random(400), percentages,
+      return expense({ id: `expense-${index}`, adjustmentAllocation: 'rotating-remainder', currency, payer: ids[random(ids.length)], items, tax: random(200), tip: random(200), discount: random(400), percentages,
         fx: currency === 'GBP' ? undefined : { rate: currency === 'HUF' || currency === 'ISK' ? 0.00214 : 0.85327, asOf: '2026-08-15', source: 'manual' },
         bankAmount: currency !== 'GBP' && random(3) === 0 ? 1 + random(80000) : undefined,
       });
@@ -630,7 +630,7 @@ test('saved per-item receipts keep their balances until they are edited', () => 
   const edited = structuredClone(oldTrip);
   edited.expenses[0].title = 'BILLA';
   const saved = validateLedger({ trips: [edited] }, { previous: { trips: [oldTrip] } }).trips[0];
-  assert.equal(saved.expenses[0].adjustmentAllocation, 'receipt-total');
+  assert.equal(saved.expenses[0].adjustmentAllocation, 'rotating-remainder');
   assert.deepEqual(shares(saved.expenses[0], members), [82, 82, 0]);
 });
 
@@ -651,11 +651,11 @@ test('unversioned zero-price receipts preserve historical shares until explicitl
   const modified = structuredClone(parsed);
   modified.expenses[0].title = 'Reviewed complimentary meal';
   const saved = validateLedger({ trips: [modified] }, { previous: { trips: [oldTrip] } }).trips[0];
-  assert.equal(saved.expenses[0].adjustmentAllocation, 'receipt-total');
+  assert.equal(saved.expenses[0].adjustmentAllocation, 'rotating-remainder');
   assert.deepEqual(shares(saved.expenses[0], members), [0, 101, 0]);
   assert.deepEqual(balances(saved), [101, -101, 0]);
   const newTrip = validateLedger({ trips: [{ ...oldTrip, id: 'new-trip' }] }).trips[0];
-  assert.equal(newTrip.expenses[0].adjustmentAllocation, 'receipt-total');
+  assert.equal(newTrip.expenses[0].adjustmentAllocation, 'rotating-remainder');
   assert.deepEqual(shares(newTrip.expenses[0], members), [0, 101, 0]);
 });
 
@@ -663,7 +663,7 @@ test('waiting empty-item drafts accept allocation metadata without requiring com
   const holiday = trip([]);
   holiday.drafts = [{ ...expense({ id: 'waiting', adjustmentAllocation: undefined }), items: [], fx: undefined, tax: 100, status: 'waiting' }];
   const accepted = validateLedger({ trips: [holiday] }).trips[0].drafts[0];
-  assert.equal(accepted.adjustmentAllocation, 'receipt-total');
+  assert.equal(accepted.adjustmentAllocation, 'rotating-remainder');
   assert.equal(accepted.items.length, 0);
   assert.equal(accepted.tax, 100);
 });
@@ -841,7 +841,7 @@ test('preserves receipt-wide percentages on saved expenses and review drafts', (
 });
 
 test('persists a receipt review draft linked to an existing expense without changing posted costs', () => {
-  const original = expense({ percentages: { a: 60, b: 40 }, adjustmentAllocation: 'receipt-total' });
+  const original = expense({ percentages: { a: 60, b: 40 }, adjustmentAllocation: 'rotating-remainder' });
   const holiday = trip([original]);
   const postedBalances = balances(holiday);
   holiday.drafts = [draftSchema.parse({

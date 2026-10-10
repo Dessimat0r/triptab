@@ -330,7 +330,12 @@ function changes(event: ActivityEvent, currency: Currency | undefined, names: Re
   for (const [key, label] of Object.entries({ amount: "Amount", tax: "Tax", tip: "Tip", discount: "Discount", bankAmount: "Actual bank charge" })) add(key, label, (value, snapshot) => money(value, key === "bankAmount" || String(event.entityType) === "payment" ? currency : auditText(snapshot.currency) || currency));
   for (const [key, label] of Object.entries({ from: "Paid by", to: "Paid to", payer: "Receipt payer", memberId: "Traveller" })) add(key, label, value => traveller(value, names));
   add("percentages", "Whole-receipt split", value => percentages(value, names));
-  add("adjustmentAllocation", "Split calculation rule", value => value === "receipt-total" ? "People selected on receipt items; pennies rounded once on the receipt total" : value === "selected-participants" ? "People selected on receipt items; pennies rounded per item" : "Earlier rule: all travellers");
+  add("memberWeights", "Traveller weights", value => { const weights = auditRecord(value); return weights ? Object.entries(weights).map(([id, weight]) => `${traveller(id, names)} counts as ${String(weight)}`).join("\n") : "Everyone counts once"; });
+  add("weight", "Counts as", value => typeof value === "number" && value > 1 ? `${value} people` : "1 person");
+  add("joinedOn", "Joined on", value => typeof value === "string" ? value : "From the start");
+  add("leftOn", "Left on", value => typeof value === "string" ? value : "Until the end");
+  add("budget", "Group budget", value => typeof value === "number" ? money(value, currency) : "No budget");
+  add("adjustmentAllocation", "Split calculation rule", value => value === "rotating-remainder" ? "People selected on receipt items; pennies rounded once on the receipt total, with leftover pennies rotating between people" : value === "receipt-total" ? "People selected on receipt items; pennies rounded once on the receipt total" : value === "selected-participants" ? "People selected on receipt items; pennies rounded per item" : "Earlier rule: all travellers");
   add("fx", "Exchange rate", value => {
     const fx = auditRecord(value); return fx ? `Rate: ${fx.rate}\nAs of: ${auditText(fx.asOf)}\nSource: ${auditText(fx.source)}` : "No recorded rate";
   });

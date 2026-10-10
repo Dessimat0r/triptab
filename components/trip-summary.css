@@ -1,0 +1,35 @@
+.budget-card { display: grid; gap: 10px; padding: 14px 16px; margin-bottom: 16px; }
+.budget-figures { display: flex; flex-wrap: wrap; gap: 8px 24px; }
+.budget-figures > div { display: grid; gap: 2px; min-width: 0; }
+.budget-figures span { font-size: var(--text-s); }
+.budget-figures strong { font-size: var(--text-l); font-variant-numeric: tabular-nums; }
+.budget-meter { height: 8px; border-radius: var(--radius-pill); background: var(--surface-raised); overflow: hidden; }
+.budget-meter span { display: block; height: 100%; background: var(--green); border-radius: inherit; }
+.budget-meter span.near { background: #b7791f; }
+.budget-meter span.over { background: var(--red); }
+.budget-card .footnote { margin: 0; }
+
+.trip-summary { max-width: 640px; }
+.trip-summary h3 { margin: 18px 0 8px; }
+.trip-summary-totals { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin: 12px 0 0; }
+.trip-summary-totals div { background: var(--surface-raised); border-radius: var(--radius-m); padding: 10px 12px; min-width: 0; }
+.trip-summary-totals dt { color: var(--muted); font-size: var(--text-s); }
+.trip-summary-totals dd { margin: 2px 0 0; font-weight: 700; font-size: var(--text-l); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.trip-summary-table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.trip-summary-table th, .trip-summary-table td { padding: 8px 4px; border-bottom: 1px solid var(--line); text-align: right; font-size: var(--text-s); }
+.trip-summary-table th:first-child, .trip-summary-table thead th:first-child { text-align: left; overflow-wrap: anywhere; }
+.trip-summary-transfers, .trip-summary-bars, .trip-summary-days { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.trip-summary-transfers li, .trip-summary-days li { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.trip-summary-transfers b, .trip-summary-days b, .trip-summary-bars b { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.trip-summary-bars li { display: grid; grid-template-columns: minmax(80px, 9rem) 1fr auto; align-items: center; gap: 10px; font-size: var(--text-s); }
+.trip-summary-bar { height: 10px; background: var(--surface-raised); border-radius: var(--radius-pill); overflow: hidden; }
+.trip-summary-bar span { display: block; height: 100%; background: var(--primary); border-radius: inherit; }
+.trip-summary-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; margin-top: 18px; }
+
+@media print {
+  body * { visibility: hidden; }
+  .trip-summary, .trip-summary * { visibility: visible; }
+  .trip-summary-overlay { position: static; background: none; }
+  .trip-summary { position: absolute; inset: 0 auto auto 0; max-width: none; width: 100%; box-shadow: none; overflow: visible; max-height: none; }
+  .trip-summary .no-print { display: none; }
+}
