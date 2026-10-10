@@ -13,6 +13,9 @@ const { d1, r2 } = hostingConfig;
 // macOS Seatbelt blocks FSEvents, so Codex previews need polling for HMR.
 const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === "seatbelt";
 const managedLinux = readExecutionProfile() === "managed-linux";
+const releaseProfile = process.env.TRIPTAB_RELEASE_PROFILE || 'app';
+if (!['app', 'backup'].includes(releaseProfile)) throw new Error('Unknown TripTab release profile.');
+const backupOnly = releaseProfile === 'backup';
 
 const receiptAIOwnerEmail = (process.env.RECEIPT_AI_OWNER_EMAIL || "").trim().toLowerCase();
 if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(receiptAIOwnerEmail) || receiptAIOwnerEmail.length > 320) {
@@ -20,12 +23,12 @@ if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(receiptAIOwnerEmail) || receiptAIOwnerEma
 }
 
 const localBindingConfig = {
-  main: "./build/sites-worker.ts",
+  main: backupOnly ? "./build/backup-worker.ts" : "./build/sites-worker.ts",
   vars: { RECEIPT_AI_OWNER_EMAIL: receiptAIOwnerEmail },
   compatibility_flags: ["nodejs_compat"],
   // Cloudflare-compatible output declares UTC maintenance every 15 minutes.
   // Sites' production deployment must separately confirm trigger activation.
-  triggers: { crons: ["*/15 * * * *"] },
+  triggers: { crons: backupOnly ? [] : ["*/15 * * * *"] },
   d1_databases: d1
     ? [
         {
@@ -71,7 +74,7 @@ export default defineConfig(async ({ command }) => {
     },
     plugins: [
       vinext(),
-      sites({ mockAuth: !managedLinux }),
+      sites({ mockAuth: !managedLinux, copyMigrations: !backupOnly }),
       connectorPreview(),
       cloudflare({
         viteEnvironment: { name: "rsc", childEnvironments: ["ssr"] },
