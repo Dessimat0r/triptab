@@ -67,3 +67,14 @@ test('archived summaries preserve bill kind without rewriting old holiday summar
   const db = await seeded(); db.sqlite.prepare('INSERT INTO trip_archives(user_id,trip_id,archived_at) VALUES(?,?,?)').run(actor.id, base.id, '2026-10-10');
   assert.equal((await listArchivedTrips(db.asD1(), actor.id))[0].kind, 'bill');
 });
+
+test('first receipt defaults adopt currency and title together, preserving explicit choices', async () => {
+  const { firstBillExpense } = await import('../lib/bills');
+  const expense: Trip['expenses'][number] = { id: 'e', title: 'Restaurant', currency: 'EUR', payer: 'alex', date: '2026-10-10', time: '19:00', timezone: 'Europe/London', items: [{ id: 'i', name: 'Food', amount: 1200, members: ['alex','sam'] }], tax: 0, tip: 0, discount: 0, fx: { rate: 0.85, asOf: '2026-10-10', source: 'reference' }, bankAmount: 1000 };
+  const defaults = { tripId: base.id, name: true, currency: true, previousTripId: '' };
+  const adopted = firstBillExpense(base, expense, defaults);
+  assert.equal(adopted.trip.name, expense.title); assert.equal(adopted.trip.currency, 'EUR'); assert.equal(adopted.expense.fx, undefined); assert.equal(adopted.expense.bankAmount, undefined);
+  const explicit = firstBillExpense(base, expense, { ...defaults, name: false, currency: false });
+  assert.deepEqual(explicit, { trip: base, expense });
+  assert.deepEqual(firstBillExpense({ ...base, expenses: [expense] }, expense, defaults).trip.currency, 'GBP');
+});

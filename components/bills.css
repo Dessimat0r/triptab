@@ -1,0 +1,7 @@
+.bill-start > label, .bill-start details label { display: flex; flex-direction: column; gap: var(--space-2); margin-block: var(--space-4); }
+.bill-start input, .bill-start select, .bill-people input { min-height: 44px; font-size: max(16px, var(--text-m)); width: 100%; min-width: 0; }
+.bill-name-chips, .bill-suggestions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.bill-name-chips > span { padding: var(--space-3); border-radius: var(--radius-s); background: var(--paper); }
+.bill-start-actions { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-3); margin-top: var(--space-5); }
+.bill-start-actions button { min-height: 44px; white-space: normal; }
+@media (max-width: 359px) { .bill-start-actions { grid-template-columns: 1fr; } }
