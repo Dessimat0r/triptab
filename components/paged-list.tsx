@@ -39,7 +39,7 @@ export default function PagedList<T>({ items, itemKey, renderItem, shown, step, 
     const target = row?.querySelector<HTMLElement>(".expense-open, .draft > .quiet") || row?.querySelector<HTMLElement>("button:not(:disabled), input:not(:disabled)") || row || root.current;
     target?.focus({ preventScroll: true });
     target?.scrollIntoView({ block: "nearest" });
-    setAnnouncement(`Showing ${visible} of ${items.length} ${noun}`);
+    setAnnouncement(uiText("Showing {shown} of {total} {noun}", { shown: visible, total: items.length, noun }));
   }, [visible, items.length, noun]);
   return <div ref={root} className={`paged-list ${className}`} role="group" aria-label={noun} tabIndex={-1}>
     <div className="paged-list-items" role={role}>{items.slice(0, visible).map((item, index) => renderItem(item, index))}</div>
@@ -47,6 +47,6 @@ export default function PagedList<T>({ items, itemKey, renderItem, shown, step, 
       <p className="muted">{uiText("Showing ")}{visible}{uiText(" of ")}{items.length} {noun}</p>
       <button type="button" className="quiet" onClick={() => { pending.current = { index: visible, id: itemKey(items[visible]) }; onMore(); }}>{uiText("Show ")}{Math.min(step, items.length - visible)}{uiText(" more")}</button>
     </div>}
-    <span className="sr-only" role="status">{announcement}</span>
+    <span className="sr-only" role="status">{uiText(announcement)}</span>
   </div>;
 }

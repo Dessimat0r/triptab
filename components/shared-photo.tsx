@@ -98,7 +98,7 @@ export default function SharedPhoto({
               }
             }}
           >
-            {working ? 'Uploading…' : 'Attach receipt photo'}
+            {working ? uiText('Uploading…') : uiText('Attach receipt photo')}
           </button>
         </>
       ) : (
@@ -115,7 +115,7 @@ export default function SharedPhoto({
       >
         {uiText('Discard photo')}
       </button>
-      {message && <p role="status">{message}</p>}
+      {message && <p role="status">{uiText(message)}</p>}
     </section>
   );
 }

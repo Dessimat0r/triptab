@@ -53,7 +53,7 @@ function TravellerRow({ trip, member, busy, onSave, confirm }: {
     <b className="traveller-options-name">{member.name}</b>
     <div className="traveller-options-fields">
       <label htmlFor={`${id}-weight`}>{uiText("Counts as")}<select id={`${id}-weight`} value={values.weight} disabled={locked} onChange={event => change("weight", event.target.value)}>
-          {Array.from({ length: 20 }, (_, index) => <option key={index} value={String(index + 1)}>{index + 1} {index ? "people" : "person"}</option>)}
+          {Array.from({ length: 20 }, (_, index) => <option key={index} value={String(index + 1)}>{index + 1} {index ? uiText("people") : uiText("person")}</option>)}
         </select>
       </label>
       <label htmlFor={`${id}-joined`}>{uiText("Joined on")}<input id={`${id}-joined`} type="date" value={values.joinedOn} min={trip.startDate} max={values.leftOn || trip.endDate} disabled={locked} onChange={event => change("joinedOn", event.target.value)} />
@@ -62,7 +62,7 @@ function TravellerRow({ trip, member, busy, onSave, confirm }: {
       </label>
     </div>
     <div className="traveller-options-actions">
-      {changed && <button type="submit" className="quiet" disabled={locked}>{submitting ? "Saving…" : "Save"}</button>}
+      {changed && <button type="submit" className="quiet" disabled={locked}>{submitting ? uiText("Saving…") : uiText("Save")}</button>}
       <button type="button" className="quiet" disabled={locked} onClick={async () => {
         if (removalBlocker) { setMessage({ error: removalBlocker }); return; }
         if (!await confirm({ title: `Remove ${member.name}?`, message: `${member.name} isn’t in any expense or payment, so removing them changes no amounts. Their removal will appear in activity history.`, confirmLabel: "Remove traveller", destructive: true })) return;
@@ -83,7 +83,7 @@ export default function TravellerOptions({ trip, busy, paging, onSave, confirm }
   return <section className="panel traveller-options" aria-labelledby={`${id}-heading`}>
     <h3 id={`${id}-heading`}>{uiText("Who shares what")}</h3>
     <p className="footnote">{uiText("“Counts as” gives a couple or family more than one share when an expense is split equally, for expenses added or edited from now on. Joining and leaving dates choose who is ticked by default on new expenses; nobody’s existing shares change.")}</p>
-    <PagedList {...paging} noun="travellers" items={trip.members} itemKey={member => member.id}
+    <PagedList {...paging} noun={uiText("travellers")} items={trip.members} itemKey={member => member.id}
       renderItem={member => <TravellerRow key={member.id} trip={trip} member={member} busy={busy} onSave={onSave} confirm={confirm} />} />
   </section>;
 }

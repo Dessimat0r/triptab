@@ -272,7 +272,7 @@ export default function ReceiptAISettings({
               if (provider === "api" || (provider === "siwc" && settings.siwcAvailable)) void update({ provider }, "POST", "Receipt processing provider saved.");
             }}>
             <option value="api">{uiText("OpenAI API key")}</option>
-            <option value="siwc" disabled={!settings.siwcAvailable}>{uiText("ChatGPT plan")}{settings.siwcAvailable ? "" : " · currently disabled"}</option>
+            <option value="siwc" disabled={!settings.siwcAvailable}>{uiText("ChatGPT plan")}{settings.siwcAvailable ? "" : uiText(" · currently disabled")}</option>
           </select>
         </label>
         {!settings.siwcAvailable && <p className="footnote">{uiText("The ChatGPT plan option is switched off for now. You can switch providers here when it becomes available.")}</p>}
@@ -282,12 +282,12 @@ export default function ReceiptAISettings({
           const submittedKey = apiKey.trim();
           void update({ apiKey: submittedKey }, "POST", "API key saved.");
         }}>
-          <label htmlFor={`${id}-api-key`}>{settings.apiConnected ? "Replace OpenAI API key" : "OpenAI API key"}
+          <label htmlFor={`${id}-api-key`}>{settings.apiConnected ? uiText("Replace OpenAI API key") : uiText("OpenAI API key")}
             <input id={`${id}-api-key`} name="receipt-ai-api-key" type="password" value={apiKey} autoComplete="off" autoCapitalize="none" autoCorrect="off" spellCheck={false}
               required maxLength={512} disabled={busy} aria-describedby={`${id}-key-hint`} onChange={event => setApiKey(event.target.value)} />
           </label>
           <small id={`${id}-key-hint`} className="muted">{uiText("Use a key created in your TripTab OpenAI project. The shared key is encrypted on the server and never shown again. This field clears after the key is saved.")}</small>
-          <button type="submit" className="quiet" disabled={busy || !apiKey.trim()}>{busy ? "Saving…" : (settings.apiConnected ? "Replace API key" : "Save API key")}</button>
+          <button type="submit" className="quiet" disabled={busy || !apiKey.trim()}>{busy ? uiText("Saving…") : (settings.apiConnected ? "Replace API key" : "Save API key")}</button>
         </form>}
         {settings.apiConnected && <button type="button" className="quiet danger" disabled={busy} onClick={() => void update(undefined, "DELETE", "API key removed.")}><Trash2 size={17} aria-hidden="true" />{uiText("Remove API key")}</button>}
         {settings.apiConnected && <p className="footnote">{uiText("Removing the key disables shared API receipt processing for everyone until a replacement is saved.")}</p>}

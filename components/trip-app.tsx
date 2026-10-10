@@ -1,5 +1,5 @@
 "use client";
-import { t as uiText,subscribeUiLanguage,setUiLanguage,type UiLanguage } from "@/lib/ui-language";
+import { t as uiText, currencyDisplayName,subscribeUiLanguage,setUiLanguage,type UiLanguage } from "@/lib/ui-language";
 import InterfaceLanguage from "@/components/interface-language";
 
 import { canonicalJson, sha256Hex } from "@/lib/data-utils";
@@ -182,7 +182,7 @@ function Amount({
     <input
       id={id}
       aria-label={label}
-      placeholder={nullable ? "Unreadable / missing" : "0.00"}
+      placeholder={nullable ? uiText("Unreadable / missing") : "0.00"}
       aria-invalid={nullable && value === null}
       inputMode="decimal"
       autoComplete="off"
@@ -1677,11 +1677,11 @@ export default function Home({ children }: { children: ReactNode }) {
                         <span>
                           {m.name}
                           <small>
-                            {calculationError ? "Needs review" : balance[i] > 0
-                              ? "Gets back"
+                            {calculationError ? uiText("Needs review") : balance[i] > 0
+                              ? uiText("Gets back")
                               : balance[i] < 0
-                                ? "Owes"
-                                : "Settled"}
+                                ? uiText("Owes")
+                                : uiText("Settled")}
                           </small>
                         </span>
                         <b
@@ -1717,7 +1717,7 @@ export default function Home({ children }: { children: ReactNode }) {
                     </div>
                     <div className="panel balance-card">
                     {inline
-                      ? <PagedList {...page("balance", 8)} noun="travellers" items={trip.members} itemKey={m => m.id} renderItem={balanceRow} />
+                      ? <PagedList {...page("balance", 8)} noun={uiText("travellers")} items={trip.members} itemKey={m => m.id} renderItem={balanceRow} />
                       : trip.members.map(balanceRow)}
                     {!inline && <button
                       className="wide quiet"
@@ -1747,7 +1747,7 @@ export default function Home({ children }: { children: ReactNode }) {
                             <button className="quiet" onClick={() => setExpenseFilter({ ...NO_EXPENSE_FILTER, sort: expenseFilter.sort })}>{uiText("Clear filters")}</button>
                           </div>
                         ) : trip.expenses.length ? (
-                          <PagedList {...page(expenseFilterActive(expenseFilter) || expenseFilter.sort !== "recent" ? `expenses:${canonicalJson(expenseFilter)}` : "expenses", 20)} noun="expenses" items={visibleExpenses} itemKey={e => e.id} renderItem={(e) => (
+                          <PagedList {...page(expenseFilterActive(expenseFilter) || expenseFilter.sort !== "recent" ? `expenses:${canonicalJson(expenseFilter)}` : "expenses", 20)} noun={uiText("expenses")} items={visibleExpenses} itemKey={e => e.id} renderItem={(e) => (
                             <div
                               className="expense"
                               key={e.id} data-entry-id={e.id} tabIndex={-1}
@@ -1766,29 +1766,29 @@ export default function Home({ children }: { children: ReactNode }) {
                                 <b>{e.title}</b>
                                 <span>
                                   {name(e.payer)}{uiText(" paid · ")}{e.items.length}{" "}
-                                  {e.items.length === 1 ? "item" : "items"}
+                                  {e.items.length === 1 ? uiText("item") : uiText("items")}
                                 </span>
                                 <small>
                                   {expenseDate(e.date)}{" "}
                                   · {e.time} ·{" "}
                                   {e.bankAmount !== undefined
-                                    ? "Bank charge"
+                                    ? uiText("Bank charge")
                                     : e.currency !== trip.currency
-                                      ? e.fx?.source === "manual" ? "Manual rate" : "Reference estimate"
-                                      : "Paid"}
-                                  {e.source === "ai" ? " · AI assisted" : ""}
+                                      ? e.fx?.source === "manual" ? uiText("Manual rate") : uiText("Reference estimate")
+                                      : uiText("Paid")}
+                                  {e.source === "ai" ? uiText(" · AI assisted") : ""}
                                 </small>
                               </span>
                               <span className="expense-amount">
                                 <b>
-                                  {expensePreviews.get(e.id)?.total === null ? "Needs review" : money(expensePreviews.get(e.id)!.total!, trip.currency)}
+                                  {expensePreviews.get(e.id)?.total === null ? uiText("Needs review") : money(expensePreviews.get(e.id)!.total!, trip.currency)}
                                 </b>
                                 <small className={e.currency !== trip.currency ? "expense-original" : "expense-edit-hint"}>
                                   {e.currency !== trip.currency
                                     ? money(total(e), e.currency) + " original"
-                                    : "Edit split"}
+                                    : uiText("Edit split")}
                                 </small>
-                                {currentMemberIndex >= 0 && <small className="expense-share">{uiText("Your share ")}{expensePreviews.get(e.id)?.shares ? money(expensePreviews.get(e.id)!.shares![currentMemberIndex], trip.currency) : "needs review"}</small>}
+                                {currentMemberIndex >= 0 && <small className="expense-share">{uiText("Your share ")}{expensePreviews.get(e.id)?.shares ? money(expensePreviews.get(e.id)!.shares![currentMemberIndex], trip.currency) : uiText("needs review")}</small>}
                               </span>
                               </button>
                             </div>
@@ -1820,7 +1820,7 @@ export default function Home({ children }: { children: ReactNode }) {
                       <p className="footnote">{uiText("Suggested transfers simplify the balances. Record what was actually transferred; partial payments and different pairs are supported.")}</p>
                       <div className="panel">
                         {calculationError ? <p className="error">{uiText("Review the flagged receipts before using settlement suggestions.")}</p> : due.length ? (
-                          <PagedList {...page("settlements", 10)} noun="suggested transfers" items={due} itemKey={d => `${d.from}:${d.to}`} renderItem={(d, i) => (
+                          <PagedList {...page("settlements", 10)} noun={uiText("suggested transfers")} items={due} itemKey={d => `${d.from}:${d.to}`} renderItem={(d, i) => (
                             <div className="settlement" key={i} data-entry-id={`${d.from}:${d.to}`} tabIndex={-1}>
                               <div>
                                 <strong>{name(d.from)}</strong>
@@ -1852,13 +1852,13 @@ export default function Home({ children }: { children: ReactNode }) {
                       <p className="footnote">{uiText("Record a payment after the money has been transferred. TripTab does not move money.")}</p>
                       <h2 className="subheading">{uiText("Traveller statements")}</h2>
                       <div className="panel">
-                        <PagedList {...page("statements", 10)} noun="traveller statements" items={trip.members} itemKey={member => member.id} renderItem={member => <button key={member.id} data-entry-id={member.id} className="statement-link" onClick={() => setStatement(member.id)}><span>{member.name}</span><span>{uiText("View statement")}</span></button>} />
+                        <PagedList {...page("statements", 10)} noun={uiText("traveller statements")} items={trip.members} itemKey={member => member.id} renderItem={member => <button key={member.id} data-entry-id={member.id} className="statement-link" onClick={() => setStatement(member.id)}><span>{member.name}</span><span>{uiText("View statement")}</span></button>} />
                       </div>
                       {trip.payments.length > 0 && (
                         <>
                           <h2 className="subheading">{uiText("Recorded payments")}<small className="muted">{uiText("Recently added")}</small></h2>
                           <div className="panel">
-                            <PagedList {...page("payments", 5)} noun="payments" items={[...trip.payments].reverse()} itemKey={p => p.id} renderItem={(p) => (
+                            <PagedList {...page("payments", 5)} noun={uiText("payments")} items={[...trip.payments].reverse()} itemKey={p => p.id} renderItem={(p) => (
                               <div className="payment" key={p.id} data-entry-id={p.id} tabIndex={-1}>
                                 <div className="payment-line"><span className="payment-summary">{name(p.from)}{uiText(" paid ")}{name(p.to)}</span>
                                 <b className="payment-amount">{money(p.amount, trip.currency)}</b></div>
@@ -1891,18 +1891,18 @@ export default function Home({ children }: { children: ReactNode }) {
                       <div className="sectionheading">
                         <div className="heading-with-order"><h2>{uiText("Receipt inbox")}</h2><span className="muted">{uiText("Recently added")}</span></div>
                         <button type="button" className="quiet" disabled={uploading || saving} onClick={() => { setError(""); setUploadOpen(true); }}>
-                          <Upload size={16} aria-hidden="true" />{uploading ? "Uploading…" : "Add receipt"}
+                          <Upload size={16} aria-hidden="true" />{uploading ? uiText("Uploading…") : uiText("Add receipt")}
                         </button>
                       </div>
                       <div className="panel">
                         {trip.drafts.length ? (
-                          <PagedList {...page("drafts", 10)} noun="receipt drafts" items={[...trip.drafts].reverse()} itemKey={d => d.id} renderItem={(d) => (
+                          <PagedList {...page("drafts", 10)} noun={uiText("receipt drafts")} items={[...trip.drafts].reverse()} itemKey={d => d.id} renderItem={(d) => (
                             <div className="draft" key={d.id} data-entry-id={d.id} tabIndex={-1}>
                               <div className="draft-visual">
                               {d.receiptId && (
                                 <img
                                   src={"/api/receipt?id=" + d.receiptId}
-                                  alt={`Receipt image for ${d.title || "untitled receipt"}`}
+                                  alt={uiText("Receipt image for {value0}", { value0: d.title || "untitled receipt" })}
                                   loading="lazy"
                                   decoding="async"
                                 />
@@ -1917,8 +1917,8 @@ export default function Home({ children }: { children: ReactNode }) {
                                   }
                                 >
                                   {d.status === "review"
-                                    ? "Ready to review"
-                                    : hasPendingReceiptQuestions(d.conversation) ? "Question saved · external processing needed" : "Not processed yet"}{" "}
+                                    ? uiText("Ready to review")
+                                    : hasPendingReceiptQuestions(d.conversation) ? uiText("Question saved · external processing needed") : uiText("Not processed yet")}{" "}
                                   · {d.items.length}{uiText(" items · ")}{d.currency}
                                 </small>
                               </div>
@@ -1949,7 +1949,7 @@ export default function Home({ children }: { children: ReactNode }) {
                               className="quiet"
                               onClick={() => setHelp(true)}
                             >
-                              {chatgptConnected ? "How to use ChatGPT or Codex" : "Connect ChatGPT or Codex"}
+                              {chatgptConnected ? uiText("How to use ChatGPT or Codex") : uiText("Connect ChatGPT or Codex")}
                             </button>
                           </div>
                         )}
@@ -1965,13 +1965,13 @@ export default function Home({ children }: { children: ReactNode }) {
                           {trip.members.length}{uiText(" people")}</span>
                       </div>
                       <div className="panel members">
-                        <PagedList {...page("members", 10)} noun="travellers" items={trip.members} itemKey={m => m.id} renderItem={(m, i) => (
+                        <PagedList {...page("members", 10)} noun={uiText("travellers")} items={trip.members} itemKey={m => m.id} renderItem={(m, i) => (
                           <div className="member" key={m.id} data-entry-id={m.id} tabIndex={-1}>
                             <span className={"avatar color" + (i % 5)}>
                               {m.name.slice(0, 1).toUpperCase()}
                             </span>
                             <div className="member-identity"><b>{m.name}</b>{m.email && <small>{m.email}</small>}</div>
-                            <span className={"member-status" + (m.userId ? " connected" : "")}>{m.userId ? "Account connected" : "Not linked"}</span>
+                            <span className={"member-status" + (m.userId ? " connected" : "")}>{m.userId ? uiText("Account connected") : uiText("Not linked")}</span>
                           </div>
                         )} />
                         <form
@@ -2055,7 +2055,7 @@ export default function Home({ children }: { children: ReactNode }) {
         <option value="" disabled>{uiText("Choose the currency")}</option>
         {CURRENCIES.map((c) => (
           <option value={c.code} key={c.code}>
-            {c.code} · {c.name}
+            {c.code} · {currencyDisplayName(c.code, c.name)}
           </option>
         ))}
       </select>
@@ -2126,7 +2126,7 @@ export default function Home({ children }: { children: ReactNode }) {
     const estimate = estimatedCharge && "amount" in estimatedCharge ? money(estimatedCharge.amount, current.currency)
       : estimatedCharge?.unavailable === "range" ? "outside the supported amount range" : null;
     return <div className="fx-panel" id={EXPENSE_TARGETS.fx}>
-      {fxError && <p className="error">{fxError}</p>}
+      {fxError && <p className="error">{uiText(fxError)}</p>}
       {manualFxWarning && <p className="bank-diff" role="status">{manualFxWarning}{uiText(". Check the rate before confirming your expense.")}</p>}
       <details className="manual-rate" open={attention || fxDetailsOpen === entry.id} onToggle={event => {
         // Remember an opened panel, so a value typed into it never closes it.
@@ -2138,7 +2138,7 @@ export default function Home({ children }: { children: ReactNode }) {
             {entry.bankAmount !== undefined && entry.bankAmount > 0 ? <><strong>{money(entry.bankAmount, current.currency)}</strong> <small>{uiText("charged by your bank")}</small></>
               : entry.fx ? <>
                 <strong>{estimate ? `≈ ${estimate}` : `≈ ${current.currency}`}</strong>{" "}
-                <small>1 {entry.currency} = {rateText(entry.fx.rate)} {current.currency} · {entry.fx.source === "reference" ? "Daily reference rate" : "Manual rate"} · {entry.fx.asOf}</small>
+                <small>1 {entry.currency} = {rateText(entry.fx.rate)} {current.currency} · {entry.fx.source === "reference" ? uiText("Daily reference rate") : uiText("Manual rate")} · {entry.fx.asOf}</small>
               </>
               : fxLoading ? <small>{uiText("Finding the ")}{entry.currency}{uiText(" to ")}{current.currency}{uiText(" rate…")}</small>
               : <small>{uiText("Add an exchange rate or the amount your bank charged.")}</small>}
@@ -2172,7 +2172,7 @@ export default function Home({ children }: { children: ReactNode }) {
         </label>
         {entry.fx?.source !== "reference" && <button type="button" className="quiet" disabled={fxLoading} onClick={lookupFx}>
           <RefreshCw size={16} className={fxLoading ? "spin" : ""} aria-hidden="true" />
-          {fxLoading ? "Finding rate…" : fxError ? "Try the reference rate again" : "Use the daily reference rate"}
+          {fxLoading ? uiText("Finding rate…") : fxError ? uiText("Try the reference rate again") : uiText("Use the daily reference rate")}
         </button>}
         <label className="checklabel">
           <input
@@ -2279,8 +2279,8 @@ export default function Home({ children }: { children: ReactNode }) {
               {profile?.displayName.slice(0, 1).toUpperCase() || "Y"}
             </span>
             <span>
-              {profile?.displayName || "Your account"}
-              <small>{profile?.email || "Profile & app settings"}</small>
+              {profile?.displayName || uiText("Your account")}
+              <small>{profile?.email || uiText("Profile & app settings")}</small>
             </span>
           </button>
         </div>
@@ -2300,7 +2300,7 @@ export default function Home({ children }: { children: ReactNode }) {
               <Menu />
             </button>
             <span className="breadcrumb">{uiText("Holidays ")}<span aria-hidden="true">/</span>{" "}
-              <b>{trip?.name || "Your next adventure"}</b>
+              <b>{trip?.name || uiText("Your next adventure")}</b>
             </span>
           </div>
           <button
@@ -2326,7 +2326,7 @@ export default function Home({ children }: { children: ReactNode }) {
           <SharedPhoto trips={ledger.trips} selected={trip?.id} accountId={profile?.id} busy={loading || saving || uploading} onSelect={setSelected} onReceive={file => upload(file)} />
           {undoNotice && undoNotice.tripId === trip?.id && !editing && <p className="saved-banner" role="status">
             <Trash2 size={18} aria-hidden="true" />
-            <span>{undoNotice.message}</span>
+            <span>{uiText(undoNotice.message)}</span>
             <button type="button" className="quiet" disabled={saving} onClick={() => void undoDeletion(undoNotice)}><Undo2 size={16} aria-hidden="true" />{uiText(" Undo")}</button>
           </p>}
           {savedNotice && !editing && <p className="saved-banner" role="status">
@@ -2356,14 +2356,14 @@ export default function Home({ children }: { children: ReactNode }) {
           <div className="page-heading">
             <div>
               <span className="eyebrow">{uiText("HOLIDAY LEDGER")}</span>
-              <h1>{trip?.name || "Every trip starts together."}</h1>
+              <h1>{trip?.name || uiText("Every trip starts together.")}</h1>
               <p>
                 {trip
-                  ? `${trip.members.length} travellers · Settle in ${trip.currency}${trip.startDate ? " · " + formatCalendarDate(trip.startDate, { year: false }) : ""}`
-                  : "Create a holiday, add your people, and keep the tabs fair."}
+                  ? uiText("{value0} travellers · Settle in {value1}{value2}", { value0: trip.members.length, value1: trip.currency, value2: trip.startDate ? " · " + formatCalendarDate(trip.startDate, { year: false }) : "" })
+                  : uiText("Create a holiday, add your people, and keep the tabs fair.")}
               </p>
               {trip && lastRefreshed && <small className="muted">{uiText("Refreshed ")}{formatClockTime(lastRefreshed)}</small>}
-              {trip && refreshError && <small className="error" role="status">{refreshError} <button className="quiet" disabled={loading} onClick={() => void load({ background: true, fresh: true })}>{uiText("Retry refresh")}</button></small>}
+              {trip && refreshError && <small className="error" role="status">{uiText(refreshError)} <button className="quiet" disabled={loading} onClick={() => void load({ background: true, fresh: true })}>{uiText("Retry refresh")}</button></small>}
             </div>
             {trip && <div className="expense-entry-actions">
               <button className="primary" onClick={newExpense} disabled={saving}><Plus size={18} />{uiText(" Add expense")}</button>
@@ -2384,7 +2384,7 @@ export default function Home({ children }: { children: ReactNode }) {
           </div>
           {error && (
             <div className="error" role="alert">
-              {error}
+              {uiText(error)}
               {auth && (
                 <button className="textbutton" onClick={requestAccount}>{uiText("Sign in to TripTab")}</button>
               )}
@@ -2432,16 +2432,16 @@ export default function Home({ children }: { children: ReactNode }) {
                 <div className="stat">
                   <span>{uiText("Total trip spend ")}<Receipt size={17} />
                   </span>
-                  <strong>{calculationError ? "Unavailable" : money(spent, trip.currency)}</strong>
+                  <strong>{calculationError ? uiText("Unavailable") : money(spent, trip.currency)}</strong>
                   <small>
                     {trip.expenses.length}{" "}
-                    {trip.expenses.length === 1 ? "expense" : "expenses"}{" "}{uiText("recorded")}</small>
+                    {trip.expenses.length === 1 ? uiText("expense") : uiText("expenses")}{" "}{uiText("recorded")}</small>
                 </div>
                 <div className="stat">
                   <span>{uiText("Average per traveller ")}<Users size={17} />
                   </span>
                   <strong>
-                    {calculationError ? "Unavailable" : money(
+                    {calculationError ? uiText("Unavailable") : money(
                       Math.round(spent / trip.members.length),
                       trip.currency,
                     )}
@@ -2452,15 +2452,15 @@ export default function Home({ children }: { children: ReactNode }) {
                   <span>{uiText("Still to settle ")}<Wallet size={17} />
                   </span>
                   <strong>
-                    {calculationError ? "Unavailable" : money(
+                    {calculationError ? uiText("Unavailable") : money(
                       due.reduce((s, d) => s + d.amount, 0),
                       trip.currency,
                     )}
                   </strong>
                   <small>
-                    {calculationError ? "Review flagged receipts" : due.length
-                      ? `${due.length} suggested ${due.length === 1 ? "payment" : "payments"}`
-                      : "Everyone is square"}
+                    {calculationError ? uiText("Review flagged receipts") : due.length
+                      ? uiText("{value0} suggested {value1}", { value0: due.length, value1: due.length === 1 ? "payment" : "payments" })
+                      : uiText("Everyone is square")}
                   </small>
                 </div>
               </div>
@@ -2476,7 +2476,7 @@ export default function Home({ children }: { children: ReactNode }) {
                       <br />{uiText("Check it. Split it.")}</h3>
                     <p>{uiText("A shared dinner doesn’t have to mean an equal bill.")}</p>
                     <button type="button" className="primary" disabled={uploading || saving} onClick={() => { setError(""); setUploadOpen(true); }}>
-                      <Upload size={17} aria-hidden="true" />{uploading ? "Uploading…" : "Upload receipt"}
+                      <Upload size={17} aria-hidden="true" />{uploading ? uiText("Uploading…") : uiText("Upload receipt")}
                     </button>
                     <button
                       className="textbutton"
@@ -2491,10 +2491,10 @@ export default function Home({ children }: { children: ReactNode }) {
             <span>{uiText("TripTab")}</span>
             <span role="status" aria-live="polite">
               {saving
-                ? "Saving…"
+                ? uiText("Saving…")
                 : trip
-                  ? "Shared holiday ledger, saved securely."
-                  : "Good trips. Fair tabs."}
+                  ? uiText("Shared holiday ledger, saved securely.")
+                  : uiText("Good trips. Fair tabs.")}
             </span>
           </footer>
         </main>
@@ -2590,18 +2590,18 @@ export default function Home({ children }: { children: ReactNode }) {
               <label>{uiText("Settle in")}<select name="currency" defaultValue="GBP">
                   {CURRENCIES.map((c) => (
                     <option value={c.code} key={c.code}>
-                      {c.name} · {c.code}
+                      {currencyDisplayName(c.code, c.name)} · {c.code}
                     </option>
                   ))}
                 </select>
               </label>
               {error && (
                 <p role="alert" className="error">
-                  {error}
+                  {uiText(error)}
                 </p>
               )}
               <button className="primary wide" disabled={saving}>
-                {saving ? "Saving…" : "Create holiday"}
+                {saving ? uiText("Saving…") : uiText("Create holiday")}
               </button>
             </form>
           </section>
@@ -2705,10 +2705,10 @@ export default function Home({ children }: { children: ReactNode }) {
                   </div>
                   <h2 id="expense-title">
                     {editing.draftId
-                      ? editing.expenseId ? "Review expense update" : "Review receipt"
+                      ? editing.expenseId ? uiText("Review expense update") : uiText("Review receipt")
                       : trip.expenses.some((e) => e.id === editing.id)
-                        ? "Edit expense"
-                        : "Add an expense"}
+                        ? uiText("Edit expense")
+                        : uiText("Add an expense")}
                   </h2>
                 </div>
                 {(editing.draftId || editing.expenseId || trip.expenses.some(value => value.id === editing.id)) && <nav className="receipt-view-switch" aria-label={uiText("Receipt views")}>
@@ -2758,10 +2758,10 @@ export default function Home({ children }: { children: ReactNode }) {
                           onUpdate={change => setEditing(previous => previous && previous.id === editing.id && previous.receiptLanguage === editing.receiptLanguage
                             ? { ...previous, items: previous.items.map(current => current.id === item.id ? change(current) : current) } : previous)} />
                         {languageSettings.error && <p className="error" role="alert">{languageSettings.error}</p>}
-                        {item.scanSource?.observedText && <p className="receipt-item-source">{uiText("Printed line: ")}{item.scanSource.observedText}{item.scanSource.confidence === "low" ? " · needs checking" : ""}</p>}
+                        {item.scanSource?.observedText && <p className="receipt-item-source">{uiText("Printed line: ")}{item.scanSource.observedText}{item.scanSource.confidence === "low" ? uiText(" · needs checking") : ""}</p>}
                         {editing.receiptScan && editorScan?.warnings.filter(warning => !warning.resolved && warning.code !== "unassigned-item" && (warning.itemId === item.id || warning.itemIds?.includes(item.id))).map((warning, index) => <p className="receipt-item-source" key={`${warning.code}:${index}`}>{receiptWarningLabel(warning.code)}</p>)}
                         {item.quantity && <p className="receipt-item-quantity">
-                          <span><strong>{uiText("Receipt:")}</strong> {item.quantity.total} {item.quantity.label || "units"}</span>
+                          <span><strong>{uiText("Receipt:")}</strong> {item.quantity.total} {item.quantity.label || uiText("units")}</span>
                           {item.quantity.sourceText && <small>{uiText("Printed: ")}{item.quantity.sourceText}</small>}
                         </p>}
                         {discussionAvailable && <ItemReceiptConversation messages={editing.conversation || []} itemId={item.id}
@@ -2775,7 +2775,7 @@ export default function Home({ children }: { children: ReactNode }) {
                           onSend={sendReceiptQuestion} onRefresh={() => void load({ background: true, fresh: true })} />}
                       </div>;
                     })()}
-                    {editing.bankAmount !== undefined && (editing.currency === trip.currency || editing.bankAmount < 0) && <div id={editing.currency === trip.currency ? EXPENSE_TARGETS.fx : undefined} className="error" role="alert"><p>{uiText("The saved bank charge is ")}{money(editing.bankAmount, trip.currency)}. {editing.currency === trip.currency ? "A receipt already in the holiday currency cannot use a currency-conversion bank charge." : "A bank charge must be greater than zero."}{uiText(" Review it before saving.")}</p><button type="button" className="quiet" onClick={() => setEditing({ ...editing, bankAmount: undefined })}>{uiText("Remove bank charge")}</button></div>}
+                    {editing.bankAmount !== undefined && (editing.currency === trip.currency || editing.bankAmount < 0) && <div id={editing.currency === trip.currency ? EXPENSE_TARGETS.fx : undefined} className="error" role="alert"><p>{uiText("The saved bank charge is ")}{money(editing.bankAmount, trip.currency)}. {editing.currency === trip.currency ? uiText("A receipt already in the holiday currency cannot use a currency-conversion bank charge.") : uiText("A bank charge must be greater than zero.")}{uiText(" Review it before saving.")}</p><button type="button" className="quiet" onClick={() => setEditing({ ...editing, bankAmount: undefined })}>{uiText("Remove bank charge")}</button></div>}
                     {fxPanel}
                     {quickMode && <div className="expense-payer">{payerField}</div>}
                     <PurchaseDetails key={`details:${editing.id}`} id={EXPENSE_TARGETS.details} needsAttention={purchaseDetailsNeedAttention}
@@ -2911,11 +2911,11 @@ export default function Home({ children }: { children: ReactNode }) {
                                   <X size={17} />
                                 </button>
                               </div>
-                              {item.scanSource?.observedText && <p className="receipt-item-source">{uiText("Printed line: ")}{item.scanSource.observedText}{item.scanSource.confidence === "low" ? " · needs checking" : ""}</p>}
+                              {item.scanSource?.observedText && <p className="receipt-item-source">{uiText("Printed line: ")}{item.scanSource.observedText}{item.scanSource.confidence === "low" ? uiText(" · needs checking") : ""}</p>}
                               {warnings.map((warning, index) => <p className="receipt-item-source" key={`${warning.code}:${index}`}>{receiptWarningLabel(warning.code)}</p>)}
                               {item.amount === null && <p className="error" role="status">{uiText("Price unreadable. Enter the full line total before saving.")}</p>}
                               {item.quantity && <p className="receipt-item-quantity">
-                                <span><strong>{uiText("Receipt:")}</strong> {item.quantity.total} {item.quantity.label || "units"}</span>
+                                <span><strong>{uiText("Receipt:")}</strong> {item.quantity.total} {item.quantity.label || uiText("units")}</span>
                                 {item.quantity.sourceText && <small>{uiText("Printed: ")}{item.quantity.sourceText}</small>}
                               </p>}
                               {discussionAvailable && <ItemReceiptConversation messages={editing.conversation || []} itemId={item.id}
@@ -2956,7 +2956,7 @@ export default function Home({ children }: { children: ReactNode }) {
                         }
                       >
                         <Plus size={16} aria-hidden="true" />{uiText(" Add item")}</button>}
-                      {canCollapseToQuick && <button type="button" className="quiet" disabled={isManualSingleLine(editing) && !editing.items[0].members.length} title={!isManualSingleLine(editing) || editing.items[0].members.length ? undefined : "Choose who shares this first"} onClick={stopItemSplitting}><Minus size={16} aria-hidden="true" />{uiText(" Use one amount")}</button>}
+                      {canCollapseToQuick && <button type="button" className="quiet" disabled={isManualSingleLine(editing) && !editing.items[0].members.length} title={!isManualSingleLine(editing) || editing.items[0].members.length ? undefined : uiText("Choose who shares this first")} onClick={stopItemSplitting}><Minus size={16} aria-hidden="true" />{uiText(" Use one amount")}</button>}
                       {!adjustmentsShown && <button type="button" className="quiet" onClick={() => setAdjustmentsFor(editing.id)}><Plus size={16} aria-hidden="true" />{uiText(" Tip, tax or discount")}</button>}
                     </div>
                     {adjustmentsShown && <>
@@ -2964,10 +2964,10 @@ export default function Home({ children }: { children: ReactNode }) {
                       {(["tax", "tip", "discount"] as const).map((k) => (
                         <label key={k}>
                           {k === "tax"
-                            ? "Added tax"
+                            ? uiText("Added tax")
                             : k === "tip"
-                              ? "Tip / service"
-                              : "Discount"}
+                              ? uiText("Tip / service")
+                              : uiText("Discount")}
                           <Amount
                             label={k}
                             value={editing[k]}
@@ -2979,8 +2979,8 @@ export default function Home({ children }: { children: ReactNode }) {
                       ))}
                     </div>
                     <p className="footnote">
-                      {editing.percentages === undefined ? "Tax, tip and discount are shared in proportion to each person’s items." : "Tax, tip and discount follow the whole receipt percentages."}{uiText(" Add tax only if it isn’t already in the item prices.")}</p>
-                    {editing.percentages === undefined && editing.items.every(item => item.amount === 0) && editing.tax + editing.tip > editing.discount && <p className="notification-status" role="status">{uiText("Added tax and tip on zero-priced items are shared between the people selected on those items.")}{editorBaseline.current?.expense?.adjustmentAllocation === undefined && editorBaseline.current?.expense ? " Saving changes the earlier split, which included every traveller." : ""}</p>}
+                      {editing.percentages === undefined ? uiText("Tax, tip and discount are shared in proportion to each person’s items.") : uiText("Tax, tip and discount follow the whole receipt percentages.")}{uiText(" Add tax only if it isn’t already in the item prices.")}</p>
+                    {editing.percentages === undefined && editing.items.every(item => item.amount === 0) && editing.tax + editing.tip > editing.discount && <p className="notification-status" role="status">{uiText("Added tax and tip on zero-priced items are shared between the people selected on those items.")}{editorBaseline.current?.expense?.adjustmentAllocation === undefined && editorBaseline.current?.expense ? uiText(" Saving changes the earlier split, which included every traveller.") : ""}</p>}
                     </>}
                   </section>
                   <section className="expense-step expense-step--check" id={EXPENSE_TARGETS.summary} aria-labelledby="expense-step-check">
@@ -2990,11 +2990,11 @@ export default function Home({ children }: { children: ReactNode }) {
                         ? trip.members.flatMap((member, index) => editorShares[index] ? [<span key={member.id}>{member.name} <b>{money(editorShares[index], trip.currency)}</b></span>] : [])
                           .flatMap((node, index) => index ? [" · ", node] : [node])
                         : <span className="muted">{quickMode
-                          ? editing.items[0].members.length === trip.members.length ? "Split equally between everyone" : `Split between ${editing.items[0].members.length === 1 ? "1 person" : `${editing.items[0].members.length} people`}`
-                          : "Shares appear once every line has a price and people."}</span>}
+                          ? editing.items[0].members.length === trip.members.length ? uiText("Split equally between everyone") : uiText("Split between {value0}", { value0: editing.items[0].members.length === 1 ? "1 person" : `${editing.items[0].members.length} people` })
+                          : uiText("Shares appear once every line has a price and people.")}</span>}
                     </p>
                     <ReceiptReviewSummary entry={editing} fxWarning={manualFxWarning} />
-                    <MoreOptions key={`more:${editing.id}`} defaultOpen={toolsOpen} title={receiptContext ? "Receipt tools" : "More options"}
+                    <MoreOptions key={`more:${editing.id}`} defaultOpen={toolsOpen} title={receiptContext ? uiText("Receipt tools") : uiText("More options")}
                       hint={[editing.receiptId && "photo", receiptContext && "language", discussionAvailable && "conversation", "import"].filter(Boolean).join(", ")}>
                       {editing.receiptId && renderReceiptCapture(editing, trip, "tools")}
                       {!editing.receiptId && !!receiptPrompt && <>{renderReceiptCapture(editing, trip, "status")}{renderReceiptCapture(editing, trip, "tools")}</>}
@@ -3040,7 +3040,7 @@ export default function Home({ children }: { children: ReactNode }) {
               </div>
               {error && (
                 <div className="error" role="alert">
-                  {error}
+                  {uiText(error)}
                 </div>
               )}
               {editorConflict && <section id={EXPENSE_TARGETS.conflict} className="conflict-review" role="region" aria-labelledby="expense-conflict-title">
@@ -3053,24 +3053,24 @@ export default function Home({ children }: { children: ReactNode }) {
                     return <div key={version.label}>
                       <h4>{version.label}</h4>
                       {value ? <>
-                        <strong>{value.title || "Untitled expense"}</strong>
+                        <strong>{value.title || uiText("Untitled expense")}</strong>
                         <p>{value.date} · {value.time} · {value.timezone}</p>
-                        <p>{name(value.payer)}{uiText(" paid · ")}{receiptEditorTotal(value) === null ? "Incomplete" : receiptMoney(receiptEditorTotal(value)!, value.currency)}</p>
+                        <p>{name(value.payer)}{uiText(" paid · ")}{receiptEditorTotal(value) === null ? uiText("Incomplete") : receiptMoney(receiptEditorTotal(value)!, value.currency)}</p>
                         <ul>{value.items.map(item => <li key={item.id}>
-                          {item.name || "Unnamed item"} · {item.amount === null ? "Unreadable" : receiptMoney(item.amount, value.currency)}
-                          <small>{item.members.map(member => `${name(member)}${item.units ? ` ${item.units.allocations[member]} ${item.units.label || "units"}` : item.percentages ? ` ${item.percentages[member]}%` : ""}`).join(", ")}{item.units ? ` · ${item.units.total} ${item.units.label || "units"} total` : ""}</small>
+                          {item.name || uiText("Unnamed item")} · {item.amount === null ? uiText("Unreadable") : receiptMoney(item.amount, value.currency)}
+                          <small>{item.members.map(member => `${name(member)}${item.units ? ` ${item.units.allocations[member]} ${item.units.label || "units"}` : item.percentages ? ` ${item.percentages[member]}%` : ""}`).join(", ")}{item.units ? uiText(" · {value0} {value1} total", { value0: item.units.total, value1: item.units.label || "units" }) : ""}</small>
                         </li>)}</ul>
                         <p>{uiText("Tax ")}{receiptMoney(value.tax, value.currency)}{uiText(" · Tip ")}{receiptMoney(value.tip, value.currency)}{uiText(" · Discount ")}{receiptMoney(value.discount, value.currency)}</p>
                         {value.percentages && <p>{uiText("Whole receipt: ")}{Object.entries(value.percentages).map(([member, percent]) => `${name(member)} ${percent}%`).join(", ")}</p>}
-                        <small>{value.bankAmount !== undefined ? `Bank charge: ${money(value.bankAmount, trip.currency)}` : value.fx ? `Exchange rate: ${value.fx.rate} ${trip.currency} per ${value.currency}` : "No currency conversion"}</small>
+                        <small>{value.bankAmount !== undefined ? uiText("Bank charge: {value0}", { value0: money(value.bankAmount, trip.currency) }) : value.fx ? uiText("Exchange rate: {value0} {value1} per {value2}", { value0: value.fx.rate, value1: trip.currency, value2: value.currency }) : uiText("No currency conversion")}</small>
                         {costs && <p>{uiText("Cost shares: ")}{trip.members.map((member, index) => `${member.name} ${money(costs[index], trip.currency)}`).join(", ")}</p>}
                       </> : <p>{uiText("This expense has been removed.")}</p>}
                     </div>;
                   })}
                 </div>
                 <div className="conflict-actions">
-                  <button type="button" className="quiet" onClick={() => { if (editorConflict.latest) openExpense(editorConflict.latest, false); else closeReceiptEditor(); setError(""); }}>{editorConflict.latest ? "Use latest saved" : "Discard my edits"}</button>
-                  <button type="button" className="primary" onClick={keepExpenseEdits}>{editorConflict.latest ? "Continue with my edits" : "Save as a new expense"}</button>
+                  <button type="button" className="quiet" onClick={() => { if (editorConflict.latest) openExpense(editorConflict.latest, false); else closeReceiptEditor(); setError(""); }}>{editorConflict.latest ? uiText("Use latest saved") : uiText("Discard my edits")}</button>
+                  <button type="button" className="primary" onClick={keepExpenseEdits}>{editorConflict.latest ? uiText("Continue with my edits") : uiText("Save as a new expense")}</button>
                 </div>
                 <p className="footnote">{uiText("Review your split and press Save expense to commit your choice.")}</p>
               </section>}
@@ -3080,7 +3080,7 @@ export default function Home({ children }: { children: ReactNode }) {
                   hidden={quickMode === "manual" && !editing.draftId && !trip.expenses.some(expense => expense.id === editing.id) && !saveAttempted && !uploading && !receiptProcessing && !offline && !editorConflict} />
                 <div className="editor-footer-total">
                   <small>{uiText("Total")}</small>
-                  <strong>{editorOriginalTotal === null ? "Incomplete" : !editing.items.length ? "Not processed" : receiptMoney(editorOriginalTotal, editing.currency)}</strong>
+                  <strong>{editorOriginalTotal === null ? uiText("Incomplete") : !editing.items.length ? uiText("Not processed") : receiptMoney(editorOriginalTotal, editing.currency)}</strong>
                   {convertedTotal && "amount" in convertedTotal && <small>{money(convertedTotal.amount, trip.currency)}{uiText(" to split")}</small>}
                 </div>
                 <div className="footer-actions">
@@ -3114,7 +3114,7 @@ export default function Home({ children }: { children: ReactNode }) {
                     className="primary"
                     disabled={saveDisabled}
                   >
-                    {saving ? "Saving…" : reviewRequired && !editorBlockers.length ? "Confirm & save expense" : "Save expense"}
+                    {saving ? uiText("Saving…") : reviewRequired && !editorBlockers.length ? uiText("Confirm & save expense") : uiText("Save expense")}
                   </button>
                 </div>
               </div>
@@ -3142,8 +3142,8 @@ export default function Home({ children }: { children: ReactNode }) {
           <section className="modal small" role="dialog" aria-modal="true" aria-labelledby="chatgpt-link-title">
             <div className="modalheading"><h2 id="chatgpt-link-title">{uiText("Connect ChatGPT for AI assistance")}</h2><button className="iconbutton" aria-label={uiText("Cancel ChatGPT connection")} disabled={linkBusy} onClick={dismissChatGPTLink}><X /></button></div>
             <p className="footnote">{uiText("Connect the ChatGPT account you just signed in with to your current TripTab account. Account linking identifies you. Receipt assistance in ChatGPT or Codex also requires the TripTab tools to be enabled in that conversation; TripTab cannot verify their availability there. All other TripTab features work without this connection.")}</p>
-            {error && <p className="error" role="alert">{error}</p>}
-            <button className="primary wide" disabled={linkBusy || auth || !profile?.hasPassword} onClick={confirmChatGPTLink}>{linkBusy ? "Connecting…" : "Connect this ChatGPT account"}</button>
+            {error && <p className="error" role="alert">{uiText(error)}</p>}
+            <button className="primary wide" disabled={linkBusy || auth || !profile?.hasPassword} onClick={confirmChatGPTLink}>{linkBusy ? uiText("Connecting…") : uiText("Connect this ChatGPT account")}</button>
             {(auth || !profile?.hasPassword) && <p className="footnote">{uiText("Sign in with your TripTab email and password before connecting ChatGPT.")}</p>}
           </section>
         </ModalA11y>

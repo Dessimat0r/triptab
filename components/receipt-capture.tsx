@@ -267,7 +267,7 @@ export default function ReceiptCapture({
     </label>
   </div>;
   const captureProblems = <>
-    {captureError && <p id={errorId} className="receipt-chat-error" role="alert">{captureError}</p>}
+    {captureError && <p id={errorId} className="receipt-chat-error" role="alert">{uiText(captureError)}</p>}
     {captureWarnings.length > 0 && <div className="receipt-capture-hint" role="status" aria-live="polite">
       {captureWarnings.map(warning => <p key={warning.code}>{warning.message}</p>)}
       <p>{uiText("Your image can still be uploaded and reviewed.")}</p>
@@ -293,7 +293,7 @@ export default function ReceiptCapture({
       <div className="receipt-capture-status" role="status" aria-live="polite" aria-atomic="true">
         {locked ? busyText : (receiptUrl || prompt) && !itemized && (
           <>
-            {!receiptUrl && <p>{stored ? "Receipt details saved for ChatGPT." : "Save your receipt details before sending the request to ChatGPT."}</p>}
+            {!receiptUrl && <p>{stored ? uiText("Receipt details saved for ChatGPT.") : uiText("Save your receipt details before sending the request to ChatGPT.")}</p>}
             {receiptUrl && !stored && <p>{uiText("Receipt attached. Save your expense to keep it.")}</p>}
             <p>{assistanceStatus}</p>
             {handoffOpened && receiptUrl && !ready && <p>{handoffStatus}</p>}
@@ -337,19 +337,19 @@ export default function ReceiptCapture({
           {!ready && !itemized && !connected && onConnectChatGPT && <button type="button" className={aiConfigured ? "quiet" : "primary"} disabled={locked} onClick={onConnectChatGPT}>{uiText("Link ChatGPT identity")}</button>}
           <button type="button" className="quiet" disabled={locked} onClick={onPrepare}>
             {copied ? <Check size={17} aria-hidden="true" /> : <Copy size={17} aria-hidden="true" />}
-            {prompt ? "Copy receipt request" : "Prepare receipt request"}
+            {prompt ? uiText("Copy receipt request") : uiText("Prepare receipt request")}
           </button>
           </div></details>
           {refreshError && !offline && <button type="button" className="quiet" disabled={locked} onClick={onRefresh}>
             <RefreshCw size={17} aria-hidden="true" />{uiText("Retry updates")}</button>}
         </div>
       )}
-      {stored && <p className="receipt-chat-note" role="status">{offline ? "You’re offline. Receipt updates resume when you reconnect." : refreshError ? "Unable to refresh receipt updates. We’ll keep trying automatically." : "Processed items and replies appear automatically while this receipt is open."}</p>}
+      {stored && <p className="receipt-chat-note" role="status">{offline ? uiText("You’re offline. Receipt updates resume when you reconnect.") : refreshError ? uiText("Unable to refresh receipt updates. We’ll keep trying automatically.") : uiText("Processed items and replies appear automatically while this receipt is open.")}</p>}
       {prompt && <details className="receipt-capture-prompt" open={!aiConnected && !ready && !itemized}>
         <summary>{uiText("Request to send in ChatGPT")}</summary>
         <p>{handoffNeedsPaste
-          ? "This request is too long to prefill reliably. Copy the complete text below, open ChatGPT, then paste and send it with TripTab enabled."
-          : "If ChatGPT opens without the request, copy this text into the conversation and send it with TripTab enabled."}</p>
+          ? uiText("This request is too long to prefill reliably. Copy the complete text below, open ChatGPT, then paste and send it with TripTab enabled.")
+          : uiText("If ChatGPT opens without the request, copy this text into the conversation and send it with TripTab enabled.")}</p>
         <textarea id={promptId} aria-label={uiText("Receipt assistant prompt")} value={prompt} readOnly onFocus={event => event.currentTarget.select()} />
       </details>}
     </section>

@@ -86,7 +86,7 @@ export default function DataExport({ trips = [], tripId, compact = false }: Data
       {trips.length > 1 ? <label htmlFor={`${id}-trip`}>{uiText("Holiday")}<select id={`${id}-trip`} value={selectedTrip} disabled={busy} onChange={event => { setChoice(event.target.value); setHistory(null); setStatus(""); setError(""); }}>
           {trips.map(trip => <option key={trip.id} value={trip.id}>{trip.name}</option>)}
         </select>
-      </label> : <p className="footnote">{trips.find(trip => trip.id === selectedTrip)?.name || "This holiday"}</p>}
+      </label> : <p className="footnote">{trips.find(trip => trip.id === selectedTrip)?.name || uiText("This holiday")}</p>}
       <label className="checklabel" htmlFor={`${id}-receipts`}>
         <input id={`${id}-receipts`} type="checkbox" checked={receipts} disabled={busy} onChange={event => setReceipts(event.target.checked)} />{uiText("Include attached receipt details in holiday JSON")}</label>
       <div className="data-export-actions button-row">
@@ -98,7 +98,7 @@ export default function DataExport({ trips = [], tripId, compact = false }: Data
       <p className="footnote">{uiText("JSON keeps item splits, receipt conversations and drafts. Financial CSV contains posted expenses and payments. History downloads arrive in pages of up to 50 changes.")}</p>
     </>}
     {busy && <p role="status">{uiText("Preparing your download…")}</p>}
-    {error && <p className="error" role="alert">{error}</p>}
-    {status && <p role="status" aria-live="polite">{status}</p>}
+    {error && <p className="error" role="alert">{uiText(error)}</p>}
+    {status && <p role="status" aria-live="polite">{uiText(status)}</p>}
   </section>;
 }

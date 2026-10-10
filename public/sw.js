@@ -1,9 +1,10 @@
 importScripts('/offline-store.js');
-const CACHE_NAME = 'triptab-public-v6';
+const CACHE_NAME = 'triptab-public-v7';
 const OFFLINE_URL = '/offline.html';
 const PUBLIC_ASSETS = [
   OFFLINE_URL,
   '/offline-store.js',
+  '/offline-language.js',
   '/offline-capture.js',
   '/icons/icon-192.png',
   '/icons/icon-512.png',

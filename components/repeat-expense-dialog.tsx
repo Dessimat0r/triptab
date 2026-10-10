@@ -39,7 +39,7 @@ export default function RepeatExpenseDialog({ trip, expense, busy, onClose, onRe
         event.preventDefault();
         setError("");
         if (!preview.length) { setError("Choose between 1 and 60 repeats."); return; }
-        if (preview.length > room) { setError(`This holiday has room for ${room} more expenses.`); return; }
+        if (preview.length > room) { setError(uiText("This holiday has room for {count} more expenses.", { count: room })); return; }
         if (await onRepeat(preview)) onClose();
       }}>
         <fieldset>
@@ -55,10 +55,10 @@ export default function RepeatExpenseDialog({ trip, expense, busy, onClose, onRe
           </select>
         </label>
         <p className="footnote" role="status">{preview.length
-          ? `${preview.length} ${preview.length === 1 ? "copy" : "copies"}: ${formatCalendarDate(preview[0].date)}${preview.length > 1 ? ` to ${formatCalendarDate(preview.at(-1)!.date)}` : ""}.`
-          : "No copies with these settings."}</p>
-        {error && <p className="error" role="alert">{error}</p>}
-        <button type="submit" className="primary wide" disabled={busy || !preview.length}>{busy ? "Saving…" : `Add ${preview.length || ""} ${preview.length === 1 ? "copy" : "copies"}`}</button>
+          ? preview.length === 1 ? uiText("1 copy: {date}.", { date: formatCalendarDate(preview[0].date) }) : uiText("{count} copies: {first} to {last}.", { count: preview.length, first: formatCalendarDate(preview[0].date), last: formatCalendarDate(preview.at(-1)!.date) })
+          : uiText("No copies with these settings.")}</p>
+        {error && <p className="error" role="alert">{uiText(error)}</p>}
+        <button type="submit" className="primary wide" disabled={busy || !preview.length}>{busy ? uiText("Saving…") : uiText(preview.length === 1 ? "Add {count} copy" : "Add {count} copies", { count: preview.length })}</button>
       </form>
     </section>
   </ModalA11y>;

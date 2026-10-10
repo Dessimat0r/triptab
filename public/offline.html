@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="theme-color" content="#635bff">
-    <title>Reconnect to TripTab</title>
+    <title data-ui="Reconnect to TripTab">Reconnect to TripTab</title>
     <style>
       :root { color-scheme: light; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
       * { box-sizing: border-box; }
@@ -27,25 +27,25 @@
   <body>
     <main>
       <div class="mark" aria-hidden="true">T</div>
-      <h1>You’re offline</h1>
-      <p>Capture a new expense here if you enabled offline capture while connected. It will sync when you open TripTab online.</p>
-      <p id="capture-status" role="status">Loading this device’s capture settings…</p>
+      <h1 data-ui="You’re offline">You’re offline</h1>
+      <p data-ui="Capture a new expense here if you enabled offline capture while connected. It will sync when you open TripTab online.">Capture a new expense here if you enabled offline capture while connected. It will sync when you open TripTab online.</p>
+      <p id="capture-status" role="status" data-ui="Loading this device’s capture settings…">Loading this device’s capture settings…</p>
       <form id="offline-expense" hidden>
-        <label>Holiday<select id="capture-trip"></select></label>
-        <label>Expense name<input id="capture-title" required maxlength="200" autocomplete="off"></label>
-        <label>Amount<input id="capture-amount" required inputmode="decimal" placeholder="0.00"></label>
-        <label>Currency<select id="capture-currency"></select></label>
-        <label>Date<input id="capture-date" type="date" required></label>
-        <label>Paid by<select id="capture-payer"></select></label>
-        <fieldset><legend>Shared by</legend><div id="capture-people"></div></fieldset>
-        <label id="capture-rate-field" hidden>Manual rate: one unit in <span id="rate-currency"></span><input id="capture-rate" inputmode="decimal" placeholder="1.00"></label>
-        <p id="capture-converted" role="status"></p><label id="capture-rate-confirm" hidden><input type="checkbox" id="capture-rate-checked"> I checked the manual rate and converted amount.</label>
-        <p id="capture-shared" hidden>The shared receipt photo will be attached.</p>
-        <label>Receipt photo (optional)<input id="capture-photo" type="file" accept="image/jpeg,image/png,image/webp"></label>
-        <button type="submit">Save on this device</button>
+        <label><span data-ui="Holiday">Holiday</span><select id="capture-trip"></select></label>
+        <label><span data-ui="Expense name">Expense name</span><input id="capture-title" required maxlength="200" autocomplete="off"></label>
+        <label><span data-ui="Amount">Amount</span><input id="capture-amount" required inputmode="decimal" placeholder="0.00"></label>
+        <label><span data-ui="Currency">Currency</span><select id="capture-currency"></select></label>
+        <label><span data-ui="Date">Date</span><input id="capture-date" type="date" required></label>
+        <label><span data-ui="Paid by">Paid by</span><select id="capture-payer"></select></label>
+        <fieldset><legend data-ui="Shared by">Shared by</legend><div id="capture-people"></div></fieldset>
+        <label id="capture-rate-field" hidden><span><span data-ui="Manual rate: one unit in">Manual rate: one unit in</span> <span id="rate-currency"></span></span><input id="capture-rate" inputmode="decimal" placeholder="1.00"></label>
+        <p id="capture-converted" role="status"></p><label id="capture-rate-confirm" hidden><input type="checkbox" id="capture-rate-checked"><span data-ui="I checked the manual rate and converted amount.">I checked the manual rate and converted amount.</span></label>
+        <p id="capture-shared" hidden data-ui="The shared receipt photo will be attached.">The shared receipt photo will be attached.</p>
+        <label><span data-ui="Receipt photo (optional)">Receipt photo (optional)</span><input id="capture-photo" type="file" accept="image/jpeg,image/png,image/webp"></label>
+        <button type="submit" data-ui="Save on this device">Save on this device</button>
       </form>
-      <a href="/">Try again</a>
+      <a href="/" data-ui="Try again">Try again</a>
     </main>
-    <script src="/offline-store.js"></script><script src="/offline-capture.js"></script>
+    <script src="/offline-language.js"></script><script src="/offline-store.js"></script><script src="/offline-capture.js"></script>
   </body>
 </html>

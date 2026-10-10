@@ -169,7 +169,7 @@ export default function TripControls({
       )}
       {message && (
         <p className="footnote" role="status">
-          {message}
+          {uiText(message)}
         </p>
       )}
       {dialog}
@@ -241,7 +241,7 @@ export function ArchivedHolidays({
           <PagedList
             {...paging('archives', 10)}
             items={trips}
-            noun="archived holidays"
+            noun={uiText("archived holidays")}
             itemKey={(trip) => trip.id}
             renderItem={(trip) => (
               <article
@@ -298,7 +298,7 @@ export function ArchivedHolidays({
         )}
         {error && (
           <p className="error" role="alert">
-            {error}
+            {uiText(error)}
           </p>
         )}
       </section>

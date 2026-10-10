@@ -37,18 +37,18 @@ export function SettlementPayActions({ payee, amount, currency, reference }: {
   const formatted = money(amount, currency);
   const copy = async (text: string, label: string) => setStatus(await copyText(text) ? `${label} copied.` : `Copy is unavailable here. Select the ${label.toLowerCase()} to copy it.`);
   const manual = links.filter(link => !link.withAmount).map(link => link.label);
-  return <div className="settlement-pay" role="group" aria-label={`Ways to pay ${payee.name}`}>
+  return <div className="settlement-pay" role="group" aria-label={uiText("Ways to pay {value0}", { value0: payee.name })}>
     <div className="settlement-pay-actions">
       {links.map(link => <a key={link.key} className="quiet" href={link.href} target="_blank" rel="noopener noreferrer"
-        aria-label={link.withAmount ? `Pay ${payee.name} ${formatted} with ${link.label} (opens ${link.label})` : `Open ${payee.name}’s ${link.label} page (opens ${link.label}; enter ${formatted})`}>
+        aria-label={link.withAmount ? uiText("Pay {value0} {value1} with {value2} (opens {value3})", { value0: payee.name, value1: formatted, value2: link.label, value3: link.label }) : uiText("Open {value0}’s {value1} page (opens {value2}; enter {value3})", { value0: payee.name, value1: link.label, value2: link.label, value3: formatted })}>
         {link.label}<ExternalLink size={14} aria-hidden="true" />
       </a>)}
       <button type="button" className="quiet" onClick={() => void copy((amount / 100).toFixed(2), "Amount")}><Copy size={14} aria-hidden="true" />{uiText("Copy amount")}</button>
       {payee.payTo.bank && <button type="button" className="quiet" onClick={() => void copy(payee.payTo!.bank!, "Bank details")}><Copy size={14} aria-hidden="true" />{uiText("Copy bank details")}</button>}
     </div>
     {payee.payTo.bank && <small className="settlement-bank">{uiText("Bank details: ")}<span>{payee.payTo.bank}</span></small>}
-    {manual.length > 0 && <small className="settlement-pay-note">{manual.join(" and ")} {manual.length === 1 ? "opens" : "open"} {payee.name}{uiText("’s page; enter ")}{formatted}{uiText(" there.")}</small>}
-    <small className="settlement-pay-status" role="status">{status}</small>
+    {manual.length > 0 && <small className="settlement-pay-note">{manual.join(" and ")} {manual.length === 1 ? uiText("opens") : uiText("open")} {payee.name}{uiText("’s page; enter ")}{formatted}{uiText(" there.")}</small>}
+    <small className="settlement-pay-status" role="status">{uiText(status)}</small>
   </div>;
 }
 
@@ -99,15 +99,15 @@ function PaymentDetailsRow({ trip, member, index, accountId, busy, onSave }: {
     <div className="payment-details-heading">
       <span className={`avatar color${index % 5}`} aria-hidden="true">{member.name.slice(0, 1).toUpperCase()}</span>
       <div className="payment-details-identity">
-        <b>{member.name}{own ? " (you)" : ""}</b>
+        <b>{member.name}{own ? uiText(" (you)") : ""}</b>
         <small>{hasPaymentDetails(member.payTo)
           ? [...methods.map(method => `${method.label} ${member.payTo![method.key]}`), ...(member.payTo.bank ? ["Bank details"] : [])].join(" · ")
-          : "No payment details yet"}</small>
+          : uiText("No payment details yet")}</small>
         {!editable && <small>{uiText("Only ")}{member.name}{uiText(" can change these.")}</small>}
       </div>
-      {editable && !draft && <button type="button" className="quiet" disabled={locked} aria-label={`${hasPaymentDetails(member.payTo) ? "Edit" : "Add"} payment details for ${member.name}`}
+      {editable && !draft && <button type="button" className="quiet" disabled={locked} aria-label={uiText("{value0} payment details for {value1}", { value0: hasPaymentDetails(member.payTo) ? "Edit" : "Add", value1: member.name })}
         onClick={() => { setDraft(emptyDraft(member.payTo)); setErrors({}); setError(""); setSaved(false); }}>
-        {hasPaymentDetails(member.payTo) ? "Edit" : "Add"}
+        {hasPaymentDetails(member.payTo) ? uiText("Edit") : uiText("Add")}
       </button>}
     </div>
     {saved && <p className="trip-details-success" role="status"><Check size={15} aria-hidden="true" />{uiText(" Payment details saved.")}</p>}
@@ -123,9 +123,9 @@ function PaymentDetailsRow({ trip, member, index, accountId, busy, onSave }: {
           aria-invalid={!!errors.bank} onChange={event => { setDraft({ ...draft, bank: event.target.value }); setErrors({ ...errors, bank: undefined }); }} />
         {errors.bank && <span className="trip-details-error">{errors.bank}</span>}
       </label>
-      {error && <p className="error" role="alert">{error}</p>}
+      {error && <p className="error" role="alert">{uiText(error)}</p>}
       <div className="payment-details-actions">
-        <button type="submit" className="primary" disabled={locked}>{submitting ? "Saving…" : "Save payment details"}</button>
+        <button type="submit" className="primary" disabled={locked}>{submitting ? uiText("Saving…") : uiText("Save payment details")}</button>
         <button type="button" className="quiet" disabled={submitting} onClick={() => { setDraft(null); setErrors({}); setError(""); }}>{uiText("Cancel")}</button>
       </div>
     </form>}
@@ -141,7 +141,7 @@ export default function PaymentDetailsPanel({ trip, accountId, busy, paging, onS
   return <section id="payment-details" className="panel payment-details-panel" aria-labelledby={`${id}-heading`} tabIndex={-1}>
     <h3 id={`${id}-heading`}>{uiText("How to pay each traveller")}</h3>
     <p className="footnote">{uiText("Add a PayPal, Monzo, Revolut or Wise username, or bank details, so others can pay you from Settle up. Everyone on this holiday can see them and changes stay in its history. A traveller connected to an account can only be changed by that account.")}</p>
-    <PagedList {...paging} noun="payment details" items={trip.members} itemKey={member => member.id}
+    <PagedList {...paging} noun={uiText("payment details")} items={trip.members} itemKey={member => member.id}
       renderItem={(member, index) => <PaymentDetailsRow key={member.id} trip={trip} member={member} index={index} accountId={accountId} busy={busy} onSave={onSave} />} />
   </section>;
 }

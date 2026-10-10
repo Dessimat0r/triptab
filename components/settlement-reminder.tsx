@@ -1,4 +1,6 @@
 'use client';
+
+import { t as uiText } from "@/lib/ui-language";
 import { useState } from 'react';
 import type { Trip } from '@/lib/model';
 
@@ -53,9 +55,9 @@ export default function SettlementReminder({
           }
         }}
       >
-        {busy ? 'Sending…' : `Remind ${debtor.name}`}
+        {busy ? uiText('Sending…') : uiText("Remind {value0}", { value0: debtor.name })}
       </button>
-      {message && <small role="status">{message}</small>}
+      {message && <small role="status">{uiText(message)}</small>}
     </div>
   );
 }

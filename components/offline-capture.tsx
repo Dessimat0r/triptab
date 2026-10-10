@@ -274,7 +274,7 @@ export default function OfflineCapture({
           }
         }}
       >
-        {enabled ? 'Disable on this device' : 'Enable on this device'}
+        {enabled ? uiText('Disable on this device') : uiText('Enable on this device')}
       </button>
       {enabled && (
         <a className="quiet" href="/offline.html">
@@ -292,7 +292,7 @@ export default function OfflineCapture({
             disabled={busy}
             onClick={() => void sync()}
           >
-            {busy ? 'Syncing…' : 'Sync pending expenses'}
+            {busy ? uiText('Syncing…') : uiText('Sync pending expenses')}
           </button>
           <details>
             <summary>{uiText('Review pending entries')}</summary>
@@ -334,7 +334,7 @@ export default function OfflineCapture({
       )}
       {message && (
         <p role="status" className="footnote">
-          {message}
+          {uiText(message)}
         </p>
       )}
       {editing && (

@@ -151,13 +151,13 @@ export default function ImportHoliday({
               </p>
             ))}
             <button className="primary wide" disabled={busy || !memberId}>
-              {busy ? 'Importing…' : 'Create imported holiday'}
+              {busy ? uiText('Importing…') : uiText('Create imported holiday')}
             </button>
           </form>
         )}
         {error && (
           <p className="error" role="alert">
-            {error}
+            {uiText(error)}
           </p>
         )}
       </section>

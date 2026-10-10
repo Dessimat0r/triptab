@@ -6,6 +6,9 @@
     "node": ">=22.13.0"
   },
   "scripts": {
+    "build:offline-language": "tsx scripts/build-offline-language.ts",
+    "prebuild": "npm run build:offline-language",
+    "predev": "npm run build:offline-language",
     "install:ci": "node scripts/install-ci.mjs",
     "dev": "node scripts/run-framework.mjs dev",
     "build": "node scripts/run-framework.mjs build",

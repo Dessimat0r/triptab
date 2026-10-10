@@ -62,7 +62,7 @@ export default function ExpenseIconPicker({ entry, onChange, disabled }: {
   const [group, setGroup] = useState("All"), [pending, setPending] = useState(false), [error, setError] = useState("");
   const id = useId(), shown = automatic ? suggested : choice;
   const visible = !open ? [] : ICON_CATALOG.filter(icon => (group === "All" || icon[2] === group)
-    && iconSearchText(`${icon[1]} ${icon[2]} ${icon[3]}`).includes(iconSearchText(search)));
+    && iconSearchText(`${uiText(icon[1])} ${uiText(icon[2])} ${icon[1]} ${icon[3]}`).includes(iconSearchText(search)));
   function close() { if (!pending) setOpen(false); }
   async function apply() {
     setPending(true); setError("");
@@ -75,7 +75,7 @@ export default function ExpenseIconPicker({ entry, onChange, disabled }: {
   }
   return <>
     <button type="button" className="expense-icon-trigger"
-      aria-label={`Choose icon for ${entry.title || "this receipt"}. ${entry.icon ? "Selected" : "Automatic"}: ${iconLabel(resolved)}`}
+      aria-label={uiText("Choose icon for {value0}. {value1}: {value2}", { value0: entry.title || "this receipt", value1: entry.icon ? "Selected" : "Automatic", value2: iconLabel(resolved) })}
       aria-haspopup="dialog" disabled={disabled}
       onClick={() => { setChoice(resolved); setAutomatic(!entry.icon); setSearch(""); setGroup("All"); setError(""); setOpen(true); }}>
       <ExpenseIconBadge entry={{ icon: resolved }} />
@@ -86,7 +86,7 @@ export default function ExpenseIconPicker({ entry, onChange, disabled }: {
           <button type="button" className="iconbutton" aria-label={uiText("Close icon picker")} disabled={pending} onClick={close}><X /></button>
         </div>
         <div className="icon-picker-preview"><ExpenseIconBadge entry={{ icon: shown }} size={30} />
-          <div><b>{iconLabel(shown)}</b><small>{automatic ? receiptSuggestion ? "Suggested from the receipt reading" : "Suggested from this receipt" : "Your choice"}</small></div>
+          <div><b>{iconLabel(shown)}</b><small>{automatic ? receiptSuggestion ? uiText("Suggested from the receipt reading") : uiText("Suggested from this receipt") : uiText("Your choice")}</small></div>
           <button type="button" className="quiet" aria-pressed={automatic} disabled={pending || disabled}
             onClick={() => { setAutomatic(true); setChoice(suggested); }}>{uiText("Automatic")}{automatic && <Check size={16} aria-hidden="true" />}</button>
         </div>
@@ -94,26 +94,26 @@ export default function ExpenseIconPicker({ entry, onChange, disabled }: {
         <fieldset className="icon-picker-controls" disabled={pending || disabled}>
           <legend>{uiText("Background colour")}</legend>
           <div className="icon-backgrounds">{ICON_BACKGROUNDS.map(([background, label, color]) => <button type="button" key={background}
-            className="icon-color" style={{ backgroundColor: color }} aria-label={`${label} background`} aria-pressed={shown.background === background}
+            className="icon-color" style={{ backgroundColor: color }} aria-label={uiText("{value0} background", { value0: label })} aria-pressed={shown.background === background}
             onClick={() => { setChoice({ ...shown, background }); setAutomatic(false); }}>
             {shown.background === background && <Check size={22} aria-hidden="true" />}
           </button>)}</div>
           <div className="icon-picker-filters"><label>{uiText("Search symbols")}<input value={search} maxLength={100} placeholder={uiText("Coffee, taxi, beach…")} data-autofocus
             onChange={event => setSearch(event.target.value)} /></label>
-            <label>{uiText("Category")}<select value={group} onChange={event => setGroup(event.target.value)}><option>{uiText("All")}</option>{GROUPS.map(group => <option key={group}>{group}</option>)}</select></label>
+            <label>{uiText("Category")}<select value={group} onChange={event => setGroup(event.target.value)}><option value="All">{uiText("All")}</option>{GROUPS.map(group => <option key={group} value={group}>{uiText(group)}</option>)}</select></label>
           </div>
           <div className="icon-symbol-grid" aria-label={uiText("Symbols")}>{visible.map(([symbol, label]) => {
             const Symbol = SYMBOLS[symbol];
-            return <button type="button" key={symbol} className="icon-symbol-option" aria-label={label} aria-pressed={shown.symbol === symbol}
+            return <button type="button" key={symbol} className="icon-symbol-option" aria-label={uiText(label)} aria-pressed={shown.symbol === symbol}
               onClick={() => { setChoice({ ...shown, symbol }); setAutomatic(false); }}>
-              <Symbol size={25} aria-hidden="true" /><span>{label}</span>
+              <Symbol size={25} aria-hidden="true" /><span>{uiText(label)}</span>
             </button>;
           })}</div>
           {!visible.length && <p className="footnote" role="status">{uiText("No matching symbols. Try another word or choose All categories.")}</p>}
         </fieldset>
-        {error && <p className="error" role="alert">{error}</p>}
+        {error && <p className="error" role="alert">{uiText(error)}</p>}
         <div className="icon-picker-actions"><button type="button" className="quiet" onClick={close} disabled={pending}>{uiText("Cancel")}</button>
-          <button type="button" className="primary" onClick={() => void apply()} disabled={pending || disabled}>{pending ? "Saving…" : "Use icon"}</button>
+          <button type="button" className="primary" onClick={() => void apply()} disabled={pending || disabled}>{pending ? uiText("Saving…") : uiText("Use icon")}</button>
         </div>
       </section>
     </ModalA11y>, document.body)}

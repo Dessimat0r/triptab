@@ -72,11 +72,11 @@ function TravellerName({ trip, member, index, busy, onSave }: {
           setDraft(event.target.value); setError(""); setSaved(false);
         }} />
       </label>
-      <p id={`${id}-account`} className="traveller-account-note">{member.userId ? "Account connected" : "Not linked to an account"}{member.email ? ` · ${member.email}` : ""}</p>
-      {error && <p id={`${id}-error`} className="trip-details-error" role="alert">{error}</p>}
+      <p id={`${id}-account`} className="traveller-account-note">{member.userId ? uiText("Account connected") : uiText("Not linked to an account")}{member.email ? ` · ${member.email}` : ""}</p>
+      {error && <p id={`${id}-error`} className="trip-details-error" role="alert">{uiText(error)}</p>}
       {saved && <p className="trip-details-success" role="status"><Check size={15} aria-hidden="true" />{uiText(" Traveller name saved.")}</p>}
     </div>
-    {(value.trim() !== member.name || submitting || error) && <button type="submit" className="quiet" disabled={locked || value.trim() === member.name} aria-label={`Save traveller ${index + 1} name`}>{submitting ? "Saving…" : "Save"}</button>}
+    {(value.trim() !== member.name || submitting || error) && <button type="submit" className="quiet" disabled={locked || value.trim() === member.name} aria-label={uiText("Save traveller {value0} name", { value0: index + 1 })}>{submitting ? uiText("Saving…") : uiText("Save")}</button>}
   </form>;
 }
 
@@ -131,9 +131,9 @@ function TripDetailsForm({ trip, paging, accountId, busy, error: externalError, 
       <label htmlFor={`${id}-budget`}>{uiText("Group budget in ")}{trip.currency}{uiText(" (optional)")}<input id={`${id}-budget`} inputMode="decimal" autoComplete="off" value={values.budget} disabled={locked} placeholder={uiText("e.g. 2000")} onChange={event => change("budget", event.target.value)} />
       </label>
       <TripReceiptLanguage value={receiptLanguageSchema.parse(values.receiptLanguage)} onChange={value=>change("receiptLanguage",value)} destination={()=>values.name} busy={locked} accountId={accountId} tripId={trip.id} />
-      {(error || externalError) && <p className="error" role="alert">{externalError || error}</p>}
+      {(error || externalError) && <p className="error" role="alert">{externalError || uiText(error)}</p>}
       <div className="holiday-details-actions">
-        <button type="submit" className="primary phone-wide" disabled={locked || !changed}>{submitting ? "Saving…" : "Save holiday details"}</button>
+        <button type="submit" className="primary phone-wide" disabled={locked || !changed}>{submitting ? uiText("Saving…") : uiText("Save holiday details")}</button>
         {saved && <p className="trip-details-success" role="status"><Check size={15} aria-hidden="true" />{uiText(" Holiday details saved.")}</p>}
       </div>
     </form>
@@ -141,7 +141,7 @@ function TripDetailsForm({ trip, paging, accountId, busy, error: externalError, 
     <div className="trip-traveller-names">
       <h3>{uiText("Traveller display names")}</h3>
       <p className="footnote">{uiText("These labels belong to this holiday. Connected accounts and personal profiles keep their identities.")}</p>
-      <PagedList {...paging} noun="traveller names" items={trip.members} itemKey={member => member.id}
+      <PagedList {...paging} noun={uiText("traveller names")} items={trip.members} itemKey={member => member.id}
         renderItem={(member, index) => <TravellerName key={member.id} trip={trip} member={member} index={index} busy={locked} onSave={onSave} />} />
     </div>
   </section>;

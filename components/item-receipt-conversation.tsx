@@ -13,6 +13,6 @@ export default function ItemReceiptConversation(props: ReceiptChatProps & { item
   }}>
     <summary>{uiText("Discuss ")}{props.scopeLabel}</summary>
     {/* Keep a visited chat mounted so collapsing it preserves the typed question. */}
-    {visited && <ReceiptChat {...props} contextTitle={`Discuss ${props.scopeLabel}`} />}
+    {visited && <ReceiptChat {...props} contextTitle={uiText("Discuss {item}", { item: props.scopeLabel })} />}
   </details>;
 }

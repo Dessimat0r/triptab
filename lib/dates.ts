@@ -1,3 +1,4 @@
+import { getUiLocale, t } from './ui-language';
 /** A calendar date in the device's zone, or in an explicitly selected IANA zone. */
 export function localDate(date = new Date(), timezone?: string): string {
   if (!Number.isFinite(date.getTime())) throw new Error('Choose a valid date');
@@ -35,22 +36,23 @@ export function validCalendarDate(value: string): boolean {
 // lists format a date per row, so reuse one formatter per option set.
 const formatters = new Map<string, Intl.DateTimeFormat>();
 function formatter(options: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {
-  const key = JSON.stringify(options);
+  const locale = getUiLocale();
+  const key = `${locale}:${JSON.stringify(options)}`;
   let cached = formatters.get(key);
-  if (!cached) formatters.set(key, cached = new Intl.DateTimeFormat('en-GB', options));
+  if (!cached) formatters.set(key, cached = new Intl.DateTimeFormat(locale, options));
   return cached;
 }
 
 /** Stored calendar dates have no viewer time zone. */
 export function formatCalendarDate(value: string, options: { year?: boolean } = {}): string {
-  if (!validCalendarDate(value)) return 'Invalid date';
+  if (!validCalendarDate(value)) return t('Invalid date');
   return formatter({ day: 'numeric', month: 'short', ...(options.year === false ? {} : { year: 'numeric' }), timeZone: 'UTC' }).format(new Date(`${value}T00:00:00Z`));
 }
 function displayInstant(value: string | Date, options: Intl.DateTimeFormatOptions): string {
   const date = value instanceof Date ? value : new Date(value);
-  if (!Number.isFinite(date.getTime())) return 'Date unavailable';
+  if (!Number.isFinite(date.getTime())) return t('Date unavailable');
   try { return formatter(options).format(date); }
-  catch { return 'Date unavailable'; }
+  catch { return t('Date unavailable'); }
 }
 export function formatInstant(value: string | Date, options: { year?: boolean; timeZone?: string } = {}): string {
   return displayInstant(value, { day: 'numeric', month: 'short', ...(options.year === false ? {} : { year: 'numeric' }), hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone: options.timeZone });

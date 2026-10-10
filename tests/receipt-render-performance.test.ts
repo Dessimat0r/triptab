@@ -88,7 +88,7 @@ function controller(trip: model.Trip, fetcher?: typeof fetch) {
   new Function('require', 'module', 'exports', 'fetch', compiled)((name: string) => {
     if (name === 'react') return hooks;
     if (name === '@/components/use-live-refresh') return {useLiveRefresh() {},dispatchLiveRefresh() {}};
-    if (name === '@/lib/ui-language') return {t:(value:string)=>value};
+    if (name === '@/lib/ui-language') return uiLanguage;
     if (name === 'react/jsx-runtime') return runtime;
     if (name === '@/components/trip-language-preferences') return {useTripLanguagePreferences:()=>({preferences:{readingLanguage:'en',primaryVersion:'reading',itemVersions:{}},ready:true,busy:false,error:'',save:async()=>true}),PersonalLanguageSettings:component};
     if (name === '@/lib/model') return models;
@@ -237,7 +237,7 @@ test('closed item discussions render no chats, and visited chats remain mounted 
   const exported = {exports: {} as {default: (props: Record<string, unknown>) => Element}};
   new Function('require', 'module', 'exports', discussionCompiled)((name: string) => {
     if (name === 'react') return {...React, useState: () => [visited, (next: boolean) => {visited = next;} ]};
-    if (name === '@/lib/ui-language') return {t:(value:string)=>value};
+    if (name === '@/lib/ui-language') return uiLanguage;
     if (name === 'react/jsx-runtime') return runtime;
     return {__esModule: true, default: chat};
   }, exported, exported.exports);

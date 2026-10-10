@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import * as React from 'react';
 import * as runtime from 'react/jsx-runtime';
+import { t } from '../lib/ui-language';
 import { createSourceFile, isFunctionDeclaration, JsxEmit, ModuleKind, ScriptKind, ScriptTarget, transpileModule } from 'typescript';
 const source = await readFile(new URL('../components/trip-app.tsx', import.meta.url), 'utf8');
 const syntax = createSourceFile('trip-app.tsx', source, ScriptTarget.Latest, true, ScriptKind.TSX);
@@ -15,7 +16,7 @@ function control(initial: number | null, nullable: boolean) {
   const changes: (number | null)[] = [];
   const hooks = {useEffect() {}, useState(next: unknown) {if(text === undefined)text = next;return [text, (next: unknown) => {text = next;}];}};
   const loaded = {exports: {} as (props: {value: number | null; nullable: boolean; label: string; onChange(value: number | null): void}) => React.ReactElement<Record<string, unknown>>};
-  new Function('require', 'module', 'exports', 'useState', 'useEffect', compiled)(() => runtime, loaded, loaded.exports, hooks.useState, hooks.useEffect);
+  new Function('require', 'module', 'exports', 'useState', 'useEffect', 'uiText', compiled)(() => runtime, loaded, loaded.exports, hooks.useState, hooks.useEffect, t);
   function render() {return loaded.exports({value, nullable, label: 'Full line total', onChange(next) {value = next; changes.push(next);}});}
   return {change(next: string) {(render().props.onChange as (event: unknown) => void)({target: {value: next}});}, blur() {(render().props.onBlur as () => void)();}, get value() {return value;}, get text() {return render().props.value;}, changes};
 }

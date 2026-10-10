@@ -300,15 +300,15 @@ export default function PwaControls({ accountId, onChanged }: { accountId?: stri
       >
         <Bell size={17} />
         {busy
-          ? "Updating…"
+          ? uiText("Updating…")
           : enabled
-            ? "Turn off notifications"
-            : "Enable trip notifications"}
+            ? uiText("Turn off notifications")
+            : uiText("Enable trip notifications")}
       </button>
       <p className="footnote">{uiText("On iPhone, add TripTab to your Home Screen before enabling notifications. Support depends on your browser.")}</p>
       {status && (
         <p className="notification-status" role="status">
-          {status}
+          {uiText(status)}
         </p>
       )}
     </div>

@@ -1,6 +1,6 @@
 'use client';
 import { useState } from 'react';
-import { setUiLanguage, t, type UiLanguage } from '@/lib/ui-language';
+import { setUiLanguage, t as uiText, type UiLanguage } from '@/lib/ui-language';
 export default function InterfaceLanguage({
   accountId,
   value,
@@ -15,7 +15,7 @@ export default function InterfaceLanguage({
   return (
     <div className="interface-language">
       <label>
-        {t('Interface language')}
+        {uiText('Interface language')}
         <select
           value={value}
           disabled={busy}
@@ -55,13 +55,13 @@ export default function InterfaceLanguage({
       {value !== 'en' && (
         <small>
           {value === 'es'
-            ? 'La ayuda avanzada que aún no está traducida se muestra en inglés.'
+            ? uiText('La ayuda avanzada que aún no está traducida se muestra en inglés.')
             : value === 'fr'
-              ? 'L’aide avancée non encore traduite s’affiche en anglais.'
-              : 'Noch nicht übersetzte erweiterte Hilfetexte erscheinen auf Englisch.'}
+              ? uiText('L’aide avancée non encore traduite s’affiche en anglais.')
+              : uiText('Noch nicht übersetzte erweiterte Hilfetexte erscheinen auf Englisch.')}
         </small>
       )}
-      {error && <p role="alert">{error}</p>}
+      {error && <p role="alert">{uiText(error)}</p>}
     </div>
   );
 }

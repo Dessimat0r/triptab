@@ -264,3 +264,49 @@ for (const [language, add, travellers, close] of [
     ).toBeVisible();
   });
 }
+
+for (const labels of [
+  { code: 'es', close: 'Cerrar', summary: 'Resumen del viaje', person: 'Cada persona', closeSummary: 'Cerrar resumen', enable: 'Activar en este dispositivo', capture: 'Abrir formulario de captura', save: 'Guardar en este dispositivo', saved: 'Guardado en este dispositivo', account: 'Perfil y ajustes de la aplicación', recovery: 'Verifica tu correo en los ajustes de la cuenta para recuperarla si olvidas la contraseña.' },
+  { code: 'fr', close: 'Fermer', summary: 'Bilan du voyage', person: 'Chaque personne', closeSummary: 'Fermer le résumé', enable: 'Activer sur cet appareil', capture: 'Ouvrir le formulaire de saisie', save: 'Enregistrer sur cet appareil', saved: 'Enregistré sur cet appareil', account: 'Profil et réglages de l’application', recovery: 'Vérifiez votre adresse e-mail dans les réglages pour récupérer votre compte si vous oubliez votre mot de passe.' },
+  { code: 'de', close: 'Schließen', summary: 'Reiseübersicht', person: 'Jede Person', closeSummary: 'Zusammenfassung schließen', enable: 'Auf diesem Gerät aktivieren', capture: 'Erfassungsformular öffnen', save: 'Auf diesem Gerät speichern', saved: 'Auf diesem Gerät gespeichert', account: 'Profil und App-Einstellungen', recovery: 'Bestätige deine E-Mail in den Kontoeinstellungen, damit du dein Konto bei vergessenem Passwort wiederherstellen kannst.' },
+]) {
+  test(`${labels.code} settings, summaries and offline capture preserve transaction values`, async ({ page }) => {
+    const actions = await fixtures(page);
+    await page.goto('/expenses');
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.getByRole('button', { name: 'More holiday options' }).click();
+    await page.getByLabel('Interface language').selectOption(labels.code);
+    await page.getByRole('button', { name: labels.close, exact: true }).click();
+    await page.goto('/balances');
+    const total = new Intl.NumberFormat(labels.code, { style: 'currency', currency: 'GBP' }).format(30);
+    await expect(page.locator('.budget-card')).toContainText(total);
+    await page.getByRole('button', { name: labels.summary, exact: true }).click();
+    await expect(page.getByRole('heading', { name: labels.person })).toBeVisible();
+    await expect(page.getByRole('dialog')).toContainText('Alice');
+    await expect(page.getByRole('dialog')).toContainText(total);
+    await page.getByRole('button', { name: labels.closeSummary }).click();
+    await page.getByRole('button', { name: 'A Alice alice@example.test', exact: true }).click();
+    await expect(page.getByRole('dialog')).toContainText(labels.recovery);
+    await page.goto('/travellers');
+    await page.getByRole('button', { name: labels.enable }).click();
+    await page.getByRole('link', { name: labels.capture }).click();
+    await expect(page.locator('#offline-expense')).toBeVisible();
+    await expect(page.locator('html')).toHaveAttribute('lang', labels.code);
+    await page.context().setOffline(true);
+    await page.locator('#capture-title').fill('Underground tickets');
+    await page.locator('#capture-amount').fill('8,50');
+    await page.getByRole('button', { name: labels.save }).click();
+    await expect(page.locator('#capture-status')).toContainText(labels.saved);
+    const queued = await page.evaluate(async () => {
+      const store = (window as unknown as { TripTabOffline: { operation: (store: string, method: string) => Promise<{ expense: { title: string; items: { amount: number }[] } }[]> } }).TripTabOffline;
+      return (await store.operation('queue', 'getAll'))[0].expense;
+    });
+    expect(queued.title).toBe('Underground tickets');
+    expect(queued.items[0].amount).toBe(850);
+    await page.context().setOffline(false);
+    await page.goto('/expenses');
+    await expect(page.locator('.expense')).toHaveCount(3);
+    expect(actions.filter(action => action.path === '/api/offline-expenses')).toHaveLength(1);
+    expect(actions.filter(action => action.path === '/api/ledger')).toHaveLength(0);
+  });
+}

@@ -2,6 +2,7 @@
 (() => {
   'use strict';
   const store = globalThis.TripTabOffline;
+  const t = globalThis.TripTabUi.t;
   const status = document.getElementById('capture-status'),
     form = document.getElementById('offline-expense'),
     holiday = document.getElementById('capture-trip');
@@ -16,7 +17,7 @@
     select.append(item);
   };
   const notice = (value) => {
-    status.textContent = value;
+    status.textContent = t(value);
   };
   let peopleTouched = false;
   people.addEventListener('change', () => {
@@ -46,7 +47,7 @@
         input,
         document.createTextNode(
           member.name +
-            ((member.weight ?? 1) > 1 ? ` (counts as ${member.weight})` : ''),
+            ((member.weight ?? 1) > 1 ? ` ${t('(counts as {count})', { count: member.weight })}` : ''),
         ),
       );
       people.append(label);
@@ -83,7 +84,7 @@
       Number.isFinite(amount * rate) &&
       amount > 0 &&
       rate > 0
-        ? `Converted total: ${(amount * rate).toFixed(['ISK', 'JPY', 'KRW', 'VND', 'CLP'].includes(trip.currency) ? 0 : 2)} ${trip.currency}`
+        ? t('Converted total: {amount} {currency}', { amount: new Intl.NumberFormat(globalThis.TripTabUi.locale, { minimumFractionDigits: ['ISK', 'JPY', 'KRW', 'VND', 'CLP'].includes(trip.currency) ? 0 : 2, maximumFractionDigits: 2 }).format(amount * rate), currency: trip.currency })
         : '';
   }
   document
@@ -116,13 +117,13 @@
       }
       for (const value of context.trips) option(holiday, value.id, value.name);
       for (const value of context.currencies)
-        option(currency, value.code, `${value.code} · ${value.name}`);
+        option(currency, value.code, `${value.code} · ${globalThis.TripTabUi.currencyName(value.code, value.name)}`);
       selectTrip();
       form.hidden = false;
       const pending = (await store.operation('queue', 'getAll')).filter(
         (entry) => entry.accountId === context.accountId,
       );
-      notice(`${pending.length} expenses waiting to sync for ${context.name}.`);
+      notice(t('{count} expenses waiting to sync for {name}.', { count: pending.length, name: context.name }));
       const photos = await store.operation('shared', 'getAll');
       shared = photos.find((photo) => photo.createdAt >= Date.now() - 86400000);
       if (shared) document.getElementById('capture-shared').hidden = false;
@@ -166,13 +167,13 @@
         (!Number.isFinite(rate) || rate <= 0)
       )
         throw Error(
-          `Enter a manual rate in ${trip.currency}, or use that currency for the amount.`,
+          t('Enter a manual rate in {currency}, or use that currency for the amount.', { currency: trip.currency }),
         );
       if (
         ['ISK', 'JPY', 'KRW', 'VND', 'CLP'].includes(currency.value) &&
         amount % 100
       )
-        throw Error(`${currency.value} totals must be whole currency units.`);
+        throw Error(t('{currency} totals must be whole currency units.', { currency: currency.value }));
       if (
         currency.value !== trip.currency &&
         (!document.getElementById('capture-rate-checked').checked ||

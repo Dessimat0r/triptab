@@ -60,9 +60,9 @@ export default function ReceiptUploadDialog({ busy, nativeAvailable, error, onCl
         </label>)}
       </div>
       {file && <p className="receipt-upload-filename" role="status">{file.name}</p>}
-      {submitting && <div className="receipt-upload-progress"><p role="status">{persisting ? "Saving receipt…" : "Uploading photo…"}</p>{!persisting && <><button type="button" className="quiet" onClick={cancel}>{uiText("Cancel upload")}</button><p className="footnote">{uiText("Choose another image above to replace this upload.")}</p></>}</div>}
-      {(error || localError) && <p className="error" role="alert">{error || localError}</p>}
-      <p className="footnote">{nativeAvailable ? "The assistant reads the photo and these notes together. Review its suggestions before saving the expense." : "Your photo and notes are saved together. You can enter items yourself or use connected ChatGPT tools."}{uiText(" Photos are resized and camera metadata is removed before uploading.")}</p>
+      {submitting && <div className="receipt-upload-progress"><p role="status">{persisting ? uiText("Saving receipt…") : uiText("Uploading photo…")}</p>{!persisting && <><button type="button" className="quiet" onClick={cancel}>{uiText("Cancel upload")}</button><p className="footnote">{uiText("Choose another image above to replace this upload.")}</p></>}</div>}
+      {(error || localError) && <p className="error" role="alert">{error || uiText(localError)}</p>}
+      <p className="footnote">{nativeAvailable ? uiText("The assistant reads the photo and these notes together. Review its suggestions before saving the expense.") : uiText("Your photo and notes are saved together. You can enter items yourself or use connected ChatGPT tools.")}{uiText(" Photos are resized and camera metadata is removed before uploading.")}</p>
       {!locked && file && (error || localError) && <button type="button" className="primary wide" onClick={() => void submit(file)}>{uiText("Retry upload")}</button>}
     </section>
   </ModalA11y>;

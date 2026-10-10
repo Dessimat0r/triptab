@@ -47,10 +47,10 @@ export default function ReceiptLocationFields({ value, onChange, disabled = fals
       placeholder={uiText("City or venue · otherwise read from receipt")} onChange={event => onChange({ ...value,
         location: event.target.value.trim() ? { label: event.target.value, source: 'user' } : undefined })} />
     <div className="receipt-place-actions">
-      {canLocate && <button type="button" className="textbutton" disabled={disabled || locating} onClick={locate}><MapPin size={16} aria-hidden="true" />{locating ? 'Locating…' : 'Use current location'}</button>}
-      {value.location?.source && value.location.source !== 'user' && <small>{value.location.source === 'receipt' ? 'From receipt' : 'From discussion'}</small>}
+      {canLocate && <button type="button" className="textbutton" disabled={disabled || locating} onClick={locate}><MapPin size={16} aria-hidden="true" />{locating ? uiText('Locating…') : uiText('Use current location')}</button>}
+      {value.location?.source && value.location.source !== 'user' && <small>{value.location.source === 'receipt' ? uiText('From receipt') : uiText('From discussion')}</small>}
       {value.locationHint && <button type="button" className="textbutton" disabled={disabled} onClick={() => { generation.current++; setLocating(false); onChange({ ...value, locationHint: undefined }); setStatus(''); }}><X size={16} aria-hidden="true" />{uiText("Remove device hint")}</button>}
     </div>
-    {(status || value.locationHint) && <small role="status">{status || 'Current device position is saved as a hint, separately from the receipt location.'}</small>}
+    {(status || value.locationHint) && <small role="status">{status || uiText('Current device position is saved as a hint, separately from the receipt location.')}</small>}
   </div>;
 }

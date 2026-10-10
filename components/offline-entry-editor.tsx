@@ -200,8 +200,8 @@ export default function OfflineEntryEditor({
                 </label>
                 <p>
                   {converted
-                    ? `Converted total: ${converted}`
-                    : 'Check the exchange rate and amount.'}
+                    ? uiText("Converted total: {value0}", { value0: converted })
+                    : uiText('Check the exchange rate and amount.')}
                 </p>
                 <label>
                   <input
@@ -262,7 +262,7 @@ export default function OfflineEntryEditor({
         )}
         {error && (
           <p className="error" role="alert">
-            {error}
+            {uiText(error)}
           </p>
         )}
       </section>

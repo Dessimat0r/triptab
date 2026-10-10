@@ -59,12 +59,12 @@ export function QuickSplit({ tripId, unassigned, members, currentMemberId, disab
   ];
   const ordered = remembered ? [...choices].sort((a, b) => Number(b.key === remembered) - Number(a.key === remembered)) : choices;
   return <section className="quick-split" aria-labelledby="quick-split-title">
-    <h3 id="quick-split-title">{unassigned === 1 ? "1 item needs" : `${unassigned} items need`}{uiText(" people")}</h3>
+    <h3 id="quick-split-title">{unassigned === 1 ? uiText("1 item needs") : uiText("{value0} items need", { value0: unassigned })}{uiText(" people")}</h3>
     <div className="quick-split-actions">
       {ordered.map((choice, index) => <button key={choice.key} type="button" className={index === 0 ? "primary" : "quiet"} disabled={disabled}
         data-autofocus={autoFocus && index === 0 ? true : undefined}
         onClick={() => { rememberChoice(tripId, choice.key); onAssign(choice.ids); }}>
-        {choice.icon}{choice.label}
+        {choice.icon}{uiText(choice.label)}
       </button>)}
     </div>
   </section>;
@@ -86,7 +86,7 @@ export function SaveChecklist({ blockers, attempted = false, hidden = false }: {
       </li>)}
     </ul>
     {blockers.length > 1 && !attempted && <button type="button" className="save-checklist-more" aria-expanded={expanded} onClick={() => setExpanded(value => !value)}>
-      {expanded ? "Show fewer" : `${blockers.length - 1} more`}
+      {expanded ? uiText("Show fewer") : uiText("{value0} more", { value0: blockers.length - 1 })}
     </button>}
   </div>;
 }

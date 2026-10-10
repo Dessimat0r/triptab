@@ -185,16 +185,16 @@ export default function AccountSecurity({
             <li key={session.id}>
               <strong>
                 {session.current
-                  ? 'This browser'
+                  ? uiText('This browser')
                   : session.device.includes('Firefox')
-                    ? 'Firefox'
+                    ? uiText('Firefox')
                     : session.device.includes('Edg/')
-                      ? 'Edge'
+                      ? uiText('Edge')
                       : session.device.includes('Chrome/')
-                        ? 'Chrome'
+                        ? uiText('Chrome')
                         : session.device.includes('Safari/')
-                          ? 'Safari'
-                          : 'Browser'}
+                          ? uiText('Safari')
+                          : uiText('Browser')}
               </strong>
               <small>
                 {uiText('Signed in ')}
@@ -290,7 +290,7 @@ export default function AccountSecurity({
       </details>
       {message && (
         <p role="status" className="footnote">
-          {message}
+          {uiText(message)}
         </p>
       )}
     </>

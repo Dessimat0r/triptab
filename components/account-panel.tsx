@@ -99,8 +99,8 @@ export default function AccountPanel({
                 {profile.email}
                 <small>
                   {profile.emailVerified
-                    ? "Verified email"
-                    : "Email not verified"}
+                    ? uiText("Verified email")
+                    : uiText("Email not verified")}
                 </small>
               </span>
             </div>
@@ -139,25 +139,25 @@ export default function AccountPanel({
               </label>
               {error && (
                 <p className="error" role="alert">
-                  {error}
+                  {uiText(error)}
                 </p>
               )}
               <button className="quiet phone-wide" disabled={busy}>
-                {busy ? "Saving…" : "Save profile"}
+                {busy ? uiText("Saving…") : uiText("Save profile")}
               </button>
             </form>
             <section className="account-section">
               <h3>
                 {profile.hasPassword
-                  ? "Change your password"
-                  : "Sign in with your email"}
+                  ? uiText("Change your password")
+                  : uiText("Sign in with your email")}
               </h3>
               <p className="footnote">
                 {profile.hasPassword
-                  ? "Changing your password signs out your other sessions."
-                  : "Add a TripTab password to sign in without ChatGPT. Your holidays and profile stay in this account."}
+                  ? uiText("Changing your password signs out your other sessions.")
+                  : uiText("Add a TripTab password to sign in without ChatGPT. Your holidays and profile stay in this account.")}
               </p>
-              <p className="footnote">{uiText("Password-reset emails are not available yet. Keep your password safe.")}</p>
+              <p className="footnote">{uiText("Verify your email in account settings so you can recover your account if you forget your password.")}</p>
               <form
                 onSubmit={async (event) => {
                   event.preventDefault();
@@ -224,15 +224,15 @@ export default function AccountPanel({
                 <small id={`${id}-password-hint`} className="muted">{uiText("Use 12–128 characters.")}</small>
                 {passwordError && (
                   <p className="error" role="alert">
-                    {passwordError}
+                    {uiText(passwordError)}
                   </p>
                 )}
                 <button className="quiet phone-wide" disabled={passwordBusy}>
                   {passwordBusy
-                    ? "Saving password…"
+                    ? uiText("Saving password…")
                     : profile.hasPassword
-                      ? "Change password"
-                      : "Add password"}
+                      ? uiText("Change password")
+                      : uiText("Add password")}
                 </button>
               </form>
             </section>
@@ -273,7 +273,7 @@ export default function AccountPanel({
                       }
                     }}
                   >
-                    {accountBusy ? "Unlinking…" : "Unlink ChatGPT"}
+                    {accountBusy ? uiText("Unlinking…") : uiText("Unlink ChatGPT")}
                   </button>
                   {!profile.hasPassword && (
                     <small className="muted">{uiText("Add a TripTab password above before unlinking ChatGPT so you can still sign in.")}</small>
@@ -287,7 +287,7 @@ export default function AccountPanel({
               )}
               {accountError && (
                 <p className="error" role="alert">
-                  {accountError}
+                  {uiText(accountError)}
                 </p>
               )}
             </section>

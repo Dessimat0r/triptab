@@ -94,7 +94,7 @@ export default function PaymentEditor({ trip, initial, busy, error, restoredFrom
         <div className="modalheading">
           <div>
             <span className="eyebrow">{uiText("MONEY ALREADY TRANSFERRED")}</span>
-            <h2 id={`${id}-title`}>{review ? "Review payment" : existing ? "Edit payment" : "Record a payment"}</h2>
+            <h2 id={`${id}-title`}>{review ? uiText("Review payment") : existing ? uiText("Edit payment") : uiText("Record a payment")}</h2>
           </div>
           <button type="button" className="iconbutton" aria-label={uiText("Close payment editor")} disabled={locked} onClick={onClose}><X /></button>
         </div>
@@ -128,13 +128,13 @@ export default function PaymentEditor({ trip, initial, busy, error, restoredFrom
               <p><strong>{name(review.from)}</strong>{uiText(" paid ")}<strong>{name(review.to)}</strong></p>
               <h3>{money(review.amount)}</h3>
               <dl>
-                <dt>{uiText("Date")}</dt><dd>{review.date}{review.time ? ` at ${review.time}` : ""}</dd>
+                <dt>{uiText("Date")}</dt><dd>{review.date}{review.time ? uiText(" at {value0}", { value0: review.time }) : ""}</dd>
                 {review.timezone && <><dt>{uiText("Timezone")}</dt><dd>{review.timezone}</dd></>}
                 {review.method && <><dt>{uiText("Method")}</dt><dd>{review.method}</dd></>}
                 {review.note && <><dt>{uiText("Note")}</dt><dd>{review.note}</dd></>}
               </dl>
               {before.length === trip.members.length && (
-                <p className="footnote">{uiText("Before this payment: ")}{name(review.from)} {before[trip.members.findIndex(member => member.id === review.from)] < 0 ? "owes" : "is owed"} {money(Math.abs(before[trip.members.findIndex(member => member.id === review.from)] || 0))}; {name(review.to)} {before[trip.members.findIndex(member => member.id === review.to)] < 0 ? "owes" : "is owed"} {money(Math.abs(before[trip.members.findIndex(member => member.id === review.to)] || 0))}.
+                <p className="footnote">{uiText("Before this payment: ")}{name(review.from)} {before[trip.members.findIndex(member => member.id === review.from)] < 0 ? uiText("owes") : uiText("is owed")} {money(Math.abs(before[trip.members.findIndex(member => member.id === review.from)] || 0))}; {name(review.to)} {before[trip.members.findIndex(member => member.id === review.to)] < 0 ? uiText("owes") : uiText("is owed")} {money(Math.abs(before[trip.members.findIndex(member => member.id === review.to)] || 0))}.
                 </p>
               )}
               {warning && <p className="payment-warning" role="status">{warning}</p>}
@@ -174,7 +174,7 @@ export default function PaymentEditor({ trip, initial, busy, error, restoredFrom
           {(localError || error) && <p className="error" role="alert">{localError || error}</p>}
           <div className="payment-actions" ref={footerRef}>
             {review && <button type="button" className="quiet" disabled={locked} onClick={() => { setReview(null); setLocalError(""); }}>{uiText("Edit details")}</button>}
-            <button className="primary" disabled={locked}>{locked ? "Saving…" : review ? "Confirm payment" : "Review payment"}</button>
+            <button className="primary" disabled={locked}>{locked ? uiText("Saving…") : review ? uiText("Confirm payment") : uiText("Review payment")}</button>
           </div>
         </form>
       </section>

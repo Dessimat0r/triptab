@@ -105,14 +105,14 @@ export function TripSharing({ trip, profile, onChanged }: { trip: Trip; profile:
         <input type="email" value={email} disabled={busy} onChange={event => setEmail(event.target.value)} placeholder={uiText("traveller@example.com")} autoComplete="off" />
         <small>{uiText("If supplied, the account email must match. Email addresses are not verified by TripTab, so share the link only with the intended traveller.")}</small>
       </label>
-      <button className="quiet phone-wide" disabled={busy}><Link size={16} aria-hidden="true" />{busy ? "Creating…" : "Create invite link"}</button>
+      <button className="quiet phone-wide" disabled={busy}><Link size={16} aria-hidden="true" />{busy ? uiText("Creating…") : uiText("Create invite link")}</button>
     </form> : <p className="footnote">{uiText("All travellers are linked to an account. Add another traveller to invite someone new.")}</p>}
     {link && <div className="invite-link">
       <input readOnly value={link} aria-label={uiText("Invitation link")} onFocus={event => event.currentTarget.select()} />
       <button className="quiet" onClick={async () => {
         try { await navigator.clipboard.writeText(link); setCopied(true); }
         catch { setError("Select and copy the invitation link above."); }
-      }}>{copied ? <Check size={16} aria-hidden="true" /> : <Copy size={16} aria-hidden="true" />}{copied ? "Copied" : "Copy"}</button>
+      }}>{copied ? <Check size={16} aria-hidden="true" /> : <Copy size={16} aria-hidden="true" />}{copied ? uiText("Copied") : uiText("Copy")}</button>
       <small>{uiText("Expires in 7 days · One use · Only this newly created link can be copied here")}</small>
     </div>}
     <section className="invite-management" aria-labelledby={`invite-list-${trip.id}`}>
@@ -146,7 +146,7 @@ export function TripSharing({ trip, profile, onChanged }: { trip: Trip; profile:
       {listed.hasMore && <p className="footnote">{uiText("More older invitations exist. Replace a traveller’s link to invalidate all their earlier unused links.")}</p>}
       {listed.error ? <button type="button" className="textbutton" disabled={busy} onClick={() => void refreshInvitations()}>{uiText("Retry invitations")}</button> : <p className="footnote">{uiText("Invitations update automatically.")}</p>}
     </section>
-    {error && <p className="error" role="alert">{error}</p>}
+    {error && <p className="error" role="alert">{uiText(error)}</p>}
     {confirmationDialog}
   </div>;
 }
@@ -206,9 +206,9 @@ export function JoinTrip({ token, accountId, onJoined, onAuthenticate }: {
   const money = (value: number) => new Intl.NumberFormat("en-GB", { style: "currency", currency: history!.currency, minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value / 100);
   return <div className="panel join-panel">
     <div className="large-icon"><Users size={30} aria-hidden="true" /></div>
-    <h2>{info ? `Join ${info.tripName}` : "Your holiday invitation"}</h2>
-    <p>{info ? `You’ve been invited as ${info.memberName}. Your account will take over this traveller’s recorded history and share access to this holiday.` : "Sign in to view your invitation and join the holiday."}</p>
-    {error && <p className="error" role="alert">{error}</p>}
+    <h2>{info ? uiText("Join {value0}", { value0: info.tripName }) : uiText("Your holiday invitation")}</h2>
+    <p>{info ? uiText("You’ve been invited as {value0}. Your account will take over this traveller’s recorded history and share access to this holiday.", { value0: info.memberName }) : uiText("Sign in to view your invitation and join the holiday.")}</p>
+    {error && <p className="error" role="alert">{uiText(error)}</p>}
     {auth ? onAuthenticate ? <button className="primary" type="button" onClick={onAuthenticate}>{uiText("Create an account or sign in")}</button>
       : <a className="primary" href={"/?account=login&invite=" + encodeURIComponent(token)}>{uiText("Create an account or sign in")}</a>
       : info?.alreadyMember ? <button className="primary" onClick={() => onJoined(info.tripId)}>{uiText("Open holiday")}</button>
@@ -229,14 +229,14 @@ export function JoinTrip({ token, accountId, onJoined, onAuthenticate }: {
       }}>
         <section className="join-history" aria-labelledby="join-history-title">
           <h3 id="join-history-title">{info.memberName}{uiText("’s saved financial history")}</h3>
-          <p className="join-history-counts">{history.expenseCount} {history.expenseCount === 1 ? "expense" : "expenses"}{uiText(" involving this traveller · ")}{history.paymentCount}{uiText(" recorded ")}{history.paymentCount === 1 ? "payment" : "payments"} · {history.currency}</p>
+          <p className="join-history-counts">{history.expenseCount} {history.expenseCount === 1 ? uiText("expense") : uiText("expenses")}{uiText(" involving this traveller · ")}{history.paymentCount}{uiText(" recorded ")}{history.paymentCount === 1 ? uiText("payment") : uiText("payments")} · {history.currency}</p>
           {history.available ? <>
             <dl className="join-history-totals">
               <div><dt>{uiText("Cost share")}</dt><dd>{money(history.costShare)}</dd></div>
               <div><dt>{uiText("Paid upfront")}</dt><dd>{money(history.paidUpfront)}</dd></div>
               <div><dt>{uiText("Payments sent")}</dt><dd>{money(history.paymentsSent)}</dd></div>
               <div><dt>{uiText("Payments received")}</dt><dd>{money(history.paymentsReceived)}</dd></div>
-              <div><dt>{history.netBalance < 0 ? "Still owes" : history.netBalance > 0 ? "Should receive" : "Settled up"}</dt><dd>{money(Math.abs(history.netBalance))}</dd></div>
+              <div><dt>{history.netBalance < 0 ? uiText("Still owes") : history.netBalance > 0 ? uiText("Should receive") : uiText("Settled up")}</dt><dd>{money(Math.abs(history.netBalance))}</dd></div>
             </dl>
             <p className="footnote">{uiText("Paid upfront − cost share + payments sent − payments received = balance. These amounts use the saved item splits and currency conversions.")}</p>
           </> : <p className="error" role="alert">{history.message}{uiText(" Ask the organiser to review these expenses before relying on the totals.")}</p>}
@@ -246,7 +246,7 @@ export function JoinTrip({ token, accountId, onJoined, onAuthenticate }: {
           <input type="checkbox" required checked={acceptedHistory} disabled={busy} onChange={event => setAcceptedHistorySnapshot(event.target.checked ? info.historySnapshot : null)} />
           <span>{uiText("I have reviewed this history and agree to join as ")}{info.memberName}.</span>
         </label>
-        <button className="primary" disabled={busy || !acceptedHistory}>{busy ? "Joining…" : "Confirm history & join holiday"}</button>
+        <button className="primary" disabled={busy || !acceptedHistory}>{busy ? uiText("Joining…") : uiText("Confirm history & join holiday")}</button>
       </form>}
   </div>;
 }

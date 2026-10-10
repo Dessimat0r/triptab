@@ -65,16 +65,16 @@ export default function ReceiptScanReview({ entry, onChange, photo, children }: 
   return <section className="receipt-scan-review" aria-labelledby={titleId}>
     {photo}
     <div className="receipt-scan-review-body">
-      <h4 id={titleId}>{!scan ? "Receipt not processed yet" : scan.status === "matched" ? "Receipt totals match exactly" : "Receipt needs review"}</h4>
+      <h4 id={titleId}>{!scan ? uiText("Receipt not processed yet") : scan.status === "matched" ? uiText("Receipt totals match exactly") : uiText("Receipt needs review")}</h4>
       {!scan && <p>{uiText("Your photo is stored. Uploading a photo or copying a prompt does not mean its items have been read.")}</p>}
       <dl className="receipt-scan-totals">
-        <div><dt>{uiText("Printed receipt total")}</dt><dd>{scan?.printedTotal === null || scan?.printedTotal === undefined ? "Not verified" : receiptMoney(scan.printedTotal, scan.printedCurrency || entry.currency)}</dd></div>
-        <div><dt>{uiText("Itemised total")}</dt><dd>{!entry.items.length ? "Not processed" : calculated === null ? "Incomplete prices" : receiptMoney(calculated, entry.currency)}</dd></div>
+        <div><dt>{uiText("Printed receipt total")}</dt><dd>{scan?.printedTotal === null || scan?.printedTotal === undefined ? uiText("Not verified") : receiptMoney(scan.printedTotal, scan.printedCurrency || entry.currency)}</dd></div>
+        <div><dt>{uiText("Itemised total")}</dt><dd>{!entry.items.length ? uiText("Not processed") : calculated === null ? uiText("Incomplete prices") : receiptMoney(calculated, entry.currency)}</dd></div>
         {scan?.printedSubtotal !== undefined && scan.printedSubtotal !== null && <div><dt>{uiText("Printed subtotal")}</dt><dd>{receiptMoney(scan.printedSubtotal, scan.printedCurrency || entry.currency)}</dd></div>}
       </dl>
-      {(!entry.items.length || unknown > 0 || !entry.currency) && <p className="receipt-review-counts">{entry.items.length} {entry.items.length === 1 ? "line" : "lines"}{unknown ? ` · ${unknown} missing ${unknown === 1 ? "price" : "prices"}` : ""}{!entry.currency ? " · currency needs review" : ""}</p>}
+      {(!entry.items.length || unknown > 0 || !entry.currency) && <p className="receipt-review-counts">{entry.items.length} {entry.items.length === 1 ? uiText("line") : uiText("lines")}{unknown ? uiText(" · {value0} missing {value1}", { value0: unknown, value1: unknown === 1 ? "price" : "prices" }) : ""}{!entry.currency ? uiText(" · currency needs review") : ""}</p>}
       {!!warnings.length && <ul className="receipt-scan-warnings">{warnings.map((warning, index) => <li key={`${warning.code}:${warning.itemId || index}`}>
-        <strong>{warning.itemId ? `${name(warning.itemId)}: ` : ""}{warningNames[warning.code] || "Check this receipt detail."}</strong>
+        <strong>{warning.itemId ? `${name(warning.itemId)}: ` : ""}{warningNames[warning.code] || uiText("Check this receipt detail.")}</strong>
         {"difference" in warning && typeof warning.difference === "number" && <span>{uiText("Difference: ")}{receiptMoney(warning.difference, entry.currency)}</span>}
         {warning.observedText && <span>{uiText("Printed: ")}{warning.observedText}</span>}
       </li>)}</ul>}
@@ -82,7 +82,7 @@ export default function ReceiptScanReview({ entry, onChange, photo, children }: 
       {scan && <details className="receipt-printed-evidence"><summary>{uiText("Check or correct printed totals")}</summary>
         <p>{uiText("Enter only amounts you can read on the receipt. These are evidence from the image, separate from the itemised calculation.")}</p>
         <label>{uiText("Printed currency")}<select aria-label={uiText("Printed currency")} value={scan.printedCurrency || ""} onChange={event => onChange({ ...entry, receiptScan: { ...scan, printedCurrency: event.target.value || null, fieldSources: { ...scan.fieldSources, printedCurrency: "user" }, acknowledgement: undefined } })}><option value="">{uiText("Not readable")}</option>{CURRENCIES.map(currency => <option key={currency.code} value={currency.code}>{currency.code} · {currency.name}</option>)}</select></label>
-        <div className="fieldpair">{(["printedSubtotal", "printedTotal"] as const).map(field => <PrintedAmount key={field} label={field === "printedTotal" ? "Printed grand total" : "Printed subtotal (optional)"} value={scan[field]} onChange={value => {
+        <div className="fieldpair">{(["printedSubtotal", "printedTotal"] as const).map(field => <PrintedAmount key={field} label={field === "printedTotal" ? uiText("Printed grand total") : uiText("Printed subtotal (optional)")} value={scan[field]} onChange={value => {
           onChange({ ...entry, receiptScan: { ...scan, [field]: value, fieldSources: { ...scan.fieldSources, [field]: "user" }, acknowledgement: undefined } });
         }} />)}</div>
       </details>}
@@ -115,7 +115,7 @@ export function ReceiptReviewSummary({ entry, fxWarning }: { entry: ReceiptEdito
     <ul>{points.map(point => <li key={point.key}>
       <span>{point.message}</span>
       {point.observedText && <small>{uiText("Printed: ")}{point.observedText}</small>}
-      {point.ids.map(id => <button key={id} type="button" className="quiet" onClick={() => focusExpenseTarget(`expense-item-${id}`, "input[required]")}>{uiText("Check ")}{entry.items.find(item => item.id === id)?.name || 'item'}</button>)}
+      {point.ids.map(id => <button key={id} type="button" className="quiet" onClick={() => focusExpenseTarget(`expense-item-${id}`, "input[required]")}>{uiText("Check ")}{entry.items.find(item => item.id === id)?.name || uiText('item')}</button>)}
       {point.lineIndex !== undefined && <small>{uiText("Receipt line ")}{point.lineIndex + 1}</small>}
     </li>)}{fxWarning && <li><span>{fxWarning}</span><button type="button" className="quiet" onClick={() => focusExpenseTarget("expense-fx-panel", "input[type=number]")}>{uiText("Check rate")}</button></li>}</ul>
   </section>;

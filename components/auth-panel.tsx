@@ -31,13 +31,13 @@ export default function AuthPanel({
       aria-labelledby={`${id}-title`}
     >
       <h2 id={`${id}-title`}>
-        {forgot ? "Reset your password" : registering ? "Create your TripTab account" : "Sign in to TripTab"}
+        {forgot ? uiText("Reset your password") : registering ? uiText("Create your TripTab account") : uiText("Sign in to TripTab")}
       </h2>
       <p className="auth-description">{uiText("Use your email to save holidays, share expenses, and join invitations. ChatGPT and Codex are optional, for receipt AI and natural-language help.")}</p>
       <p className="footnote">
         {registering
-          ? "Save your password in a password manager. You can verify your email in account settings."
-          : "If you previously linked ChatGPT, you can also sign in with that account."}
+          ? uiText("Save your password in a password manager. You can verify your email in account settings.")
+          : uiText("If you previously linked ChatGPT, you can also sign in with that account.")}
       </p>
       <form
         onSubmit={async (event) => {
@@ -120,23 +120,23 @@ export default function AuthPanel({
         )}
         {error && (
           <p className="error" role="alert">
-            {error}
+            {uiText(error)}
           </p>
         )}
-        {message && <p role="status">{message}</p>}
+        {message && <p role="status">{uiText(message)}</p>}
         <button className="primary" type="submit" disabled={busy}>
-          {forgot ? busy ? "Sending…" : "Send recovery link" : busy
+          {forgot ? busy ? uiText("Sending…") : uiText("Send recovery link") : busy
             ? registering
-              ? "Creating account…"
-              : "Signing in…"
+              ? uiText("Creating account…")
+              : uiText("Signing in…")
             : registering
-              ? "Create account"
-              : "Sign in"}
+              ? uiText("Create account")
+              : uiText("Sign in")}
         </button>
       </form>
-      <p><button className="textbutton" type="button" disabled={busy} onClick={() => { setForgot(value => !value); setMode("login"); setError(""); setMessage(""); }}>{forgot ? "Back to sign in" : "Forgot password?"}</button></p>
+      <p><button className="textbutton" type="button" disabled={busy} onClick={() => { setForgot(value => !value); setMode("login"); setError(""); setMessage(""); }}>{forgot ? uiText("Back to sign in") : uiText("Forgot password?")}</button></p>
       <p className="auth-switch">
-        {registering ? "Already have a TripTab account?" : "New to TripTab?"}
+        {registering ? uiText("Already have a TripTab account?") : uiText("New to TripTab?")}
         <button
           className="textbutton"
           type="button"
@@ -146,7 +146,7 @@ export default function AuthPanel({
             setError(""); setMessage("");
           }}
         >
-          {registering ? "Sign in" : "Create an account"}
+          {registering ? uiText("Sign in") : uiText("Create an account")}
         </button>
       </p>
     </section>

@@ -56,7 +56,7 @@ export default function AuthRecovery({
       >
         <div className="modalheading">
           <h2 id="recovery-title">
-            {link.purpose === 'reset' ? 'Reset password' : 'Verify email'}
+            {link.purpose === 'reset' ? uiText('Reset password') : uiText('Verify email')}
           </h2>
           <button
             className="iconbutton"
@@ -131,14 +131,14 @@ export default function AuthRecovery({
             )}
             <button className="primary" disabled={busy}>
               {busy
-                ? 'Confirming…'
+                ? uiText('Confirming…')
                 : link.purpose === 'reset'
-                  ? 'Set new password'
-                  : 'Verify email'}
+                  ? uiText('Set new password')
+                  : uiText('Verify email')}
             </button>
           </form>
         )}
-        {message && <p role="status">{message}</p>}
+        {message && <p role="status">{uiText(message)}</p>}
         {done && (
           <button className="quiet" onClick={close}>
             {uiText('Return to TripTab')}
