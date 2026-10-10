@@ -1,6 +1,6 @@
 // Vendored from @openai/sites-vite-plugin 0.2.0 (openai/sites#9).
 // See sites-vite-plugin.LICENSE for the upstream MIT license.
-import { access, cp, mkdir, rm } from "node:fs/promises";
+import { access, cp, mkdir, rm, writeFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { resolve } from "node:path";
 import type { Plugin } from "vite";
@@ -29,7 +29,7 @@ async function exists(path: string): Promise<boolean> {
   }
 }
 
-export function sites({ mockAuth = true } = {}): Plugin {
+export function sites({ mockAuth = true, copyMigrations = true } = {}): Plugin {
   let root = process.cwd();
   let command: "build" | "serve" = "build";
 
@@ -181,11 +181,16 @@ export function sites({ mockAuth = true } = {}): Plugin {
       await mkdir(outputDirectory, { recursive: true });
 
       await cp(hostingConfig, resolve(outputDirectory, "hosting.json"));
-      if (await exists(drizzleSource)) {
+      if (copyMigrations && await exists(drizzleSource)) {
         await cp(drizzleSource, resolve(outputDirectory, "drizzle"), {
           recursive: true,
         });
       }
+      await writeFile(resolve(outputDirectory, 'release-profile.json'), JSON.stringify({
+        profile: copyMigrations ? 'app' : 'backup',
+        appliesMigrations: copyMigrations,
+        exportOnly: !copyMigrations,
+      }) + '\n');
     },
   };
 }
