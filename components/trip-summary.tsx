@@ -50,10 +50,10 @@ export function BudgetCard({ trip, today = localDate() }: { trip: Trip; today?: 
         <span style={{ width: `${Math.min(100, budget.usedPercent)}%` }} className={over ? "over" : budget.usedPercent > 85 ? "near" : ""} />
       </div>
       <p className="footnote">{budget.usedPercent}{uiText("% of ")}{money(budget.amount)}
-        {budget.perDayLeft !== undefined && budget.daysLeft ? uiText(" · {amount} a day for the {count} days left", { amount: money(budget.perDayLeft), count: budget.daysLeft }) : ""}
+        {budget.perDayLeft !== undefined && budget.daysLeft ? uiText(budget.daysLeft === 1 ? " · {amount} a day for the {count} day left" : " · {amount} a day for the {count} days left", { amount: money(budget.perDayLeft), count: budget.daysLeft }) : ""}
         {budget.projected !== undefined ? uiText(" · On track for {value0}", { value0: money(budget.projected) }) : ""}</p>
     </>}
-    {summary.unavailable > 0 && <p className="footnote">{summary.unavailable} {summary.unavailable === 1 ? uiText("expense needs") : uiText("expenses need")}{uiText(" review and ")}{summary.unavailable === 1 ? uiText("is") : uiText("are")}{uiText(" not counted.")}</p>}
+    {summary.unavailable > 0 && <p className="footnote">{uiText(summary.unavailable === 1 ? "{count} expense needs review and is not included." : "{count} expenses need review and are not included.", { count: summary.unavailable })}</p>}
   </div>;
 }
 

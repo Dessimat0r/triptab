@@ -1,5 +1,5 @@
 "use client";
-import { t as uiText } from "@/lib/ui-language";
+import { t as uiText, getUiLanguage } from "@/lib/ui-language";
 
 
 import { useId, useState } from "react";
@@ -53,7 +53,7 @@ export default function AuthPanel({
                 action: forgot ? "request_password_reset" : mode,
                 email: email.trim(),
                 password,
-                ...(registering ? { displayName: displayName.trim() } : {}),
+                ...(registering ? { displayName: displayName.trim(), uiLanguage: getUiLanguage() } : {}),
               }),
             });
             const body = (await response.json()) as AuthResponse;

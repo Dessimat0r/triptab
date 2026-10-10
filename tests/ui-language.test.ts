@@ -5,7 +5,7 @@ import { SPANISH_UI } from '../lib/ui-spanish';
 import { FRENCH_UI } from '../lib/ui-french';
 import { GERMAN_UI } from '../lib/ui-german';
 import { getUiCatalog, getUiLocale, translateUi } from '../lib/ui-language';
-import copy from '../lib/ui-copy.json';
+import copy from '../lib/ui-copy.json' with { type: 'json' };
 import { formatMoney } from '../lib/money-format';
 import { formatCalendarDate, localTimestamp } from '../lib/dates';
 import { readFileSync } from 'node:fs';

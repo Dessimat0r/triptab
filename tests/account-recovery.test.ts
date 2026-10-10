@@ -53,6 +53,24 @@ async function account(
 const token = (message: EmailMessage) =>
   new URL(message.text.match(/https:\/\/\S+/)![0]).hash.split('=')[1];
 
+test('registration keeps the interface language selected before signing up', async () => {
+  const database = await storage();
+  for (const uiLanguage of ['es', 'fr', 'de']) {
+    const created = await performAuthAction(request(), {
+      action: 'register', email: `${uiLanguage}@example.test`, password, displayName: 'Alice', uiLanguage,
+    }, database.asD1());
+    assert.equal(created.state.profile?.uiLanguage, uiLanguage);
+    const signedIn = await performAuthAction(request(), {
+      action: 'login', email: `${uiLanguage}@example.test`, password,
+    }, database.asD1());
+    assert.equal(signedIn.state.profile?.uiLanguage, uiLanguage);
+  }
+  await assert.rejects(performAuthAction(request(), {
+    action: 'register', email: 'unsupported@example.test', password, displayName: 'Alice', uiLanguage: 'unsupported',
+  }, database.asD1()), /interface language/);
+  assert.equal(database.sqlite.prepare('SELECT COUNT(*) AS count FROM profiles').get()?.count, 3);
+});
+
 test('verification links are single-use, purpose-bound, hashed and excluded from private history', async () => {
   const database = await storage(),
     messages: EmailMessage[] = [],
@@ -365,6 +383,7 @@ test('account deletion preserves shared money, removes contact and sign-in state
     b = await account(database, 'bob@example.test'),
     actor = b.state.profile!;
   const original = seedTrip(database, a.state.profile!.id, actor.id);
+  database.sqlite.prepare("UPDATE profiles SET ui_language='fr' WHERE id=?").run(actor.id);
   await saveNotificationPreferences(database.asD1(), actor, {
     scope: 'involved',
     delivery: 'daily',
@@ -385,6 +404,7 @@ test('account deletion preserves shared money, removes contact and sign-in state
     confirmation: actor.email,
     password,
   });
+  assert.equal(database.sqlite.prepare('SELECT ui_language FROM profiles WHERE id=?').get(actor.id)?.ui_language, 'en');
   const saved = JSON.parse(
     String(database.sqlite.prepare('SELECT data FROM trips').get()?.data),
   ) as Trip;

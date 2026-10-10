@@ -1,7 +1,7 @@
 import { SPANISH_UI } from './ui-spanish';
 import { FRENCH_UI } from './ui-french';
 import { GERMAN_UI } from './ui-german';
-import copy from './ui-copy.json';
+import copy from './ui-copy.json' with { type: 'json' };
 export const UI_LANGUAGES = ['en', 'es', 'fr', 'de'] as const;
 export const isUiLanguage = (value: unknown): value is UiLanguage =>
   typeof value === 'string' &&

@@ -2655,7 +2655,11 @@ export default function Home({ children }: { children: ReactNode }) {
       <AuthRecovery onChanged={async body => { const next = profileFromAuth(body); if (next) await accountAuthenticated(next); else await load({ fresh: true }); }} />
       {holidayToolsOpen&&<ModalA11y className="overlay" onClose={()=>setHolidayToolsOpen(false)}><section className="modal small" role="dialog" aria-modal="true" aria-labelledby="holiday-tools-title"><div className="modalheading"><h2 id="holiday-tools-title">{uiText("Holiday options")}</h2><button className="quiet" onClick={()=>setHolidayToolsOpen(false)}>{uiText("Close")}</button></div>
         {profile&&<div className="button-row"><button className="quiet" disabled={loading||saving} onClick={()=>{setHolidayToolsOpen(false);setImportOpen(true);}}>{uiText("Import holiday")}</button><button className="quiet" disabled={loading||saving} onClick={()=>{setHolidayToolsOpen(false);setArchivesOpen(true);}}>{uiText("Archived holidays")}</button></div>}
-        <InterfaceLanguage accountId={profile?.id} value={uiLanguage} onSaved={async()=>{if(profile)await refreshProfile(profile.id);}}/>
+        <InterfaceLanguage key={profile?.id || "device"} accountId={profile?.id} value={uiLanguage} onSaved={async()=>{
+          if (activeProfile.current?.id !== profile?.id) return false;
+          if (profile) { profileReadRequest.current++; await refreshProfile(profile.id); }
+          return activeProfile.current?.id === profile?.id;
+        }}/>
       </section></ModalA11y>}
       {importOpen && profile && <ImportHoliday accountId={profile.id} onClose={()=>setImportOpen(false)} onImported={async tripId=>{await load({fresh:true});setSelected(tripId);setView("expenses");}}/>}
       {archivesOpen && profile && <ArchivedHolidays accountId={profile.id} onClose={() => setArchivesOpen(false)} onChanged={async () => { await load({ fresh: true }); }} />}

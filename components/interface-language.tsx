@@ -8,7 +8,7 @@ export default function InterfaceLanguage({
 }: {
   accountId?: string;
   value: UiLanguage;
-  onSaved?: () => Promise<void>;
+  onSaved?: () => Promise<void | boolean>;
 }) {
   const [busy, setBusy] = useState(false),
     [error, setError] = useState('');
@@ -28,13 +28,15 @@ export default function InterfaceLanguage({
                 const response = await fetch('/api/interface-language', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ language }),
+                  body: JSON.stringify({ language, accountId }),
                 });
-                if (!response.ok)
-                  throw Error('Could not save the interface language.');
+                if (!response.ok) {
+                  const body = await response.json() as { error?: unknown };
+                  throw Error(typeof body.error === 'string' ? body.error : 'Could not save the interface language.');
+                }
               }
+              if (await onSaved?.() === false) return;
               setUiLanguage(language);
-              await onSaved?.();
             } catch (cause) {
               setError(
                 cause instanceof Error

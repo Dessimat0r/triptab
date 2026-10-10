@@ -231,7 +231,7 @@ export async function deleteAccount(
   statements.push(
     database
       .prepare(
-        `UPDATE profiles SET email=?,display_name='Deleted traveller',deleted_at=? WHERE id=? AND ${gate.sql}`,
+        `UPDATE profiles SET email=?,display_name='Deleted traveller',ui_language='en',deleted_at=? WHERE id=? AND ${gate.sql}`,
       )
       .bind(
         `deleted-${crypto.randomUUID()}@invalid.local`,

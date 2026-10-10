@@ -3,6 +3,7 @@ import { encodeBase64url as base64url, decodeBase64url, sha256Hex, encodeHex as 
 // Sites gateway; browser sessions are opaque tokens and are stored only hashed.
 import { accountAuditStatement } from './audit';
 import { emailLink, passwordResetEmail, verificationEmail, type Mailer } from './email';
+import { isUiLanguage } from './ui-language';
 const SESSION_LIFETIME = 30 * 24 * 60 * 60 * 1000;
 const VERIFY_LIFETIME = 24 * 60 * 60 * 1000;
 const RESET_LIFETIME = 60 * 60 * 1000;
@@ -326,6 +327,8 @@ async function sendVerification(request: Request, email: string, verification: E
 }
 
 async function register(request: Request, body: Record<string, unknown>, database: D1Database, mailer?: Mailer | null) {
+  const uiLanguage = body.uiLanguage ?? 'en';
+  if (!isUiLanguage(uiLanguage)) throw new AuthError('Choose an available interface language.');
   const email = normalizeEmail(body.email);
   const keys = await consumeAuthRateLimit(request, email, database, 'register');
   const digest = await hashPassword(body.password);
@@ -336,9 +339,9 @@ async function register(request: Request, body: Record<string, unknown>, databas
   const verification = mailer ? await prepareEmailToken(database, id, email, 'verify') : null;
   try {
     await database.batch([
-      database.prepare('INSERT INTO profiles (id, email, display_name, created_at) VALUES (?, ?, ?, ?)').bind(id, email, name, now),
+      database.prepare('INSERT INTO profiles (id, email, display_name, created_at, ui_language) VALUES (?, ?, ?, ?, ?)').bind(id, email, name, now, uiLanguage),
       accountAuditStatement(database, { userId: id, actorName: name, entityType: 'profile', entityId: id,
-        action: 'create', before: null, after: { displayName: name } }, { sql: 'changes() > 0', bindings: [] }),
+        action: 'create', before: null, after: { displayName: name, ...(uiLanguage !== 'en' ? { uiLanguage } : {}) } }, { sql: 'changes() > 0', bindings: [] }),
       database.prepare('INSERT INTO auth_credentials (user_id, email, password_hash, password_salt, iterations, created_at) VALUES (?, ?, ?, ?, ?, ?)').bind(id, email, digest.hash, digest.salt, digest.iterations, now),
       accountAuditStatement(database, { userId: id, actorName: name, entityType: 'password', entityId: 'account', action: 'create',
         before: { hasPassword: false }, after: { hasPassword: true } }, { sql: 'changes() > 0', bindings: [] }),

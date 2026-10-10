@@ -3046,5 +3046,35 @@
     "Hay {count} respuestas del asistente.",
     "{count} réponses de l’assistant sont disponibles.",
     "{count} Antworten des Assistenten sind verfügbar."
+  ],
+  [
+    "Choose an available interface language.",
+    "Elige un idioma de interfaz disponible.",
+    "Choisissez une langue d’interface disponible.",
+    "Wähle eine verfügbare Oberflächensprache."
+  ],
+  [
+    "Your account changed. Reopen settings before changing language.",
+    "Tu cuenta ha cambiado. Abre de nuevo los ajustes antes de cambiar el idioma.",
+    "Votre compte a changé. Rouvrez les réglages avant de changer de langue.",
+    "Dein Konto hat sich geändert. Öffne die Einstellungen erneut, bevor du die Sprache änderst."
+  ],
+  [
+    "Sign in again to change your language.",
+    "Inicia sesión de nuevo para cambiar el idioma.",
+    "Reconnectez-vous pour changer de langue.",
+    "Melde dich erneut an, um die Sprache zu ändern."
+  ],
+  [
+    "Your language settings changed. Reopen settings and try again.",
+    "Tus ajustes de idioma han cambiado. Abre de nuevo los ajustes y reinténtalo.",
+    "Vos réglages de langue ont changé. Rouvrez les réglages et réessayez.",
+    "Deine Spracheinstellungen haben sich geändert. Öffne die Einstellungen erneut und versuche es noch einmal."
+  ],
+  [
+    "· {amount} a day for the {count} day left",
+    "· {amount} al día durante el {count} día restante",
+    "· {amount} par jour pour le {count} jour restant",
+    "· {amount} für den {count} übrigen Tag"
   ]
 ]
