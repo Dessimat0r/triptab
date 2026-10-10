@@ -153,7 +153,20 @@ test("storage exceptions do not leak private error messages or credentials", asy
   const fetch = handler({ async inspectDatabase() { throw new Error("database private / sk-secret!"); } });
   const response = await fetch(request("metadata"), environment());
   assert.equal(response.status, 500);
-  assert.equal(await response.text(), '{"error":"Backup request failed."}');
+  assert.deepEqual(await response.json(), { error: "Backup request failed.", category: "export_failed" });
+});
+
+test("operator error categories stay fixed and exclude storage exception details", async () => {
+  for (const [message, category] of [
+    ["Missing SQL for schema object private_table", "schema_missing_definition"],
+    ["SQLITE_AUTH: not authorized / sk-secret!", "database_operation_not_supported"],
+    ["D1 private account error", "database_read_failed"],
+  ]) {
+    const fetch = handler({ async inspectDatabase() { throw new Error(message); } });
+    const response = await fetch(request("metadata"), environment());
+    assert.equal(response.status, 500);
+    assert.deepEqual(await response.json(), { error: "Backup request failed.", category });
+  }
 });
 
 test("expired leases terminate active downloads instead of allowing continued export", async () => {

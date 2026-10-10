@@ -93,6 +93,20 @@ function maintenance(): Response {
   });
 }
 
+// Fixed categories for the authenticated operator; never include exception text,
+// SQL, credentials, object keys or row values in a failed response.
+function failureCategory(error: unknown): string {
+  const message = error instanceof Error ? error.message : '';
+  if (/Missing SQL for schema object/.test(message)) return 'schema_missing_definition';
+  if (/Unknown schema SQL|Unknown trigger SQL|Multiple statements/.test(message)) return 'schema_definition_unsupported';
+  if (/Unsupported schema type|Unsupported SQLite internal object|Virtual table/.test(message)) return 'schema_object_unsupported';
+  if (/Invalid table count/.test(message)) return 'database_count_invalid';
+  if (/not authorized|SQLITE_AUTH/i.test(message)) return 'database_operation_not_supported';
+  if (/too many|limit exceeded/i.test(message)) return 'export_limit_exceeded';
+  if (/D1|SQLITE_ERROR/i.test(message)) return 'database_read_failed';
+  return 'export_failed';
+}
+
 function json(data: unknown, lease: Lease, status = 200): Response {
   const headers = privateHeaders(lease);
   headers.set("Content-Type", "application/json; charset=utf-8");
@@ -327,9 +341,9 @@ export function createBackupHandler(dependencies: BackupDependencies) {
         }
       }
       return json({ error: "Invalid backup route or parameters." }, lease, 400);
-    } catch {
+    } catch (error) {
       // Never return database errors, object keys, credentials, or stack traces.
-      return json({ error: "Backup request failed." }, lease, 500);
+      return json({ error: "Backup request failed.", category: failureCategory(error) }, lease, 500);
     }
   };
 }

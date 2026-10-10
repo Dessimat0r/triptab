@@ -89,6 +89,7 @@ class Client:
             url += '?' + urllib.parse.urlencode(query)
         req = urllib.request.Request(url, headers={
             'Authorization': 'Bearer ' + self.token, 'Cache-Control': 'no-store',
+            'User-Agent': 'TripTab-operator-backup/1.0',
             'Accept': 'application/json' if route in ('metadata', 'objects') else 'application/octet-stream',
         })
         for attempt in range(4):

@@ -133,6 +133,41 @@ test('ANALYZE optimizer caches are explicitly recorded as rebuildable exclusions
   db.close(); restored.close();
 });
 
+test('documented D1 _cf_KV and its autoindex are excluded before any forbidden read while user and migration tables remain', async () => {
+  const db = new DatabaseSync(':memory:');
+  db.exec(`
+    CREATE TABLE _cf_KV(key TEXT PRIMARY KEY, value BLOB);
+    INSERT INTO _cf_KV VALUES('platform', X'FF');
+    CREATE TABLE _cf_user_notes(id INTEGER PRIMARY KEY, note TEXT);
+    INSERT INTO _cf_user_notes VALUES(1, 'application-owned');
+    CREATE TABLE d1_migrations(id INTEGER PRIMARY KEY, name TEXT, applied_at TEXT);
+    INSERT INTO d1_migrations VALUES(1, '0000_initial.sql', '2026-10-10');
+  `);
+  const calls: string[] = [];
+  const underlying = adapter(db, calls);
+  const nativeD1Like: ReadOnlyD1Database = {
+    prepare(sql) {
+      if (/FROM "_cf_KV"|table_xinfo\("_cf_KV"\)/i.test(sql)) throw new Error('D1_ERROR: not authorized to read _cf_KV');
+      return underlying.prepare(sql);
+    },
+  };
+  const metadata = await inspectD1ExportMetadata(nativeD1Like);
+  assert.ok(metadata.skipped.some((item) => item.name === '_cf_KV' && item.reason.includes('Cloudflare-owned')));
+  assert.ok(metadata.skipped.some((item) => item.name === 'sqlite_autoindex__cf_KV_1'));
+  assert.ok(!metadata.schema.some((item) => item.tbl_name === '_cf_KV'));
+  assert.deepEqual(metadata.tables, [{ name: '_cf_user_notes', row_count: '1' }, { name: 'd1_migrations', row_count: '1' }]);
+  assert.equal(metadata.migration_records[0].table, 'd1_migrations');
+  const sql = await collect(generateD1SqlExport(nativeD1Like, { maintenanceFreezeConfirmed: true }));
+  assert.ok(!sql.includes('CREATE TABLE _cf_KV'));
+  assert.ok(sql.includes('CREATE TABLE _cf_user_notes'));
+  assert.ok(calls.every((statement) => !/FROM "_cf_KV"|table_xinfo\("_cf_KV"\)/i.test(statement)));
+  const restored = new DatabaseSync(':memory:');
+  restored.exec(sql);
+  assert.deepEqual(restored.prepare('SELECT * FROM _cf_user_notes').all(), db.prepare('SELECT * FROM _cf_user_notes').all());
+  assert.deepEqual(restored.prepare('SELECT * FROM d1_migrations').all(), db.prepare('SELECT * FROM d1_migrations').all());
+  db.close(); restored.close();
+});
+
 test('virtual tables fail before emitting a misleading SQL archive', async () => {
   const db = new DatabaseSync(':memory:'); db.exec('CREATE VIRTUAL TABLE docs USING fts5(text);');
   const iterator = generateD1SqlExport(adapter(db), { maintenanceFreezeConfirmed: true });

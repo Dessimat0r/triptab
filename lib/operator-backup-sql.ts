@@ -131,6 +131,9 @@ function validateSchema(row: SchemaRow): void {
 }
 
 function portableExclusionReason(row: SchemaRow): string | undefined {
+  if (row.name === '_cf_KV' || row.tbl_name === '_cf_KV') {
+    return 'Cloudflare-owned _cf_KV is provisioned by the destination platform';
+  }
   if (row.name === '_cf_METADATA' || row.tbl_name === '_cf_METADATA') {
     return 'Cloudflare-owned _cf_METADATA is provisioned by the destination platform';
   }
