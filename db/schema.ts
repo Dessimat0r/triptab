@@ -7,6 +7,7 @@ export const ledgers = sqliteTable('ledgers', {
 });
 
 export const profiles = sqliteTable('profiles', {
+  deletedAt: text('deleted_at').notNull().default(''), uiLanguage: text('ui_language').notNull().default('en'),
   id: text('id').primaryKey(), email: text('email').notNull(), displayName: text('display_name').notNull(), createdAt: text('created_at').notNull(),
 });
 
@@ -38,11 +39,13 @@ export const authEmailTokens = sqliteTable('auth_email_tokens', {
 ]);
 
 export const authSessions = sqliteTable('auth_sessions', {
+  sessionId: text('session_id').notNull().default(''), userAgent: text('user_agent').notNull().default(''),
   tokenHash: text('token_hash').primaryKey(),
   userId: text('user_id').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
   expiresAt: text('expires_at').notNull(),
   createdAt: text('created_at').notNull(),
 }, table => [
+  uniqueIndex('auth_sessions_id_idx').on(table.sessionId).where(sql`${table.sessionId} <> ''`),
   index('auth_sessions_user_idx').on(table.userId),
   index('auth_sessions_expiry_idx').on(table.expiresAt),
 ]);
@@ -223,3 +226,19 @@ export const pushSubscriptions = sqliteTable('push_subscriptions', {
   endpoint: text('endpoint').primaryKey(), userId: text('user_id').notNull(), createdAt: text('created_at').notNull(),
   generation: text('generation').notNull().default(''),
 }, table => [index('push_subscriptions_user_idx').on(table.userId)]);
+
+export const notificationPreferences = sqliteTable('notification_preferences', {
+  userId:text('user_id').primaryKey().references(()=>profiles.id,{onDelete:'cascade'}),
+  scope:text('scope',{enum:['all','involved','none']}).notNull().default('all'),
+  delivery:text('delivery',{enum:['immediate','daily','none']}).notNull().default('immediate'), reminders:integer('reminders').notNull().default(1),
+}, table => [check('notification_preferences_scope_check',sql`${table.scope} IN ('all','involved','none')`),check('notification_preferences_delivery_check',sql`${table.delivery} IN ('immediate','daily','none')`),check('notification_preferences_reminders_check',sql`${table.reminders} IN (0,1)`)]);
+export const notificationDigests = sqliteTable('notification_digests', {
+  userId:text('user_id').notNull().references(()=>profiles.id,{onDelete:'cascade'}), tripId:text('trip_id').notNull().references(()=>trips.id,{onDelete:'cascade'}),
+  updates:integer('updates').notNull().default(1),createdAt:text('created_at').notNull(),
+},table=>[primaryKey({columns:[table.userId,table.tripId]})]);
+export const settlementReminders = sqliteTable('settlement_reminders', {
+  tripId:text('trip_id').notNull().references(()=>trips.id,{onDelete:'cascade'}),fromMember:text('from_member').notNull(),toMember:text('to_member').notNull(),sentAt:text('sent_at').notNull(),marker:text('marker').notNull(),
+},table=>[primaryKey({columns:[table.tripId,table.fromMember,table.toMember]})]);
+export const receiptRestoreHolds = sqliteTable('receipt_restore_holds', {
+  receiptId:text('receipt_id').primaryKey().references(()=>receipts.id,{onDelete:'cascade'}),until:text('until').notNull(),
+},table=>[index('receipt_restore_holds_until_idx').on(table.until)]);

@@ -1,4 +1,6 @@
 "use client";
+import { t as uiText } from "@/lib/ui-language";
+
 import { useCallback,useEffect,useLayoutEffect,useRef,useState } from 'react';
 import { defaultLanguagePreferences,tripLanguagePreferencesSchema,RECEIPT_LANGUAGES,type TripLanguagePreferences,type DisplayVersion } from '@/lib/receipt-languages';
 import { useLiveRefresh } from './use-live-refresh';
@@ -81,17 +83,17 @@ export function useTripLanguagePreferences(accountId:string,tripId:string){
 export type LanguagePreferencesController=ReturnType<typeof useTripLanguagePreferences>;
 export function PersonalLanguageSettings({settings}:{settings:LanguagePreferencesController}){
   return <section className="panel personal-language-settings" aria-labelledby="reading-language-heading">
-    <h3 id="reading-language-heading">Your receipt language preferences</h3>
-    <p className="footnote">Saved just for you in this holiday. Both item names stay visible and editable.</p>
+    <h3 id="reading-language-heading">{uiText("Your receipt language preferences")}</h3>
+    <p className="footnote">{uiText("Saved just for you in this holiday. Both item names stay visible and editable.")}</p>
     <div className="fieldpair">
-      <label>Reading language<select aria-label="Reading language" value={settings.preferences.readingLanguage} disabled={!settings.ready||settings.busy} onChange={event=>void settings.save({readingLanguage:event.target.value as TripLanguagePreferences['readingLanguage']})}>
+      <label>{uiText("Reading language")}<select aria-label={uiText("Reading language")} value={settings.preferences.readingLanguage} disabled={!settings.ready||settings.busy} onChange={event=>void settings.save({readingLanguage:event.target.value as TripLanguagePreferences['readingLanguage']})}>
         {RECEIPT_LANGUAGES.map(([code,label])=><option key={code} value={code}>{label}</option>)}
       </select></label>
-      <label>Show first<select aria-label="Default item name display" value={settings.preferences.primaryVersion} disabled={!settings.ready||settings.busy} onChange={event=>void settings.save({primaryVersion:event.target.value as DisplayVersion})}>
-        <option value="reading">Reading language</option><option value="receipt">Receipt original</option>
+      <label>{uiText("Show first")}<select aria-label={uiText("Default item name display")} value={settings.preferences.primaryVersion} disabled={!settings.ready||settings.busy} onChange={event=>void settings.save({primaryVersion:event.target.value as DisplayVersion})}>
+        <option value="reading">{uiText("Reading language")}</option><option value="receipt">{uiText("Receipt original")}</option>
       </select></label>
     </div>
-    {settings.busy&&<p className="footnote" role="status">Saving your preferences…</p>}
-    {settings.error&&<p className="error" role="alert">{settings.error} <button type="button" className="quiet" onClick={()=>void settings.reload()}>Reload preferences</button></p>}
+    {settings.busy&&<p className="footnote" role="status">{uiText("Saving your preferences…")}</p>}
+    {settings.error&&<p className="error" role="alert">{settings.error} <button type="button" className="quiet" onClick={()=>void settings.reload()}>{uiText("Reload preferences")}</button></p>}
   </section>;
 }

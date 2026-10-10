@@ -1,4 +1,6 @@
 "use client";
+import { t as uiText } from "@/lib/ui-language";
+
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Bell, Download, Check } from "lucide-react";
 import { useLiveRefresh } from "@/components/use-live-refresh";
@@ -273,11 +275,10 @@ export default function PwaControls({ accountId, onChanged }: { accountId?: stri
   }
   return (
     <div className="pwa-settings">
-      <h3>TripTab on your phone</h3>
+      <h3>{uiText("TripTab on your phone")}</h3>
       {installed ? (
         <p className="installed">
-          <Check size={16} /> Installed on this device
-        </p>
+          <Check size={16} />{uiText(" Installed on this device")}</p>
       ) : install ? (
         <button
           className="quiet wide"
@@ -288,13 +289,9 @@ export default function PwaControls({ accountId, onChanged }: { accountId?: stri
             setInstall(null);
           }}
         >
-          <Download size={17} /> Install TripTab
-        </button>
+          <Download size={17} />{uiText(" Install TripTab")}</button>
       ) : (
-        <p className="footnote">
-          Use your browser’s menu to install TripTab or choose “Add to Home
-          Screen”.
-        </p>
+        <p className="footnote">{uiText("Use your browser’s menu to install TripTab or choose “Add to Home Screen”.")}</p>
       )}
       <button
         className="quiet wide"
@@ -308,10 +305,7 @@ export default function PwaControls({ accountId, onChanged }: { accountId?: stri
             ? "Turn off notifications"
             : "Enable trip notifications"}
       </button>
-      <p className="footnote">
-        On iPhone, add TripTab to your Home Screen before enabling
-        notifications. Support depends on your browser.
-      </p>
+      <p className="footnote">{uiText("On iPhone, add TripTab to your Home Screen before enabling notifications. Support depends on your browser.")}</p>
       {status && (
         <p className="notification-status" role="status">
           {status}

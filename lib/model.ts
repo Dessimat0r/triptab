@@ -288,10 +288,10 @@ const expenseItemSchema = rawItemSchema.extend({
 // 'rotating-remainder': as 'receipt-total', but exact remainder ties start at a
 // person chosen from the entry ID, so the same traveller does not always get
 // the leftover penny (F-21). Older rules keep their historical tie order.
-const calculationRuleSchema = z.enum(['selected-participants', 'receipt-total', 'rotating-remainder']);
+const calculationRuleSchema = z.enum(['selected-participants', 'receipt-total', 'rotating-remainder', 'native-minor-units']);
 export type CalculationRule = z.infer<typeof calculationRuleSchema>;
 /** Rule stamped on every new or changed entry. Earlier entries keep the rule they were saved with. */
-export const CURRENT_CALCULATION_RULE: CalculationRule = 'rotating-remainder';
+export const CURRENT_CALCULATION_RULE: CalculationRule = 'native-minor-units';
 /** Weighted equal shares in force when an entry was saved (only people counting as more than one). */
 const MAX_MEMBER_WEIGHT = 20;
 const memberWeightsSchema = z.record(id, z.number().int().min(2).max(MAX_MEMBER_WEIGHT));
@@ -356,7 +356,7 @@ export const paymentSchema = z.object({
   note: z.string().trim().max(500).optional(),
 });
 const memberSchema = z.object({ id, name: z.string().trim().min(1).max(50), userId: accountId.optional(), email: z.string().email().optional(),
-  payTo: payToSchema.optional(),
+  payTo: payToSchema.optional(), retired: z.boolean().optional(),
   // How many people this traveller stands for in equal splits (a couple or family). Absent means 1.
   weight: z.number().int().min(1).max(MAX_MEMBER_WEIGHT).optional(),
   // Days this traveller was on the holiday. They only guide new-expense defaults; existing splits are unchanged.
@@ -428,15 +428,16 @@ export function stampCalculationRules<Entry extends { adjustmentAllocation?: Cal
 }
 
 /** Whether a traveller was on the holiday on a date, from their optional joining and leaving dates. */
-export function memberPresent(member: { joinedOn?: string; leftOn?: string }, date: string | undefined): boolean {
+export function memberPresent(member: { joinedOn?: string; leftOn?: string; retired?: boolean }, date: string | undefined): boolean {
+  if (member.retired) return false;
   if (!date) return true;
   return (!member.joinedOn || member.joinedOn <= date) && (!member.leftOn || date <= member.leftOn);
 }
 
 /** Travellers to select by default for a new expense on this date; everyone when nobody matches. */
-export function defaultParticipants(members: readonly { id: string; joinedOn?: string; leftOn?: string }[], date: string | undefined): string[] {
+export function defaultParticipants(members: readonly { id: string; joinedOn?: string; leftOn?: string; retired?: boolean }[], date: string | undefined): string[] {
   const present = members.filter(member => memberPresent(member, date)).map(member => member.id);
-  return present.length ? present : members.map(member => member.id);
+  return present.length ? present : members.filter(member => !member.retired).map(member => member.id);
 }
 
 /** A stable starting position in [0, count) derived from an entry ID (FNV-1a). */
@@ -460,7 +461,11 @@ export function receiptSplitError(expense: Pick<Expense, 'percentages'>): string
   return expense.percentages === undefined ? null : percentageError(expense.percentages, 'Receipt');
 }
 
-export function validateLedger(data: unknown, options: { previous?: Ledger; source?: 'web' | 'mcp' } = {}): Ledger {
+function financialValue(entry:Expense|Draft) {
+  return {currency:entry.currency,payer:entry.payer,bankAmount:entry.bankAmount,rate:entry.fx?.rate,percentages:entry.percentages,
+    tax:entry.tax,tip:entry.tip,discount:entry.discount,items:entry.items.map(item=>({id:item.id,amount:item.amount,members:item.members,percentages:item.percentages,units:item.units?{total:item.units.total,allocations:item.units.allocations}:undefined}))};
+}
+export function validateLedger(data: unknown, options: { previous?: Ledger; source?: 'web' | 'mcp'; preserveCalculationRules?: boolean } = {}): Ledger {
   // `previous` is a server-side compatibility boundary, never request input.
   // New records and every changed record still use the strict schemas/rules.
   const previous = options.previous && parseLedgerStructure(options.previous);
@@ -507,8 +512,15 @@ export function validateLedger(data: unknown, options: { previous?: Ledger; sour
         // Keep the old absence on untouched historical records. An explicitly
         // saved new/modified record adopts the current calculation rule and
         // the traveller weights in force now.
-        stampCalculationRules(expense, trip.members);
         const old = [...(prior?.expenses || []), ...(prior?.drafts || [])].find(value => value.id === expense.id);
+        if (old && sameStoredValue(financialValue(expense),financialValue(old))) {
+          // Chats, translations and other descriptive changes cannot resplit
+          // an approved receipt or adopt today's family weights.
+          expense.adjustmentAllocation=old.adjustmentAllocation;
+          expense.memberWeights=old.memberWeights;
+          if(old.adjustmentAllocation===undefined)delete expense.adjustmentAllocation;
+          if(old.memberWeights===undefined)delete expense.memberWeights;
+        } else if (!options.preserveCalculationRules) stampCalculationRules(expense, trip.members);
         if (options.source === 'mcp' && receiptScanHumanReviewChanged(expense, old)) {
           throw new LedgerValidationError('Receipt scan warnings and differences must be reviewed in TripTab by a person.');
         }
@@ -543,6 +555,7 @@ export function validateLedger(data: unknown, options: { previous?: Ledger; sour
       expenseTotal(expense, trip.currency);
     }
     for (const payment of trip.payments) {
+      if (!options.preserveCalculationRules && !sameStoredValue(payment,prior?.payments.find(old=>old.id===payment.id)) && payment.amount%currencyQuantum(trip.currency)) throw new LedgerValidationError(`${trip.currency} payments must be whole currency units`);
       if (!memberIds.has(payment.from) || !memberIds.has(payment.to)
         || payment.from === payment.to || !payment.amount) throw new LedgerValidationError('Invalid payment');
     }
@@ -681,13 +694,13 @@ function exactItemWeights(expense: AllocatedAmounts, members: { id: string }[]):
 function receiptTieOrder(expense: AllocatedAmounts, members: { id: string }[]): number[] {
   const ids = [...new Set([...expense.items.flatMap(item => item.members), ...members.map(member => member.id)])];
   const order = members.map(member => ids.indexOf(member.id));
-  return expense.adjustmentAllocation === 'rotating-remainder' ? rotatedTieOrder(order, expense.id) : order;
+  return (expense.adjustmentAllocation === 'rotating-remainder' || expense.adjustmentAllocation === 'native-minor-units') ? rotatedTieOrder(order, expense.id) : order;
 }
 
 const roundsOnReceiptTotal = (expense: Pick<Expense, 'adjustmentAllocation'>) =>
-  expense.adjustmentAllocation === 'receipt-total' || expense.adjustmentAllocation === 'rotating-remainder';
+  expense.adjustmentAllocation === 'receipt-total' || (expense.adjustmentAllocation === 'rotating-remainder' || expense.adjustmentAllocation === 'native-minor-units');
 const rotationKey = (expense: Pick<AllocatedAmounts, 'adjustmentAllocation' | 'id'>) =>
-  expense.adjustmentAllocation === 'rotating-remainder' ? expense.id ?? '' : undefined;
+  (expense.adjustmentAllocation === 'rotating-remainder' || expense.adjustmentAllocation === 'native-minor-units') ? expense.id ?? '' : undefined;
 
 /** Weights for rounding the whole receipt once, including tax, tip and discount. */
 function receiptWeights(expense: AllocatedAmounts, members: { id: string }[]): bigint[] {
@@ -742,6 +755,8 @@ export function convertAmount(original: number, rate: number): number {
   return converted;
 }
 
+export const currencyQuantum = (currency: string) => ['ISK','JPY','KRW','VND','CLP'].includes(currency) ? 100 : 1;
+
 export function expenseTotal(expense: Expense | Draft, baseCurrency: Currency): number {
   if (!expense.currency || expense.items.some(item => item.amount === null)) {
     throw new LedgerValidationError('Confirm the receipt currency and every item amount before calculating its cost');
@@ -756,9 +771,15 @@ export function expenseTotal(expense: Expense | Draft, baseCurrency: Currency): 
       throw new LedgerValidationError('The actual bank charge must be greater than zero');
     }
   }
-  const converted = expense.bankAmount !== undefined ? expense.bankAmount
+  let converted = expense.bankAmount !== undefined ? expense.bankAmount
     : expense.currency === baseCurrency ? original
       : expense.fx ? convertAmount(original, expense.fx.rate) : undefined;
+  if (expense.adjustmentAllocation==='native-minor-units') {
+    if (original % currencyQuantum(expense.currency)) throw new LedgerValidationError(`${expense.currency} receipt totals must be whole currency units`);
+    const quantum=currencyQuantum(baseCurrency);
+    if (expense.bankAmount!==undefined && expense.bankAmount%quantum) throw new LedgerValidationError(`${baseCurrency} bank charges must be whole currency units`);
+    if (converted!==undefined && quantum>1) converted=expense.bankAmount!==undefined || expense.currency===baseCurrency ? converted : convertAmount(original,expense.fx!.rate/quantum)*quantum;
+  }
   if (converted === undefined) throw new LedgerValidationError('Add an exchange rate or the actual bank charge for this currency');
   if (!Number.isSafeInteger(converted) || converted > MAX_AMOUNT) throw new LedgerValidationError('Converted amount is out of range (maximum 1,000,000 settlement currency units)');
   if (converted <= 0) throw new LedgerValidationError('Converted receipt total must be greater than zero');
@@ -766,11 +787,12 @@ export function expenseTotal(expense: Expense | Draft, baseCurrency: Currency): 
 }
 
 export function expenseShares(expense: Expense | Draft, members: { id: string }[], baseCurrency: Currency): number[] {
-  if (expense.percentages !== undefined) return percentageShares(expenseTotal(expense, baseCurrency), expense.percentages, members, rotationKey(expense));
+  const quantum=expense.adjustmentAllocation==='native-minor-units' ? currencyQuantum(baseCurrency) : 1;
+  if (expense.percentages !== undefined) return percentageShares(expenseTotal(expense, baseCurrency)/quantum, expense.percentages, members, rotationKey(expense)).map(value=>value*quantum);
   if (roundsOnReceiptTotal(expense)) {
     if (expense.items.some(item => item.amount === null)) throw new LedgerValidationError('Enter every item amount before calculating shares');
     const weights = receiptWeights(expense, members);
-    return allocateExact(expenseTotal(expense, baseCurrency), weights.some(Boolean) ? weights : members.map(member => BigInt(expense.memberWeights?.[member.id] ?? 1)), receiptTieOrder(expense, members));
+    return allocateExact(expenseTotal(expense, baseCurrency)/quantum, weights.some(Boolean) ? weights : members.map(member => BigInt(expense.memberWeights?.[member.id] ?? 1)), receiptTieOrder(expense, members)).map(value=>value*quantum);
   }
   const originalShares = shares(expense, members);
   const convertedTotal = expenseTotal(expense, baseCurrency);

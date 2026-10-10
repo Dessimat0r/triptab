@@ -1,4 +1,6 @@
 "use client";
+import { t as uiText } from "@/lib/ui-language";
+
 
 import { languageName } from "@/lib/receipt-languages";
 import type { AccountAuditEvent } from "@/lib/audit";
@@ -40,26 +42,26 @@ function accountLabel(event: AccountAuditEvent): string {
 
 export default function AccountActivityPanel({ refreshKey = 0, accountId }: { refreshKey?: number; accountId?: string }) {
   const history = useActivityPages<AccountAuditEvent>("/api/account-activity", `private-account:${accountId || ""}`, refreshKey, "userId", accountId);
-  return <section className="account-section account-activity" aria-label="Private account activity" aria-busy={history.loading}>
-    <h3>Account activity</h3>
-    <p className="footnote">Only you can see this account history. It records profile, sign-in, email confirmation, connection, notification, holiday archive and personal language changes without passwords or sign-in credentials.</p>
-    {history.error ? <button type="button" className="quiet" disabled={history.loading} onClick={history.retry}>Retry account activity</button> : <p className="footnote">History updates automatically.</p>}
+  return <section className="account-section account-activity" aria-label={uiText("Private account activity")} aria-busy={history.loading}>
+    <h3>{uiText("Account activity")}</h3>
+    <p className="footnote">{uiText("Only you can see this account history. It records profile, sign-in, email confirmation, connection, notification, holiday archive and personal language changes without passwords or sign-in credentials.")}</p>
+    {history.error ? <button type="button" className="quiet" disabled={history.loading} onClick={history.retry}>{uiText("Retry account activity")}</button> : <p className="footnote">{uiText("History updates automatically.")}</p>}
     {history.loading && <p role="status">{history.events.length ? "Checking account activity…" : "Loading account activity…"}</p>}
     {history.error && <p className="error" role="alert">{history.error}</p>}
-    {!history.loading && !history.error && !history.events.length && <p className="footnote">No recorded account changes yet.</p>}
+    {!history.loading && !history.error && !history.events.length && <p className="footnote">{uiText("No recorded account changes yet.")}</p>}
     <ol className="activity-list">{history.events.map(event => <li className="activity-event" key={event.id}>
       <p><strong>{event.actorName || "You"}</strong> {({ create: "added", update: "updated", delete: "removed" }[event.action]) || "changed"} <strong>{accountLabel(event)}</strong></p>
       <p className="footnote"><time dateTime={event.createdAt}>{auditTimestamp(event.createdAt)}</time> · {auditSource(event.source)}</p>
       <details>
-        <summary>View account change</summary>
+        <summary>{uiText("View account change")}</summary>
         <dl className="activity-identifiers">
-          <div><dt>Recorded at</dt><dd><time dateTime={event.createdAt}>{auditTimestamp(event.createdAt, true)}</time></dd></div>
-          <div><dt>Account</dt><dd>{event.userId}</dd></div>
-          <div><dt>Change reference</dt><dd>{event.id}</dd></div>
-          {event.entityType === "session" && <div><dt>Session scope</dt><dd>{event.entityId === "account" ? "Browser sessions revoked when the password changed" : "Current browser"}</dd></div>}
+          <div><dt>{uiText("Recorded at")}</dt><dd><time dateTime={event.createdAt}>{auditTimestamp(event.createdAt, true)}</time></dd></div>
+          <div><dt>{uiText("Account")}</dt><dd>{event.userId}</dd></div>
+          <div><dt>{uiText("Change reference")}</dt><dd>{event.id}</dd></div>
+          {event.entityType === "session" && <div><dt>{uiText("Session scope")}</dt><dd>{event.entityId === "account" ? "Browser sessions revoked when the password changed" : "Current browser"}</dd></div>}
           {event.entityType === "notifications" && <>
-            <div><dt>Notification delivery service</dt><dd>{auditText(event.after?.service) || auditText(event.before?.service) || "Not recorded"}</dd></div>
-            <div><dt>Browser subscription reference</dt><dd>{event.entityId}</dd></div>
+            <div><dt>{uiText("Notification delivery service")}</dt><dd>{auditText(event.after?.service) || auditText(event.before?.service) || "Not recorded"}</dd></div>
+            <div><dt>{uiText("Browser subscription reference")}</dt><dd>{event.entityId}</dd></div>
           </>}
         </dl>
         <ActivityChanges fields={accountChanges(event)} before={!!event.before} after={!!event.after} />

@@ -401,7 +401,7 @@ async function sendPush(subscription: Subscription, timeoutMs = sendTimeoutMs) {
   }
 }
 
-async function deliverNotifications(tripId: string, actor: string, title: string, body: string, replyAuthor?: string | null) {
+async function deliverNotifications(tripId: string, actor: string, title: string, body: string, replyAuthor?: string | null, involvedMembers?: string[]) {
   const deadline = Date.now() + deliveryBudgetMs;
   try {
     // Replies go to the saved question's author, including when their connected
@@ -416,7 +416,13 @@ async function deliverNotifications(tripId: string, actor: string, title: string
         : await db().prepare(`SELECT ? AS user_id FROM trips t WHERE t.id = ? AND
           (t.owner = ? OR EXISTS (SELECT 1 FROM memberships m WHERE m.trip_id = t.id AND m.user_id = ?))`)
           .bind(actor, tripId, actor, actor).all<{ user_id: string }>();
-    const users = [...new Set((memberResult.results ?? []).map(member => member.user_id))];
+    const candidates = [...new Set((memberResult.results ?? []).map(member => member.user_id))];
+    if (!candidates.length) return;
+    const preferences = await db().prepare(`SELECT m.user_id,m.member_id,p.scope,p.delivery FROM memberships m LEFT JOIN notification_preferences p ON p.user_id=m.user_id WHERE m.trip_id=? AND m.user_id IN (${candidates.map(() => '?').join(',')})`).bind(tripId,...candidates).all<{user_id:string;member_id:string;scope:string|null;delivery:string|null}>();
+    const allowed = candidates.filter(user => { const preference=preferences.results.find(row=>row.user_id===user); return preference?.scope!=='none' && (preference?.scope!=='involved' || involvedMembers===undefined || involvedMembers.includes(preference.member_id)); });
+    const daily = allowed.filter(user=>preferences.results.find(row=>row.user_id===user)?.delivery==='daily');
+    const users = allowed.filter(user=>!daily.includes(user));
+    if (daily.length) await db().batch(daily.map(user=>db().prepare('INSERT INTO notification_digests(user_id,trip_id,updates,created_at) VALUES(?,?,1,?) ON CONFLICT(user_id,trip_id) DO UPDATE SET updates=notification_digests.updates+1').bind(user,tripId,new Date().toISOString())));
     if (!users.length) return;
     const now = new Date().toISOString();
     const recent = new Date(Date.now() - 30000).toISOString();
@@ -431,7 +437,7 @@ async function deliverNotifications(tripId: string, actor: string, title: string
     ]);
     await db().batch(writes);
     if (!pushConfiguration().enabled) return;
-    const recipients = users.filter(user => !throttled.has(user));
+    const recipients = users.filter(user => !throttled.has(user) && preferences.results.find(row=>row.user_id===user)?.delivery !== 'none');
     if (!recipients.length) return;
     const result = await db().prepare(`SELECT endpoint, user_id, generation, created_at, latest_recency FROM (
       SELECT endpoint, user_id, generation, created_at,
@@ -466,8 +472,8 @@ async function deliverNotifications(tripId: string, actor: string, title: string
 }
 
 /** Notification failures never invalidate an already-saved holiday change. */
-export async function notifyMembers(tripId: string, actor: string, title: string, body: string) {
-  const delivery = deliverNotifications(tripId, actor, title, body);
+export async function notifyMembers(tripId: string, actor: string, title: string, body: string, involvedMembers?: string[]) {
+  const delivery = deliverNotifications(tripId, actor, title, body, undefined, involvedMembers);
   try { waitUntil(delivery); } catch { await delivery; }
 }
 
@@ -481,4 +487,29 @@ export async function notifyReceiptReply(tripId: string, caller: string, authorM
     body: scope === 'item' ? 'ChatGPT or Codex answered your question about a receipt item.' : 'ChatGPT or Codex answered your receipt question.' };
   const delivery = deliverNotifications(tripId, caller, notification.title, notification.body, authorMemberId ?? null);
   try { waitUntil(delivery); } catch { await delivery; }
+}
+
+/** Account-only wakeup after an already committed in-app notification. */
+export async function notifyAccountPush(userId:string) {
+  if(!pushConfiguration().enabled) return;
+  const preference=await db().prepare('SELECT delivery FROM notification_preferences WHERE user_id=?').bind(userId).first<{delivery:string}>();
+  if(preference?.delivery==='none') return;
+  const subscriptions=await db().prepare('SELECT endpoint,user_id,generation,created_at FROM push_subscriptions WHERE user_id=? ORDER BY created_at LIMIT 4').bind(userId).all<Subscription>();
+  await Promise.allSettled(subscriptions.results.map(subscription=>sendPush(subscription)));
+}
+export async function flushNotificationDigests(database:D1Database,now=Date.now()) {
+  const cutoff=new Date(now-86400000).toISOString();
+  const pending=await database.prepare(`SELECT d.user_id,d.trip_id,d.updates,d.created_at,t.data FROM notification_digests d JOIN trips t ON t.id=d.trip_id JOIN memberships m ON m.trip_id=d.trip_id AND m.user_id=d.user_id JOIN notification_preferences p ON p.user_id=d.user_id WHERE d.created_at<=? AND p.scope<>'none' AND p.delivery='daily' ORDER BY d.created_at LIMIT 20`).bind(cutoff).all<{user_id:string;trip_id:string;updates:number;created_at:string;data:string}>();
+  let delivered=0;
+  for(const digest of pending.results) {
+    const id=crypto.randomUUID(),date=new Date(now).toISOString(),tripName=(JSON.parse(digest.data) as {name:string}).name;
+    const body=compactText(`${digest.updates} updates to ${tripName}. Open TripTab to review the activity.`,160);
+    const result=await database.batch([
+      database.prepare(`INSERT INTO notifications(id,user_id,title,body,url,created_at) SELECT ?,?,'TripTab daily summary',?,'/',? WHERE EXISTS(SELECT 1 FROM notification_digests d JOIN memberships m ON m.trip_id=d.trip_id AND m.user_id=d.user_id JOIN notification_preferences p ON p.user_id=d.user_id WHERE d.user_id=? AND d.trip_id=? AND d.updates=? AND d.created_at=? AND p.scope<>'none' AND p.delivery='daily')`).bind(id,digest.user_id,body,date,digest.user_id,digest.trip_id,digest.updates,digest.created_at),
+      database.prepare('DELETE FROM notification_digests WHERE user_id=? AND trip_id=? AND EXISTS(SELECT 1 FROM notifications WHERE id=?)').bind(digest.user_id,digest.trip_id,id),
+      database.prepare('DELETE FROM notifications WHERE user_id=? AND id NOT IN(SELECT id FROM notifications WHERE user_id=? ORDER BY created_at DESC,id DESC LIMIT 100)').bind(digest.user_id,digest.user_id),
+    ]);
+    if(result[0].meta.changes) { delivered++; await notifyAccountPush(digest.user_id).catch(()=>{}); }
+  }
+  return delivered;
 }

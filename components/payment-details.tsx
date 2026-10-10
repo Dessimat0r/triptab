@@ -1,4 +1,6 @@
 "use client";
+import { t as uiText } from "@/lib/ui-language";
+
 
 import { useEffect, useId, useState } from "react";
 import { Check, Copy, ExternalLink } from "lucide-react";
@@ -41,11 +43,11 @@ export function SettlementPayActions({ payee, amount, currency, reference }: {
         aria-label={link.withAmount ? `Pay ${payee.name} ${formatted} with ${link.label} (opens ${link.label})` : `Open ${payee.name}’s ${link.label} page (opens ${link.label}; enter ${formatted})`}>
         {link.label}<ExternalLink size={14} aria-hidden="true" />
       </a>)}
-      <button type="button" className="quiet" onClick={() => void copy((amount / 100).toFixed(2), "Amount")}><Copy size={14} aria-hidden="true" />Copy amount</button>
-      {payee.payTo.bank && <button type="button" className="quiet" onClick={() => void copy(payee.payTo!.bank!, "Bank details")}><Copy size={14} aria-hidden="true" />Copy bank details</button>}
+      <button type="button" className="quiet" onClick={() => void copy((amount / 100).toFixed(2), "Amount")}><Copy size={14} aria-hidden="true" />{uiText("Copy amount")}</button>
+      {payee.payTo.bank && <button type="button" className="quiet" onClick={() => void copy(payee.payTo!.bank!, "Bank details")}><Copy size={14} aria-hidden="true" />{uiText("Copy bank details")}</button>}
     </div>
-    {payee.payTo.bank && <small className="settlement-bank">Bank details: <span>{payee.payTo.bank}</span></small>}
-    {manual.length > 0 && <small className="settlement-pay-note">{manual.join(" and ")} {manual.length === 1 ? "opens" : "open"} {payee.name}’s page; enter {formatted} there.</small>}
+    {payee.payTo.bank && <small className="settlement-bank">{uiText("Bank details: ")}<span>{payee.payTo.bank}</span></small>}
+    {manual.length > 0 && <small className="settlement-pay-note">{manual.join(" and ")} {manual.length === 1 ? "opens" : "open"} {payee.name}{uiText("’s page; enter ")}{formatted}{uiText(" there.")}</small>}
     <small className="settlement-pay-status" role="status">{status}</small>
   </div>;
 }
@@ -101,32 +103,30 @@ function PaymentDetailsRow({ trip, member, index, accountId, busy, onSave }: {
         <small>{hasPaymentDetails(member.payTo)
           ? [...methods.map(method => `${method.label} ${member.payTo![method.key]}`), ...(member.payTo.bank ? ["Bank details"] : [])].join(" · ")
           : "No payment details yet"}</small>
-        {!editable && <small>Only {member.name} can change these.</small>}
+        {!editable && <small>{uiText("Only ")}{member.name}{uiText(" can change these.")}</small>}
       </div>
       {editable && !draft && <button type="button" className="quiet" disabled={locked} aria-label={`${hasPaymentDetails(member.payTo) ? "Edit" : "Add"} payment details for ${member.name}`}
         onClick={() => { setDraft(emptyDraft(member.payTo)); setErrors({}); setError(""); setSaved(false); }}>
         {hasPaymentDetails(member.payTo) ? "Edit" : "Add"}
       </button>}
     </div>
-    {saved && <p className="trip-details-success" role="status"><Check size={15} aria-hidden="true" /> Payment details saved.</p>}
+    {saved && <p className="trip-details-success" role="status"><Check size={15} aria-hidden="true" />{uiText(" Payment details saved.")}</p>}
     {draft && <form className="payment-details-form" onSubmit={event => { event.preventDefault(); if (!locked) void save(); }}>
       <div className="payment-details-fields">
-        {PAYMENT_METHODS.map(method => <label key={method.key} htmlFor={`${id}-${method.key}`}>{method.label} username
-          <input id={`${id}-${method.key}`} value={draft[method.key]} maxLength={80} autoComplete="off" autoCapitalize="none" spellCheck={false}
+        {PAYMENT_METHODS.map(method => <label key={method.key} htmlFor={`${id}-${method.key}`}>{method.label}{uiText(" username")}<input id={`${id}-${method.key}`} value={draft[method.key]} maxLength={80} autoComplete="off" autoCapitalize="none" spellCheck={false}
             placeholder={method.example} disabled={locked} aria-invalid={!!errors[method.key]} aria-describedby={errors[method.key] ? `${id}-${method.key}-error` : undefined}
             onChange={event => { setDraft({ ...draft, [method.key]: event.target.value }); setErrors({ ...errors, [method.key]: undefined }); }} />
           {errors[method.key] && <span id={`${id}-${method.key}-error`} className="trip-details-error">{errors[method.key]}</span>}
         </label>)}
       </div>
-      <label htmlFor={`${id}-bank`}>Bank details (optional)
-        <textarea id={`${id}-bank`} rows={2} value={draft.bank} maxLength={MAX_BANK_DETAILS} disabled={locked} placeholder="Name, IBAN or sort code and account number"
+      <label htmlFor={`${id}-bank`}>{uiText("Bank details (optional)")}<textarea id={`${id}-bank`} rows={2} value={draft.bank} maxLength={MAX_BANK_DETAILS} disabled={locked} placeholder={uiText("Name, IBAN or sort code and account number")}
           aria-invalid={!!errors.bank} onChange={event => { setDraft({ ...draft, bank: event.target.value }); setErrors({ ...errors, bank: undefined }); }} />
         {errors.bank && <span className="trip-details-error">{errors.bank}</span>}
       </label>
       {error && <p className="error" role="alert">{error}</p>}
       <div className="payment-details-actions">
         <button type="submit" className="primary" disabled={locked}>{submitting ? "Saving…" : "Save payment details"}</button>
-        <button type="button" className="quiet" disabled={submitting} onClick={() => { setDraft(null); setErrors({}); setError(""); }}>Cancel</button>
+        <button type="button" className="quiet" disabled={submitting} onClick={() => { setDraft(null); setErrors({}); setError(""); }}>{uiText("Cancel")}</button>
       </div>
     </form>}
   </div>;
@@ -139,8 +139,8 @@ export default function PaymentDetailsPanel({ trip, accountId, busy, paging, onS
 }) {
   const id = useId();
   return <section id="payment-details" className="panel payment-details-panel" aria-labelledby={`${id}-heading`} tabIndex={-1}>
-    <h3 id={`${id}-heading`}>How to pay each traveller</h3>
-    <p className="footnote">Add a PayPal, Monzo, Revolut or Wise username, or bank details, so others can pay you from Settle up. Everyone on this holiday can see them and changes stay in its history. A traveller connected to an account can only be changed by that account.</p>
+    <h3 id={`${id}-heading`}>{uiText("How to pay each traveller")}</h3>
+    <p className="footnote">{uiText("Add a PayPal, Monzo, Revolut or Wise username, or bank details, so others can pay you from Settle up. Everyone on this holiday can see them and changes stay in its history. A traveller connected to an account can only be changed by that account.")}</p>
     <PagedList {...paging} noun="payment details" items={trip.members} itemKey={member => member.id}
       renderItem={(member, index) => <PaymentDetailsRow key={member.id} trip={trip} member={member} index={index} accountId={accountId} busy={busy} onSave={onSave} />} />
   </section>;

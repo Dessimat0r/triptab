@@ -1,4 +1,6 @@
 "use client";
+import { t as uiText } from "@/lib/ui-language";
+
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
 export function useListPaging(scope: string) {
@@ -42,8 +44,8 @@ export default function PagedList<T>({ items, itemKey, renderItem, shown, step, 
   return <div ref={root} className={`paged-list ${className}`} role="group" aria-label={noun} tabIndex={-1}>
     <div className="paged-list-items" role={role}>{items.slice(0, visible).map((item, index) => renderItem(item, index))}</div>
     {visible < items.length && <div className="list-more">
-      <p className="muted">Showing {visible} of {items.length} {noun}</p>
-      <button type="button" className="quiet" onClick={() => { pending.current = { index: visible, id: itemKey(items[visible]) }; onMore(); }}>Show {Math.min(step, items.length - visible)} more</button>
+      <p className="muted">{uiText("Showing ")}{visible}{uiText(" of ")}{items.length} {noun}</p>
+      <button type="button" className="quiet" onClick={() => { pending.current = { index: visible, id: itemKey(items[visible]) }; onMore(); }}>{uiText("Show ")}{Math.min(step, items.length - visible)}{uiText(" more")}</button>
     </div>}
     <span className="sr-only" role="status">{announcement}</span>
   </div>;

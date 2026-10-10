@@ -306,6 +306,8 @@ test('index migration bootstraps populated immutable history without rewriting o
   const rawTrip = database.sqlite.prepare('SELECT data FROM trips WHERE id=?').get('trip')!.data;
   database.sqlite.exec(await readFile(new URL('../drizzle/0008_receipt_activity_scope.sql', import.meta.url), 'utf8'));
   database.sqlite.exec(await readFile(new URL('../drizzle/0009_receipt_link_projections.sql', import.meta.url), 'utf8'));
+  database.sqlite.exec(await readFile(new URL('../drizzle/0012_trip_lifecycle_email_recovery.sql', import.meta.url), 'utf8'));
+  database.sqlite.exec(await readFile(new URL('../drizzle/0013_account_preferences.sql', import.meta.url), 'utf8'));
   assert.deepEqual(database.sqlite.prepare('SELECT * FROM activity_events ORDER BY sequence').all(), before);
   assert.equal(database.sqlite.prepare('SELECT data FROM trips WHERE id=?').get('trip')!.data, rawTrip);
   assert.deepEqual(ids(await page('tripId=trip&draftId=historic-draft&limit=50')), dinnerIds);

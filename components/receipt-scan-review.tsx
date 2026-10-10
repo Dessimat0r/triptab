@@ -1,4 +1,6 @@
 "use client";
+import { t as uiText } from "@/lib/ui-language";
+
 
 import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
 import { focusExpenseTarget } from "@/components/expense-quick-review";
@@ -36,7 +38,7 @@ function PrintedAmount({ label, value, onChange }: { label: string; value?: numb
     });
     return () => { active = false; };
   }, [value]);
-  return <label>{label}<input aria-label={label} inputMode="decimal" placeholder="Not readable yet" value={text} onChange={event => {
+  return <label>{label}<input aria-label={label} inputMode="decimal" placeholder={uiText("Not readable yet")} value={text} onChange={event => {
     const next = event.target.value.replace(",", ".");
     if (!/^\d*(?:\.\d{0,2})?$/.test(next)) return;
     setText(next);
@@ -64,22 +66,22 @@ export default function ReceiptScanReview({ entry, onChange, photo, children }: 
     {photo}
     <div className="receipt-scan-review-body">
       <h4 id={titleId}>{!scan ? "Receipt not processed yet" : scan.status === "matched" ? "Receipt totals match exactly" : "Receipt needs review"}</h4>
-      {!scan && <p>Your photo is stored. Uploading a photo or copying a prompt does not mean its items have been read.</p>}
+      {!scan && <p>{uiText("Your photo is stored. Uploading a photo or copying a prompt does not mean its items have been read.")}</p>}
       <dl className="receipt-scan-totals">
-        <div><dt>Printed receipt total</dt><dd>{scan?.printedTotal === null || scan?.printedTotal === undefined ? "Not verified" : receiptMoney(scan.printedTotal, scan.printedCurrency || entry.currency)}</dd></div>
-        <div><dt>Itemised total</dt><dd>{!entry.items.length ? "Not processed" : calculated === null ? "Incomplete prices" : receiptMoney(calculated, entry.currency)}</dd></div>
-        {scan?.printedSubtotal !== undefined && scan.printedSubtotal !== null && <div><dt>Printed subtotal</dt><dd>{receiptMoney(scan.printedSubtotal, scan.printedCurrency || entry.currency)}</dd></div>}
+        <div><dt>{uiText("Printed receipt total")}</dt><dd>{scan?.printedTotal === null || scan?.printedTotal === undefined ? "Not verified" : receiptMoney(scan.printedTotal, scan.printedCurrency || entry.currency)}</dd></div>
+        <div><dt>{uiText("Itemised total")}</dt><dd>{!entry.items.length ? "Not processed" : calculated === null ? "Incomplete prices" : receiptMoney(calculated, entry.currency)}</dd></div>
+        {scan?.printedSubtotal !== undefined && scan.printedSubtotal !== null && <div><dt>{uiText("Printed subtotal")}</dt><dd>{receiptMoney(scan.printedSubtotal, scan.printedCurrency || entry.currency)}</dd></div>}
       </dl>
       {(!entry.items.length || unknown > 0 || !entry.currency) && <p className="receipt-review-counts">{entry.items.length} {entry.items.length === 1 ? "line" : "lines"}{unknown ? ` · ${unknown} missing ${unknown === 1 ? "price" : "prices"}` : ""}{!entry.currency ? " · currency needs review" : ""}</p>}
       {!!warnings.length && <ul className="receipt-scan-warnings">{warnings.map((warning, index) => <li key={`${warning.code}:${warning.itemId || index}`}>
         <strong>{warning.itemId ? `${name(warning.itemId)}: ` : ""}{warningNames[warning.code] || "Check this receipt detail."}</strong>
-        {"difference" in warning && typeof warning.difference === "number" && <span>Difference: {receiptMoney(warning.difference, entry.currency)}</span>}
-        {warning.observedText && <span>Printed: {warning.observedText}</span>}
+        {"difference" in warning && typeof warning.difference === "number" && <span>{uiText("Difference: ")}{receiptMoney(warning.difference, entry.currency)}</span>}
+        {warning.observedText && <span>{uiText("Printed: ")}{warning.observedText}</span>}
       </li>)}</ul>}
       {children}
-      {scan && <details className="receipt-printed-evidence"><summary>Check or correct printed totals</summary>
-        <p>Enter only amounts you can read on the receipt. These are evidence from the image, separate from the itemised calculation.</p>
-        <label>Printed currency<select aria-label="Printed currency" value={scan.printedCurrency || ""} onChange={event => onChange({ ...entry, receiptScan: { ...scan, printedCurrency: event.target.value || null, fieldSources: { ...scan.fieldSources, printedCurrency: "user" }, acknowledgement: undefined } })}><option value="">Not readable</option>{CURRENCIES.map(currency => <option key={currency.code} value={currency.code}>{currency.code} · {currency.name}</option>)}</select></label>
+      {scan && <details className="receipt-printed-evidence"><summary>{uiText("Check or correct printed totals")}</summary>
+        <p>{uiText("Enter only amounts you can read on the receipt. These are evidence from the image, separate from the itemised calculation.")}</p>
+        <label>{uiText("Printed currency")}<select aria-label={uiText("Printed currency")} value={scan.printedCurrency || ""} onChange={event => onChange({ ...entry, receiptScan: { ...scan, printedCurrency: event.target.value || null, fieldSources: { ...scan.fieldSources, printedCurrency: "user" }, acknowledgement: undefined } })}><option value="">{uiText("Not readable")}</option>{CURRENCIES.map(currency => <option key={currency.code} value={currency.code}>{currency.code} · {currency.name}</option>)}</select></label>
         <div className="fieldpair">{(["printedSubtotal", "printedTotal"] as const).map(field => <PrintedAmount key={field} label={field === "printedTotal" ? "Printed grand total" : "Printed subtotal (optional)"} value={scan[field]} onChange={value => {
           onChange({ ...entry, receiptScan: { ...scan, [field]: value, fieldSources: { ...scan.fieldSources, [field]: "user" }, acknowledgement: undefined } });
         }} />)}</div>
@@ -107,14 +109,14 @@ export function ReceiptReviewSummary({ entry, fxWarning }: { entry: ReceiptEdito
     return [{ key: `${warning.code}:${index}`, message: `${message}${names ? `: ${names}` : ''}`, ids, observedText: warning.observedText, lineIndex: warning.lineIndex }];
   });
   if (!points.length && !fxWarning) return null;
-  return <section className="receipt-review-summary" aria-label="Confirm when saving">
-    <h4>Confirm when saving</h4>
-    <p>Check these details against the receipt. Confirm &amp; save expense accepts the itemised amount and these points.</p>
+  return <section className="receipt-review-summary" aria-label={uiText("Confirm when saving")}>
+    <h4>{uiText("Confirm when saving")}</h4>
+    <p>{uiText("Check these details against the receipt. Confirm & save expense accepts the itemised amount and these points.")}</p>
     <ul>{points.map(point => <li key={point.key}>
       <span>{point.message}</span>
-      {point.observedText && <small>Printed: {point.observedText}</small>}
-      {point.ids.map(id => <button key={id} type="button" className="quiet" onClick={() => focusExpenseTarget(`expense-item-${id}`, "input[required]")}>Check {entry.items.find(item => item.id === id)?.name || 'item'}</button>)}
-      {point.lineIndex !== undefined && <small>Receipt line {point.lineIndex + 1}</small>}
-    </li>)}{fxWarning && <li><span>{fxWarning}</span><button type="button" className="quiet" onClick={() => focusExpenseTarget("expense-fx-panel", "input[type=number]")}>Check rate</button></li>}</ul>
+      {point.observedText && <small>{uiText("Printed: ")}{point.observedText}</small>}
+      {point.ids.map(id => <button key={id} type="button" className="quiet" onClick={() => focusExpenseTarget(`expense-item-${id}`, "input[required]")}>{uiText("Check ")}{entry.items.find(item => item.id === id)?.name || 'item'}</button>)}
+      {point.lineIndex !== undefined && <small>{uiText("Receipt line ")}{point.lineIndex + 1}</small>}
+    </li>)}{fxWarning && <li><span>{fxWarning}</span><button type="button" className="quiet" onClick={() => focusExpenseTarget("expense-fx-panel", "input[type=number]")}>{uiText("Check rate")}</button></li>}</ul>
   </section>;
 }

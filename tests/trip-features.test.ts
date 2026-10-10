@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  balances, CURRENCIES, CURRENT_CALCULATION_RULE, defaultParticipants, expenseShares, memberPresent,
+  balances, CURRENCIES, CURRENT_CALCULATION_RULE, defaultParticipants, expenseShares, expenseTotal, memberPresent,
   REFERENCE_RATE_CURRENCIES, remainderOffset, shares, stampCalculationRules, tripMemberWeights, validateLedger,
 } from '../lib/model';
 import type { Expense, Trip } from '../lib/model';
@@ -153,4 +153,13 @@ test('repeating an expense copies its split onto later days without receipt evid
   assert.equal(new Set(copies.map(copy => copy.id)).size, 3);
   assert.doesNotThrow(() => validateLedger({ trips: [trip({ expenses: [source, ...copies].map(entry => ({ ...entry, receiptId: undefined })) })] }));
   assert.throws(() => repeatExpense(source, 0, () => 'x'));
+});
+
+test('new yen and króna receipts allocate whole native units while old saved rules keep their balances',()=>{
+  for(const currency of ['JPY','ISK','KRW','VND','CLP'] as const){
+    const current=expense({currency,items:[{id:'x',name:'X',amount:100100,members:['a','b']}],adjustmentAllocation:'native-minor-units'});
+    const split=expenseShares(current,members,currency);assert.equal(split.reduce((a,b)=>a+b,0),100100);assert.ok(split.every(value=>value%100===0));
+    assert.deepEqual(expenseShares({...current,adjustmentAllocation:'receipt-total'},members,currency),[50050,50050,0]);
+    assert.throws(()=>expenseTotal({...current,items:[{...current.items[0],amount:100101}]},currency),/whole currency/);
+  }
 });

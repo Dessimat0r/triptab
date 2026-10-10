@@ -1,4 +1,6 @@
 "use client";
+import { t as uiText } from "@/lib/ui-language";
+
 import { formatInstant, formatInstantDay, formatClockTime } from "@/lib/dates";
 import { languageName } from "@/lib/receipt-languages";
 
@@ -389,8 +391,8 @@ function changes(event: ActivityEvent, currency: Currency | undefined, names: Re
 
 export function ActivityChanges({ fields, before, after }: { fields: AuditChange[]; before: boolean; after: boolean }) {
   return fields.length ? <dl className="activity-changes">{fields.map((field, index) => <div key={`${field.label}-${index}`}>
-    <dt>{field.label}</dt><dd>{before && <span className="activity-before"><span className="muted">Before: </span>{field.before}</span>}{after && <span className="activity-after"><span className="muted">After: </span>{field.after}</span>}</dd>
-  </div>)}</dl> : <p className="footnote">No additional recorded field changes.</p>;
+    <dt>{field.label}</dt><dd>{before && <span className="activity-before"><span className="muted">{uiText("Before: ")}</span>{field.before}</span>}{after && <span className="activity-after"><span className="muted">{uiText("After: ")}</span>{field.after}</span>}</dd>
+  </div>)}</dl> : <p className="footnote">{uiText("No additional recorded field changes.")}</p>;
 }
 
 function eventLabel(event: ActivityEvent, currency?: Currency): string {
@@ -413,19 +415,19 @@ function ActivityDetailBody({ event, currency, memberNames, actorMemberNames }: 
   const snapshot = event.after || event.before || {};
   return <>
     <dl className="activity-identifiers">
-      <div><dt>Recorded at</dt><dd><time dateTime={event.createdAt}>{auditTimestamp(event.createdAt, true)}</time></dd></div>
-      <div><dt>Changed by</dt><dd>{actor}{tripName ? ` · current traveller name: ${tripName}` : ""}<br />{event.source === "system" ? "System reference" : "Account"} {event.actorId}</dd></div>
-      <div><dt>Record</dt><dd>{eventLabel(event, currency)} · {event.entityId}</dd></div>
-      <div><dt>Change reference</dt><dd>{event.id} · holiday revision {event.revision}</dd></div>
-      {event.entityType === "invite" && <div><dt>Invitation for</dt><dd>{auditText(snapshot.memberName) || memberNames[auditText(snapshot.memberId)] || "Earlier traveller"} · traveller {auditText(snapshot.memberId)}</dd></div>}
+      <div><dt>{uiText("Recorded at")}</dt><dd><time dateTime={event.createdAt}>{auditTimestamp(event.createdAt, true)}</time></dd></div>
+      <div><dt>{uiText("Changed by")}</dt><dd>{actor}{tripName ? ` · current traveller name: ${tripName}` : ""}<br />{event.source === "system" ? "System reference" : "Account"} {event.actorId}</dd></div>
+      <div><dt>{uiText("Record")}</dt><dd>{eventLabel(event, currency)} · {event.entityId}</dd></div>
+      <div><dt>{uiText("Change reference")}</dt><dd>{event.id}{uiText(" · holiday revision ")}{event.revision}</dd></div>
+      {event.entityType === "invite" && <div><dt>{uiText("Invitation for")}</dt><dd>{auditText(snapshot.memberName) || memberNames[auditText(snapshot.memberId)] || "Earlier traveller"}{uiText(" · traveller ")}{auditText(snapshot.memberId)}</dd></div>}
       {event.entityType === "receipt" && <>
-        {!!snapshot.uploaderId && <div><dt>Image uploaded by</dt><dd>{accountReference(snapshot.uploaderId, actorMemberNames)}</dd></div>}
-        {!!snapshot.initiatorId && <div><dt>Cleanup initiated by</dt><dd>{auditText(snapshot.initiatorName) || accountReference(snapshot.initiatorId, actorMemberNames)} · account {auditText(snapshot.initiatorId)}</dd></div>}
-        {!!snapshot.sha256 && <div><dt>Image checksum (SHA-256)</dt><dd>{auditText(snapshot.sha256)}</dd></div>}
+        {!!snapshot.uploaderId && <div><dt>{uiText("Image uploaded by")}</dt><dd>{accountReference(snapshot.uploaderId, actorMemberNames)}</dd></div>}
+        {!!snapshot.initiatorId && <div><dt>{uiText("Cleanup initiated by")}</dt><dd>{auditText(snapshot.initiatorName) || accountReference(snapshot.initiatorId, actorMemberNames)}{uiText(" · account ")}{auditText(snapshot.initiatorId)}</dd></div>}
+        {!!snapshot.sha256 && <div><dt>{uiText("Image checksum (SHA-256)")}</dt><dd>{auditText(snapshot.sha256)}</dd></div>}
       </>}
     </dl>
-    <p className="footnote">Traveller references use current holiday names with stable IDs. Message authors retain their recorded names.</p>
-    {event.snapshotOmitted ? <p className="footnote">The full before and after details are too large for this history page. They remain saved. <a href={event.snapshotDownload} download>Download full shared history entry</a> to inspect the original snapshots, including shared traveller contacts.</p>
+    <p className="footnote">{uiText("Traveller references use current holiday names with stable IDs. Message authors retain their recorded names.")}</p>
+    {event.snapshotOmitted ? <p className="footnote">{uiText("The full before and after details are too large for this history page. They remain saved. ")}<a href={event.snapshotDownload} download>{uiText("Download full shared history entry")}</a>{uiText(" to inspect the original snapshots, including shared traveller contacts.")}</p>
       : <ActivityChanges fields={fields} before={!!event.before} after={!!event.after} />}
   </>;
 }
@@ -435,7 +437,7 @@ function ActivityEventDetails(props: ActivityDetailProps) {
   // Closed rows need only their summary. Keep the body mounted after its first
   // expansion so closing and refreshing preserve the reader's details.
   return <details onToggle={event => { if (event.currentTarget.open) setVisited(true); }}>
-    <summary>View {props.event.action === "update" ? "changes" : "details"}</summary>
+    <summary>{uiText("View ")}{props.event.action === "update" ? "changes" : "details"}</summary>
     {visited && <ActivityDetailBody {...props} />}
   </details>;
 }
@@ -453,11 +455,11 @@ export default function ActivityPanel({ tripId, accountId, expenseId, draftId, t
   const grouped = !scope;
   const days = useMemo(() => grouped ? history.events.map(event => formatInstantDay(event.createdAt)) : null, [grouped, history.events]);
   return <section className={`activity-panel${scope ? " receipt-activity" : ""}`} aria-label={scope ? heading : "Holiday activity"} aria-busy={history.loading}>
-    {scope ? <h2 className="subheading">{heading}</h2> : <div className="sectionheading"><h2>{heading}</h2><span className="muted">Updates automatically</span></div>}
+    {scope ? <h2 className="subheading">{heading}</h2> : <div className="sectionheading"><h2>{heading}</h2><span className="muted">{uiText("Updates automatically")}</span></div>}
     {help && <p className="footnote">{help}</p>}
-    {history.error ? <button type="button" className="quiet" disabled={history.loading} onClick={history.retry}>{scope ? "Retry receipt history" : "Retry activity"}</button> : scope && <p className="footnote">History updates automatically.</p>}
-    {history.loading && !history.events.length && <p role="status">Loading activity…</p>}
-    {history.loading && !!history.events.length && <p role="status">Checking for changes…</p>}
+    {history.error ? <button type="button" className="quiet" disabled={history.loading} onClick={history.retry}>{scope ? "Retry receipt history" : "Retry activity"}</button> : scope && <p className="footnote">{uiText("History updates automatically.")}</p>}
+    {history.loading && !history.events.length && <p role="status">{uiText("Loading activity…")}</p>}
+    {history.loading && !!history.events.length && <p role="status">{uiText("Checking for changes…")}</p>}
     {history.error && <p className="error" role="alert">{history.error}</p>}
     {!history.loading && !history.error && !history.events.length && <p className="footnote">{emptyText ?? (scope ? "No recorded changes for this receipt yet." : "No recorded changes yet. Activity starts when this version of TripTab saves a change.")}</p>}
     <ol className={"activity-list" + (scope ? "" : " panel")}>{history.events.map((event, index) => {
@@ -467,7 +469,7 @@ export default function ActivityPanel({ tripId, accountId, expenseId, draftId, t
         <p><strong>{actor}{tripName && tripName !== actor ? ` (${tripName})` : ""}</strong> {({ create: "created", update: "updated", delete: "removed" }[event.action]) || "changed"} <strong>{eventLabel(event, currency)}</strong></p>
         <p className="footnote"><time dateTime={event.createdAt}>{scope ? auditTimestamp(event.createdAt) : formatClockTime(event.createdAt)}</time> · {auditSource(event.source)}</p>
         <ActivityEventDetails event={event} currency={currency} memberNames={memberNames} actorMemberNames={actorMemberNames} />
-        {onRestore && event.action === "delete" && event.before && ["expense", "payment"].includes(event.entityType) && <button type="button" className="quiet" disabled={busy} onClick={() => onRestore(event)}>Review {event.entityType} to restore</button>}
+        {onRestore && event.action === "delete" && event.before && ["expense", "payment"].includes(event.entityType) && <button type="button" className="quiet" disabled={busy} onClick={() => onRestore(event)}>{uiText("Review ")}{event.entityType}{uiText(" to restore")}</button>}
       </li>;
     })}</ol>
     {history.nextCursor !== null && <button type="button" className="quiet phone-wide" disabled={history.loading} onClick={history.loadOlder}>{history.loading ? "Loading…" : "Load older changes"}</button>}

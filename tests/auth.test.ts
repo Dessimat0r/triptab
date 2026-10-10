@@ -10,6 +10,7 @@ import {
   authFailure,
 } from '../lib/auth';
 import { readAccountActivity } from '../lib/audit';
+import * as emailModule from '../lib/email';
 import * as authModule from '../lib/auth';
 
 class SQLiteStatement {
@@ -75,6 +76,8 @@ async function logoutRoute(database: SQLiteD1, revokePush = async () => {}) {
   }).outputText;
   const loaded = { exports: {} as { POST(request: Request): Promise<Response> } };
   new Function('require', 'module', 'exports', compiled)((name: string) => {
+    if (name === '@/lib/email') return emailModule;
+    if (name === 'cloudflare:workers') return {env:{}};
     if (name === '@/lib/auth') return authModule;
     if (name === '@/lib/store') return { db: () => database.asD1(), RequestError: class extends Error {}, readBoundedBody: async (request: Request) => new Uint8Array(await request.arrayBuffer()) };
     if (name === '@/lib/notifications') return { revokeBrowserPush: revokePush, browserPushCookie: async () => 'tt_push=; Path=/; Max-Age=0' };
@@ -476,6 +479,7 @@ test('HTTP auth endpoint enforces same origin, JSON, body bounds and private res
   const source = await readFile(new URL('../app/api/auth/route.ts', import.meta.url), 'utf8');
   const notificationsURL = 'data:text/javascript;base64,' + Buffer.from("export const browserPushCookie=async()=> 'tt_push=; Path=/; HttpOnly; Max-Age=0'; export const revokeBrowserPush=async()=>{};").toString('base64');
   const compiled = transpileWithSharedImports(source, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
+    .replace("'cloudflare:workers'", JSON.stringify('data:text/javascript,export const env={}'))
     .replace("'@/lib/auth'", JSON.stringify(new URL('../lib/auth.ts', import.meta.url).href))
     .replace("'@/lib/notifications'", JSON.stringify(notificationsURL))
     .replace("'@/lib/store'", JSON.stringify(storeURL));

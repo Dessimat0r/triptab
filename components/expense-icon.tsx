@@ -1,4 +1,6 @@
 "use client";
+import { t as uiText } from "@/lib/ui-language";
+
 
 import { useId, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
@@ -80,37 +82,37 @@ export default function ExpenseIconPicker({ entry, onChange, disabled }: {
     </button>
     {open && createPortal(<ModalA11y className="overlay icon-picker-overlay" onClose={close}>
       <section className="modal icon-picker" role="dialog" aria-modal="true" aria-labelledby={`${id}-title`}>
-        <div className="modalheading"><h2 id={`${id}-title`}>Choose an icon</h2>
-          <button type="button" className="iconbutton" aria-label="Close icon picker" disabled={pending} onClick={close}><X /></button>
+        <div className="modalheading"><h2 id={`${id}-title`}>{uiText("Choose an icon")}</h2>
+          <button type="button" className="iconbutton" aria-label={uiText("Close icon picker")} disabled={pending} onClick={close}><X /></button>
         </div>
         <div className="icon-picker-preview"><ExpenseIconBadge entry={{ icon: shown }} size={30} />
           <div><b>{iconLabel(shown)}</b><small>{automatic ? receiptSuggestion ? "Suggested from the receipt reading" : "Suggested from this receipt" : "Your choice"}</small></div>
           <button type="button" className="quiet" aria-pressed={automatic} disabled={pending || disabled}
-            onClick={() => { setAutomatic(true); setChoice(suggested); }}>Automatic{automatic && <Check size={16} aria-hidden="true" />}</button>
+            onClick={() => { setAutomatic(true); setChoice(suggested); }}>{uiText("Automatic")}{automatic && <Check size={16} aria-hidden="true" />}</button>
         </div>
-        <p className="footnote">Automatic follows the expense name and receipt items. Your choice stays until you change it.</p>
+        <p className="footnote">{uiText("Automatic follows the expense name and receipt items. Your choice stays until you change it.")}</p>
         <fieldset className="icon-picker-controls" disabled={pending || disabled}>
-          <legend>Background colour</legend>
+          <legend>{uiText("Background colour")}</legend>
           <div className="icon-backgrounds">{ICON_BACKGROUNDS.map(([background, label, color]) => <button type="button" key={background}
             className="icon-color" style={{ backgroundColor: color }} aria-label={`${label} background`} aria-pressed={shown.background === background}
             onClick={() => { setChoice({ ...shown, background }); setAutomatic(false); }}>
             {shown.background === background && <Check size={22} aria-hidden="true" />}
           </button>)}</div>
-          <div className="icon-picker-filters"><label>Search symbols<input value={search} maxLength={100} placeholder="Coffee, taxi, beach…" data-autofocus
+          <div className="icon-picker-filters"><label>{uiText("Search symbols")}<input value={search} maxLength={100} placeholder={uiText("Coffee, taxi, beach…")} data-autofocus
             onChange={event => setSearch(event.target.value)} /></label>
-            <label>Category<select value={group} onChange={event => setGroup(event.target.value)}><option>All</option>{GROUPS.map(group => <option key={group}>{group}</option>)}</select></label>
+            <label>{uiText("Category")}<select value={group} onChange={event => setGroup(event.target.value)}><option>{uiText("All")}</option>{GROUPS.map(group => <option key={group}>{group}</option>)}</select></label>
           </div>
-          <div className="icon-symbol-grid" aria-label="Symbols">{visible.map(([symbol, label]) => {
+          <div className="icon-symbol-grid" aria-label={uiText("Symbols")}>{visible.map(([symbol, label]) => {
             const Symbol = SYMBOLS[symbol];
             return <button type="button" key={symbol} className="icon-symbol-option" aria-label={label} aria-pressed={shown.symbol === symbol}
               onClick={() => { setChoice({ ...shown, symbol }); setAutomatic(false); }}>
               <Symbol size={25} aria-hidden="true" /><span>{label}</span>
             </button>;
           })}</div>
-          {!visible.length && <p className="footnote" role="status">No matching symbols. Try another word or choose All categories.</p>}
+          {!visible.length && <p className="footnote" role="status">{uiText("No matching symbols. Try another word or choose All categories.")}</p>}
         </fieldset>
         {error && <p className="error" role="alert">{error}</p>}
-        <div className="icon-picker-actions"><button type="button" className="quiet" onClick={close} disabled={pending}>Cancel</button>
+        <div className="icon-picker-actions"><button type="button" className="quiet" onClick={close} disabled={pending}>{uiText("Cancel")}</button>
           <button type="button" className="primary" onClick={() => void apply()} disabled={pending || disabled}>{pending ? "Saving…" : "Use icon"}</button>
         </div>
       </section>

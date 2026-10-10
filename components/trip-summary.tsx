@@ -1,6 +1,8 @@
 "use client";
+import { t as uiText } from "@/lib/ui-language";
 
-import { useId, useState } from "react";
+
+import { useId, useMemo, useState } from "react";
 import { Printer, Share2, X } from "lucide-react";
 import ModalA11y from "./modal-accessibility";
 import { formatCalendarDate, localDate } from "@/lib/dates";
@@ -31,15 +33,15 @@ export function tripSummaryText(trip: Trip, today = localDate()): string {
 }
 
 export function BudgetCard({ trip, today = localDate() }: { trip: Trip; today?: string }) {
-  const summary = spendingSummary(trip, today);
+  const summary = useMemo(() => spendingSummary(trip, today), [trip, today]);
   if (!trip.budget && !summary.total) return null;
   const money = (value: number) => formatMoney(value, trip.currency);
   const budget = summary.budget;
   const over = !!budget && budget.remaining < 0;
-  return <div className="panel budget-card" aria-label="Group spending">
+  return <div className="panel budget-card" aria-label={uiText("Group spending")}>
     <div className="budget-figures">
-      <div><span className="muted">Spent so far</span><strong>{money(summary.total)}</strong></div>
-      {summary.days > 0 && <div><span className="muted">Per day</span><strong>{money(summary.dailyAverage)}</strong></div>}
+      <div><span className="muted">{uiText("Spent so far")}</span><strong>{money(summary.total)}</strong></div>
+      {summary.days > 0 && <div><span className="muted">{uiText("Per day")}</span><strong>{money(summary.dailyAverage)}</strong></div>}
       {budget && <div><span className="muted">{over ? "Over budget" : "Left"}</span><strong className={over ? "negative" : "positive"}>{money(Math.abs(budget.remaining))}</strong></div>}
     </div>
     {budget && <>
@@ -47,11 +49,11 @@ export function BudgetCard({ trip, today = localDate() }: { trip: Trip; today?: 
         aria-label={`${budget.usedPercent}% of the ${money(budget.amount)} budget used`}>
         <span style={{ width: `${Math.min(100, budget.usedPercent)}%` }} className={over ? "over" : budget.usedPercent > 85 ? "near" : ""} />
       </div>
-      <p className="footnote">{budget.usedPercent}% of {money(budget.amount)}
+      <p className="footnote">{budget.usedPercent}{uiText("% of ")}{money(budget.amount)}
         {budget.perDayLeft !== undefined && budget.daysLeft ? ` · ${money(budget.perDayLeft)} a day for the ${budget.daysLeft} ${budget.daysLeft === 1 ? "day" : "days"} left` : ""}
         {budget.projected !== undefined ? ` · On track for ${money(budget.projected)}` : ""}</p>
     </>}
-    {summary.unavailable > 0 && <p className="footnote">{summary.unavailable} {summary.unavailable === 1 ? "expense needs" : "expenses need"} review and {summary.unavailable === 1 ? "is" : "are"} not counted.</p>}
+    {summary.unavailable > 0 && <p className="footnote">{summary.unavailable} {summary.unavailable === 1 ? "expense needs" : "expenses need"}{uiText(" review and ")}{summary.unavailable === 1 ? "is" : "are"}{uiText(" not counted.")}</p>}
   </div>;
 }
 
@@ -78,54 +80,54 @@ export default function TripSummary({ trip, onClose }: { trip: Trip; onClose: ()
     <section className="modal trip-summary" role="dialog" aria-modal="true" aria-labelledby={`${id}-title`}>
       <div className="modalheading">
         <div>
-          <span className="eyebrow">END-OF-TRIP SUMMARY</span>
+          <span className="eyebrow">{uiText("END-OF-TRIP SUMMARY")}</span>
           <h2 id={`${id}-title`}>{trip.name}</h2>
-          <p className="footnote">{trip.startDate && trip.endDate ? `${formatCalendarDate(trip.startDate)} – ${formatCalendarDate(trip.endDate)} · ` : ""}{trip.members.length} travellers · Amounts in {trip.currency}</p>
+          <p className="footnote">{trip.startDate && trip.endDate ? `${formatCalendarDate(trip.startDate)} – ${formatCalendarDate(trip.endDate)} · ` : ""}{trip.members.length}{uiText(" travellers · Amounts in ")}{trip.currency}</p>
         </div>
-        <button type="button" className="iconbutton no-print" aria-label="Close summary" onClick={onClose}><X aria-hidden="true" /></button>
+        <button type="button" className="iconbutton no-print" aria-label={uiText("Close summary")} onClick={onClose}><X aria-hidden="true" /></button>
       </div>
       {!summary.ok ? <p className="error" role="alert">{summary.message}</p> : <>
         <dl className="trip-summary-totals">
-          <div><dt>Total spent</dt><dd>{money(summary.spending.total)}</dd></div>
-          <div><dt>Expenses</dt><dd>{trip.expenses.length}</dd></div>
-          {summary.spending.days > 0 && <div><dt>Per day</dt><dd>{money(summary.spending.dailyAverage)}</dd></div>}
-          {summary.spending.budget && <div><dt>Budget used</dt><dd>{summary.spending.budget.usedPercent}%</dd></div>}
+          <div><dt>{uiText("Total spent")}</dt><dd>{money(summary.spending.total)}</dd></div>
+          <div><dt>{uiText("Expenses")}</dt><dd>{trip.expenses.length}</dd></div>
+          {summary.spending.days > 0 && <div><dt>{uiText("Per day")}</dt><dd>{money(summary.spending.dailyAverage)}</dd></div>}
+          {summary.spending.budget && <div><dt>{uiText("Budget used")}</dt><dd>{summary.spending.budget.usedPercent}%</dd></div>}
         </dl>
         <section aria-labelledby={`${id}-people`}>
-          <h3 id={`${id}-people`}>Each person</h3>
+          <h3 id={`${id}-people`}>{uiText("Each person")}</h3>
           <table className="trip-summary-table">
-            <thead><tr><th scope="col">Traveller</th><th scope="col">Share</th><th scope="col">Paid</th><th scope="col">Balance</th></tr></thead>
+            <thead><tr><th scope="col">{uiText("Traveller")}</th><th scope="col">{uiText("Share")}</th><th scope="col">{uiText("Paid")}</th><th scope="col">{uiText("Balance")}</th></tr></thead>
             <tbody>{summary.travellers.map(person => <tr key={person.id}>
               <th scope="row">{person.name}</th><td>{money(person.share)}</td><td>{money(person.paid)}</td>
               <td className={person.net > 0 ? "positive" : person.net < 0 ? "negative" : "muted"}>{person.net > 0 ? "+" : person.net < 0 ? "−" : ""}{money(Math.abs(person.net))}</td>
             </tr>)}</tbody>
           </table>
-          <p className="footnote">Balance = paid − share + payments sent − payments received.</p>
+          <p className="footnote">{uiText("Balance = paid − share + payments sent − payments received.")}</p>
         </section>
         <section aria-labelledby={`${id}-transfers`}>
-          <h3 id={`${id}-transfers`}>Final transfers</h3>
+          <h3 id={`${id}-transfers`}>{uiText("Final transfers")}</h3>
           {summary.transfers.length ? <ul className="trip-summary-transfers">{summary.transfers.map(transfer => <li key={`${transfer.from}:${transfer.to}`}>
-            <span><strong>{name(transfer.from)}</strong> pays {name(transfer.to)}</span><b>{money(transfer.amount)}</b>
-          </li>)}</ul> : <p>Everyone is settled up.</p>}
+            <span><strong>{name(transfer.from)}</strong>{uiText(" pays ")}{name(transfer.to)}</span><b>{money(transfer.amount)}</b>
+          </li>)}</ul> : <p>{uiText("Everyone is settled up.")}</p>}
         </section>
         {summary.spending.byGroup.length > 0 && <section aria-labelledby={`${id}-groups`}>
-          <h3 id={`${id}-groups`}>Where the money went</h3>
+          <h3 id={`${id}-groups`}>{uiText("Where the money went")}</h3>
           <ul className="trip-summary-bars">{summary.spending.byGroup.map(group => <li key={group.group}>
             <span>{group.group}</span>
             <span className="trip-summary-bar" aria-hidden="true"><span style={{ width: `${group.amount / largestGroup * 100}%` }} /></span>
             <b>{money(group.amount)}</b>
           </li>)}</ul>
-          <p className="footnote">Grouped by each expense’s icon.</p>
+          <p className="footnote">{uiText("Grouped by each expense’s icon.")}</p>
         </section>}
         {summary.spending.byDay.length > 1 && <section aria-labelledby={`${id}-days`}>
-          <h3 id={`${id}-days`}>By day</h3>
+          <h3 id={`${id}-days`}>{uiText("By day")}</h3>
           <ul className="trip-summary-days">{summary.spending.byDay.map(day => <li key={day.date}><span>{formatCalendarDate(day.date)}</span><b>{money(day.amount)}</b></li>)}</ul>
         </section>}
       </>}
       {shareStatus && <p className="footnote" role="status">{shareStatus}</p>}
       <div className="trip-summary-actions no-print">
-        <button type="button" className="quiet" onClick={() => window.print()}><Printer size={16} aria-hidden="true" /> Print or save as PDF</button>
-        <button type="button" className="primary" disabled={!summary.ok} onClick={() => void share()}><Share2 size={16} aria-hidden="true" /> Share summary</button>
+        <button type="button" className="quiet" onClick={() => window.print()}><Printer size={16} aria-hidden="true" />{uiText(" Print or save as PDF")}</button>
+        <button type="button" className="primary" disabled={!summary.ok} onClick={() => void share()}><Share2 size={16} aria-hidden="true" />{uiText(" Share summary")}</button>
       </div>
     </section>
   </ModalA11y>;

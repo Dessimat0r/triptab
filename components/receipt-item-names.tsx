@@ -1,4 +1,6 @@
 "use client";
+import { t as uiText } from "@/lib/ui-language";
+
 import { useLayoutEffect,useRef,useState } from 'react';
 import { RefreshCw,Undo2 } from 'lucide-react';
 import { canonicalJson } from '@/lib/data-utils';
@@ -63,7 +65,7 @@ export default function ReceiptItemNames(props:Props){
     const fieldId=`item-name-${displayKey}-${target}`;
     return <div key={target} className={`item-name-row ${version===target?'item-name-row--preferred':'item-name-row--alternate'}`}>
       <div className="item-name-field">
-        <label className="item-name-caption" htmlFor={fieldId}>{manual?'Item name':sameLanguage?languageName(language):translated?languageName(language):`Receipt · ${originalLanguage?languageName(originalLanguage):'original'}`}{!sameLanguage&&stale&&<span className="translation-stale"> · refresh suggested</span>}</label>
+        <label className="item-name-caption" htmlFor={fieldId}>{manual?'Item name':sameLanguage?languageName(language):translated?languageName(language):`Receipt · ${originalLanguage?languageName(originalLanguage):'original'}`}{!sameLanguage&&stale&&<span className="translation-stale">{uiText(" · refresh suggested")}</span>}</label>
         <input id={fieldId} aria-label={`Item ${index+1} ${translated?languageName(language)+' name':'name'}`} lang={translated?language:originalLanguage} dir="auto"
           placeholder={translated?`${languageName(language)} item name`:'Item name'} value={value} required={!translated} maxLength={200}
           onChange={event=>{setError('');setUndo(null);const text=event.target.value;onUpdate(current=>translated?editReadingName(current,language,text):{...current,name:text,fieldSources:{...current.fieldSources,name:'user'}});}} />
@@ -71,24 +73,24 @@ export default function ReceiptItemNames(props:Props){
       {showTranslationAction&&<button type="button" className="iconbutton translation-refresh" aria-label={`${!value.trim()?'Translate':'Refresh'} item ${index+1} ${translated?languageName(language)+' name':'receipt name'}`} title={translated?`Translate receipt name into ${languageName(language)}`:originalLanguage?`Translate ${languageName(language)} name into ${languageName(originalLanguage)}`:'Choose a receipt language to translate back'}
         disabled={!settings.ready||pending!==null||!(translated?item.name.trim():reading?.text.trim())||(!translated&&!originalLanguage)} onClick={()=>void refresh(target)}>
         <RefreshCw size={15} className={pending===target?'translation-spinner':undefined} aria-hidden="true" />
-        {!value.trim()&&<span aria-hidden="true">Translate</span>}
+        {!value.trim()&&<span aria-hidden="true">{uiText("Translate")}</span>}
       </button>}
     </div>;
   }
   if(sameLanguage)return <div className="item-bilingual-names item-bilingual-names--single">
     {row('receipt',false)}
-    {pending&&<span className="footnote" role="status">Translating…</span>}{error&&<p className="error" role="alert">{error}</p>}
+    {pending&&<span className="footnote" role="status">{uiText("Translating…")}</span>}{error&&<p className="error" role="alert">{error}</p>}
   </div>;
   return <div className="item-bilingual-names">
     {row(version)}{row(version==='reading'?'receipt':'reading')}
     <div className="item-language-actions">
-      <label className="sr-only" htmlFor={`item-language-${displayKey}`}>Show first for item {index+1}</label>
+      <label className="sr-only" htmlFor={`item-language-${displayKey}`}>{uiText("Show first for item ")}{index+1}</label>
       <select id={`item-language-${displayKey}`} aria-label={`Show first for item ${index+1}`} value={settings.preferences.itemVersions[displayKey]??'default'} disabled={!settings.ready||settings.busy} onChange={event=>void settings.save({itemKey:displayKey,itemVersion:event.target.value==='default'?null:event.target.value as DisplayVersion})}>
-        <option value="default">Holiday display default</option><option value="reading">{languageName(language)} first</option><option value="receipt">Receipt original first</option>
+        <option value="default">{uiText("Holiday display default")}</option><option value="reading">{languageName(language)}{uiText(" first")}</option><option value="receipt">{uiText("Receipt original first")}</option>
       </select>
-      {undo&&<button type="button" className="quiet translation-undo" onClick={()=>{const saved=undo;onUpdate(current=>itemNameSnapshot(current,saved.language)===saved.after?restoredNames(current,saved.before,saved.language):current);setUndo(null);}}><Undo2 size={13} aria-hidden="true" /> Undo</button>}
+      {undo&&<button type="button" className="quiet translation-undo" onClick={()=>{const saved=undo;onUpdate(current=>itemNameSnapshot(current,saved.language)===saved.after?restoredNames(current,saved.before,saved.language):current);setUndo(null);}}><Undo2 size={13} aria-hidden="true" />{uiText(" Undo")}</button>}
     </div>
-    {pending&&<span className="footnote" role="status">Translating…</span>}{error&&<p className="error" role="alert">{error}</p>}
+    {pending&&<span className="footnote" role="status">{uiText("Translating…")}</span>}{error&&<p className="error" role="alert">{error}</p>}
   </div>;
 }
 export function TranslateMissingNames({accountId,trip,receipt,settings,onUpdate}:{accountId:string;trip:Trip;receipt:ReceiptEditor;settings:LanguagePreferencesController;onUpdate:(id:string,change:(item:DraftItem)=>DraftItem)=>void}){

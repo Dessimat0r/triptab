@@ -343,7 +343,11 @@ test.describe('phone keyboard', () => {
       expect((await field.boundingBox())!.y).toBeGreaterThan(screen.height - keyboard);
       await setKeyboard(page, { height: keyboard, pan });
       const visibleBottom = pan + screen.height - keyboard;
-      await expect.poll(() => page.locator('.editor').evaluate(editor => Math.round(editor.getBoundingClientRect().bottom))).toBe(visibleBottom);
+      // With a pan, the old full-height bottom equals the resized bottom.
+      // Wait for both coordinates so a pending animation frame cannot pass.
+      await expect.poll(() => page.locator('.editor').evaluate(editor => {
+        const box=editor.getBoundingClientRect();return [Math.round(box.top),Math.round(box.bottom)];
+      })).toEqual([pan,visibleBottom]);
       const geometry = await page.locator('.editor').evaluate(editor => {
         const overlay = editor.closest<HTMLElement>('.editor-overlay')!;
         const footer = editor.querySelector('.editor-footer')!.getBoundingClientRect();

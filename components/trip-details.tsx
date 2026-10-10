@@ -1,4 +1,6 @@
 "use client";
+import { t as uiText } from "@/lib/ui-language";
+
 
 import { useEffect, useId, useRef, useState } from "react";
 import PagedList from "./paged-list";
@@ -66,14 +68,13 @@ function TravellerName({ trip, member, index, busy, onSave }: {
   }}>
     <span className={`avatar color${index % 5}`} aria-hidden="true">{member.name.slice(0, 1).toUpperCase()}</span>
     <div className="traveller-name-fields">
-      <label htmlFor={`${id}-name`}>Traveller {index + 1} name
-        <input ref={input} id={`${id}-name`} value={value} required maxLength={50} disabled={locked} autoComplete="off" aria-describedby={`${id}-account${error ? " " + id + "-error" : ""}`} onChange={event => {
+      <label htmlFor={`${id}-name`}>{uiText("Traveller ")}{index + 1}{uiText(" name")}<input ref={input} id={`${id}-name`} value={value} required maxLength={50} disabled={locked} autoComplete="off" aria-describedby={`${id}-account${error ? " " + id + "-error" : ""}`} onChange={event => {
           setDraft(event.target.value); setError(""); setSaved(false);
         }} />
       </label>
       <p id={`${id}-account`} className="traveller-account-note">{member.userId ? "Account connected" : "Not linked to an account"}{member.email ? ` · ${member.email}` : ""}</p>
       {error && <p id={`${id}-error`} className="trip-details-error" role="alert">{error}</p>}
-      {saved && <p className="trip-details-success" role="status"><Check size={15} aria-hidden="true" /> Traveller name saved.</p>}
+      {saved && <p className="trip-details-success" role="status"><Check size={15} aria-hidden="true" />{uiText(" Traveller name saved.")}</p>}
     </div>
     {(value.trim() !== member.name || submitting || error) && <button type="submit" className="quiet" disabled={locked || value.trim() === member.name} aria-label={`Save traveller ${index + 1} name`}>{submitting ? "Saving…" : "Save"}</button>}
   </form>;
@@ -94,8 +95,8 @@ function TripDetailsForm({ trip, paging, accountId, busy, error: externalError, 
     setDraft(previous => ({ ...previous, [field]: value })); setError(""); setSaved(false);
   }
   return <section className="panel trip-details-panel" aria-labelledby={`${id}-heading`}>
-    <h3 id={`${id}-heading`}>Holiday details</h3>
-    <p className="footnote">Travellers in this holiday can update its name, dates, budget and display names.</p>
+    <h3 id={`${id}-heading`}>{uiText("Holiday details")}</h3>
+    <p className="footnote">{uiText("Travellers in this holiday can update its name, dates, budget and display names.")}</p>
     <form className="holiday-details-form" onSubmit={async event => {
       event.preventDefault();
       if (locked) return;
@@ -119,31 +120,27 @@ function TripDetailsForm({ trip, paging, accountId, busy, error: externalError, 
         setError(cause instanceof Error ? cause.message : "Unable to save the holiday details. Your edits are still here.");
       } finally { setSubmitting(false); }
     }}>
-      <label htmlFor={`${id}-name`}>Holiday name
-        <input id={`${id}-name`} value={values.name} required maxLength={100} disabled={locked} onChange={event => change("name", event.target.value)} />
+      <label htmlFor={`${id}-name`}>{uiText("Holiday name")}<input id={`${id}-name`} value={values.name} required maxLength={100} disabled={locked} onChange={event => change("name", event.target.value)} />
       </label>
       <div className="fieldpair holiday-dates">
-        <label htmlFor={`${id}-start`}>Start date (optional)
-          <input id={`${id}-start`} type="date" value={values.startDate} max={values.endDate || undefined} disabled={locked} onChange={event => change("startDate", event.target.value)} />
+        <label htmlFor={`${id}-start`}>{uiText("Start date (optional)")}<input id={`${id}-start`} type="date" value={values.startDate} max={values.endDate || undefined} disabled={locked} onChange={event => change("startDate", event.target.value)} />
         </label>
-        <label htmlFor={`${id}-end`}>End date (optional)
-          <input id={`${id}-end`} type="date" value={values.endDate} min={values.startDate || undefined} disabled={locked} onChange={event => change("endDate", event.target.value)} />
+        <label htmlFor={`${id}-end`}>{uiText("End date (optional)")}<input id={`${id}-end`} type="date" value={values.endDate} min={values.startDate || undefined} disabled={locked} onChange={event => change("endDate", event.target.value)} />
         </label>
       </div>
-      <label htmlFor={`${id}-budget`}>Group budget in {trip.currency} (optional)
-        <input id={`${id}-budget`} inputMode="decimal" autoComplete="off" value={values.budget} disabled={locked} placeholder="e.g. 2000" onChange={event => change("budget", event.target.value)} />
+      <label htmlFor={`${id}-budget`}>{uiText("Group budget in ")}{trip.currency}{uiText(" (optional)")}<input id={`${id}-budget`} inputMode="decimal" autoComplete="off" value={values.budget} disabled={locked} placeholder={uiText("e.g. 2000")} onChange={event => change("budget", event.target.value)} />
       </label>
       <TripReceiptLanguage value={receiptLanguageSchema.parse(values.receiptLanguage)} onChange={value=>change("receiptLanguage",value)} destination={()=>values.name} busy={locked} accountId={accountId} tripId={trip.id} />
       {(error || externalError) && <p className="error" role="alert">{externalError || error}</p>}
       <div className="holiday-details-actions">
         <button type="submit" className="primary phone-wide" disabled={locked || !changed}>{submitting ? "Saving…" : "Save holiday details"}</button>
-        {saved && <p className="trip-details-success" role="status"><Check size={15} aria-hidden="true" /> Holiday details saved.</p>}
+        {saved && <p className="trip-details-success" role="status"><Check size={15} aria-hidden="true" />{uiText(" Holiday details saved.")}</p>}
       </div>
     </form>
-    <p className="footnote">Settle in {trip.currency}. Each expense keeps its original currency and transaction time. Saved expenses and payments keep the same traveller assignments when a display name changes.</p>
+    <p className="footnote">{uiText("Settle in ")}{trip.currency}{uiText(". Each expense keeps its original currency and transaction time. Saved expenses and payments keep the same traveller assignments when a display name changes.")}</p>
     <div className="trip-traveller-names">
-      <h3>Traveller display names</h3>
-      <p className="footnote">These labels belong to this holiday. Connected accounts and personal profiles keep their identities.</p>
+      <h3>{uiText("Traveller display names")}</h3>
+      <p className="footnote">{uiText("These labels belong to this holiday. Connected accounts and personal profiles keep their identities.")}</p>
       <PagedList {...paging} noun="traveller names" items={trip.members} itemKey={member => member.id}
         renderItem={(member, index) => <TravellerName key={member.id} trip={trip} member={member} index={index} busy={locked} onSave={onSave} />} />
     </div>

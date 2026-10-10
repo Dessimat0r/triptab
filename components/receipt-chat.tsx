@@ -1,4 +1,6 @@
 "use client";
+import { t as uiText } from "@/lib/ui-language";
+
 import { formatInstant } from "@/lib/dates";
 
 import { useId, useRef, useState } from "react";
@@ -90,10 +92,10 @@ export default function ReceiptChat({ messages, busy, itemId, scopeLabel, contex
       <p id={hintId} className="receipt-chat-hint">
         {nativeAvailable ? "Ask about who bought what, quantities, names or location. The assistant remembers this receipt and proposes changes for review." : "Questions are saved here and a prompt is prepared. Use it in a ChatGPT or Codex conversation with TripTab tools enabled. Replies appear here automatically."}
       </p>
-      {itemId && <p className="receipt-chat-scope">“This” refers to {itemLabel}. You can also ask about other items or the whole receipt.</p>}
+      {itemId && <p className="receipt-chat-scope">{uiText("“This” refers to ")}{itemLabel}{uiText(". You can also ask about other items or the whole receipt.")}</p>}
       {memory && <details className="receipt-chat-memory">
-        <summary>Remembered receipt context</summary>
-        <p className="receipt-chat-hint">Saved with this receipt for the assistant. All item discussions share these notes and names.</p>
+        <summary>{uiText("Remembered receipt context")}</summary>
+        <p className="receipt-chat-hint">{uiText("Saved with this receipt for the assistant. All item discussions share these notes and names.")}</p>
         {memory.notes && <p className="receipt-chat-memory-notes">{memory.notes}</p>}
         {memory.aliases.length > 0 && <ul className="receipt-chat-aliases">
           {memory.aliases.map((alias, index) => <li key={`${alias.name}:${index}`}>
@@ -102,7 +104,7 @@ export default function ReceiptChat({ messages, busy, itemId, scopeLabel, contex
               {alias.scopeMemberId ? ` · for ${memberNames?.[alias.scopeMemberId] || "an earlier traveller"}` : ""}</span>
           </li>)}
         </ul>}
-        {!memory.notes && memory.aliases.length === 0 && <p className="receipt-chat-empty">No notes or names remembered yet.</p>}
+        {!memory.notes && memory.aliases.length === 0 && <p className="receipt-chat-empty">{uiText("No notes or names remembered yet.")}</p>}
       </details>}
       {visibleMessages.length ? (
         <div className="receipt-chat-scroll" role="region" aria-label={itemId ? `${itemLabel} conversation` : "Receipt conversation"} tabIndex={0}>
@@ -116,7 +118,7 @@ export default function ReceiptChat({ messages, busy, itemId, scopeLabel, contex
                 {messageItem(message) && <span className="receipt-chat-context">{itemNames?.[messageItem(message)!] || (messageItem(message) === itemId && scopeLabel) || "Earlier item"}</span>}
                 <p className="receipt-chat-text">{message.text}</p>
                 {message.role === "user" && !answered.has(message.id) && (
-                  <div className="receipt-chat-pending-row"><span className="receipt-chat-pending">{nativeAvailable ? "Question saved · awaiting reply" : "Question saved · external processing needed"}</span>{nativeAvailable && onRetry && <button type="button" className="textbutton" disabled={working || offline} onClick={() => void retryQuestion(message.id)}><RefreshCw size={14} aria-hidden="true" />Retry reply</button>}</div>
+                  <div className="receipt-chat-pending-row"><span className="receipt-chat-pending">{nativeAvailable ? "Question saved · awaiting reply" : "Question saved · external processing needed"}</span>{nativeAvailable && onRetry && <button type="button" className="textbutton" disabled={working || offline} onClick={() => void retryQuestion(message.id)}><RefreshCw size={14} aria-hidden="true" />{uiText("Retry reply")}</button>}</div>
                 )}
               </li>
             ))}
@@ -150,12 +152,10 @@ export default function ReceiptChat({ messages, busy, itemId, scopeLabel, contex
           {nativeAvailable ? "Ask assistant" : "Save question & prepare prompt"}
         </button>
         {refreshError && !offline && <button type="button" className="quiet" disabled={working} onClick={onRefresh}>
-          <RefreshCw size={17} aria-hidden="true" />
-          Retry updates
-        </button>}
+          <RefreshCw size={17} aria-hidden="true" />{uiText("Retry updates")}</button>}
       </div>
       {visibleError && <p id={errorId} className="receipt-chat-error" role="alert">{visibleError}</p>}
-      <p className="receipt-chat-note" role="status">{offline ? "You’re offline. Replies will update when you reconnect. " : refreshError ? "Unable to refresh replies. We’ll keep trying automatically. " : ""}Proposed changes need your review before the expense is updated.</p>
+      <p className="receipt-chat-note" role="status">{offline ? "You’re offline. Replies will update when you reconnect. " : refreshError ? "Unable to refresh replies. We’ll keep trying automatically. " : ""}{uiText("Proposed changes need your review before the expense is updated.")}</p>
     </section>
   );
 }

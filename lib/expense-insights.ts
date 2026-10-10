@@ -56,11 +56,11 @@ export const EXPENSE_SORTS = [
   ['lowest', 'Lowest amount first'],
 ] as const;
 export type ExpenseSort = typeof EXPENSE_SORTS[number][0];
-export type ExpenseFilter = { query: string; payer: string; participant: string; category: ExpenseCategory | ''; sort: ExpenseSort };
+export type ExpenseFilter = { query: string; payer: string; participant: string; category: ExpenseCategory | ''; currency?: string; from?: string; to?: string; needsReview?: boolean; sort: ExpenseSort };
 export const NO_EXPENSE_FILTER: ExpenseFilter = { query: '', payer: '', participant: '', category: '', sort: 'recent' };
 
 export function expenseFilterActive(filter: ExpenseFilter): boolean {
-  return !!(filter.query.trim() || filter.payer || filter.participant || filter.category);
+  return !!(filter.query.trim() || filter.payer || filter.participant || filter.category || filter.currency || filter.from || filter.to || filter.needsReview);
 }
 
 /** True when the traveller owes part of the expense. Unreadable entries fall back to their selected people. */
@@ -72,6 +72,9 @@ export function expenseInvolves(facts: ExpenseFacts, memberIndex: number, member
 }
 
 function matches(facts: ExpenseFacts, filter: Omit<ExpenseFilter, 'sort' | 'category'>, members: Trip['members']): boolean {
+  if (filter.currency && facts.expense.currency !== filter.currency) return false;
+  if (filter.from && facts.expense.date < filter.from || filter.to && facts.expense.date > filter.to) return false;
+  if (filter.needsReview && facts.total !== null && facts.shares !== null) return false;
   if (filter.payer && facts.expense.payer !== filter.payer) return false;
   if (filter.participant) {
     const index = members.findIndex(member => member.id === filter.participant);

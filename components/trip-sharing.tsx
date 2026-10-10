@@ -1,4 +1,6 @@
 "use client";
+import { t as uiText } from "@/lib/ui-language";
+
 import { formatInstant } from "@/lib/dates";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useLiveRefresh } from "./use-live-refresh";
@@ -89,43 +91,42 @@ export function TripSharing({ trip, profile, onChanged }: { trip: Trip; profile:
     } finally { setBusy(false); }
   }
 
-  if (!owner) return <p className="footnote">The holiday organiser can invite people to join this trip.</p>;
+  if (!owner) return <p className="footnote">{uiText("The holiday organiser can invite people to join this trip.")}</p>;
   return <div className="panel sharing-panel">
-    <h3>Invite a traveller</h3>
-    <p className="footnote">Share a one-use link. They create a TripTab account with their email or sign in, then review the traveller’s saved expenses and payments before joining. ChatGPT is optional.</p>
-    <p className="footnote">Creating a new link replaces earlier unused links for the same traveller.</p>
+    <h3>{uiText("Invite a traveller")}</h3>
+    <p className="footnote">{uiText("Share a one-use link. They create a TripTab account with their email or sign in, then review the traveller’s saved expenses and payments before joining. ChatGPT is optional.")}</p>
+    <p className="footnote">{uiText("Creating a new link replaces earlier unused links for the same traveller.")}</p>
     {available.length ? <form onSubmit={event => { event.preventDefault(); void createLink(memberId || available[0].id, email); }}>
-      <label>Invite as
-        <select value={memberId || available[0].id} disabled={busy} onChange={event => { setMemberId(event.target.value); setLink(""); setLinkId(""); }}>
+      <label>{uiText("Invite as")}<select value={memberId || available[0].id} disabled={busy} onChange={event => { setMemberId(event.target.value); setLink(""); setLinkId(""); }}>
           {available.map(member => <option value={member.id} key={member.id}>{member.name}</option>)}
         </select>
       </label>
-      <label>Invitee email <span className="muted">optional</span>
-        <input type="email" value={email} disabled={busy} onChange={event => setEmail(event.target.value)} placeholder="traveller@example.com" autoComplete="off" />
-        <small>If supplied, the account email must match. Email addresses are not verified by TripTab, so share the link only with the intended traveller.</small>
+      <label>{uiText("Invitee email ")}<span className="muted">{uiText("optional")}</span>
+        <input type="email" value={email} disabled={busy} onChange={event => setEmail(event.target.value)} placeholder={uiText("traveller@example.com")} autoComplete="off" />
+        <small>{uiText("If supplied, the account email must match. Email addresses are not verified by TripTab, so share the link only with the intended traveller.")}</small>
       </label>
       <button className="quiet phone-wide" disabled={busy}><Link size={16} aria-hidden="true" />{busy ? "Creating…" : "Create invite link"}</button>
-    </form> : <p className="footnote">All travellers are linked to an account. Add another traveller to invite someone new.</p>}
+    </form> : <p className="footnote">{uiText("All travellers are linked to an account. Add another traveller to invite someone new.")}</p>}
     {link && <div className="invite-link">
-      <input readOnly value={link} aria-label="Invitation link" onFocus={event => event.currentTarget.select()} />
+      <input readOnly value={link} aria-label={uiText("Invitation link")} onFocus={event => event.currentTarget.select()} />
       <button className="quiet" onClick={async () => {
         try { await navigator.clipboard.writeText(link); setCopied(true); }
         catch { setError("Select and copy the invitation link above."); }
       }}>{copied ? <Check size={16} aria-hidden="true" /> : <Copy size={16} aria-hidden="true" />}{copied ? "Copied" : "Copy"}</button>
-      <small>Expires in 7 days · One use · Only this newly created link can be copied here</small>
+      <small>{uiText("Expires in 7 days · One use · Only this newly created link can be copied here")}</small>
     </div>}
     <section className="invite-management" aria-labelledby={`invite-list-${trip.id}`}>
-      <h3 id={`invite-list-${trip.id}`}>Active invitations</h3>
+      <h3 id={`invite-list-${trip.id}`}>{uiText("Active invitations")}</h3>
       {listed.error && <p className="error" role="alert">{listed.error}</p>}
       {listed.invitations.length ? <ul className="invite-management-list">
         {listed.invitations.map(invitation => <li className="invite-management-entry" key={invitation.id}>
           <div className="invite-management-details">
             <strong>{memberName(invitation)}</strong>
             {invitation.email && <small>{invitation.email}</small>}
-            <small>Expires <time dateTime={invitation.expiresAt}>{formatInstant(invitation.expiresAt)}</time></small>
+            <small>{uiText("Expires ")}<time dateTime={invitation.expiresAt}>{formatInstant(invitation.expiresAt)}</time></small>
           </div>
           <div className="invite-management-actions button-row">
-            <button type="button" className="quiet" disabled={busy || confirming} onClick={() => void createLink(invitation.memberId, invitation.email || "")}>Replace link</button>
+            <button type="button" className="quiet" disabled={busy || confirming} onClick={() => void createLink(invitation.memberId, invitation.email || "")}>{uiText("Replace link")}</button>
             <button type="button" className="danger quiet" disabled={busy || confirming} onClick={async () => {
               if (busy || !await confirm({ title: "Revoke invitation?", message: `Revoke the invitation for ${memberName(invitation)}? Its link will stop working.`, confirmLabel: "Revoke invitation", destructive: true })) return;
               listRequest.current?.abort(); listRequest.current = null;
@@ -138,12 +139,12 @@ export function TripSharing({ trip, profile, onChanged }: { trip: Trip; profile:
                 await onChanged?.();
               } catch (cause) { setError(cause instanceof Error ? cause.message : "Unable to revoke this invitation."); }
               finally { await refreshInvitations(); setBusy(false); }
-            }}>Revoke</button>
+            }}>{uiText("Revoke")}</button>
           </div>
         </li>)}
-      </ul> : <p className="footnote">No active invitations.</p>}
-      {listed.hasMore && <p className="footnote">More older invitations exist. Replace a traveller’s link to invalidate all their earlier unused links.</p>}
-      {listed.error ? <button type="button" className="textbutton" disabled={busy} onClick={() => void refreshInvitations()}>Retry invitations</button> : <p className="footnote">Invitations update automatically.</p>}
+      </ul> : <p className="footnote">{uiText("No active invitations.")}</p>}
+      {listed.hasMore && <p className="footnote">{uiText("More older invitations exist. Replace a traveller’s link to invalidate all their earlier unused links.")}</p>}
+      {listed.error ? <button type="button" className="textbutton" disabled={busy} onClick={() => void refreshInvitations()}>{uiText("Retry invitations")}</button> : <p className="footnote">{uiText("Invitations update automatically.")}</p>}
     </section>
     {error && <p className="error" role="alert">{error}</p>}
     {confirmationDialog}
@@ -208,9 +209,9 @@ export function JoinTrip({ token, accountId, onJoined, onAuthenticate }: {
     <h2>{info ? `Join ${info.tripName}` : "Your holiday invitation"}</h2>
     <p>{info ? `You’ve been invited as ${info.memberName}. Your account will take over this traveller’s recorded history and share access to this holiday.` : "Sign in to view your invitation and join the holiday."}</p>
     {error && <p className="error" role="alert">{error}</p>}
-    {auth ? onAuthenticate ? <button className="primary" type="button" onClick={onAuthenticate}>Create an account or sign in</button>
-      : <a className="primary" href={"/?account=login&invite=" + encodeURIComponent(token)}>Create an account or sign in</a>
-      : info?.alreadyMember ? <button className="primary" onClick={() => onJoined(info.tripId)}>Open holiday</button>
+    {auth ? onAuthenticate ? <button className="primary" type="button" onClick={onAuthenticate}>{uiText("Create an account or sign in")}</button>
+      : <a className="primary" href={"/?account=login&invite=" + encodeURIComponent(token)}>{uiText("Create an account or sign in")}</a>
+      : info?.alreadyMember ? <button className="primary" onClick={() => onJoined(info.tripId)}>{uiText("Open holiday")}</button>
       : info && history && <form onSubmit={async event => {
         event.preventDefault(); if (busy || !acceptedHistory) return;
         infoRequest.current?.abort(); infoRequest.current = null;
@@ -227,23 +228,23 @@ export function JoinTrip({ token, accountId, onJoined, onAuthenticate }: {
         finally { setBusy(false); }
       }}>
         <section className="join-history" aria-labelledby="join-history-title">
-          <h3 id="join-history-title">{info.memberName}’s saved financial history</h3>
-          <p className="join-history-counts">{history.expenseCount} {history.expenseCount === 1 ? "expense" : "expenses"} involving this traveller · {history.paymentCount} recorded {history.paymentCount === 1 ? "payment" : "payments"} · {history.currency}</p>
+          <h3 id="join-history-title">{info.memberName}{uiText("’s saved financial history")}</h3>
+          <p className="join-history-counts">{history.expenseCount} {history.expenseCount === 1 ? "expense" : "expenses"}{uiText(" involving this traveller · ")}{history.paymentCount}{uiText(" recorded ")}{history.paymentCount === 1 ? "payment" : "payments"} · {history.currency}</p>
           {history.available ? <>
             <dl className="join-history-totals">
-              <div><dt>Cost share</dt><dd>{money(history.costShare)}</dd></div>
-              <div><dt>Paid upfront</dt><dd>{money(history.paidUpfront)}</dd></div>
-              <div><dt>Payments sent</dt><dd>{money(history.paymentsSent)}</dd></div>
-              <div><dt>Payments received</dt><dd>{money(history.paymentsReceived)}</dd></div>
+              <div><dt>{uiText("Cost share")}</dt><dd>{money(history.costShare)}</dd></div>
+              <div><dt>{uiText("Paid upfront")}</dt><dd>{money(history.paidUpfront)}</dd></div>
+              <div><dt>{uiText("Payments sent")}</dt><dd>{money(history.paymentsSent)}</dd></div>
+              <div><dt>{uiText("Payments received")}</dt><dd>{money(history.paymentsReceived)}</dd></div>
               <div><dt>{history.netBalance < 0 ? "Still owes" : history.netBalance > 0 ? "Should receive" : "Settled up"}</dt><dd>{money(Math.abs(history.netBalance))}</dd></div>
             </dl>
-            <p className="footnote">Paid upfront − cost share + payments sent − payments received = balance. These amounts use the saved item splits and currency conversions.</p>
-          </> : <p className="error" role="alert">{history.message} Ask the organiser to review these expenses before relying on the totals.</p>}
-          <p className="footnote">Joining links these existing records to your account. It does not record a payment or transfer any money.</p>
+            <p className="footnote">{uiText("Paid upfront − cost share + payments sent − payments received = balance. These amounts use the saved item splits and currency conversions.")}</p>
+          </> : <p className="error" role="alert">{history.message}{uiText(" Ask the organiser to review these expenses before relying on the totals.")}</p>}
+          <p className="footnote">{uiText("Joining links these existing records to your account. It does not record a payment or transfer any money.")}</p>
         </section>
         <label className="join-history-confirm">
           <input type="checkbox" required checked={acceptedHistory} disabled={busy} onChange={event => setAcceptedHistorySnapshot(event.target.checked ? info.historySnapshot : null)} />
-          <span>I have reviewed this history and agree to join as {info.memberName}.</span>
+          <span>{uiText("I have reviewed this history and agree to join as ")}{info.memberName}.</span>
         </label>
         <button className="primary" disabled={busy || !acceptedHistory}>{busy ? "Joining…" : "Confirm history & join holiday"}</button>
       </form>}

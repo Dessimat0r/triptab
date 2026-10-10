@@ -95,3 +95,5 @@
     flex: 1 1 auto;
   }
 }
+
+.settlement-reminder { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }

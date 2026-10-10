@@ -1,4 +1,6 @@
 "use client";
+import { t as uiText } from "@/lib/ui-language";
+
 
 import { useState, type ReactNode } from "react";
 import { ChevronRight, Users, User } from "lucide-react";
@@ -57,7 +59,7 @@ export function QuickSplit({ tripId, unassigned, members, currentMemberId, disab
   ];
   const ordered = remembered ? [...choices].sort((a, b) => Number(b.key === remembered) - Number(a.key === remembered)) : choices;
   return <section className="quick-split" aria-labelledby="quick-split-title">
-    <h3 id="quick-split-title">{unassigned === 1 ? "1 item needs" : `${unassigned} items need`} people</h3>
+    <h3 id="quick-split-title">{unassigned === 1 ? "1 item needs" : `${unassigned} items need`}{uiText(" people")}</h3>
     <div className="quick-split-actions">
       {ordered.map((choice, index) => <button key={choice.key} type="button" className={index === 0 ? "primary" : "quiet"} disabled={disabled}
         data-autofocus={autoFocus && index === 0 ? true : undefined}
@@ -75,7 +77,7 @@ export function SaveChecklist({ blockers, attempted = false, hidden = false }: {
   // The first blocker is the next thing to fix; the rest are one tap away so
   // the pinned footer stays small on phones.
   const shown = expanded || attempted ? blockers : blockers.slice(0, 1);
-  return <div className="save-checklist" role="group" aria-label="Before you can save">
+  return <div className="save-checklist" role="group" aria-label={uiText("Before you can save")}>
     <ul>
       {shown.map(blocker => <li key={blocker.key}>
         {blocker.target ? <button type="button" className="save-checklist-item" onClick={() => focusExpenseTarget(blocker.target!, blocker.focus)}>
@@ -104,13 +106,13 @@ export function PurchaseDetails({ id, summary, needsAttention, children }: {
     if (needsAttention) setOpen(true);
   }
   const shown = open || needsAttention;
-  return <section id={id} className="purchase-details" aria-label="Purchase details">
+  return <section id={id} className="purchase-details" aria-label={uiText("Purchase details")}>
     {!shown && <div className="purchase-details-summary">
       <p>{summary}</p>
-      <button type="button" className="textbutton" aria-expanded={false} onClick={() => setOpen(true)}>Change</button>
+      <button type="button" className="textbutton" aria-expanded={false} onClick={() => setOpen(true)}>{uiText("Change")}</button>
     </div>}
     {shown && children}
-    {shown && !needsAttention && <button type="button" className="quiet purchase-details-done" aria-expanded={true} onClick={() => setOpen(false)}>Done</button>}
+    {shown && !needsAttention && <button type="button" className="quiet purchase-details-done" aria-expanded={true} onClick={() => setOpen(false)}>{uiText("Done")}</button>}
   </section>;
 }
 

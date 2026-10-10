@@ -13,7 +13,7 @@ const RATE_WINDOW = 15 * 60 * 1000;
 const EMAIL_RATE_LIMIT = 8;
 // Actions have independent budgets so a group signing up on hotel Wi-Fi does
 // not exhaust sign-in or password-change attempts for that same network.
-const IP_RATE_LIMITS = { login: 40, register: 24, set_password: 24, verify_email: 24, reset_password: 24 };
+const IP_RATE_LIMITS = { login: 40, register: 24, set_password: 24, verify_email: 24, reset_password: 24, delete_account: 24 };
 const AUTH_CLEANUP_BATCH = 100;
 const PASSWORD_ITERATIONS = 100_000;
 const SESSION_COOKIE = 'tt_session';
@@ -28,14 +28,14 @@ export class AuthError extends Error {
 
 export type AuthProfile = {
   id: string; email: string; displayName: string; createdAt: string;
-  authMethod?: 'password' | 'chatgpt'; hasPassword?: boolean; chatgptConnected?: boolean; emailVerified?: boolean;
+  authMethod?: 'password' | 'chatgpt'; hasPassword?: boolean; chatgptConnected?: boolean; emailVerified?: boolean; uiLanguage?: "en"|"es";
 };
 export type AuthIdentity = { id: string; email?: string; displayName?: string; kind: 'session' | 'chatgpt'; chatgptId?: string; emailVerified?: boolean };
 export type AuthState = {
   authenticated: boolean; profile?: AuthProfile; hasPassword: boolean;
   chatgptLinked: boolean; chatgptAvailable: boolean; emailVerified: boolean;
 };
-type ProfileRow = { id: string; email: string; display_name: string; created_at: string };
+type ProfileRow = { id: string; email: string; display_name: string; created_at: string; deleted_at?: string; ui_language?: string };
 type Credential = { user_id: string; email: string; password_hash: string; password_salt: string; iterations: number };
 type PasswordDigest = { hash: string; salt: string; iterations: number };
 
@@ -102,6 +102,7 @@ type ProviderStateRow = { [Key in keyof ProfileStateRow]: ProfileStateRow[Key] |
 type AuthSnapshot = { identity: AuthIdentity; row: ProfileStateRow | null };
 
 function providerIdentity(provider: AuthIdentity, row: ProviderStateRow): AuthIdentity | null {
+  if (row.deleted_at) return null;
   if (row.linked_user_id !== null) {
     if (!row.id || row.email === null || row.display_name === null) return null;
     return { ...provider, id: row.id, email: row.email, displayName: row.display_name, emailVerified: provider.email === row.email };
@@ -128,7 +129,7 @@ async function authSnapshot(request: Request, database: D1Database, provider: Au
   // Identity-only reads omit account flags; session-only reads omit provider joins.
   // When a session resolves, provider link/credential lookups are skipped inside
   // the same statement, so provider headers never widen a live session's read.
-  const row = await database.prepare(`SELECT p.id,p.email,p.display_name,p.created_at,
+  const row = await database.prepare(`SELECT p.id,p.email,p.display_name,p.created_at,p.deleted_at,p.ui_language,
     s.user_id AS session_user_id,${allowedProvider ? 'l.user_id' : 'NULL'} AS linked_user_id,
     ${accountFlags ? 'EXISTS (SELECT 1 FROM auth_credentials c WHERE c.user_id=p.id)' : '0'} AS has_password,
     ${accountFlags ? 'EXISTS (SELECT 1 FROM auth_links linked WHERE linked.user_id=p.id)' : '0'} AS chatgpt_linked,
@@ -136,7 +137,7 @@ async function authSnapshot(request: Request, database: D1Database, provider: Au
     ${allowedProvider ? 'CASE WHEN s.user_id IS NULL THEN EXISTS (SELECT 1 FROM auth_credentials c WHERE c.user_id=identity.provider_id) ELSE 0 END' : '0'} AS legacy_disconnected
     FROM (SELECT ? AS token_hash, ? AS provider_id) identity
     LEFT JOIN auth_sessions s ON s.token_hash=identity.token_hash AND s.expires_at>?
-      AND EXISTS (SELECT 1 FROM profiles session_profile WHERE session_profile.id=s.user_id)
+      AND EXISTS (SELECT 1 FROM profiles session_profile WHERE session_profile.id=s.user_id AND session_profile.deleted_at='')
     ${allowedProvider ? 'LEFT JOIN auth_links l ON l.oai_user_id=identity.provider_id AND s.user_id IS NULL' : ''}
     LEFT JOIN profiles p ON p.id=${allowedProvider ? 'COALESCE(s.user_id,l.user_id,identity.provider_id)' : 's.user_id'}`)
     .bind(token ? await hashToken(token) : null, allowedProvider?.id ?? null, new Date().toISOString())
@@ -211,7 +212,7 @@ export async function readAuthContext(request: Request, database: D1Database, op
   return { identity, state: {
     authenticated: true, profile: {
       id: row.id, email: row.email, displayName: row.display_name, createdAt: row.created_at,
-      authMethod: identity.kind === 'session' ? 'password' : 'chatgpt', hasPassword, chatgptConnected: chatgptLinked, emailVerified,
+      authMethod: identity.kind === 'session' ? 'password' : 'chatgpt', hasPassword, chatgptConnected: chatgptLinked, emailVerified, uiLanguage:row.ui_language==='es'?'es':'en',
     },
     hasPassword, chatgptLinked, chatgptAvailable: !!provider, emailVerified,
   } };
@@ -240,9 +241,9 @@ async function prepareSession(user: string, actorName: string, request: Request,
   const token = randomToken();
   const now = new Date();
   const statements = [
-    database.prepare(`INSERT INTO auth_sessions (token_hash, user_id, expires_at, created_at)
-      SELECT ?, ?, ?, ?${gate ? ` WHERE ${gate.sql}` : ''}`)
-      .bind(await hashToken(token), user, new Date(now.getTime() + SESSION_LIFETIME).toISOString(), now.toISOString(), ...(gate?.bindings || [])),
+    database.prepare(`INSERT INTO auth_sessions (token_hash, user_id, expires_at, created_at, session_id, user_agent)
+      SELECT ?, ?, ?, ?, ?, ?${gate ? ` WHERE ${gate.sql}` : ''}`)
+      .bind(await hashToken(token), user, new Date(now.getTime() + SESSION_LIFETIME).toISOString(), now.toISOString(), crypto.randomUUID(), (request.headers.get("user-agent") || "Browser").replace(/[\u0000-\u001f\u007f]/g, "").slice(0, 200), ...(gate?.bindings || [])),
     accountAuditStatement(database, { userId: user, actorName, entityType: 'session', entityId: 'browser', action: 'create',
       before: null, after: { active: true } }, { sql: 'changes() > 0', bindings: [] }),
   ];
@@ -415,7 +416,8 @@ async function setPassword(request: Request, body: Record<string, unknown>, data
     SELECT ?, ?, ?, ?, ?, ?, ? WHERE ? IS NULL OR NOT EXISTS (
       SELECT 1 FROM auth_links WHERE oai_user_id = ? AND user_id <> ?
     ) ON CONFLICT(user_id) DO UPDATE SET password_hash = excluded.password_hash,
-      password_salt = excluded.password_salt, iterations = excluded.iterations
+      password_salt = excluded.password_salt, iterations = excluded.iterations,
+      email_verified_at = COALESCE(auth_credentials.email_verified_at, excluded.email_verified_at)
       WHERE auth_credentials.password_hash = ?
   `).bind(identity.id, email, digest.hash, digest.salt, digest.iterations, now, providerVerified ? now : null,
     providerId, providerId, identity.id, existing?.password_hash || null));
@@ -426,6 +428,7 @@ async function setPassword(request: Request, body: Record<string, unknown>, data
     statements.push(accountAuditStatement(database, { userId: identity.id, actorName: profile.display_name, entityType: 'chatgpt', entityId: 'account',
       action: 'create', before: { connected: false }, after: { connected: true } }, { sql: 'changes() > 0', bindings: [] }));
   }
+  statements.push(database.prepare('DELETE FROM auth_email_tokens WHERE user_id = ? AND EXISTS (SELECT 1 FROM auth_credentials WHERE user_id = ? AND password_salt = ?)').bind(identity.id, identity.id, digest.salt));
   statements.push(database.prepare('DELETE FROM auth_sessions WHERE user_id = ? AND EXISTS (SELECT 1 FROM auth_credentials WHERE user_id = ? AND password_salt = ?)').bind(identity.id, identity.id, digest.salt));
   statements.push(accountAuditStatement(database, { userId: identity.id, actorName: profile.display_name, entityType: 'session', entityId: 'account',
     action: 'delete', before: { active: true }, after: { active: false } }, { sql: 'changes() > 0', bindings: [] }));
@@ -489,9 +492,10 @@ async function requestVerification(request: Request, database: D1Database, maile
 
 async function verifyEmail(request: Request, body: Record<string, unknown>, database: D1Database) {
   const tokenHash = await hashToken(emailTokenValue(body.token, 'verify'));
+  await consumeAuthRateLimit(request, tokenHash, database, 'verify_email');
   const now = new Date().toISOString();
   const row = await database.prepare(`SELECT t.user_id, t.email, c.email_verified_at, p.display_name FROM auth_email_tokens t
-    JOIN auth_credentials c ON c.user_id = t.user_id AND c.email = t.email JOIN profiles p ON p.id = t.user_id
+    JOIN auth_credentials c ON c.user_id = t.user_id AND c.email = t.email JOIN profiles p ON p.id = t.user_id AND p.email = t.email
     WHERE t.token_hash = ? AND t.purpose = 'verify' AND t.expires_at > ?`).bind(tokenHash, now)
     .first<{ user_id: string; email: string; email_verified_at: string | null; display_name: string }>();
   if (!row) throw invalidEmailLink('verify');
@@ -527,10 +531,11 @@ async function requestPasswordReset(request: Request, body: Record<string, unkno
 
 async function resetPassword(request: Request, body: Record<string, unknown>, database: D1Database) {
   const tokenHash = await hashToken(emailTokenValue(body.token, 'reset'));
+  await consumeAuthRateLimit(request, tokenHash, database, 'reset_password');
   const digest = await hashPassword(body.password);
   const now = new Date().toISOString();
   const row = await database.prepare(`SELECT t.user_id, t.email, c.password_hash, c.email_verified_at, p.display_name FROM auth_email_tokens t
-    JOIN auth_credentials c ON c.user_id = t.user_id AND c.email = t.email JOIN profiles p ON p.id = t.user_id
+    JOIN auth_credentials c ON c.user_id = t.user_id AND c.email = t.email JOIN profiles p ON p.id = t.user_id AND p.email = t.email
     WHERE t.token_hash = ? AND t.purpose = 'reset' AND t.expires_at > ?`).bind(tokenHash, now)
     .first<{ user_id: string; email: string; password_hash: string; email_verified_at: string | null; display_name: string }>();
   if (!row) throw invalidEmailLink('reset');
@@ -546,6 +551,12 @@ async function resetPassword(request: Request, body: Record<string, unknown>, da
     accountAuditStatement(database, { userId: row.user_id, actorName: row.display_name, entityType: 'email', entityId: 'account',
       action: 'update', before: { verified: false }, after: { verified: true } }, { sql: `${saved.sql} AND ? IS NULL`, bindings: [...saved.bindings, row.email_verified_at] }),
     database.prepare(`DELETE FROM auth_email_tokens WHERE user_id = ? AND ${saved.sql}`).bind(row.user_id, ...saved.bindings),
+    // Recovery also removes linked sign-ins: an unverified email squatter must
+    // not retain access through a provider they linked before the reset.
+    database.prepare(`DELETE FROM auth_links WHERE user_id = ? AND ${saved.sql}`).bind(row.user_id, ...saved.bindings),
+    accountAuditStatement(database, { userId: row.user_id, actorName: row.display_name, entityType: 'chatgpt', entityId: 'account', action: 'delete', before: { connected: true }, after: { connected: false } }),
+    database.prepare(`DELETE FROM chatgpt_plan_connections WHERE user_id = ? AND ${saved.sql}`).bind(row.user_id, ...saved.bindings),
+    database.prepare(`DELETE FROM chatgpt_plan_transactions WHERE user_id = ? AND ${saved.sql}`).bind(row.user_id, ...saved.bindings),
     ...await replacedBrowserSession(request, database, saved),
     database.prepare(`DELETE FROM auth_sessions WHERE user_id = ? AND ${saved.sql}`).bind(row.user_id, ...saved.bindings),
     accountAuditStatement(database, { userId: row.user_id, actorName: row.display_name, entityType: 'session', entityId: 'account',
@@ -555,7 +566,7 @@ async function resetPassword(request: Request, body: Record<string, unknown>, da
   const results = await database.batch([...statements, ...session.statements]);
   if (!results[1].meta.changes) throw invalidEmailLink('reset');
   return { state: await readAuthState(requestWithSession(request, session.token), database), cookie: session.cookie,
-    additionalCookies: [signedOutCookie(request, false)], notice: 'Your password has been reset. Other devices have been signed out.' };
+    additionalCookies: [signedOutCookie(request, false)], notice: 'Your password has been reset. Previous sign-ins have been disconnected. You can reconnect ChatGPT in your profile.' };
 }
 
 async function linkChatGPT(request: Request, database: D1Database) {

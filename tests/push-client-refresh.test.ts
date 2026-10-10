@@ -21,7 +21,7 @@ async function push(options: PushOptions = {}) {
     ...ours.map(url => ({ url, postMessage(data: unknown) { messages.push({ url, data }); } })),
     { url: 'https://other.test/', postMessage(data: unknown) { messages.push({ url: 'foreign', data }); } },
   ];
-  const context = vm.createContext({
+  const context = vm.createContext({ importScripts() {},
     URL, Response, AbortController, setTimeout, clearTimeout,
     self: {
       location: { origin: 'https://triptab.test' },
@@ -138,7 +138,7 @@ test('clicking a notification focuses and updates the open app without navigatin
   const messages:unknown[]=[];
   let click:(event:unknown)=>void=()=>{};
   const client={url:'https://triptab.test/expenses?receipt=open',postMessage(value:unknown){messages.push(value)},async focus(){focused++},async navigate(){navigated++}};
-  const context=vm.createContext({URL,self:{location:{origin:'https://triptab.test'},
+  const context=vm.createContext({ importScripts() {},URL,self:{location:{origin:'https://triptab.test'},
     addEventListener(name:string,handler:(event:unknown)=>void){if(name==='notificationclick')click=handler},
     clients:{async matchAll(){return [client]},async openWindow(){opened++}}
   }});
@@ -151,7 +151,7 @@ test('clicking a notification focuses and updates the open app without navigatin
 test('notification clicks open the internal destination when there is no existing app window', async () => {
   let task:Promise<unknown>|undefined,click:(event:unknown)=>void=()=>{};
   const opened:string[]=[];
-  const context=vm.createContext({URL,self:{location:{origin:'https://triptab.test'},
+  const context=vm.createContext({ importScripts() {},URL,self:{location:{origin:'https://triptab.test'},
     addEventListener(name:string,handler:(event:unknown)=>void){if(name==='notificationclick')click=handler},
     clients:{async matchAll(){return []},async openWindow(url:string){opened.push(url)}}
   }});

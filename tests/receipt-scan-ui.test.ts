@@ -31,7 +31,8 @@ const compiled = transpileModule(source, {compilerOptions: {module: ModuleKind.C
 const exported = {exports: {} as {default: (props: {entry: ReceiptEditor; onChange(entry: ReceiptEditor): void}) => React.ReactNode; ReceiptReviewSummary: (props: {entry: ReceiptEditor}) => React.ReactNode}};
 new Function('require', 'module', 'exports', compiled)((name: string) => {
   if (name === 'react') return {useId: () => 'review-title', useMemo: (callback:()=>unknown) => callback(), useEffect() {}, useState: (initial: unknown) => [initial, () => {}]};
-  if (name === 'react/jsx-runtime') return runtime;
+  if (name === '@/lib/ui-language') return {t:(value:string)=>value};
+    if (name === 'react/jsx-runtime') return runtime;
   if (name === '@/components/expense-quick-review') return {focusExpenseTarget() {}};
   if (name === '@/lib/model') return model;
   if (name === '@/lib/receipt-processing') return processing;

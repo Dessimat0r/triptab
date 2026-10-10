@@ -16,6 +16,7 @@ import * as quickExpense from '../lib/quick-expense';
 import * as dataUtils from '../lib/data-utils';
 import * as receiptLanguages from '../lib/receipt-languages';
 import * as expenseInsights from '../lib/expense-insights';
+import * as uiLanguage from '../lib/ui-language';
 import * as paymentLinks from '../lib/payment-links';
 import { createSourceFile, isArrayBindingPattern, isBindingElement, isCallExpression, isFunctionDeclaration, isIdentifier, isVariableStatement, JsxEmit, ModuleKind, ScriptKind, ScriptTarget, transpileModule } from 'typescript';
 
@@ -87,6 +88,7 @@ function controller(trip: model.Trip, fetcher?: typeof fetch) {
   new Function('require', 'module', 'exports', 'fetch', compiled)((name: string) => {
     if (name === 'react') return hooks;
     if (name === '@/components/use-live-refresh') return {useLiveRefresh() {},dispatchLiveRefresh() {}};
+    if (name === '@/lib/ui-language') return {t:(value:string)=>value};
     if (name === 'react/jsx-runtime') return runtime;
     if (name === '@/components/trip-language-preferences') return {useTripLanguagePreferences:()=>({preferences:{readingLanguage:'en',primaryVersion:'reading',itemVersions:{}},ready:true,busy:false,error:'',save:async()=>true}),PersonalLanguageSettings:component};
     if (name === '@/lib/model') return models;
@@ -101,6 +103,7 @@ function controller(trip: model.Trip, fetcher?: typeof fetch) {
     if (name === '@/lib/data-utils') return dataUtils;
     if (name === '@/lib/receipt-languages') return receiptLanguages;
     if (name === '@/lib/expense-insights') return expenseInsights;
+    if (name === '@/lib/ui-language') return uiLanguage;
     if (name === '@/lib/payment-links') return paymentLinks;
     if (name === '@/components/receipt-scan-review') return {__esModule: true, default: component, receiptMoney: (amount: number, currency: string | null) => currency ? moneyFormat.formatMoney(amount, currency) : String(amount / 100)};
     if (name === '@/lib/receipt-chatgpt') return receiptChatgpt;
@@ -234,6 +237,7 @@ test('closed item discussions render no chats, and visited chats remain mounted 
   const exported = {exports: {} as {default: (props: Record<string, unknown>) => Element}};
   new Function('require', 'module', 'exports', discussionCompiled)((name: string) => {
     if (name === 'react') return {...React, useState: () => [visited, (next: boolean) => {visited = next;} ]};
+    if (name === '@/lib/ui-language') return {t:(value:string)=>value};
     if (name === 'react/jsx-runtime') return runtime;
     return {__esModule: true, default: chat};
   }, exported, exported.exports);

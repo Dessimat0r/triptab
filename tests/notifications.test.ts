@@ -61,7 +61,7 @@ const notificationURL = dataURL(compile(await readFile(new URL('../lib/notificat
 const notifications = await import(notificationURL) as typeof import('../lib/notifications');
 const pushURL = dataURL(compile(await readFile(new URL('../app/api/push/route.ts', import.meta.url), 'utf8')).replace("'@/lib/store'", JSON.stringify(storeURL)).replace("'@/lib/notifications'", JSON.stringify(notificationURL)).replace("'zod'", JSON.stringify(import.meta.resolve('zod'))));
 const pushRoute = await import(pushURL) as typeof import('../app/api/push/route');
-const authURL = dataURL(compile(await readFile(new URL('../app/api/auth/route.ts', import.meta.url), 'utf8')).replace("'@/lib/store'", JSON.stringify(storeURL)).replace("'@/lib/notifications'", JSON.stringify(notificationURL)).replace("'@/lib/auth'", JSON.stringify(new URL('../lib/auth.ts', import.meta.url).href)));
+const authURL = dataURL(compile(await readFile(new URL('../app/api/auth/route.ts', import.meta.url), 'utf8')).replace("'cloudflare:workers'", JSON.stringify(envURL)).replace("'@/lib/store'", JSON.stringify(storeURL)).replace("'@/lib/notifications'", JSON.stringify(notificationURL)).replace("'@/lib/auth'", JSON.stringify(new URL('../lib/auth.ts', import.meta.url).href)));
 const authRoute = await import(authURL) as typeof import('../app/api/auth/route');
 const pwaURL = dataURL(compile(await readFile(new URL('../components/pwa-controls.tsx', import.meta.url), 'utf8'))
   .replace('"@/components/use-live-refresh"', JSON.stringify(new URL('../components/use-live-refresh.ts', import.meta.url).href))
@@ -593,7 +593,7 @@ async function serviceWorkerPush(ownership: boolean | number | Error) {
   let unsubscribed = 0; let closed = 0; let task: Promise<unknown> | undefined;
   const subscription = { endpoint: endpoint('browser-a'), async unsubscribe() { unsubscribed++; } };
   const registration = { pushManager: { async getSubscription() { return subscription; } }, async getNotifications() { return [{ close() { closed++; } }]; }, async showNotification(...args: unknown[]) { shown.push(args); } };
-  const context = vm.createContext({ URL, Request, Response, AbortController, setTimeout, clearTimeout, self: { location: { origin: 'https://triptab.test' }, registration, addEventListener(name: string, fn: typeof handlers extends Map<string, infer F> ? F : never) { handlers.set(name, fn); } }, fetch: async (url: string) => {
+  const context = vm.createContext({ importScripts() {}, URL, Request, Response, AbortController, setTimeout, clearTimeout, self: { location: { origin: 'https://triptab.test' }, registration, addEventListener(name: string, fn: typeof handlers extends Map<string, infer F> ? F : never) { handlers.set(name, fn); } }, fetch: async (url: string) => {
     fetched.push(url);
     if (url === '/api/push') {
       if (ownership instanceof Error) throw ownership;

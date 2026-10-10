@@ -22,6 +22,7 @@ export async function POST(r: Request) {
   try {
     sameOrigin(r);
     const user = (await ensureProfile(r)).id;
+    if (r.headers.get('X-TripTab-Account') && r.headers.get('X-TripTab-Account') !== user) throw new RequestError('Sign in to the account that captured this receipt.',409);
     const tripId = new URL(r.url).searchParams.get('tripId');
     if (!tripId || tripId.length > 100 || !await tripAccess(user, tripId)) throw new RequestError('Choose a trip you have access to.', 403);
     const type = (r.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
@@ -43,6 +44,7 @@ export async function DELETE(r: Request) {
   try {
     sameOrigin(r);
     const user = (await ensureProfile(r)).id;
+    if (r.headers.get('X-TripTab-Account') && r.headers.get('X-TripTab-Account') !== user) throw new RequestError('Sign in to the account that captured this receipt.',409);
     const params = new URL(r.url).searchParams;
     const id = params.get('id');
     if (params.getAll('id').length !== 1 || !id || !RECEIPT_ID.test(id)) throw new RequestError('Invalid receipt.');
@@ -56,6 +58,7 @@ export async function DELETE(r: Request) {
 export async function GET(r: Request) {
   try {
     const user = await owner(r);
+    if (r.headers.get('X-TripTab-Account') && r.headers.get('X-TripTab-Account') !== user) throw new RequestError('Sign in to the account that captured this receipt.',409);
     const id = new URL(r.url).searchParams.get('id');
     if (!id || !RECEIPT_ID.test(id)) throw new RequestError('Invalid receipt.');
     const access = await receiptAccess(user, id);

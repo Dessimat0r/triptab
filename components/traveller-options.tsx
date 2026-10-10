@@ -1,4 +1,6 @@
 "use client";
+import { t as uiText } from "@/lib/ui-language";
+
 
 import { useId, useState } from "react";
 import { Check, UserMinus } from "lucide-react";
@@ -50,16 +52,13 @@ function TravellerRow({ trip, member, busy, onSave, confirm }: {
   }}>
     <b className="traveller-options-name">{member.name}</b>
     <div className="traveller-options-fields">
-      <label htmlFor={`${id}-weight`}>Counts as
-        <select id={`${id}-weight`} value={values.weight} disabled={locked} onChange={event => change("weight", event.target.value)}>
+      <label htmlFor={`${id}-weight`}>{uiText("Counts as")}<select id={`${id}-weight`} value={values.weight} disabled={locked} onChange={event => change("weight", event.target.value)}>
           {Array.from({ length: 20 }, (_, index) => <option key={index} value={String(index + 1)}>{index + 1} {index ? "people" : "person"}</option>)}
         </select>
       </label>
-      <label htmlFor={`${id}-joined`}>Joined on
-        <input id={`${id}-joined`} type="date" value={values.joinedOn} min={trip.startDate} max={values.leftOn || trip.endDate} disabled={locked} onChange={event => change("joinedOn", event.target.value)} />
+      <label htmlFor={`${id}-joined`}>{uiText("Joined on")}<input id={`${id}-joined`} type="date" value={values.joinedOn} min={trip.startDate} max={values.leftOn || trip.endDate} disabled={locked} onChange={event => change("joinedOn", event.target.value)} />
       </label>
-      <label htmlFor={`${id}-left`}>Left on
-        <input id={`${id}-left`} type="date" value={values.leftOn} min={values.joinedOn || trip.startDate} max={trip.endDate} disabled={locked} onChange={event => change("leftOn", event.target.value)} />
+      <label htmlFor={`${id}-left`}>{uiText("Left on")}<input id={`${id}-left`} type="date" value={values.leftOn} min={values.joinedOn || trip.startDate} max={trip.endDate} disabled={locked} onChange={event => change("leftOn", event.target.value)} />
       </label>
     </div>
     <div className="traveller-options-actions">
@@ -68,7 +67,7 @@ function TravellerRow({ trip, member, busy, onSave, confirm }: {
         if (removalBlocker) { setMessage({ error: removalBlocker }); return; }
         if (!await confirm({ title: `Remove ${member.name}?`, message: `${member.name} isn’t in any expense or payment, so removing them changes no amounts. Their removal will appear in activity history.`, confirmLabel: "Remove traveller", destructive: true })) return;
         await persist(removeMember(trip, member.id), `${member.name} was removed.`);
-      }}><UserMinus size={16} aria-hidden="true" /> Remove</button>
+      }}><UserMinus size={16} aria-hidden="true" />{uiText(" Remove")}</button>
     </div>
     {message.error && <p className="trip-details-error" role="alert">{message.error}</p>}
     {message.saved && <p className="trip-details-success" role="status"><Check size={15} aria-hidden="true" /> {message.saved}</p>}
@@ -82,8 +81,8 @@ export default function TravellerOptions({ trip, busy, paging, onSave, confirm }
 }) {
   const id = useId();
   return <section className="panel traveller-options" aria-labelledby={`${id}-heading`}>
-    <h3 id={`${id}-heading`}>Who shares what</h3>
-    <p className="footnote">“Counts as” gives a couple or family more than one share when an expense is split equally, for expenses added or edited from now on. Joining and leaving dates choose who is ticked by default on new expenses; nobody’s existing shares change.</p>
+    <h3 id={`${id}-heading`}>{uiText("Who shares what")}</h3>
+    <p className="footnote">{uiText("“Counts as” gives a couple or family more than one share when an expense is split equally, for expenses added or edited from now on. Joining and leaving dates choose who is ticked by default on new expenses; nobody’s existing shares change.")}</p>
     <PagedList {...paging} noun="travellers" items={trip.members} itemKey={member => member.id}
       renderItem={member => <TravellerRow key={member.id} trip={trip} member={member} busy={busy} onSave={onSave} confirm={confirm} />} />
   </section>;

@@ -1,4 +1,6 @@
 "use client";
+import { t as uiText } from "@/lib/ui-language";
+
 
 import { createContext, useCallback, useContext, useSyncExternalStore, type AnchorHTMLAttributes, type ReactNode } from "react";
 import { History, Receipt, Sparkles, Users, Wallet } from "lucide-react";
@@ -56,7 +58,7 @@ export function TripTabNavigation({ receiptCount = 0 }: { receiptCount?: number 
   const location = useTripTabLocation();
   const search = useTripTabEntryQuery();
   const view = tripSectionForPathname(location.split("?", 1)[0]);
-  return <nav className="tabs" aria-label="Holiday sections">
+  return <nav className="tabs" aria-label={uiText("Holiday sections")}>
     {TRIP_SECTIONS.map(section => {
       const Icon = icons[section.id];
       return <TripTabLink
@@ -67,7 +69,7 @@ export function TripTabNavigation({ receiptCount = 0 }: { receiptCount?: number 
         className={view === section.id ? "selected" : ""}
       >
         <Icon size={17} aria-hidden="true" />
-        <span>{section.label}</span>
+        <span>{uiText(section.label)}</span>
         {section.id === "receipts" && receiptCount > 0 && <span className="badge">{receiptCount}</span>}
       </TripTabLink>;
     })}

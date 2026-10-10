@@ -1,4 +1,6 @@
 "use client";
+import { t as uiText } from "@/lib/ui-language";
+
 
 import { useId, useState } from "react";
 import { X } from "lucide-react";
@@ -29,10 +31,10 @@ export default function RepeatExpenseDialog({ trip, expense, busy, onClose, onRe
   return <ModalA11y className="overlay" onClose={onClose}>
     <section className="modal small" role="dialog" aria-modal="true" aria-labelledby={`${id}-title`}>
       <div className="modalheading">
-        <div><span className="eyebrow">REPEAT EXPENSE</span><h2 id={`${id}-title`}>Repeat “{expense.title}”</h2></div>
-        <button type="button" className="iconbutton" aria-label="Close" onClick={onClose}><X aria-hidden="true" /></button>
+        <div><span className="eyebrow">{uiText("REPEAT EXPENSE")}</span><h2 id={`${id}-title`}>{uiText("Repeat “")}{expense.title}”</h2></div>
+        <button type="button" className="iconbutton" aria-label={uiText("Close")} onClick={onClose}><X aria-hidden="true" /></button>
       </div>
-      <p className="footnote">Adds copies of the saved expense with the same amount, payer and split on later days. Receipt photos and chats are not copied.</p>
+      <p className="footnote">{uiText("Adds copies of the saved expense with the same amount, payer and split on later days. Current traveller weights and rounding apply. Receipt photos and chats are not copied.")}</p>
       <form className="repeat-expense-form" onSubmit={async event => {
         event.preventDefault();
         setError("");
@@ -41,18 +43,15 @@ export default function RepeatExpenseDialog({ trip, expense, busy, onClose, onRe
         if (await onRepeat(preview)) onClose();
       }}>
         <fieldset>
-          <legend>How long</legend>
-          <label><input type="radio" name={`${id}-mode`} checked={mode === "until"} onChange={() => setMode("until")} /> Until a date</label>
-          <label><input type="radio" name={`${id}-mode`} checked={mode === "times"} onChange={() => setMode("times")} /> A number of times</label>
+          <legend>{uiText("How long")}</legend>
+          <label><input type="radio" name={`${id}-mode`} checked={mode === "until"} onChange={() => setMode("until")} />{uiText(" Until a date")}</label>
+          <label><input type="radio" name={`${id}-mode`} checked={mode === "times"} onChange={() => setMode("times")} />{uiText(" A number of times")}</label>
         </fieldset>
-        {mode === "until" ? <label htmlFor={`${id}-until`}>Last date
-          <input id={`${id}-until`} type="date" value={until} min={expense.date} onChange={event => setUntil(event.target.value)} required />
-        </label> : <label htmlFor={`${id}-times`}>Number of copies
-          <input id={`${id}-times`} type="number" inputMode="numeric" min={1} max={60} value={times} onChange={event => setTimes(event.target.value)} required />
+        {mode === "until" ? <label htmlFor={`${id}-until`}>{uiText("Last date")}<input id={`${id}-until`} type="date" value={until} min={expense.date} onChange={event => setUntil(event.target.value)} required />
+        </label> : <label htmlFor={`${id}-times`}>{uiText("Number of copies")}<input id={`${id}-times`} type="number" inputMode="numeric" min={1} max={60} value={times} onChange={event => setTimes(event.target.value)} required />
         </label>}
-        <label htmlFor={`${id}-every`}>Every
-          <select id={`${id}-every`} value={every} onChange={event => setEvery(event.target.value)}>
-            <option value="1">day</option><option value="2">2 days</option><option value="7">week</option>
+        <label htmlFor={`${id}-every`}>{uiText("Every")}<select id={`${id}-every`} value={every} onChange={event => setEvery(event.target.value)}>
+            <option value="1">{uiText("day")}</option><option value="2">{uiText("2 days")}</option><option value="7">{uiText("week")}</option>
           </select>
         </label>
         <p className="footnote" role="status">{preview.length

@@ -65,5 +65,5 @@ export function verificationEmail(to: string, link: string): EmailMessage {
 
 export function passwordResetEmail(to: string, link: string): EmailMessage {
   return message(to, 'Reset your TripTab password', 'Someone asked to reset the password for the TripTab account that uses this address.',
-    'Choose a new password', link, 'This link works once and expires in 1 hour. Resetting signs out every other device. If you did not ask for this, ignore this email; your password has not changed.');
+    'Choose a new password', link, 'This link works once and expires in 1 hour. Resetting disconnects previous sign-ins, including linked ChatGPT identities. You can reconnect them in your profile. If you did not ask for this, ignore this email; your password has not changed.');
 }

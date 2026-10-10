@@ -1,4 +1,6 @@
 "use client";
+import { t as uiText } from "@/lib/ui-language";
+
 
 import { useId, useState } from "react";
 import { profileFromAuth, type Profile, type AuthResponse } from "./account-panel";
@@ -13,13 +15,15 @@ export default function AuthPanel({
   compact?: boolean;
 }) {
   const id = useId();
+  const [forgot, setForgot] = useState(false);
+  const [message, setMessage] = useState("");
   const [mode, setMode] = useState(initialMode);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const registering = mode === "register";
+  const registering = !forgot && mode === "register";
 
   return (
     <section
@@ -27,16 +31,13 @@ export default function AuthPanel({
       aria-labelledby={`${id}-title`}
     >
       <h2 id={`${id}-title`}>
-        {registering ? "Create your TripTab account" : "Sign in to TripTab"}
+        {forgot ? "Reset your password" : registering ? "Create your TripTab account" : "Sign in to TripTab"}
       </h2>
-      <p className="auth-description">
-        Use your email to save holidays, share expenses, and join invitations.
-        ChatGPT and Codex are optional, for receipt AI and natural-language help.
-      </p>
+      <p className="auth-description">{uiText("Use your email to save holidays, share expenses, and join invitations. ChatGPT and Codex are optional, for receipt AI and natural-language help.")}</p>
       <p className="footnote">
         {registering
-          ? "Save your password in a password manager. TripTab cannot send password-reset emails yet."
-          : "Password-reset emails are not available yet. If you previously linked ChatGPT, you can also sign in with that account."}
+          ? "Save your password in a password manager. You can verify your email in account settings."
+          : "If you previously linked ChatGPT, you can also sign in with that account."}
       </p>
       <form
         onSubmit={async (event) => {
@@ -49,13 +50,14 @@ export default function AuthPanel({
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
-                action: mode,
+                action: forgot ? "request_password_reset" : mode,
                 email: email.trim(),
                 password,
                 ...(registering ? { displayName: displayName.trim() } : {}),
               }),
             });
             const body = (await response.json()) as AuthResponse;
+            if (forgot) { if (!response.ok) throw Error(body.error || "Unable to request recovery."); setMessage((body as AuthResponse & {notice?:string}).notice || "If this email has a password account, a recovery link has been sent."); return; }
             const profile = profileFromAuth(body);
             if (!response.ok || !profile) {
               throw Error(body.error || "Unable to sign in. Please try again.");
@@ -72,23 +74,19 @@ export default function AuthPanel({
         }}
       >
         {registering && (
-          <label htmlFor={`${id}-name`}>
-            Display name
-            <input
+          <label htmlFor={`${id}-name`}>{uiText("Display name")}<input
               id={`${id}-name`}
               required
               maxLength={50}
               value={displayName}
               onChange={(event) => setDisplayName(event.target.value)}
               autoComplete="nickname"
-              placeholder="Your name"
+              placeholder={uiText("Your name")}
               disabled={busy}
             />
           </label>
         )}
-        <label htmlFor={`${id}-email`}>
-          Email
-          <input
+        <label htmlFor={`${id}-email`}>{uiText("Email")}<input
             id={`${id}-email`}
             type="email"
             required
@@ -99,13 +97,11 @@ export default function AuthPanel({
             inputMode="email"
             autoCapitalize="none"
             spellCheck={false}
-            placeholder="you@example.com"
+            placeholder={uiText("you@example.com")}
             disabled={busy}
           />
         </label>
-        <label htmlFor={`${id}-password`}>
-          Password
-          <input
+        {!forgot && <label htmlFor={`${id}-password`}>{uiText("Password")}<input
             id={`${id}-password`}
             type="password"
             required
@@ -118,18 +114,18 @@ export default function AuthPanel({
             disabled={busy}
           />
         </label>
+        }
         {registering && (
-          <small id={`${id}-password-hint`} className="muted">
-            Use 12–128 characters.
-          </small>
+          <small id={`${id}-password-hint`} className="muted">{uiText("Use 12–128 characters.")}</small>
         )}
         {error && (
           <p className="error" role="alert">
             {error}
           </p>
         )}
+        {message && <p role="status">{message}</p>}
         <button className="primary" type="submit" disabled={busy}>
-          {busy
+          {forgot ? busy ? "Sending…" : "Send recovery link" : busy
             ? registering
               ? "Creating account…"
               : "Signing in…"
@@ -138,6 +134,7 @@ export default function AuthPanel({
               : "Sign in"}
         </button>
       </form>
+      <p><button className="textbutton" type="button" disabled={busy} onClick={() => { setForgot(value => !value); setMode("login"); setError(""); setMessage(""); }}>{forgot ? "Back to sign in" : "Forgot password?"}</button></p>
       <p className="auth-switch">
         {registering ? "Already have a TripTab account?" : "New to TripTab?"}
         <button
@@ -145,8 +142,8 @@ export default function AuthPanel({
           type="button"
           disabled={busy}
           onClick={() => {
-            setMode(registering ? "login" : "register");
-            setError("");
+            setForgot(false); setMode(registering ? "login" : "register");
+            setError(""); setMessage("");
           }}
         >
           {registering ? "Sign in" : "Create an account"}

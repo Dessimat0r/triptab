@@ -1,7 +1,10 @@
-const CACHE_NAME = 'triptab-public-v5';
+importScripts('/offline-store.js');
+const CACHE_NAME = 'triptab-public-v6';
 const OFFLINE_URL = '/offline.html';
 const PUBLIC_ASSETS = [
   OFFLINE_URL,
+  '/offline-store.js',
+  '/offline-capture.js',
   '/icons/icon-192.png',
   '/icons/icon-512.png',
   '/icons/maskable-192.png',
@@ -37,6 +40,20 @@ self.addEventListener('message', (event) => {
 
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
+  if (url.origin === self.location.origin && url.pathname === '/share-receipt' && event.request.method === 'POST') {
+    event.respondWith((async () => {
+      try {
+        if(event.request.headers.get('sec-fetch-site')==='cross-site') return new Response('Open TripTab to share a photo.',{status:403});
+        const origin=event.request.headers.get('origin');
+        if(origin && origin!=='null' && origin!==self.location.origin) return new Response('Open TripTab to share a photo.',{status:403});
+        const data = await event.request.formData(), files = data.getAll('receipt');
+        if (files.length !== 1) throw Error('Share one receipt photo.');
+        await self.TripTabOffline.receivePhoto(files[0]);
+        return Response.redirect(new URL('/', self.location.origin).href, 303);
+      } catch { return new Response('Share one JPEG, PNG or WebP photo under 10 MB.', {status:400,headers:{'Content-Type':'text/plain'}}); }
+    })());
+    return;
+  }
   if (event.request.method !== 'GET' || url.origin !== self.location.origin) return;
 
   if (event.request.mode === 'navigate') {

@@ -92,6 +92,13 @@
       "when": 1791591294310,
       "tag": "0012_trip_lifecycle_email_recovery",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1791591835256,
+      "tag": "0013_account_preferences",
+      "breakpoints": true
     }
   ]
 }

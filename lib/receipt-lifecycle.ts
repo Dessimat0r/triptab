@@ -118,14 +118,14 @@ export async function markRemovedReceipts(database: D1Database, user: string, id
 export async function sweepReceiptOrphans(database: D1Database, user: string, now = Date.now()) {
   const cutoff = new Date(now - RECEIPT_LIMITS.orphanAgeMs).toISOString();
   const rows = await database.prepare(`SELECT r.* FROM receipts r JOIN trips t ON t.id = r.trip_id
-    WHERE r.state = 'active' AND ${expired} AND ${access} AND ${unreferenced} AND ${identity}
-    ORDER BY r.created_at, r.id LIMIT ?`).bind(cutoff, new Date(now).toISOString(), user, user, user, user, user, RECEIPT_LIMITS.sweepBatch).all<ReceiptRow>();
+    WHERE r.state = 'active' AND ${expired} AND NOT EXISTS(SELECT 1 FROM receipt_restore_holds h WHERE h.receipt_id=r.id AND h.until>?) AND ${access} AND ${unreferenced} AND ${identity}
+    ORDER BY r.created_at, r.id LIMIT ?`).bind(cutoff, new Date(now).toISOString(), new Date(now).toISOString(), user, user, user, user, user, RECEIPT_LIMITS.sweepBatch).all<ReceiptRow>();
   if (!rows.results.length) return 0;
   const { revision } = await auditContext(database);
   return commitReceiptChanges(database, rows.results.map(row => ({
     statement: database.prepare(`UPDATE receipts AS r SET state = 'deleting' WHERE ${baseline}
-      AND EXISTS (SELECT 1 FROM trips t WHERE t.id = r.trip_id AND ${access} AND ${unreferenced}) AND ${identity}`)
-      .bind(...baselineValues(row), user, user, user, user, user),
+      AND EXISTS (SELECT 1 FROM trips t WHERE t.id = r.trip_id AND ${access} AND ${unreferenced}) AND ${identity} AND NOT EXISTS(SELECT 1 FROM receipt_restore_holds h WHERE h.receipt_id=r.id AND h.until>?)`)
+      .bind(...baselineValues(row), user, user, user, user, user, new Date(now).toISOString()),
     change: change(row, 'update', snapshot(row, 'upload-complete'), snapshot({ ...row, state: 'deleting' }, 'orphan-expired', systemActor)),
   })), systemActor, revision, 'system');
 }
@@ -186,12 +186,12 @@ export async function maintainSystemReceipts(database: D1Database, bucket: R2Buc
   if (!Number.isSafeInteger(now) || now < 0 || now > 8_640_000_000_000_000) throw new Error('Invalid receipt maintenance time.');
   const cutoff = new Date(now - RECEIPT_LIMITS.orphanAgeMs).toISOString(), current = new Date(now).toISOString();
   const rows = await database.prepare(`SELECT r.* FROM receipts r JOIN trips t ON t.id = r.trip_id
-    WHERE r.state = 'active' AND ${expired} AND ${unreferenced}
-    ORDER BY r.created_at, r.id LIMIT ?`).bind(cutoff, current, sweepLimit).all<ReceiptRow>();
+    WHERE r.state = 'active' AND (${expired} OR EXISTS(SELECT 1 FROM receipt_restore_holds h WHERE h.receipt_id=r.id AND h.until<=?)) AND NOT EXISTS(SELECT 1 FROM receipt_restore_holds h WHERE h.receipt_id=r.id AND h.until>?) AND ${unreferenced}
+    ORDER BY r.created_at, r.id LIMIT ?`).bind(cutoff, current, current, current, sweepLimit).all<ReceiptRow>();
   const { revision } = await auditContext(database);
   const marked = await commitReceiptChanges(database, rows.results.map(row => ({
     statement: database.prepare(`UPDATE receipts AS r SET state = 'deleting' WHERE ${baseline}
-      AND EXISTS (SELECT 1 FROM trips t WHERE t.id = r.trip_id AND ${unreferenced})`).bind(...baselineValues(row)),
+      AND EXISTS (SELECT 1 FROM trips t WHERE t.id = r.trip_id AND ${unreferenced}) AND NOT EXISTS(SELECT 1 FROM receipt_restore_holds h WHERE h.receipt_id=r.id AND h.until>?)`).bind(...baselineValues(row),current),
     change: change(row, 'update', snapshot(row, 'upload-complete'), snapshot({ ...row, state: 'deleting' }, 'orphan-expired', systemActor)),
   })), systemActor, revision, 'system');
   const deleting = await database.prepare(`SELECT * FROM receipts WHERE state = 'deleting' ORDER BY created_at, id LIMIT ?`)

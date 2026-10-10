@@ -58,6 +58,7 @@ const workerSource = compile(await readFile(new URL('../build/sites-worker.ts', 
   .replace('"vinext/server/fetch-handler"', JSON.stringify(handlerUrl))
   .replace('"../lib/connector-context"', JSON.stringify(contextUrl))
   .replace('"../lib/receipt-lifecycle"', JSON.stringify(new URL('../lib/receipt-lifecycle.ts', import.meta.url).href))
+  .replace("'../lib/notifications'", JSON.stringify(dataUrl('export const flushNotificationDigests=async()=>0;')))
   .replaceAll('import.meta.env.DEV', 'false');
 const worker = (await import(dataUrl(workerSource)) as { default: {
   scheduled(controller: ScheduledController, env: unknown, ctx: unknown): Promise<void>;

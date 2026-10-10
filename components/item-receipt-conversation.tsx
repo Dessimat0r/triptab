@@ -1,4 +1,6 @@
 "use client";
+import { t as uiText } from "@/lib/ui-language";
+
 
 import { useState } from "react";
 import ReceiptChat, { type ReceiptChatProps } from "./receipt-chat";
@@ -9,7 +11,7 @@ export default function ItemReceiptConversation(props: ReceiptChatProps & { item
   return <details className="item-conversation" onToggle={event => {
     if (event.currentTarget.open) setVisited(true);
   }}>
-    <summary>Discuss {props.scopeLabel}</summary>
+    <summary>{uiText("Discuss ")}{props.scopeLabel}</summary>
     {/* Keep a visited chat mounted so collapsing it preserves the typed question. */}
     {visited && <ReceiptChat {...props} contextTitle={`Discuss ${props.scopeLabel}`} />}
   </details>;

@@ -1,4 +1,6 @@
 "use client";
+import { t as uiText } from "@/lib/ui-language";
+
 
 import { useId, useState } from "react";
 import { X } from "lucide-react";
@@ -91,10 +93,10 @@ export default function PaymentEditor({ trip, initial, busy, error, restoredFrom
       <section className="modal small payment-editor" role="dialog" aria-modal="true" aria-labelledby={`${id}-title`}>
         <div className="modalheading">
           <div>
-            <span className="eyebrow">MONEY ALREADY TRANSFERRED</span>
+            <span className="eyebrow">{uiText("MONEY ALREADY TRANSFERRED")}</span>
             <h2 id={`${id}-title`}>{review ? "Review payment" : existing ? "Edit payment" : "Record a payment"}</h2>
           </div>
-          <button type="button" className="iconbutton" aria-label="Close payment editor" disabled={locked} onClick={onClose}><X /></button>
+          <button type="button" className="iconbutton" aria-label={uiText("Close payment editor")} disabled={locked} onClick={onClose}><X /></button>
         </div>
         {restoredFrom && <RestorationNotice info={restoredFrom} />}
         <form onSubmit={async event => {
@@ -123,63 +125,55 @@ export default function PaymentEditor({ trip, initial, busy, error, restoredFrom
         }}>
           {review ? (
             <div className="payment-review">
-              <p><strong>{name(review.from)}</strong> paid <strong>{name(review.to)}</strong></p>
+              <p><strong>{name(review.from)}</strong>{uiText(" paid ")}<strong>{name(review.to)}</strong></p>
               <h3>{money(review.amount)}</h3>
               <dl>
-                <dt>Date</dt><dd>{review.date}{review.time ? ` at ${review.time}` : ""}</dd>
-                {review.timezone && <><dt>Timezone</dt><dd>{review.timezone}</dd></>}
-                {review.method && <><dt>Method</dt><dd>{review.method}</dd></>}
-                {review.note && <><dt>Note</dt><dd>{review.note}</dd></>}
+                <dt>{uiText("Date")}</dt><dd>{review.date}{review.time ? ` at ${review.time}` : ""}</dd>
+                {review.timezone && <><dt>{uiText("Timezone")}</dt><dd>{review.timezone}</dd></>}
+                {review.method && <><dt>{uiText("Method")}</dt><dd>{review.method}</dd></>}
+                {review.note && <><dt>{uiText("Note")}</dt><dd>{review.note}</dd></>}
               </dl>
               {before.length === trip.members.length && (
-                <p className="footnote">
-                  Before this payment: {name(review.from)} {before[trip.members.findIndex(member => member.id === review.from)] < 0 ? "owes" : "is owed"} {money(Math.abs(before[trip.members.findIndex(member => member.id === review.from)] || 0))}; {name(review.to)} {before[trip.members.findIndex(member => member.id === review.to)] < 0 ? "owes" : "is owed"} {money(Math.abs(before[trip.members.findIndex(member => member.id === review.to)] || 0))}.
+                <p className="footnote">{uiText("Before this payment: ")}{name(review.from)} {before[trip.members.findIndex(member => member.id === review.from)] < 0 ? "owes" : "is owed"} {money(Math.abs(before[trip.members.findIndex(member => member.id === review.from)] || 0))}; {name(review.to)} {before[trip.members.findIndex(member => member.id === review.to)] < 0 ? "owes" : "is owed"} {money(Math.abs(before[trip.members.findIndex(member => member.id === review.to)] || 0))}.
                 </p>
               )}
               {warning && <p className="payment-warning" role="status">{warning}</p>}
-              <p className="footnote">Confirming records the transfer in TripTab. It does not send money.</p>
+              <p className="footnote">{uiText("Confirming records the transfer in TripTab. It does not send money.")}</p>
             </div>
           ) : (
             <>
               <div className="fieldpair">
-                <label htmlFor={`${id}-from`}>Paid by
-                  <select id={`${id}-from`} value={from} disabled={locked} onChange={event => setFrom(event.target.value)} required>
-                    <option value="">Choose a traveller</option>
+                <label htmlFor={`${id}-from`}>{uiText("Paid by")}<select id={`${id}-from`} value={from} disabled={locked} onChange={event => setFrom(event.target.value)} required>
+                    <option value="">{uiText("Choose a traveller")}</option>
                     {trip.members.map(member => <option value={member.id} key={member.id}>{member.name}</option>)}
                   </select>
                 </label>
-                <label htmlFor={`${id}-to`}>Paid to
-                  <select id={`${id}-to`} value={to} disabled={locked} onChange={event => setTo(event.target.value)} required>
-                    <option value="">Choose a traveller</option>
+                <label htmlFor={`${id}-to`}>{uiText("Paid to")}<select id={`${id}-to`} value={to} disabled={locked} onChange={event => setTo(event.target.value)} required>
+                    <option value="">{uiText("Choose a traveller")}</option>
                     {trip.members.map(member => <option value={member.id} key={member.id}>{member.name}</option>)}
                   </select>
                 </label>
               </div>
-              <label htmlFor={`${id}-amount`}>Amount ({trip.currency})
+              <label htmlFor={`${id}-amount`}>{uiText("Amount (")}{trip.currency})
                 <input id={`${id}-amount`} value={amount} disabled={locked} required inputMode="decimal" maxLength={16} placeholder="0.00" onChange={event => setAmount(event.target.value)} />
               </label>
               <div className="fieldpair fieldpair--keep">
-                <label htmlFor={`${id}-date`}>Date
-                  <input id={`${id}-date`} type="date" value={date} disabled={locked} required onChange={event => setDate(event.target.value)} />
+                <label htmlFor={`${id}-date`}>{uiText("Date")}<input id={`${id}-date`} type="date" value={date} disabled={locked} required onChange={event => setDate(event.target.value)} />
                 </label>
-                <label htmlFor={`${id}-time`}>Time (optional)
-                  <input id={`${id}-time`} type="time" value={time} disabled={locked} onChange={event => setTime(event.target.value)} />
+                <label htmlFor={`${id}-time`}>{uiText("Time (optional)")}<input id={`${id}-time`} type="time" value={time} disabled={locked} onChange={event => setTime(event.target.value)} />
                 </label>
               </div>
-              <label htmlFor={`${id}-timezone`}>Timezone
-                <input id={`${id}-timezone`} value={timezone} disabled={locked} maxLength={100} placeholder="Europe/London" required={!!time} onChange={event => setTimezone(event.target.value)} />
+              <label htmlFor={`${id}-timezone`}>{uiText("Timezone")}<input id={`${id}-timezone`} value={timezone} disabled={locked} maxLength={100} placeholder={uiText("Europe/London")} required={!!time} onChange={event => setTimezone(event.target.value)} />
               </label>
-              <label htmlFor={`${id}-method`}>Payment method (optional)
-                <input id={`${id}-method`} value={method} disabled={locked} maxLength={80} placeholder="Bank transfer, cash…" onChange={event => setMethod(event.target.value)} />
+              <label htmlFor={`${id}-method`}>{uiText("Payment method (optional)")}<input id={`${id}-method`} value={method} disabled={locked} maxLength={80} placeholder={uiText("Bank transfer, cash…")} onChange={event => setMethod(event.target.value)} />
               </label>
-              <label htmlFor={`${id}-note`}>Note (optional)
-                <textarea id={`${id}-note`} autoComplete="off" value={note} disabled={locked} maxLength={500} rows={3} placeholder="Add any useful details" onChange={event => setNote(event.target.value)} />
+              <label htmlFor={`${id}-note`}>{uiText("Note (optional)")}<textarea id={`${id}-note`} autoComplete="off" value={note} disabled={locked} maxLength={500} rows={3} placeholder={uiText("Add any useful details")} onChange={event => setNote(event.target.value)} />
               </label>
             </>
           )}
           {(localError || error) && <p className="error" role="alert">{localError || error}</p>}
           <div className="payment-actions" ref={footerRef}>
-            {review && <button type="button" className="quiet" disabled={locked} onClick={() => { setReview(null); setLocalError(""); }}>Edit details</button>}
+            {review && <button type="button" className="quiet" disabled={locked} onClick={() => { setReview(null); setLocalError(""); }}>{uiText("Edit details")}</button>}
             <button className="primary" disabled={locked}>{locked ? "Saving…" : review ? "Confirm payment" : "Review payment"}</button>
           </div>
         </form>

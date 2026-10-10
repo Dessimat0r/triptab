@@ -1214,7 +1214,7 @@ test('appends and reads a receipt reply without marking it itemised or changing 
   const holiday = content(reply).data.trips[0];
   const draft = holiday.drafts[0];
   assert.deepEqual(holiday.expenses, originalExpenses);
-  assert.deepEqual({ ...draft, conversation: undefined }, { ...originalDraft, conversation: undefined, adjustmentAllocation: 'rotating-remainder' });
+  assert.deepEqual({ ...draft, conversation: undefined }, { ...originalDraft, conversation: undefined });
   assert.equal(draft.status, 'waiting');
   assert.deepEqual(draft.conversation![0], receiptQuestion);
   const answer = draft.conversation![1];
@@ -1328,7 +1328,7 @@ test('item chat can request corrections to another receipt item while preserving
   const { status, source, adjustmentAllocation, conversation, ...draftInput } = state.data.trips[0].drafts[0];
   assert.equal(status, 'review');
   assert.equal(source, undefined);
-  assert.equal(adjustmentAllocation, 'rotating-remainder');
+  assert.equal(adjustmentAllocation,undefined);
   const proposed = await invoke('update_receipt_draft', {
     trip_id: 'trip-1', revision: 4,
     draft: { ...draftInput, items: [originalItem, { ...otherItem, units: { total: 3, allocations: { a: 2.5, b: 0.5 } } }] },
