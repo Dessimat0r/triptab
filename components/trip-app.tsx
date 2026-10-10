@@ -32,6 +32,10 @@ import "@/components/receipt-history-view.css";
 import "@/components/expense-editor.css";
 import MemberStatement from "@/components/member-statement";
 import TripDetails from "@/components/trip-details";
+import PaymentDetailsPanel, { SettlementPayActions } from "@/components/payment-details";
+import { ExpenseFilterBar, SpendingBreakdownPanel } from "@/components/expense-insights";
+import { EXPENSE_SORTS, NO_EXPENSE_FILTER, expenseFacts, expenseFilterActive, filterExpenses, spendingBreakdown, type ExpenseFilter } from "@/lib/expense-insights";
+import { hasPaymentDetails } from "@/lib/payment-links";
 import { useTripLanguagePreferences, PersonalLanguageSettings } from "@/components/trip-language-preferences";
 import { TripReceiptLanguage, ReceiptLanguageSelect } from "@/components/receipt-language-select";
 import ReceiptItemNames, { TranslateMissingNames } from "@/components/receipt-item-names";
@@ -1439,10 +1443,25 @@ export default function Home({ children }: { children: ReactNode }) {
     || (!!receiptAI && receiptAI.accountId === profile?.id && receiptAI.provider === "siwc" && receiptAI.connected);
   const memberNames = useMemo(() => Object.fromEntries(trip?.members.map(member => [member.id, member.name]) || []), [trip?.members]);
   const actorMemberNames = useMemo(() => Object.fromEntries(trip?.members.filter(member => member.userId).map(member => [member.userId!, member.name]) || []), [trip?.members]);
-  const expensePreviews = useMemo(() => new Map(trip?.expenses.map(expense => [expense.id, {
-    total: previewTotal(expense, trip),
-    shares: currentMemberIndex >= 0 ? previewShares(expense, trip) : null,
-  }]) || []), [trip, currentMemberIndex]);
+  // Every traveller's share feeds the row's "Your share", the people filter and the breakdown.
+  const expensePreviews = useMemo(() => new Map(trip?.expenses.map(expense => {
+    const total = previewTotal(expense, trip);
+    return [expense.id, { total, shares: total === 0 ? trip.members.map(() => 0) : previewShares(expense, trip) }];
+  }) || []), [trip]);
+  // Search and filters belong to one holiday; another holiday starts unfiltered.
+  const [expenseFilterState, setExpenseFilterState] = useState<{ tripId: string; filter: ExpenseFilter }>({ tripId: "", filter: NO_EXPENSE_FILTER });
+  const expenseFilter = useMemo(() => {
+    const filter = expenseFilterState.tripId === trip?.id ? expenseFilterState.filter : NO_EXPENSE_FILTER;
+    const known = (id: string) => !id || !!trip?.members.some(member => member.id === id);
+    return known(filter.payer) && known(filter.participant) ? filter
+      : { ...filter, payer: known(filter.payer) ? filter.payer : "", participant: known(filter.participant) ? filter.participant : "" };
+  }, [expenseFilterState, trip?.id, trip?.members]);
+  const setExpenseFilter = useCallback((filter: ExpenseFilter) => setExpenseFilterState({ tripId: trip?.id ?? "", filter }), [trip?.id]);
+  const allExpenseFacts = useMemo(() => trip ? expenseFacts(trip, expensePreviews) : [], [trip, expensePreviews]);
+  const visibleExpenses = useMemo(() => trip ? filterExpenses(allExpenseFacts, expenseFilter, trip.members).map(entry => entry.expense) : [], [allExpenseFacts, expenseFilter, trip]);
+  // The breakdown follows the search and people filters; its category rows are the category filter.
+  const breakdown = useMemo(() => trip ? spendingBreakdown(filterExpenses(allExpenseFacts, { ...expenseFilter, category: "", sort: "recent" }, trip.members), trip.members) : null,
+    [allExpenseFacts, expenseFilter, trip]);
   // Unsaved work is measured against the editor as it was opened (or last
   // saved as a draft). A server proposal filling an untouched receipt draft
   // matches that draft, so it does not count as the person's unsaved work.
@@ -1598,6 +1617,18 @@ export default function Home({ children }: { children: ReactNode }) {
                         </b>
                       </div>
   );
+  const payees = new Map(trip?.members.filter(member => hasPaymentDetails(member.payTo)).map(member => [member.id, member]) ?? []);
+  const ownMember = currentMemberIndex >= 0 ? trip?.members[currentMemberIndex] : undefined;
+  const ownPaymentHint = !!ownMember && !hasPaymentDetails(ownMember.payTo) && !calculationError && due.some(d => d.to === ownMember.id);
+  function showPaymentDetails() {
+    setView("settings");
+    // The Travellers section renders on the next frame after navigation.
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      const panel = document.getElementById("payment-details");
+      panel?.scrollIntoView({ block: "start" });
+      panel?.focus({ preventScroll: true });
+    }));
+  }
   const groupBalance = (inline: boolean) => trip ? (
                   <div className={"group-balance" + (inline ? " balance-card--inline" : "")}>
                     <div className="sectionheading">
@@ -1623,11 +1654,22 @@ export default function Home({ children }: { children: ReactNode }) {
                     <>
                       <div className="sectionheading">
                         <h2>Your expenses</h2>
-                        <span className="muted">Recently added</span>
+                        <span className="muted">{EXPENSE_SORTS.find(([value]) => value === expenseFilter.sort)?.[1]}</span>
                       </div>
+                      {trip.expenses.length > 1 && <ExpenseFilterBar filter={expenseFilter} onChange={setExpenseFilter} members={trip.members} shown={visibleExpenses.length} total={trip.expenses.length} />}
+                      {trip.expenses.length > 0 && breakdown && <SpendingBreakdownPanel breakdown={breakdown} members={trip.members} currency={trip.currency}
+                        category={expenseFilter.category} onCategory={category => setExpenseFilter({ ...expenseFilter, category })}
+                        filtered={!!(expenseFilter.query.trim() || expenseFilter.payer || expenseFilter.participant)} />}
                       <div className="panel expense-list">
-                        {trip.expenses.length ? (
-                          <PagedList {...page("expenses", 20)} noun="expenses" items={trip.expenses} itemKey={e => e.id} renderItem={(e) => (
+                        {trip.expenses.length && !visibleExpenses.length ? (
+                          <div className="empty">
+                            <Receipt size={30} />
+                            <h3>No matching expenses</h3>
+                            <p>Try another search, or clear the filters to see all {trip.expenses.length} expenses.</p>
+                            <button className="quiet" onClick={() => setExpenseFilter({ ...NO_EXPENSE_FILTER, sort: expenseFilter.sort })}>Clear filters</button>
+                          </div>
+                        ) : trip.expenses.length ? (
+                          <PagedList {...page(expenseFilterActive(expenseFilter) || expenseFilter.sort !== "recent" ? `expenses:${canonicalJson(expenseFilter)}` : "expenses", 20)} noun="expenses" items={visibleExpenses} itemKey={e => e.id} renderItem={(e) => (
                             <div
                               className="expense"
                               key={e.id} data-entry-id={e.id} tabIndex={-1}
@@ -1710,6 +1752,7 @@ export default function Home({ children }: { children: ReactNode }) {
                               >
                                 <Check size={16} /> Record paid
                               </button>
+                              {payees.get(d.to) && <SettlementPayActions payee={payees.get(d.to)!} amount={d.amount} currency={trip.currency} reference={`TripTab: ${trip.name}`} />}
                             </div>
                           )} />
                         ) : (
@@ -1723,6 +1766,10 @@ export default function Home({ children }: { children: ReactNode }) {
                           </div>
                         )}
                       </div>
+                      {ownPaymentHint && <p className="footnote settlement-pay-hint">
+                        <span>Add your PayPal, Monzo, Revolut, Wise or bank details so others can pay you in one tap.</span>
+                        <button type="button" className="link-button" onClick={showPaymentDetails}>Add payment details</button>
+                      </p>}
                       <p className="footnote">
                         Record a payment after the money has been transferred.
                         TripTab does not move money.
@@ -1905,6 +1952,7 @@ export default function Home({ children }: { children: ReactNode }) {
                         </form>
                       </div>
                       <TripSharing key={`${trip.id}:${profile?.id || "anonymous"}`} trip={trip} profile={profile} onChanged={() => load({ background: true })} />
+                      <PaymentDetailsPanel key={`pay:${trip.id}:${profile?.id || ""}`} paging={page("payment-details", 10)} trip={trip} accountId={profile?.id} busy={saving || loading} onSave={updateTrip} />
                       <TripDetails paging={page("names", 10)} key={`${trip.id}:${profile?.id || ""}`} trip={trip} accountId={profile?.id} busy={saving || loading} error={error} onSave={updateTrip} />
                       <PersonalLanguageSettings settings={languageSettings} />
                       <DataExport key={`${profile?.id || "anonymous"}:${trip.id}`} tripId={trip.id} compact />

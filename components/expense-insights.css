@@ -1,0 +1,182 @@
+/* Expense search, filters and the spending breakdown above the expense list. */
+.expense-filters {
+  margin-bottom: var(--space-3);
+}
+.expense-search-row {
+  display: flex;
+  gap: var(--space-2);
+  align-items: stretch;
+}
+.expense-search {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+.expense-search > svg {
+  position: absolute;
+  left: var(--space-3);
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--muted);
+  pointer-events: none;
+}
+.expense-search > input {
+  margin: 0;
+  padding-left: 38px;
+}
+.expense-filter-toggle {
+  flex-shrink: 0;
+}
+.expense-filter-toggle .badge {
+  margin-left: 2px;
+}
+.expense-filter-fields {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+}
+.expense-filter-fields > label > select {
+  margin-bottom: 0;
+}
+.expense-filter-status:not(:empty) {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-3);
+  margin-top: var(--space-2);
+  color: var(--muted);
+  font-size: var(--text-s);
+}
+.link-button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: 44px;
+  color: var(--primary);
+  font-weight: 650;
+  font-size: var(--text-s);
+}
+.expense-list .empty .quiet {
+  margin-top: var(--space-3);
+}
+
+.spending-breakdown {
+  margin-bottom: var(--space-4);
+}
+.spending-breakdown > summary {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-4) 22px;
+  cursor: pointer;
+  list-style-position: inside;
+  min-height: 44px;
+}
+.spending-breakdown > summary::marker {
+  color: var(--muted);
+}
+.spending-summary-title {
+  display: inline;
+  font-weight: 700;
+}
+.spending-breakdown > summary small {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.spending-breakdown-body {
+  padding: 0 22px var(--space-4);
+  border-top: 1px solid var(--line);
+}
+.breakdown-views {
+  display: inline-flex;
+  gap: var(--space-1);
+  margin: var(--space-4) 0 var(--space-3);
+  padding: 3px;
+  border-radius: var(--radius-s);
+  background: var(--surface-raised);
+}
+.breakdown-view {
+  min-height: 40px;
+  padding: 0 var(--space-4);
+  border-radius: 6px;
+  font-size: var(--text-s);
+  font-weight: 600;
+  /* Muted ink falls below 4.5:1 on the raised track. */
+  color: var(--label);
+}
+.breakdown-view[aria-pressed="true"] {
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 1px 3px #18203b1f;
+}
+.breakdown-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.breakdown-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px var(--space-3);
+  /* The hover fill extends into the panel padding; the text stays aligned. */
+  width: calc(100% + 2 * var(--space-2));
+  padding: 10px var(--space-2);
+  margin: 0 calc(-1 * var(--space-2));
+  border-radius: var(--radius-s);
+  text-align: left;
+}
+button.breakdown-row:hover {
+  background: var(--surface-raised);
+}
+.breakdown-row[aria-pressed="true"] {
+  background: var(--accent-surface);
+}
+.breakdown-label,
+.breakdown-value {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  font-size: var(--text-s);
+}
+.breakdown-label > span {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.breakdown-label small,
+.breakdown-value small {
+  color: var(--muted);
+}
+.breakdown-value {
+  align-items: flex-end;
+  text-align: right;
+}
+.breakdown-track {
+  grid-column: 1 / -1;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--surface-raised);
+  overflow: hidden;
+}
+.breakdown-bar {
+  display: block;
+  height: 100%;
+  border-radius: 4px;
+  background: var(--primary);
+}
+
+@media (max-width: 700px) {
+  .expense-filter-fields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .spending-breakdown > summary,
+  .spending-breakdown-body {
+    padding-left: var(--space-4);
+    padding-right: var(--space-4);
+  }
+}
+@media (forced-colors: active) {
+  .breakdown-bar {
+    background: CanvasText;
+  }
+}

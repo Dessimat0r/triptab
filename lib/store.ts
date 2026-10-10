@@ -565,6 +565,10 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
         const old = previous.members.find(value => value.id === member.id);
         const link = links.find(value => value.member_id === member.id);
         if (link) {
+          // Payers follow these handles, so only the linked account may change them.
+          if (link.user_id !== id && canonical(member.payTo ?? null) !== canonical(old?.payTo ?? null)) {
+            throw new RequestError(`Only ${old?.name || member.name} can change their own payment details.`, 403);
+          }
           member.userId = link.user_id;
           member.email = link.email || old?.email;
         } else {
@@ -693,7 +697,7 @@ export function failure(e: unknown) {
   if (!(e instanceof RequestError) && !(e instanceof AuthError) && !(e instanceof ReceiptLifecycleError) && !(e instanceof LedgerValidationError) && !(e instanceof ZodError) && !(e instanceof Error && ['UNAUTHORIZED', 'CONFLICT'].includes(e.message))) console.error('TripTab request failed', { kind: e instanceof Error ? e.name : 'UnknownError' });
   const m = e instanceof Error ? e.message : '';
   const issue = e instanceof ZodError ? e.issues[0] : undefined;
-  const knownFields = new Set(['trips', 'id', 'ownerId', 'name', 'currency', 'startDate', 'endDate', 'members', 'userId', 'email', 'expenses', 'drafts', 'payments', 'title', 'date', 'time', 'timezone', 'fx', 'rate', 'asOf', 'source', 'bankAmount', 'payer', 'items', 'amount', 'percentages', 'quantity', 'sourceText', 'units', 'total', 'allocations', 'label', 'conversation', 'role', 'text', 'createdAt', 'replyTo', 'itemId', 'authorMemberId', 'authorName', 'memory', 'notes', 'aliases', 'memberId', 'scopeMemberId', 'tax', 'tip', 'discount', 'receiptId', 'sourceDraftId', 'expenseId', 'status', 'from', 'to', 'note', 'method']);
+  const knownFields = new Set(['trips', 'id', 'ownerId', 'name', 'currency', 'startDate', 'endDate', 'members', 'userId', 'email', 'expenses', 'drafts', 'payments', 'title', 'date', 'time', 'timezone', 'fx', 'rate', 'asOf', 'source', 'bankAmount', 'payer', 'items', 'amount', 'percentages', 'quantity', 'sourceText', 'units', 'total', 'allocations', 'label', 'conversation', 'role', 'text', 'createdAt', 'replyTo', 'itemId', 'authorMemberId', 'authorName', 'memory', 'notes', 'aliases', 'memberId', 'scopeMemberId', 'tax', 'tip', 'discount', 'receiptId', 'sourceDraftId', 'expenseId', 'status', 'from', 'to', 'note', 'method', 'payTo', 'paypal', 'monzo', 'revolut', 'wise', 'bank']);
   for (const field of ['receiptScan', 'version', 'printedSubtotal', 'printedTotal', 'printedCurrency', 'calculatedSubtotal', 'calculatedTotal', 'warnings', 'code', 'itemIds', 'lineIndex', 'observedText', 'difference', 'resolved', 'sourceLines', 'kind', 'mappedTo', 'processedAt', 'processor', 'attemptId', 'imageIds', 'acknowledgement', 'missingTotalAcknowledgement', 'fingerprint', 'scanSource', 'confidence', 'fieldSources']) knownFields.add(field);
   for (const field of ['icon', 'suggestedIcon', 'symbol', 'background', 'receiptLanguage', 'detectedLanguage', 'nameLanguage', 'translations', 'pairedText', 'sourceLanguage', 'provenance', 'languageViewId', 'readingLanguage', 'primaryVersion', 'itemVersions', 'itemKey', 'itemVersion']) knownFields.add(field);
   const issuePath = issue?.path.map(part => typeof part === 'number' ? String(part + 1) : knownFields.has(part) ? part : 'entry').join(' → ');

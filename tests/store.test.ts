@@ -2124,3 +2124,44 @@ test('native D1 scoped receipt saves accept legacy display repairs and preserve 
     assert.equal(JSON.parse(event!.after_data).conversation[0].authorName, undefined);
   } finally { binding.DB = undefined; await worker.dispose(); }
 });
+
+test('only a linked traveller can change their own payment details; unlinked travellers stay shared', async () => {
+  const database = await storage();
+  await create(database);
+  database.sqlite.prepare('INSERT INTO memberships (trip_id,user_id,member_id) VALUES (?,?,?)').run('trip-1', member, 'b');
+  // The organiser may fill in Bob's details only while Bob is not linked; Bob is linked now.
+  let state = await store.readLedger(actor);
+  const forged = structuredClone(state.data);
+  forged.trips[0].members[1].payTo = { paypal: 'organiser' };
+  const before = count(database);
+  await assert.rejects(store.writeLedger(actor, forged, state.revision), /Only Bob can change their own payment details/);
+  assert.equal(count(database), before, 'a refused change records no history');
+  assert.equal((await store.readLedger(member)).data.trips[0].members[1].payTo, undefined);
+
+  // Bob sets his own handle, and the change is recorded against him.
+  state = await store.readLedger(member);
+  state.data.trips[0].members[1].payTo = { monzo: 'bob', bank: 'GB00 TEST 0000 0000 0000 00' };
+  state = await store.writeLedger(member, state.data, state.revision);
+  assert.deepEqual(state.data.trips[0].members[1].payTo, { monzo: 'bob', bank: 'GB00 TEST 0000 0000 0000 00' });
+  const event = lastEntity(await history(member), 'member', 'b');
+  assert.equal(event.actorId, member);
+  assert.deepEqual(event.after?.payTo, { monzo: 'bob', bank: 'GB00 TEST 0000 0000 0000 00' });
+
+  // Bob cannot change the organiser's linked traveller, but unrelated saves keep everyone's details.
+  const ownerEdit = structuredClone(state.data);
+  ownerEdit.trips[0].members[0].payTo = { paypal: 'bob' };
+  await assert.rejects(store.writeLedger(member, ownerEdit, state.revision), /Only Original Owner can change/);
+  state = await store.readLedger(actor);
+  state.data.trips[0].name = 'Lisbon 2026';
+  state = await store.writeLedger(actor, state.data, state.revision);
+  assert.deepEqual(state.data.trips[0].members[1].payTo?.monzo, 'bob');
+
+  // Anyone on the holiday may fill in a traveller with no account.
+  state.data.trips[0].members.push({ id: 'c', name: 'Carol', payTo: { revolut: 'carol' } });
+  state = await store.writeLedger(member, state.data, state.revision);
+  assert.deepEqual(state.data.trips[0].members[2].payTo, { revolut: 'carol' });
+
+  // Handles are usernames, never arbitrary links.
+  state.data.trips[0].members[2].payTo = { revolut: 'evil.example/path' };
+  await assert.rejects(store.writeLedger(member, state.data, state.revision));
+});

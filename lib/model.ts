@@ -3,6 +3,7 @@ import { validCalendarDate } from './dates';
 import { receiptMemorySchema } from './receipt-context';
 import { receiptLocationSchema, receiptLocationHintSchema } from './receipt-location';
 import { expenseIconSchema } from './expense-icons';
+import { payToSchema } from './payment-links';
 import { languageSchema, receiptLanguageSchema, itemTranslationsSchema } from './receipt-languages';
 import { fieldSourcesSchema, itemFieldSourcesSchema, scanSourceSchema, receiptScanSchema,
   reconcileReceiptScan, receiptScanSaveError, receiptScanHumanReviewChanged } from './receipt-scan';
@@ -311,7 +312,8 @@ export const paymentSchema = z.object({
   method: z.string().trim().max(80).optional(),
   note: z.string().trim().max(500).optional(),
 });
-const memberSchema = z.object({ id, name: z.string().trim().min(1).max(50), userId: accountId.optional(), email: z.string().email().optional() });
+const memberSchema = z.object({ id, name: z.string().trim().min(1).max(50), userId: accountId.optional(), email: z.string().email().optional(),
+  payTo: payToSchema.optional() });
 export const tripSchema = z.object({
   id, ownerId: accountId.optional(), name: z.string().min(1).max(100), currency: currencySchema,
   receiptLanguage:receiptLanguageSchema.optional(),

@@ -9,6 +9,7 @@ import type { ActivityEvent } from "@/lib/store";
 import { formatMoney } from "@/lib/money-format";
 import { receiptWarningLabel } from "@/lib/receipt-scan";
 import { expenseIconSchema, iconLabel } from "@/lib/expense-icons";
+import { paymentDetailsSummary, payToSchema } from "@/lib/payment-links";
 import "./activity-details.css";
 
 export type ActivityPanelProps = {
@@ -324,6 +325,7 @@ function changes(event: ActivityEvent, currency: Currency | undefined, names: Re
   add("receiptScan", "Receipt scan review", (value, snapshot) => scanDescription(value, auditText(snapshot.currency) || currency));
   add("status", String(event.entityType) === "invite" ? "Invitation status" : "Review status", value => String(event.entityType) === "invite" && value === "pending" ? "Waiting for the traveller to join" : STATES[auditText(value)] || readable(value));
   add("memberName", "Invited traveller name");
+  add("payTo", "Payment details", value => paymentDetailsSummary(payToSchema.safeParse(value).data));
   add("emailRestricted", "Invitation email restriction", value => value === true ? "Only the invited email can join" : value === false ? "Anyone with the link can join as this traveller" : "Not recorded");
   for (const [key, label] of Object.entries({ amount: "Amount", tax: "Tax", tip: "Tip", discount: "Discount", bankAmount: "Actual bank charge" })) add(key, label, (value, snapshot) => money(value, key === "bankAmount" || String(event.entityType) === "payment" ? currency : auditText(snapshot.currency) || currency));
   for (const [key, label] of Object.entries({ from: "Paid by", to: "Paid to", payer: "Receipt payer", memberId: "Traveller" })) add(key, label, value => traveller(value, names));
