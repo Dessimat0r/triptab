@@ -1,0 +1,3080 @@
+[
+  [
+    "Private account activity",
+    "Actividad privada de la cuenta",
+    "Activité privée du compte",
+    "Private Kontoaktivität"
+  ],
+  [
+    "Only you can see this account history. It records profile, sign-in, email confirmation, connection, notification, holiday archive and personal language changes without passwords or sign-in credentials.",
+    "Solo tú puedes ver este historial de la cuenta. Registra cambios de perfil, inicio de sesión, confirmación de correo, conexiones, notificaciones, archivos de viajes e idioma personal, sin contraseñas ni credenciales.",
+    "Vous seul pouvez voir cet historique. Il consigne les changements de profil, connexion, confirmation d’e-mail, notifications, archivage des voyages et langue personnelle, sans mots de passe ni identifiants de connexion.",
+    "Nur du kannst diesen Kontoverlauf sehen. Er erfasst Änderungen an Profil, Anmeldung, E-Mail-Bestätigung, Verknüpfungen, Benachrichtigungen, Reisearchiv und persönlicher Sprache, ohne Passwörter oder Anmeldedaten."
+  ],
+  [
+    "Retry account activity",
+    "Reintentar actividad de la cuenta",
+    "Réessayer l’activité du compte",
+    "Kontoaktivität erneut laden"
+  ],
+  [
+    "History updates automatically.",
+    "El historial se actualiza automáticamente.",
+    "L’historique se met à jour automatiquement.",
+    "Der Verlauf wird automatisch aktualisiert."
+  ],
+  [
+    "Checking account activity…",
+    "Comprobando actividad de la cuenta…",
+    "Vérification de l’activité du compte…",
+    "Kontoaktivität wird geprüft…"
+  ],
+  [
+    "Loading account activity…",
+    "Cargando actividad de la cuenta…",
+    "Chargement de l’activité du compte…",
+    "Kontoaktivität wird geladen…"
+  ],
+  [
+    "No recorded account changes yet.",
+    "Todavía no hay cambios registrados en la cuenta.",
+    "Aucun changement du compte enregistré.",
+    "Noch keine Kontoänderungen erfasst."
+  ],
+  [
+    "You",
+    "Tú",
+    "Vous",
+    "Du"
+  ],
+  [
+    "changed",
+    "cambió",
+    "a modifié",
+    "hat geändert"
+  ],
+  [
+    "View account change",
+    "Ver cambio de la cuenta",
+    "Voir le changement du compte",
+    "Kontoänderung ansehen"
+  ],
+  [
+    "Recorded at",
+    "Registrado el",
+    "Enregistré le",
+    "Erfasst am"
+  ],
+  [
+    "Session scope",
+    "Ámbito de la sesión",
+    "Portée de la session",
+    "Sitzungsumfang"
+  ],
+  [
+    "Browser sessions revoked when the password changed",
+    "Sesiones del navegador revocadas al cambiar la contraseña",
+    "Sessions du navigateur révoquées lors du changement de mot de passe",
+    "Browsersitzungen beim Passwortwechsel widerrufen"
+  ],
+  [
+    "Notification delivery service",
+    "Servicio de entrega de notificaciones",
+    "Service d’envoi des notifications",
+    "Benachrichtigungsdienst"
+  ],
+  [
+    "Not recorded",
+    "No registrado",
+    "Non enregistré",
+    "Nicht erfasst"
+  ],
+  [
+    "Browser subscription reference",
+    "Referencia de suscripción del navegador",
+    "Référence de l’abonnement du navigateur",
+    "Referenz des Browserabonnements"
+  ],
+  [
+    "Loading…",
+    "Cargando…",
+    "Chargement…",
+    "Wird geladen…"
+  ],
+  [
+    "Load older account changes",
+    "Cargar cambios anteriores de la cuenta",
+    "Charger les changements antérieurs du compte",
+    "Ältere Kontoänderungen laden"
+  ],
+  [
+    "YOUR ACCOUNT",
+    "TU CUENTA",
+    "VOTRE COMPTE",
+    "DEIN KONTO"
+  ],
+  [
+    "Profile & app settings",
+    "Perfil y ajustes de la aplicación",
+    "Profil et réglages de l’application",
+    "Profil und App-Einstellungen"
+  ],
+  [
+    "Close profile",
+    "Cerrar perfil",
+    "Fermer le profil",
+    "Profil schließen"
+  ],
+  [
+    "Verified email",
+    "Correo verificado",
+    "Adresse e-mail vérifiée",
+    "E-Mail bestätigt"
+  ],
+  [
+    "Email not verified",
+    "Correo sin verificar",
+    "Adresse e-mail non vérifiée",
+    "E-Mail nicht bestätigt"
+  ],
+  [
+    "Saving…",
+    "Guardando…",
+    "Enregistrement…",
+    "Wird gespeichert…"
+  ],
+  [
+    "Save profile",
+    "Guardar perfil",
+    "Enregistrer le profil",
+    "Profil speichern"
+  ],
+  [
+    "Change your password",
+    "Cambia tu contraseña",
+    "Modifier votre mot de passe",
+    "Passwort ändern"
+  ],
+  [
+    "Sign in with your email",
+    "Inicia sesión con tu correo",
+    "Se connecter avec votre e-mail",
+    "Mit E-Mail anmelden"
+  ],
+  [
+    "Changing your password signs out your other sessions.",
+    "Cambiar la contraseña cierra las demás sesiones.",
+    "Modifier votre mot de passe déconnecte vos autres sessions.",
+    "Beim Passwortwechsel werden deine anderen Sitzungen abgemeldet."
+  ],
+  [
+    "Add a TripTab password to sign in without ChatGPT. Your holidays and profile stay in this account.",
+    "Añade una contraseña de TripTab para iniciar sesión sin ChatGPT. Tus viajes y perfil siguen en esta cuenta.",
+    "Ajoutez un mot de passe TripTab pour vous connecter sans ChatGPT. Vos voyages et votre profil restent dans ce compte.",
+    "Füge ein TripTab-Passwort hinzu, um dich ohne ChatGPT anzumelden. Deine Reisen und dein Profil bleiben in diesem Konto."
+  ],
+  [
+    "Verify your email in account settings so you can recover your account if you forget your password.",
+    "Verifica tu correo en los ajustes de la cuenta para recuperarla si olvidas la contraseña.",
+    "Vérifiez votre adresse e-mail dans les réglages pour récupérer votre compte si vous oubliez votre mot de passe.",
+    "Bestätige deine E-Mail in den Kontoeinstellungen, damit du dein Konto bei vergessenem Passwort wiederherstellen kannst."
+  ],
+  [
+    "Current TripTab password",
+    "Contraseña actual de TripTab",
+    "Mot de passe TripTab actuel",
+    "Aktuelles TripTab-Passwort"
+  ],
+  [
+    "New TripTab password",
+    "Nueva contraseña de TripTab",
+    "Nouveau mot de passe TripTab",
+    "Neues TripTab-Passwort"
+  ],
+  [
+    "Use 12–128 characters.",
+    "Usa entre 12 y 128 caracteres.",
+    "Utilisez entre 12 et 128 caractères.",
+    "Verwende 12–128 Zeichen."
+  ],
+  [
+    "Saving password…",
+    "Guardando contraseña…",
+    "Enregistrement du mot de passe…",
+    "Passwort wird gespeichert…"
+  ],
+  [
+    "Change password",
+    "Cambiar contraseña",
+    "Modifier le mot de passe",
+    "Passwort ändern"
+  ],
+  [
+    "Add password",
+    "Añadir contraseña",
+    "Ajouter un mot de passe",
+    "Passwort hinzufügen"
+  ],
+  [
+    "Optional AI features",
+    "Funciones de IA opcionales",
+    "Fonctions d’IA facultatives",
+    "Optionale KI-Funktionen"
+  ],
+  [
+    "ChatGPT or Codex can help read receipts, resolve inconsistencies, and enter expenses in natural language. You can use all manual expense, receipt, and sharing features without connecting them.",
+    "ChatGPT o Codex pueden leer recibos, resolver incoherencias e introducir gastos con lenguaje natural. Puedes usar todas las funciones manuales de gastos, recibos y uso compartido sin conectarlos.",
+    "ChatGPT ou Codex peuvent lire les reçus, résoudre les incohérences et saisir les dépenses en langage naturel. Toutes les fonctions manuelles de dépenses, reçus et partage fonctionnent sans les connecter.",
+    "ChatGPT oder Codex können Belege lesen, Unstimmigkeiten klären und Ausgaben in natürlicher Sprache erfassen. Alle manuellen Ausgaben-, Beleg- und Freigabefunktionen funktionieren auch ohne diese Verknüpfung."
+  ],
+  [
+    "ChatGPT identity is linked.",
+    "La identidad de ChatGPT está vinculada.",
+    "L’identité ChatGPT est liée.",
+    "Die ChatGPT-Identität ist verknüpft."
+  ],
+  [
+    "External TripTab tool availability is unknown. Enable TripTab in the conversation you use for assistance. ChatGPT and Codex connections must each be checked in that client.",
+    "Se desconoce si las herramientas externas de TripTab están disponibles. Activa TripTab en la conversación de ayuda. Comprueba las conexiones de ChatGPT y Codex en cada cliente.",
+    "La disponibilité des outils TripTab externes est inconnue. Activez TripTab dans la conversation utilisée pour l’assistance. Vérifiez chaque connexion ChatGPT et Codex dans son client.",
+    "Die Verfügbarkeit externer TripTab-Werkzeuge ist unbekannt. Aktiviere TripTab im Gespräch für die Unterstützung. Prüfe die Verbindungen zu ChatGPT und Codex jeweils in deren App."
+  ],
+  [
+    "Unlinking…",
+    "Desvinculando…",
+    "Dissociation…",
+    "Verknüpfung wird aufgehoben…"
+  ],
+  [
+    "Unlink ChatGPT",
+    "Desvincular ChatGPT",
+    "Dissocier ChatGPT",
+    "ChatGPT-Verknüpfung aufheben"
+  ],
+  [
+    "Add a TripTab password above before unlinking ChatGPT so you can still sign in.",
+    "Añade una contraseña de TripTab arriba antes de desvincular ChatGPT para poder seguir iniciando sesión.",
+    "Ajoutez un mot de passe TripTab ci-dessus avant de dissocier ChatGPT afin de pouvoir toujours vous connecter.",
+    "Füge oben ein TripTab-Passwort hinzu, bevor du ChatGPT trennst, damit du dich weiterhin anmelden kannst."
+  ],
+  [
+    "Link ChatGPT · optional",
+    "Vincular ChatGPT · opcional",
+    "Lier ChatGPT · facultatif",
+    "ChatGPT verknüpfen · optional"
+  ],
+  [
+    "Create a TripTab account with your email to save your profile and holidays. ChatGPT and Codex are optional.",
+    "Crea una cuenta de TripTab con tu correo para guardar tu perfil y viajes. ChatGPT y Codex son opcionales.",
+    "Créez un compte TripTab avec votre e-mail pour conserver votre profil et vos voyages. ChatGPT et Codex sont facultatifs.",
+    "Erstelle ein TripTab-Konto mit deiner E-Mail, um Profil und Reisen zu speichern. ChatGPT und Codex sind optional."
+  ],
+  [
+    "Unable to sign out.",
+    "No se pudo cerrar la sesión.",
+    "Impossible de vous déconnecter.",
+    "Abmelden nicht möglich."
+  ],
+  [
+    "Unable to load account controls.",
+    "No se pudieron cargar los controles de la cuenta.",
+    "Impossible de charger les réglages du compte.",
+    "Kontoeinstellungen konnten nicht geladen werden."
+  ],
+  [
+    "Unable to load signed-in browsers.",
+    "No se pudieron cargar los navegadores con sesión iniciada.",
+    "Impossible de charger les navigateurs connectés.",
+    "Angemeldete Browser konnten nicht geladen werden."
+  ],
+  [
+    "Unable to load account controls. Reopen settings to try again.",
+    "No se pudieron cargar los controles de la cuenta. Abre de nuevo los ajustes para reintentarlo.",
+    "Impossible de charger les réglages du compte. Rouvrez les réglages pour réessayer.",
+    "Kontoeinstellungen konnten nicht geladen werden. Öffne die Einstellungen erneut."
+  ],
+  [
+    "Notification preferences saved.",
+    "Preferencias de notificación guardadas.",
+    "Préférences de notification enregistrées.",
+    "Benachrichtigungseinstellungen gespeichert."
+  ],
+  [
+    "ChatGPT sign-in is managed by ChatGPT. These are your TripTab password sessions.",
+    "ChatGPT gestiona el inicio de sesión de ChatGPT. Estas son tus sesiones con contraseña de TripTab.",
+    "La connexion ChatGPT est gérée par ChatGPT. Voici vos sessions TripTab avec mot de passe.",
+    "Die ChatGPT-Anmeldung wird von ChatGPT verwaltet. Dies sind deine TripTab-Sitzungen mit Passwort."
+  ],
+  [
+    "This browser",
+    "Este navegador",
+    "Ce navigateur",
+    "Dieser Browser"
+  ],
+  [
+    "Browser",
+    "Navegador",
+    "Navigateur",
+    "Browser"
+  ],
+  [
+    "Signed in",
+    "Sesión iniciada el",
+    "Connecté le",
+    "Angemeldet am"
+  ],
+  [
+    "· expires",
+    "· caduca",
+    "· expire",
+    "· läuft ab"
+  ],
+  [
+    "Other browsers signed out.",
+    "Se cerraron las sesiones de los demás navegadores.",
+    "Les autres navigateurs ont été déconnectés.",
+    "Andere Browser wurden abgemeldet."
+  ],
+  [
+    "This removes your sign-in, private settings and account history. Shared expenses and their history, including authored names and notes, remain for other travellers. Transfer or delete holidays you own first.",
+    "Esto elimina tu acceso, ajustes privados e historial de la cuenta. Los gastos compartidos y su historial, incluidos nombres y notas, permanecen para los demás viajeros. Primero transfiere o elimina los viajes de los que eres propietario.",
+    "Cela supprime votre connexion, vos réglages privés et l’historique du compte. Les dépenses partagées et leur historique, y compris les noms et notes saisis, restent accessibles aux autres voyageurs. Transférez ou supprimez d’abord les voyages dont vous êtes propriétaire.",
+    "Dies entfernt deine Anmeldung, privaten Einstellungen und den Kontoverlauf. Gemeinsame Ausgaben und deren Verlauf samt eingetragenen Namen und Notizen bleiben für andere Reisende erhalten. Übertrage oder lösche zuerst deine eigenen Reisen."
+  ],
+  [
+    "Reset your password",
+    "Restablece tu contraseña",
+    "Réinitialiser votre mot de passe",
+    "Passwort zurücksetzen"
+  ],
+  [
+    "Create your TripTab account",
+    "Crea tu cuenta de TripTab",
+    "Créer votre compte TripTab",
+    "TripTab-Konto erstellen"
+  ],
+  [
+    "Sign in to TripTab",
+    "Iniciar sesión en TripTab",
+    "Se connecter à TripTab",
+    "Bei TripTab anmelden"
+  ],
+  [
+    "Use your email to save holidays, share expenses, and join invitations. ChatGPT and Codex are optional, for receipt AI and natural-language help.",
+    "Usa tu correo para guardar viajes, compartir gastos y aceptar invitaciones. ChatGPT y Codex son opcionales para la IA de recibos y la ayuda en lenguaje natural.",
+    "Utilisez votre e-mail pour conserver vos voyages, partager des dépenses et accepter des invitations. ChatGPT et Codex sont facultatifs pour l’IA des reçus et l’aide en langage naturel.",
+    "Verwende deine E-Mail, um Reisen zu speichern, Ausgaben zu teilen und Einladungen anzunehmen. ChatGPT und Codex sind optional für Beleg-KI und Hilfe in natürlicher Sprache."
+  ],
+  [
+    "Save your password in a password manager. You can verify your email in account settings.",
+    "Guarda tu contraseña en un gestor de contraseñas. Puedes verificar tu correo en los ajustes de la cuenta.",
+    "Conservez votre mot de passe dans un gestionnaire. Vous pouvez vérifier votre e-mail dans les réglages du compte.",
+    "Speichere dein Passwort in einem Passwortmanager. Du kannst deine E-Mail in den Kontoeinstellungen bestätigen."
+  ],
+  [
+    "If you previously linked ChatGPT, you can also sign in with that account.",
+    "Si ya vinculaste ChatGPT, también puedes iniciar sesión con esa cuenta.",
+    "Si vous avez déjà lié ChatGPT, vous pouvez également vous connecter avec ce compte.",
+    "Wenn du ChatGPT bereits verknüpft hast, kannst du dich auch mit diesem Konto anmelden."
+  ],
+  [
+    "Your name",
+    "Tu nombre",
+    "Votre nom",
+    "Dein Name"
+  ],
+  [
+    "Sending…",
+    "Enviando…",
+    "Envoi…",
+    "Wird gesendet…"
+  ],
+  [
+    "Send recovery link",
+    "Enviar enlace de recuperación",
+    "Envoyer le lien de récupération",
+    "Wiederherstellungslink senden"
+  ],
+  [
+    "Creating account…",
+    "Creando cuenta…",
+    "Création du compte…",
+    "Konto wird erstellt…"
+  ],
+  [
+    "Signing in…",
+    "Iniciando sesión…",
+    "Connexion…",
+    "Anmeldung läuft…"
+  ],
+  [
+    "Already have a TripTab account?",
+    "¿Ya tienes una cuenta de TripTab?",
+    "Vous avez déjà un compte TripTab ?",
+    "Hast du schon ein TripTab-Konto?"
+  ],
+  [
+    "New to TripTab?",
+    "¿Nuevo en TripTab?",
+    "Vous découvrez TripTab ?",
+    "Neu bei TripTab?"
+  ],
+  [
+    "Create an account",
+    "Crear una cuenta",
+    "Créer un compte",
+    "Konto erstellen"
+  ],
+  [
+    "Close recovery",
+    "Cerrar recuperación",
+    "Fermer la récupération",
+    "Wiederherstellung schließen"
+  ],
+  [
+    "Confirm that this email address belongs to you.",
+    "Confirma que esta dirección de correo te pertenece.",
+    "Confirmez que cette adresse e-mail vous appartient.",
+    "Bestätige, dass diese E-Mail-Adresse dir gehört."
+  ],
+  [
+    "Confirming…",
+    "Confirmando…",
+    "Confirmation…",
+    "Wird bestätigt…"
+  ],
+  [
+    "Set new password",
+    "Establecer nueva contraseña",
+    "Définir un nouveau mot de passe",
+    "Neues Passwort festlegen"
+  ],
+  [
+    "Return to TripTab",
+    "Volver a TripTab",
+    "Revenir à TripTab",
+    "Zurück zu TripTab"
+  ],
+  [
+    "Your download is ready.",
+    "Tu descarga está lista.",
+    "Votre téléchargement est prêt.",
+    "Dein Download ist bereit."
+  ],
+  [
+    "Download your data",
+    "Descargar tus datos",
+    "Télécharger vos données",
+    "Deine Daten herunterladen"
+  ],
+  [
+    "Keep a copy of your profile and holidays you can currently access, including shared records. Photos and sign-in credentials are excluded.",
+    "Conserva una copia de tu perfil y de los viajes a los que tienes acceso, incluidos registros compartidos. Se excluyen fotos y credenciales de acceso.",
+    "Conservez une copie de votre profil et des voyages actuellement accessibles, y compris les données partagées. Les photos et identifiants de connexion sont exclus.",
+    "Speichere eine Kopie deines Profils und der aktuell zugänglichen Reisen samt gemeinsamen Einträgen. Fotos und Anmeldedaten sind ausgeschlossen."
+  ],
+  [
+    "Older account history JSON",
+    "Historial anterior de la cuenta en JSON",
+    "Historique antérieur du compte en JSON",
+    "Älterer Kontoverlauf als JSON"
+  ],
+  [
+    "Older account history CSV",
+    "Historial anterior de la cuenta en CSV",
+    "Historique antérieur du compte en CSV",
+    "Älterer Kontoverlauf als CSV"
+  ],
+  [
+    "This holiday",
+    "Este viaje",
+    "Ce voyage",
+    "Diese Reise"
+  ],
+  [
+    "Include attached receipt details in holiday JSON",
+    "Incluir detalles de recibos adjuntos en el JSON del viaje",
+    "Inclure les détails des reçus joints dans le JSON du voyage",
+    "Angehängte Belegdetails in Reise-JSON aufnehmen"
+  ],
+  [
+    "Holiday JSON",
+    "Viaje en JSON",
+    "Voyage en JSON",
+    "Reise als JSON"
+  ],
+  [
+    "Expenses & payments CSV",
+    "Gastos y pagos en CSV",
+    "Dépenses et paiements en CSV",
+    "Ausgaben und Zahlungen als CSV"
+  ],
+  [
+    "Latest history CSV",
+    "Último historial en CSV",
+    "Historique récent en CSV",
+    "Neuester Verlauf als CSV"
+  ],
+  [
+    "Older history CSV",
+    "Historial anterior en CSV",
+    "Historique antérieur en CSV",
+    "Älterer Verlauf als CSV"
+  ],
+  [
+    "JSON keeps item splits, receipt conversations and drafts. Financial CSV contains posted expenses and payments. History downloads arrive in pages of up to 50 changes.",
+    "JSON conserva los repartos por artículo, conversaciones de recibos y borradores. El CSV financiero contiene gastos y pagos registrados. El historial se descarga en páginas de hasta 50 cambios.",
+    "Le JSON conserve les répartitions par article, conversations et brouillons. Le CSV financier contient les dépenses et paiements enregistrés. L’historique est téléchargé par pages de 50 changements au maximum.",
+    "JSON bewahrt Artikelaufteilungen, Beleggespräche und Entwürfe. Die Finanz-CSV enthält gebuchte Ausgaben und Zahlungen. Der Verlauf wird in Seiten mit bis zu 50 Änderungen heruntergeladen."
+  ],
+  [
+    "Preparing your download…",
+    "Preparando descarga…",
+    "Préparation du téléchargement…",
+    "Download wird vorbereitet…"
+  ],
+  [
+    "Invalid date",
+    "Fecha no válida",
+    "Date invalide",
+    "Ungültiges Datum"
+  ],
+  [
+    "Date unavailable",
+    "Fecha no disponible",
+    "Date indisponible",
+    "Datum nicht verfügbar"
+  ],
+  [
+    "Showing",
+    "Mostrando",
+    "Affichage de",
+    "Angezeigt:"
+  ],
+  [
+    "of",
+    "de",
+    "sur",
+    "von"
+  ],
+  [
+    "expense",
+    "gasto",
+    "dépense",
+    "Ausgabe"
+  ],
+  [
+    "expenses",
+    "gastos",
+    "dépenses",
+    "Ausgaben"
+  ],
+  [
+    "people",
+    "personas",
+    "personnes",
+    "Personen"
+  ],
+  [
+    "payments",
+    "pagos",
+    "paiements",
+    "Zahlungen"
+  ],
+  [
+    "travellers",
+    "viajeros",
+    "voyageurs",
+    "Reisende"
+  ],
+  [
+    "receipt drafts",
+    "borradores de recibos",
+    "brouillons de reçus",
+    "Belegentwürfe"
+  ],
+  [
+    "suggested transfers",
+    "transferencias sugeridas",
+    "virements suggérés",
+    "Vorgeschlagene Überweisungen"
+  ],
+  [
+    "traveller statements",
+    "estados de viajeros",
+    "relevés des voyageurs",
+    "Abrechnungen der Reisenden"
+  ],
+  [
+    "archived holidays",
+    "viajes archivados",
+    "voyages archivés",
+    "Archivierte Reisen"
+  ],
+  [
+    "traveller names",
+    "nombres de viajeros",
+    "noms des voyageurs",
+    "Namen der Reisenden"
+  ],
+  [
+    "payment details",
+    "datos de pago",
+    "coordonnées de paiement",
+    "Zahlungsdaten"
+  ],
+  [
+    "Show",
+    "Mostrar",
+    "Afficher",
+    "Anzeigen"
+  ],
+  [
+    "more",
+    "más",
+    "de plus",
+    "weitere"
+  ],
+  [
+    "Unknown",
+    "Desconocido",
+    "Inconnu",
+    "Unbekannt"
+  ],
+  [
+    "Review",
+    "Revisar",
+    "Vérifier",
+    "Prüfen"
+  ],
+  [
+    "No tabs yet",
+    "Todavía no hay gastos",
+    "Aucune dépense pour le moment",
+    "Noch keine Ausgaben"
+  ],
+  [
+    "The group balance",
+    "El saldo del grupo",
+    "Le solde du groupe",
+    "Gruppensaldo"
+  ],
+  [
+    "View settlements",
+    "Ver liquidaciones",
+    "Voir les règlements",
+    "Abrechnungen ansehen"
+  ],
+  [
+    "Spending",
+    "Gastos",
+    "Dépenses",
+    "Ausgaben"
+  ],
+  [
+    "Gets back",
+    "Recibe",
+    "À recevoir",
+    "Bekommt zurück"
+  ],
+  [
+    "Owes",
+    "Debe",
+    "À payer",
+    "Schuldet"
+  ],
+  [
+    "Settled",
+    "Saldado",
+    "Réglé",
+    "Ausgeglichen"
+  ],
+  [
+    "needs review",
+    "pendiente de revisión",
+    "à vérifier",
+    "muss geprüft werden"
+  ],
+  [
+    "items",
+    "artículos",
+    "articles",
+    "Artikel"
+  ],
+  [
+    "item",
+    "artículo",
+    "article",
+    "Artikel"
+  ],
+  [
+    "paid ·",
+    "pagó ·",
+    "a payé ·",
+    "hat bezahlt ·"
+  ],
+  [
+    "pays",
+    "paga a",
+    "paie",
+    "zahlt an"
+  ],
+  [
+    "paid",
+    "pagó",
+    "a payé",
+    "hat bezahlt"
+  ],
+  [
+    "Try another search, or clear the filters to see all",
+    "Prueba otra búsqueda o quita los filtros para ver los",
+    "Essayez une autre recherche ou effacez les filtres pour voir les",
+    "Versuche eine andere Suche oder entferne die Filter, um alle"
+  ],
+  [
+    "expenses.",
+    "gastos.",
+    "dépenses.",
+    "Ausgaben anzuzeigen."
+  ],
+  [
+    "Suggested transfers simplify the balances. Record what was actually transferred; partial payments and different pairs are supported.",
+    "Las transferencias sugeridas simplifican los saldos. Registra el dinero que realmente se transfirió; se admiten pagos parciales y entre otras parejas.",
+    "Les virements suggérés simplifient les soldes. Enregistrez les sommes réellement transférées ; les paiements partiels et entre d’autres personnes sont possibles.",
+    "Vorgeschlagene Überweisungen vereinfachen die Salden. Erfasse den tatsächlich überwiesenen Betrag; Teilzahlungen und andere Empfänger sind möglich."
+  ],
+  [
+    "Review the flagged receipts before using settlement suggestions.",
+    "Revisa los recibos marcados antes de usar las liquidaciones sugeridas.",
+    "Vérifiez les reçus signalés avant d’utiliser les règlements suggérés.",
+    "Prüfe die markierten Belege vor der Verwendung der Überweisungsvorschläge."
+  ],
+  [
+    "Everyone’s recorded payments and shares balance out.",
+    "Los pagos y las partes registradas de todos están saldados.",
+    "Les paiements et parts enregistrés de chacun s’équilibrent.",
+    "Die erfassten Zahlungen und Anteile aller Reisenden sind ausgeglichen."
+  ],
+  [
+    "Add your PayPal, Monzo, Revolut, Wise or bank details so others can pay you in one tap.",
+    "Añade tus datos de PayPal, Monzo, Revolut, Wise o banco para que los demás puedan pagarte con un toque.",
+    "Ajoutez vos coordonnées PayPal, Monzo, Revolut, Wise ou bancaires pour permettre aux autres de vous payer en un geste.",
+    "Füge deine PayPal-, Monzo-, Revolut-, Wise- oder Bankdaten hinzu, damit andere dich mit einem Tippen bezahlen können."
+  ],
+  [
+    "Record a payment after the money has been transferred. TripTab does not move money.",
+    "Registra un pago después de transferir el dinero. TripTab no mueve dinero.",
+    "Enregistrez un paiement après le transfert d’argent. TripTab ne transfère pas d’argent.",
+    "Erfasse eine Zahlung, nachdem das Geld überwiesen wurde. TripTab bewegt kein Geld."
+  ],
+  [
+    "Traveller statements",
+    "Estados de viajeros",
+    "Relevés des voyageurs",
+    "Abrechnungen der Reisenden"
+  ],
+  [
+    "View statement",
+    "Ver estado",
+    "Voir le relevé",
+    "Abrechnung ansehen"
+  ],
+  [
+    "Recorded payments",
+    "Pagos registrados",
+    "Paiements enregistrés",
+    "Erfasste Zahlungen"
+  ],
+  [
+    "Undo recorded payment",
+    "Deshacer pago registrado",
+    "Annuler le paiement enregistré",
+    "Erfasste Zahlung rückgängig machen"
+  ],
+  [
+    "Receipt inbox",
+    "Bandeja de recibos",
+    "Boîte de réception des reçus",
+    "Belegeingang"
+  ],
+  [
+    "items ·",
+    "artículos ·",
+    "articles ·",
+    "Artikel ·"
+  ],
+  [
+    "Remove draft",
+    "Eliminar borrador",
+    "Supprimer le brouillon",
+    "Entwurf entfernen"
+  ],
+  [
+    "Your travellers",
+    "Tus viajeros",
+    "Vos voyageurs",
+    "Deine Reisenden"
+  ],
+  [
+    "Traveller’s name",
+    "Nombre del viajero",
+    "Nom du voyageur",
+    "Name des Reisenden"
+  ],
+  [
+    "New traveller name",
+    "Nombre del nuevo viajero",
+    "Nom du nouveau voyageur",
+    "Name des neuen Reisenden"
+  ],
+  [
+    "Who shares what",
+    "Quién comparte qué",
+    "Qui partage quoi",
+    "Wer teilt was"
+  ],
+  [
+    "“Counts as” gives a couple or family more than one share when an expense is split equally, for expenses added or edited from now on. Joining and leaving dates choose who is ticked by default on new expenses; nobody’s existing shares change.",
+    "«Cuenta como» da más de una parte a una pareja o familia en los repartos iguales de gastos añadidos o editados a partir de ahora. Las fechas de llegada y salida determinan quién se selecciona por defecto en nuevos gastos; no cambian las partes existentes.",
+    "«Compte pour» donne plusieurs parts à un couple ou une famille lors d’un partage égal des dépenses ajoutées ou modifiées à partir de maintenant. Les dates d’arrivée et de départ déterminent la sélection par défaut des nouvelles dépenses ; les parts existantes ne changent pas.",
+    "„Zählt als“ gibt einem Paar oder einer Familie mehrere Anteile bei gleichmäßigen Aufteilungen von künftig erstellten oder bearbeiteten Ausgaben. Ankunfts- und Abreisedaten bestimmen die Vorauswahl bei neuen Ausgaben; bestehende Anteile ändern sich nicht."
+  ],
+  [
+    "HOW THE BALANCE ADDS UP",
+    "CÓMO SE CALCULA EL SALDO",
+    "COMMENT LE SOLDE EST CALCULÉ",
+    "SO WIRD DER SALDO BERECHNET"
+  ],
+  [
+    "’s statement",
+    ": estado",
+    " : relevé",
+    ": Abrechnung"
+  ],
+  [
+    "· All amounts below are in",
+    "· Todos los importes están en",
+    "· Tous les montants ci-dessous sont en",
+    "· Alle folgenden Beträge in"
+  ],
+  [
+    "Close traveller statement",
+    "Cerrar estado del viajero",
+    "Fermer le relevé du voyageur",
+    "Abrechnung schließen"
+  ],
+  [
+    "Should receive",
+    "Debe recibir",
+    "À recevoir",
+    "Soll erhalten"
+  ],
+  [
+    "Still owes",
+    "Todavía debe",
+    "Reste à payer",
+    "Schuldet noch"
+  ],
+  [
+    "Settled up",
+    "Saldado",
+    "Réglé",
+    "Ausgeglichen"
+  ],
+  [
+    "Payments sent",
+    "Pagos enviados",
+    "Paiements envoyés",
+    "Gesendete Zahlungen"
+  ],
+  [
+    "Payments received",
+    "Pagos recibidos",
+    "Paiements reçus",
+    "Empfangene Zahlungen"
+  ],
+  [
+    "No expenses involving this traveller yet.",
+    "Todavía no hay gastos de este viajero.",
+    "Aucune dépense concernant ce voyageur.",
+    "Noch keine Ausgaben für diese Person."
+  ],
+  [
+    "No payments sent or received yet.",
+    "Todavía no hay pagos enviados ni recibidos.",
+    "Aucun paiement envoyé ou reçu.",
+    "Noch keine gesendeten oder empfangenen Zahlungen."
+  ],
+  [
+    "Recorded payments describe money already transferred between travellers.",
+    "Los pagos registrados describen dinero ya transferido entre viajeros.",
+    "Les paiements enregistrés correspondent à l’argent déjà transféré entre voyageurs.",
+    "Erfasste Zahlungen beschreiben bereits zwischen Reisenden übertragenes Geld."
+  ],
+  [
+    "Close statement",
+    "Cerrar estado",
+    "Fermer le relevé",
+    "Abrechnung schließen"
+  ],
+  [
+    "This traveller is no longer in the holiday.",
+    "Este viajero ya no está en el viaje.",
+    "Ce voyageur ne fait plus partie du voyage.",
+    "Diese Person gehört nicht mehr zur Reise."
+  ],
+  [
+    "Paid upfront − cost share + payments sent − payments received = balance. A positive balance is money to receive; a negative balance is money still owed.",
+    "Pagado por adelantado − parte del gasto + pagos enviados − pagos recibidos = saldo. Un saldo positivo es dinero por recibir; uno negativo es dinero pendiente de pagar.",
+    "Payé d’avance − part des dépenses + paiements envoyés − paiements reçus = solde. Un solde positif est à recevoir ; un solde négatif reste à payer.",
+    "Vorauszahlungen − Kostenanteil + gesendete Zahlungen − empfangene Zahlungen = Saldo. Ein positiver Saldo ist Geld, das du erhältst; ein negativer Saldo ist noch zu zahlen."
+  ],
+  [
+    "Cost shares include receipt percentages, item assignments, tax, tips, discounts and currency conversion. Every penny follows the holiday’s saved split.",
+    "Las partes incluyen porcentajes, asignación de artículos, impuestos, propinas, descuentos y conversión de moneda. Cada céntimo sigue el reparto guardado del viaje.",
+    "Les parts incluent pourcentages, attribution des articles, taxes, pourboires, remises et conversion des devises. Chaque centime suit le partage enregistré du voyage.",
+    "Kostenanteile berücksichtigen Prozentsätze, Artikelzuordnungen, Steuern, Trinkgeld, Rabatte und Währungsumrechnung. Jeder Cent folgt der gespeicherten Aufteilung der Reise."
+  ],
+  [
+    "receipt ·",
+    "recibo ·",
+    "reçu ·",
+    "Beleg ·"
+  ],
+  [
+    "Keep holiday names and travellers on this device. New expenses and receipt photos wait here until you open TripTab while connected.",
+    "Conserva nombres de viajes y viajeros en este dispositivo. Los gastos nuevos y fotos esperan aquí hasta que abras TripTab con conexión.",
+    "Conservez les noms des voyages et voyageurs sur cet appareil. Les nouvelles dépenses et photos attendent ici jusqu’à l’ouverture de TripTab en ligne.",
+    "Speichere Reisenamen und Reisende auf diesem Gerät. Neue Ausgaben und Belegfotos warten hier, bis du TripTab mit Internetverbindung öffnest."
+  ],
+  [
+    "Offline holiday details could not be refreshed.",
+    "No se pudieron actualizar los datos del viaje sin conexión.",
+    "Impossible d’actualiser les détails du voyage hors ligne.",
+    "Offline-Reisedaten konnten nicht aktualisiert werden."
+  ],
+  [
+    "Sign in again to check the queued receipt photo.",
+    "Inicia sesión de nuevo para comprobar la foto pendiente.",
+    "Reconnectez-vous pour vérifier la photo en attente.",
+    "Melde dich erneut an, um das vorgemerkte Belegfoto zu prüfen."
+  ],
+  [
+    "This browser cannot enable offline capture.",
+    "Este navegador no puede activar la captura sin conexión.",
+    "Ce navigateur ne peut pas activer la saisie hors ligne.",
+    "Dieser Browser kann die Offline-Erfassung nicht aktivieren."
+  ],
+  [
+    "pending expenses for this account.",
+    "gastos pendientes de esta cuenta.",
+    "dépenses en attente pour ce compte.",
+    "ausstehende Ausgaben für dieses Konto."
+  ],
+  [
+    "Syncing…",
+    "Sincronizando…",
+    "Synchronisation…",
+    "Wird synchronisiert…"
+  ],
+  [
+    "Restore this holiday or sign in to its account before editing the pending expense.",
+    "Restaura este viaje o inicia sesión en su cuenta antes de editar el gasto pendiente.",
+    "Restaurez ce voyage ou connectez-vous à son compte avant de modifier la dépense en attente.",
+    "Stelle diese Reise wieder her oder melde dich mit dem zugehörigen Konto an, bevor du die ausstehende Ausgabe bearbeitest."
+  ],
+  [
+    "Enter an amount with up to two decimals.",
+    "Introduce un importe con hasta dos decimales.",
+    "Saisissez un montant avec deux décimales au maximum.",
+    "Gib einen Betrag mit höchstens zwei Dezimalstellen ein."
+  ],
+  [
+    "Check the converted amount before saving.",
+    "Comprueba el importe convertido antes de guardar.",
+    "Vérifiez le montant converti avant d’enregistrer.",
+    "Prüfe den umgerechneten Betrag vor dem Speichern."
+  ],
+  [
+    "Choose travellers in this holiday.",
+    "Elige viajeros de este viaje.",
+    "Choisissez des voyageurs de ce voyage.",
+    "Wähle Reisende aus dieser Reise."
+  ],
+  [
+    "Converted total: {value0}",
+    "Total convertido: {value0}",
+    "Total converti : {value0}",
+    "Umgerechnete Summe: {value0}"
+  ],
+  [
+    "Check the exchange rate and amount.",
+    "Comprueba el tipo de cambio y el importe.",
+    "Vérifiez le taux de change et le montant.",
+    "Prüfe Wechselkurs und Betrag."
+  ],
+  [
+    "You’re offline",
+    "Sin conexión",
+    "Vous êtes hors ligne",
+    "Du bist offline"
+  ],
+  [
+    "Reconnect to TripTab",
+    "Volver a conectar con TripTab",
+    "Se reconnecter à TripTab",
+    "TripTab erneut verbinden"
+  ],
+  [
+    "Capture a new expense here if you enabled offline capture while connected. It will sync when you open TripTab online.",
+    "Captura aquí un gasto nuevo si activaste la captura sin conexión cuando estabas conectado. Se sincronizará al abrir TripTab en línea.",
+    "Saisissez une nouvelle dépense ici si vous avez activé la saisie hors ligne lorsque vous étiez connecté. Elle sera synchronisée à l’ouverture de TripTab en ligne.",
+    "Erfasse hier eine neue Ausgabe, wenn du die Offline-Erfassung zuvor mit Internetverbindung aktiviert hast. Sie wird synchronisiert, sobald du TripTab online öffnest."
+  ],
+  [
+    "Loading this device’s capture settings…",
+    "Cargando ajustes de captura del dispositivo…",
+    "Chargement des réglages de saisie de cet appareil…",
+    "Erfassungseinstellungen dieses Geräts werden geladen…"
+  ],
+  [
+    "Expense name",
+    "Nombre del gasto",
+    "Nom de la dépense",
+    "Name der Ausgabe"
+  ],
+  [
+    "Manual rate: one unit in",
+    "Cambio manual: una unidad en",
+    "Taux manuel : une unité en",
+    "Manueller Kurs: eine Einheit in"
+  ],
+  [
+    "I checked the manual rate and converted amount.",
+    "He comprobado el cambio manual y el importe convertido.",
+    "J’ai vérifié le taux manuel et le montant converti.",
+    "Ich habe den manuellen Kurs und den umgerechneten Betrag geprüft."
+  ],
+  [
+    "The shared receipt photo will be attached.",
+    "Se adjuntará la foto compartida del recibo.",
+    "La photo du reçu partagé sera jointe.",
+    "Das geteilte Belegfoto wird angehängt."
+  ],
+  [
+    "Save on this device",
+    "Guardar en este dispositivo",
+    "Enregistrer sur cet appareil",
+    "Auf diesem Gerät speichern"
+  ],
+  [
+    "Try again",
+    "Reintentar",
+    "Réessayer",
+    "Erneut versuchen"
+  ],
+  [
+    "(counts as {count})",
+    "(cuenta como {count})",
+    "(compte pour {count})",
+    "(zählt als {count})"
+  ],
+  [
+    "Converted total: {amount} {currency}",
+    "Total convertido: {amount} {currency}",
+    "Total converti : {amount} {currency}",
+    "Umgerechnete Summe: {amount} {currency}"
+  ],
+  [
+    "Enable offline capture in TripTab while connected. Your pending expenses remain on this device.",
+    "Activa la captura sin conexión en TripTab cuando tengas conexión. Tus gastos pendientes permanecen en este dispositivo.",
+    "Activez la saisie hors ligne dans TripTab lorsque vous êtes connecté. Vos dépenses en attente restent sur cet appareil.",
+    "Aktiviere die Offline-Erfassung in TripTab mit Internetverbindung. Deine ausstehenden Ausgaben bleiben auf diesem Gerät."
+  ],
+  [
+    "Open TripTab online to refresh your holidays first.",
+    "Abre TripTab con conexión para actualizar tus viajes primero.",
+    "Ouvrez d’abord TripTab en ligne pour actualiser vos voyages.",
+    "Öffne TripTab zuerst online, um deine Reisen zu aktualisieren."
+  ],
+  [
+    "{count} expenses waiting to sync for {name}.",
+    "{count} gastos pendientes de sincronizar de {name}.",
+    "{count} dépenses en attente de synchronisation pour {name}.",
+    "{count} Ausgaben warten auf die Synchronisierung für {name}."
+  ],
+  [
+    "This browser cannot save offline. Reconnect to record the expense.",
+    "Este navegador no puede guardar sin conexión. Vuelve a conectarte para registrar el gasto.",
+    "Ce navigateur ne peut pas enregistrer hors ligne. Reconnectez-vous pour saisir la dépense.",
+    "Dieser Browser kann nicht offline speichern. Verbinde dich erneut, um die Ausgabe zu erfassen."
+  ],
+  [
+    "Enter an amount with at most two decimal places.",
+    "Introduce un importe con un máximo de dos decimales.",
+    "Saisissez un montant avec deux décimales au maximum.",
+    "Gib einen Betrag mit höchstens zwei Dezimalstellen ein."
+  ],
+  [
+    "Enter a positive amount and choose who shares it.",
+    "Introduce un importe positivo y elige quién lo comparte.",
+    "Saisissez un montant positif et choisissez qui le partage.",
+    "Gib einen positiven Betrag ein und wähle die Beteiligten."
+  ],
+  [
+    "Enter an expense name.",
+    "Introduce un nombre para el gasto.",
+    "Saisissez un nom de dépense.",
+    "Gib einen Namen für die Ausgabe ein."
+  ],
+  [
+    "Enter a manual rate in {currency}, or use that currency for the amount.",
+    "Introduce un cambio manual en {currency} o usa esa moneda para el importe.",
+    "Saisissez un taux manuel en {currency}, ou utilisez cette devise pour le montant.",
+    "Gib einen manuellen Kurs in {currency} ein oder verwende diese Währung für den Betrag."
+  ],
+  [
+    "{currency} totals must be whole currency units.",
+    "Los totales en {currency} deben ser unidades enteras.",
+    "Les totaux en {currency} doivent être des unités entières.",
+    "Summen in {currency} müssen ganze Währungseinheiten sein."
+  ],
+  [
+    "Check the manual rate and converted total before saving. The converted amount must be within the expense limit.",
+    "Comprueba el cambio manual y el total convertido antes de guardar. El importe convertido debe estar dentro del límite de gastos.",
+    "Vérifiez le taux manuel et le total converti avant d’enregistrer. Le montant converti doit respecter la limite des dépenses.",
+    "Prüfe den manuellen Kurs und die umgerechnete Summe vor dem Speichern. Der umgerechnete Betrag muss innerhalb der Ausgabengrenze liegen."
+  ],
+  [
+    "Saved on this device. Open TripTab when connected to sync it.",
+    "Guardado en este dispositivo. Abre TripTab con conexión para sincronizarlo.",
+    "Enregistré sur cet appareil. Ouvrez TripTab en ligne pour synchroniser.",
+    "Auf diesem Gerät gespeichert. Öffne TripTab mit Internetverbindung, um zu synchronisieren."
+  ],
+  [
+    "Unable to save. Your details are still here.",
+    "No se pudo guardar. Tus datos siguen aquí.",
+    "Impossible d’enregistrer. Vos informations sont conservées.",
+    "Speichern nicht möglich. Deine Angaben bleiben erhalten."
+  ],
+  [
+    "{value0} active",
+    "{value0} activos",
+    "{value0} actifs",
+    "{value0} aktiv"
+  ],
+  [
+    "· Matching your search",
+    "· Coincide con tu búsqueda",
+    "· Correspond à votre recherche",
+    "· Entspricht deiner Suche"
+  ],
+  [
+    "Categories follow each expense’s icon. Change an icon to recategorise it; tap a category to list only its expenses.",
+    "Las categorías siguen el icono de cada gasto. Cambia el icono para cambiar de categoría; toca una categoría para ver solo sus gastos.",
+    "Les catégories suivent l’icône de chaque dépense. Changez l’icône pour changer de catégorie ; touchez une catégorie pour afficher ses dépenses.",
+    "Die Kategorie folgt dem Symbol der Ausgabe. Ändere das Symbol, um sie neu zuzuordnen; tippe auf eine Kategorie, um deren Ausgaben anzuzeigen."
+  ],
+  [
+    "What each person owes for these expenses, whoever paid upfront.",
+    "Lo que debe cada persona por estos gastos, independientemente de quién pagó.",
+    "La part de chacun pour ces dépenses, quelle que soit la personne ayant avancé l’argent.",
+    "Der Anteil jeder Person an diesen Ausgaben, unabhängig davon, wer bezahlt hat."
+  ],
+  [
+    "{count} days with spending · {amount} a day on average.",
+    "{count} días con gastos · {amount} al día de media.",
+    "{count} jours avec des dépenses · {amount} par jour en moyenne.",
+    "{count} Tage mit Ausgaben · durchschnittlich {amount} pro Tag."
+  ],
+  [
+    "{count} expenses need review and are not included.",
+    "{count} gastos necesitan revisión y no están incluidos.",
+    "{count} dépenses nécessitent une vérification et ne sont pas incluses.",
+    "{count} Ausgaben müssen geprüft werden und sind nicht enthalten."
+  ],
+  [
+    "Most on {category} ({percent}%)",
+    "Más en {category} ({percent}%)",
+    "Principalement {category} ({percent} %)",
+    "Am meisten für {category} ({percent} %)"
+  ],
+  [
+    "· Showing below",
+    "· Mostrados abajo",
+    "· Affichées ci-dessous",
+    "· Unten angezeigt"
+  ],
+  [
+    "Discuss",
+    "Comentar",
+    "Discuter",
+    "Besprechen"
+  ],
+  [
+    "Importing…",
+    "Importando…",
+    "Importation…",
+    "Wird importiert…"
+  ],
+  [
+    "Create imported holiday",
+    "Crear viaje importado",
+    "Créer le voyage importé",
+    "Importierte Reise erstellen"
+  ],
+  [
+    "Import files must be no larger than 2 MB.",
+    "Los archivos de importación no deben superar los 2 MB.",
+    "Les fichiers d’importation ne doivent pas dépasser 2 Mo.",
+    "Importdateien dürfen nicht größer als 2 MB sein."
+  ],
+  [
+    "Could not save the interface language.",
+    "No se pudo guardar el idioma de la interfaz.",
+    "Impossible d’enregistrer la langue de l’interface.",
+    "Oberflächensprache konnte nicht gespeichert werden."
+  ],
+  [
+    "Could not change language.",
+    "No se pudo cambiar el idioma.",
+    "Impossible de changer la langue.",
+    "Sprache konnte nicht geändert werden."
+  ],
+  [
+    "Group spending",
+    "Gastos del grupo",
+    "Dépenses du groupe",
+    "Gruppenausgaben"
+  ],
+  [
+    "Per day",
+    "Por día",
+    "Par jour",
+    "Pro Tag"
+  ],
+  [
+    "Over budget",
+    "Presupuesto superado",
+    "Budget dépassé",
+    "Über dem Budget"
+  ],
+  [
+    "Left",
+    "Restante",
+    "Restant",
+    "Übrig"
+  ],
+  [
+    "% of",
+    "% de",
+    "% de",
+    "% von"
+  ],
+  [
+    "review and",
+    "revisión y",
+    "vérification et",
+    "Prüfung und"
+  ],
+  [
+    "not counted.",
+    "no se cuentan.",
+    "non comptées.",
+    "nicht mitgerechnet."
+  ],
+  [
+    "Summary copied. Paste it into a message or email.",
+    "Resumen copiado. Pégalo en un mensaje o correo.",
+    "Résumé copié. Collez-le dans un message ou un e-mail.",
+    "Zusammenfassung kopiert. Füge sie in eine Nachricht oder E-Mail ein."
+  ],
+  [
+    "Unable to share from this browser. Use Print instead.",
+    "No se puede compartir desde este navegador. Usa Imprimir.",
+    "Impossible de partager depuis ce navigateur. Utilisez Imprimer.",
+    "Teilen ist in diesem Browser nicht möglich. Verwende Drucken."
+  ],
+  [
+    "END-OF-TRIP SUMMARY",
+    "RESUMEN FINAL DEL VIAJE",
+    "BILAN DE FIN DE VOYAGE",
+    "ZUSAMMENFASSUNG DER REISE"
+  ],
+  [
+    "travellers · Amounts in",
+    "viajeros · Importes en",
+    "voyageurs · Montants en",
+    "Reisende · Beträge in"
+  ],
+  [
+    "Close summary",
+    "Cerrar resumen",
+    "Fermer le résumé",
+    "Zusammenfassung schließen"
+  ],
+  [
+    "Total spent",
+    "Total gastado",
+    "Total dépensé",
+    "Insgesamt ausgegeben"
+  ],
+  [
+    "Each person",
+    "Cada persona",
+    "Chaque personne",
+    "Jede Person"
+  ],
+  [
+    "Paid",
+    "Pagado",
+    "Payé",
+    "Bezahlt"
+  ],
+  [
+    "Balance = paid − share + payments sent − payments received.",
+    "Saldo = pagado − parte + pagos enviados − pagos recibidos.",
+    "Solde = payé − part + paiements envoyés − paiements reçus.",
+    "Saldo = bezahlt − Anteil + gesendete Zahlungen − empfangene Zahlungen."
+  ],
+  [
+    "Everyone is settled up.",
+    "Todos han saldado cuentas.",
+    "Tous les comptes sont réglés.",
+    "Alle haben abgerechnet."
+  ],
+  [
+    "Where the money went",
+    "En qué se gastó el dinero",
+    "Où l’argent a été dépensé",
+    "Wofür das Geld ausgegeben wurde"
+  ],
+  [
+    "Grouped by each expense’s icon.",
+    "Agrupado por el icono de cada gasto.",
+    "Regroupé selon l’icône de chaque dépense.",
+    "Nach dem Symbol jeder Ausgabe gruppiert."
+  ],
+  [
+    "Print or save as PDF",
+    "Imprimir o guardar como PDF",
+    "Imprimer ou enregistrer en PDF",
+    "Drucken oder als PDF speichern"
+  ],
+  [
+    "Share summary",
+    "Compartir resumen",
+    "Partager le résumé",
+    "Zusammenfassung teilen"
+  ],
+  [
+    "Repeat “",
+    "Repetir «",
+    "Répéter «",
+    "Wiederholen: „"
+  ],
+  [
+    "Adds copies of the saved expense with the same amount, payer and split on later days. Current traveller weights and rounding apply. Receipt photos and chats are not copied.",
+    "Añade copias del gasto guardado con el mismo importe, pagador y reparto en días posteriores. Se aplican los pesos actuales de los viajeros y el redondeo. No se copian fotos ni chats.",
+    "Ajoute des copies de la dépense enregistrée avec le même montant, payeur et partage aux dates suivantes. Les poids actuels des voyageurs et l’arrondi s’appliquent. Les photos et conversations ne sont pas copiées.",
+    "Fügt Kopien der gespeicherten Ausgabe mit gleichem Betrag, Zahler und Aufteilung an späteren Tagen hinzu. Aktuelle Personengewichte und Rundungsregeln gelten. Belegfotos und Gespräche werden nicht kopiert."
+  ],
+  [
+    "Choose between 1 and 60 repeats.",
+    "Elige entre 1 y 60 repeticiones.",
+    "Choisissez entre 1 et 60 répétitions.",
+    "Wähle zwischen 1 und 60 Wiederholungen."
+  ],
+  [
+    "This holiday has room for {count} more expenses.",
+    "En este viaje caben {count} gastos más.",
+    "Ce voyage peut contenir {count} dépenses supplémentaires.",
+    "Diese Reise bietet Platz für {count} weitere Ausgaben."
+  ],
+  [
+    "No copies with these settings.",
+    "No hay copias con estos ajustes.",
+    "Aucune copie avec ces réglages.",
+    "Keine Kopien mit diesen Einstellungen."
+  ],
+  [
+    "Add {count} copies",
+    "Añadir {count} copias",
+    "Ajouter {count} copies",
+    "{count} Kopien hinzufügen"
+  ],
+  [
+    "{count} copies: {first} to {last}.",
+    "{count} copias: de {first} a {last}.",
+    "{count} copies : du {first} au {last}.",
+    "{count} Kopien: von {first} bis {last}."
+  ],
+  [
+    "Manage this holiday",
+    "Administrar este viaje",
+    "Gérer ce voyage",
+    "Diese Reise verwalten"
+  ],
+  [
+    "Archive removes it from your open list. Other travellers keep their access, and you can restore it or download it from Archived holidays.",
+    "Archivar lo quita de tu lista abierta. Los demás viajeros conservan el acceso y puedes restaurarlo o descargarlo desde Viajes archivados.",
+    "L’archivage retire le voyage de votre liste ouverte. Les autres voyageurs conservent leur accès ; vous pouvez le restaurer ou le télécharger dans Voyages archivés.",
+    "Archivieren entfernt die Reise aus deiner offenen Liste. Andere Reisende behalten ihren Zugang. Du kannst sie unter Archivierte Reisen wiederherstellen oder herunterladen."
+  ],
+  [
+    "New owner",
+    "Nuevo propietario",
+    "Nouveau propriétaire",
+    "Neuer Eigentümer"
+  ],
+  [
+    "Deletion removes the holiday and receipt photos. Shared history is retained. Holidays that other accounts can still open must be transferred or archived instead.",
+    "La eliminación borra el viaje y las fotos de recibos. Se conserva el historial compartido. Los viajes accesibles para otras cuentas deben transferirse o archivarse.",
+    "La suppression efface le voyage et les photos des reçus. L’historique partagé est conservé. Les voyages encore accessibles à d’autres comptes doivent être transférés ou archivés.",
+    "Löschen entfernt die Reise und Belegfotos. Der gemeinsame Verlauf bleibt erhalten. Reisen, die andere Konten noch öffnen können, müssen übertragen oder archiviert werden."
+  ],
+  [
+    "Type",
+    "Escribe",
+    "Saisissez",
+    "Gib"
+  ],
+  [
+    "to confirm",
+    "para confirmar",
+    "pour confirmer",
+    "zur Bestätigung ein"
+  ],
+  [
+    "Close archived holidays",
+    "Cerrar viajes archivados",
+    "Fermer les voyages archivés",
+    "Archivierte Reisen schließen"
+  ],
+  [
+    "Loading holidays…",
+    "Cargando viajes…",
+    "Chargement des voyages…",
+    "Reisen werden geladen…"
+  ],
+  [
+    "· archived",
+    "· archivado",
+    "· archivé",
+    "· archiviert"
+  ],
+  [
+    "No archived holidays.",
+    "No hay viajes archivados.",
+    "Aucun voyage archivé.",
+    "Keine archivierten Reisen."
+  ],
+  [
+    "Enter a traveller name between 1 and 50 characters.",
+    "Introduce un nombre de viajero de entre 1 y 50 caracteres.",
+    "Saisissez un nom de voyageur de 1 à 50 caractères.",
+    "Gib einen Namen mit 1–50 Zeichen ein."
+  ],
+  [
+    "Each traveller needs a different name. Add a surname or nickname.",
+    "Cada viajero necesita un nombre diferente. Añade un apellido o apodo.",
+    "Chaque voyageur doit avoir un nom différent. Ajoutez un nom de famille ou un surnom.",
+    "Jede Person braucht einen anderen Namen. Füge einen Nachnamen oder Spitznamen hinzu."
+  ],
+  [
+    "Unable to save this traveller name. Your edit is still here; try again.",
+    "No se pudo guardar el nombre. Tu cambio sigue aquí; reinténtalo.",
+    "Impossible d’enregistrer ce nom. Votre modification est conservée ; réessayez.",
+    "Name konnte nicht gespeichert werden. Deine Änderung bleibt erhalten; versuche es erneut."
+  ],
+  [
+    "name",
+    "nombre",
+    "nom",
+    "Name"
+  ],
+  [
+    "Traveller name saved.",
+    "Nombre del viajero guardado.",
+    "Nom du voyageur enregistré.",
+    "Name gespeichert."
+  ],
+  [
+    "Travellers in this holiday can update its name, dates, budget and display names.",
+    "Los viajeros pueden cambiar el nombre, fechas, presupuesto y nombres para mostrar del viaje.",
+    "Les voyageurs peuvent modifier le nom, les dates, le budget et les noms affichés de ce voyage.",
+    "Reisende können den Namen, die Daten, das Budget und die Anzeigenamen dieser Reise ändern."
+  ],
+  [
+    "Enter a holiday name between 1 and 100 characters.",
+    "Introduce un nombre de viaje de entre 1 y 100 caracteres.",
+    "Saisissez un nom de voyage de 1 à 100 caractères.",
+    "Gib einen Reisenamen mit 1–100 Zeichen ein."
+  ],
+  [
+    "Enter a valid holiday start date.",
+    "Introduce una fecha de inicio válida.",
+    "Saisissez une date de début de voyage valide.",
+    "Gib ein gültiges Startdatum ein."
+  ],
+  [
+    "Enter a valid holiday end date.",
+    "Introduce una fecha de fin válida.",
+    "Saisissez une date de fin de voyage valide.",
+    "Gib ein gültiges Enddatum ein."
+  ],
+  [
+    "The end date must be on or after the start date.",
+    "La fecha de fin debe ser igual o posterior al inicio.",
+    "La date de fin doit être égale ou postérieure à la date de début.",
+    "Das Enddatum muss am oder nach dem Startdatum liegen."
+  ],
+  [
+    "Enter the budget as an amount such as 1500 or 1500.00, or leave it empty.",
+    "Introduce un presupuesto como 1500 o 1500.00, o déjalo vacío.",
+    "Saisissez le budget sous la forme 1500 ou 1500.00, ou laissez le champ vide.",
+    "Gib das Budget als Betrag wie 1500 oder 1500.00 ein oder lasse das Feld leer."
+  ],
+  [
+    "Unable to save the holiday details. Your edits are still here; try again.",
+    "No se pudieron guardar los datos del viaje. Tus cambios siguen aquí; reinténtalo.",
+    "Impossible d’enregistrer les détails du voyage. Vos modifications sont conservées ; réessayez.",
+    "Reisedaten konnten nicht gespeichert werden. Deine Änderungen bleiben erhalten; versuche es erneut."
+  ],
+  [
+    "Start date (optional)",
+    "Fecha de inicio (opcional)",
+    "Date de début (facultative)",
+    "Startdatum (optional)"
+  ],
+  [
+    "End date (optional)",
+    "Fecha de fin (opcional)",
+    "Date de fin (facultative)",
+    "Enddatum (optional)"
+  ],
+  [
+    "Group budget in",
+    "Presupuesto del grupo en",
+    "Budget du groupe en",
+    "Gruppenbudget in"
+  ],
+  [
+    "Holiday details saved.",
+    "Datos del viaje guardados.",
+    "Détails du voyage enregistrés.",
+    "Reisedaten gespeichert."
+  ],
+  [
+    ". Each expense keeps its original currency and transaction time. Saved expenses and payments keep the same traveller assignments when a display name changes.",
+    ". Cada gasto conserva su moneda original y hora. Los gastos y pagos guardados conservan la asignación de viajeros al cambiar un nombre.",
+    ". Chaque dépense conserve sa devise et son heure d’origine. Les dépenses et paiements enregistrés conservent leurs attributions lorsqu’un nom affiché change.",
+    ". Jede Ausgabe behält ihre ursprüngliche Währung und Uhrzeit. Gespeicherte Ausgaben und Zahlungen behalten ihre Personenzuordnung bei Änderungen der Anzeigenamen."
+  ],
+  [
+    "Traveller display names",
+    "Nombres para mostrar de los viajeros",
+    "Noms affichés des voyageurs",
+    "Anzeigenamen der Reisenden"
+  ],
+  [
+    "These labels belong to this holiday. Connected accounts and personal profiles keep their identities.",
+    "Estos nombres pertenecen a este viaje. Las cuentas vinculadas y perfiles conservan su identidad.",
+    "Ces noms appartiennent à ce voyage. Les comptes liés et les profils personnels conservent leur identité.",
+    "Diese Namen gehören zu dieser Reise. Verknüpfte Konten und persönliche Profile behalten ihre Identität."
+  ],
+  [
+    "Showing {shown} of {total} {noun}",
+    "Mostrando {shown} de {total} {noun}",
+    "Affichage de {shown} sur {total} {noun}",
+    "{shown} von {total} {noun} angezeigt"
+  ],
+  [
+    "{name} — TripTab summary",
+    "{name} — Resumen de TripTab",
+    "{name} — Résumé TripTab",
+    "{name} — TripTab-Zusammenfassung"
+  ],
+  [
+    "{name} summary",
+    "Resumen de {name}",
+    "Résumé de {name}",
+    "Zusammenfassung: {name}"
+  ],
+  [
+    "Total spent: {amount} ({count} expenses)",
+    "Total gastado: {amount} ({count} gastos)",
+    "Total dépensé : {amount} ({count} dépenses)",
+    "Insgesamt ausgegeben: {amount} ({count} Ausgaben)"
+  ],
+  [
+    "Budget: {amount} ({percent}% used)",
+    "Presupuesto: {amount} ({percent}% usado)",
+    "Budget : {amount} ({percent} % utilisé)",
+    "Budget: {amount} ({percent} % verbraucht)"
+  ],
+  [
+    "Each person’s share:",
+    "Parte de cada persona:",
+    "Part de chacun :",
+    "Anteil jeder Person:"
+  ],
+  [
+    "• {name}: share {share}, paid {paid}",
+    "• {name}: parte {share}, pagado {paid}",
+    "• {name} : part {share}, payé {paid}",
+    "• {name}: Anteil {share}, bezahlt {paid}"
+  ],
+  [
+    "To settle up:",
+    "Para saldar cuentas:",
+    "Pour régler les comptes :",
+    "Zum Abrechnen:"
+  ],
+  [
+    "• {from} pays {to} {amount}",
+    "• {from} paga {amount} a {to}",
+    "• {from} paie {amount} à {to}",
+    "• {from} zahlt {amount} an {to}"
+  ],
+  [
+    "{value0}% of the {value1} budget used",
+    "{value0}% del presupuesto de {value1} usado",
+    "{value0} % du budget de {value1} utilisé",
+    "{value0} % des Budgets von {value1} verbraucht"
+  ],
+  [
+    "· {amount} a day for the {count} days left",
+    "· {amount} al día durante los {count} días restantes",
+    "· {amount} par jour pour les {count} jours restants",
+    "· {amount} pro Tag für die übrigen {count} Tage"
+  ],
+  [
+    "· On track for {value0}",
+    "· Previsión de {value0}",
+    "· Projection : {value0}",
+    "· Voraussichtlich {value0}"
+  ],
+  [
+    "expense needs",
+    "gasto necesita",
+    "dépense nécessite une",
+    "Ausgabe benötigt eine"
+  ],
+  [
+    "expenses need",
+    "gastos necesitan",
+    "dépenses nécessitent une",
+    "Ausgaben benötigen eine"
+  ],
+  [
+    "is",
+    "está",
+    "est",
+    "ist"
+  ],
+  [
+    "are",
+    "están",
+    "sont",
+    "sind"
+  ],
+  [
+    "Local storage is unavailable.",
+    "El almacenamiento local no está disponible.",
+    "Le stockage local est indisponible.",
+    "Lokaler Speicher ist nicht verfügbar."
+  ],
+  [
+    "Unable to save on this device. Check its available storage.",
+    "No se pudo guardar en este dispositivo. Comprueba el espacio disponible.",
+    "Impossible d’enregistrer sur cet appareil. Vérifiez l’espace disponible.",
+    "Speichern auf diesem Gerät nicht möglich. Prüfe den freien Speicherplatz."
+  ],
+  [
+    "Check the expense before saving.",
+    "Comprueba el gasto antes de guardar.",
+    "Vérifiez la dépense avant d’enregistrer.",
+    "Prüfe die Ausgabe vor dem Speichern."
+  ],
+  [
+    "Unable to save on this device.",
+    "No se pudo guardar en este dispositivo.",
+    "Impossible d’enregistrer sur cet appareil.",
+    "Speichern auf diesem Gerät nicht möglich."
+  ],
+  [
+    "This device’s queue is full. Sync or remove pending expenses first.",
+    "La cola del dispositivo está llena. Sincroniza o elimina gastos pendientes primero.",
+    "La file d’attente de cet appareil est pleine. Synchronisez ou supprimez d’abord les dépenses en attente.",
+    "Die Warteschlange dieses Geräts ist voll. Synchronisiere oder entferne zuerst ausstehende Ausgaben."
+  ],
+  [
+    "Share one JPEG, PNG or WebP photo under 10 MB.",
+    "Comparte una foto JPEG, PNG o WebP de menos de 10 MB.",
+    "Partagez une photo JPEG, PNG ou WebP de moins de 10 Mo.",
+    "Teile ein JPEG-, PNG- oder WebP-Foto unter 10 MB."
+  ],
+  [
+    "The shared photo could not be saved.",
+    "No se pudo guardar la foto compartida.",
+    "Impossible d’enregistrer la photo partagée.",
+    "Geteiltes Foto konnte nicht gespeichert werden."
+  ],
+  [
+    "legacy receipts",
+    "recibos antiguos",
+    "reçus anciens",
+    "ältere Belege"
+  ],
+  [
+    "Firefox",
+    "Firefox",
+    "Firefox",
+    "Firefox"
+  ],
+  [
+    "Edge",
+    "Edge",
+    "Edge",
+    "Edge"
+  ],
+  [
+    "Chrome",
+    "Chrome",
+    "Chrome",
+    "Chrome"
+  ],
+  [
+    "Safari",
+    "Safari",
+    "Safari",
+    "Safari"
+  ],
+  [
+    "TripTab",
+    "TripTab",
+    "TripTab",
+    "TripTab"
+  ],
+  [
+    "you@example.com",
+    "you@example.com",
+    "you@example.com",
+    "you@example.com"
+  ],
+  [
+    "Europe/London",
+    "Europe/London",
+    "Europe/London",
+    "Europe/London"
+  ],
+  [
+    "traveller@example.com",
+    "traveller@example.com",
+    "traveller@example.com",
+    "traveller@example.com"
+  ],
+  [
+    "No additional recorded field changes.",
+    "No hay más cambios de campos registrados.",
+    "Aucun autre changement de champ enregistré.",
+    "Keine weiteren Feldänderungen erfasst."
+  ],
+  [
+    "· current traveller name: {value0}",
+    "· nombre actual del viajero: {value0}",
+    "· nom actuel du voyageur : {value0}",
+    "· aktueller Name: {value0}"
+  ],
+  [
+    "System reference",
+    "Referencia del sistema",
+    "Référence système",
+    "Systemreferenz"
+  ],
+  [
+    "Record",
+    "Registro",
+    "Enregistrement",
+    "Eintrag"
+  ],
+  [
+    "· holiday revision",
+    "· revisión del viaje",
+    "· version du voyage",
+    "· Reiseversion"
+  ],
+  [
+    "Invitation for",
+    "Invitación para",
+    "Invitation pour",
+    "Einladung für"
+  ],
+  [
+    "Earlier traveller",
+    "Viajero anterior",
+    "Ancien voyageur",
+    "Frühere Person"
+  ],
+  [
+    "· traveller",
+    "· viajero",
+    "· voyageur",
+    "· reisende Person"
+  ],
+  [
+    "Image uploaded by",
+    "Imagen subida por",
+    "Image téléversée par",
+    "Bild hochgeladen von"
+  ],
+  [
+    "Cleanup initiated by",
+    "Limpieza iniciada por",
+    "Nettoyage lancé par",
+    "Bereinigung gestartet von"
+  ],
+  [
+    "· account",
+    "· cuenta",
+    "· compte",
+    "· Konto"
+  ],
+  [
+    "Image checksum (SHA-256)",
+    "Suma de comprobación de la imagen (SHA-256)",
+    "Somme de contrôle de l’image (SHA-256)",
+    "Bildprüfsumme (SHA-256)"
+  ],
+  [
+    "Traveller references use current holiday names with stable IDs. Message authors retain their recorded names.",
+    "Las referencias a viajeros usan nombres actuales del viaje e identificadores estables. Los autores de mensajes conservan los nombres registrados.",
+    "Les références aux voyageurs utilisent les noms actuels du voyage et des identifiants stables. Les auteurs des messages conservent leurs noms enregistrés.",
+    "Verweise auf Reisende verwenden aktuelle Reisenamen mit unveränderlichen IDs. Nachrichtenautoren behalten ihre erfassten Namen."
+  ],
+  [
+    "The full before and after details are too large for this history page. They remain saved.",
+    "Los detalles completos de antes y después son demasiado grandes para esta página. Siguen guardados.",
+    "Les détails complets avant et après sont trop volumineux pour cette page. Ils restent enregistrés.",
+    "Die vollständigen Vorher- und Nachher-Daten sind für diese Seite zu groß. Sie bleiben gespeichert."
+  ],
+  [
+    "Download full shared history entry",
+    "Descargar entrada completa del historial compartido",
+    "Télécharger l’entrée complète de l’historique partagé",
+    "Vollständigen gemeinsamen Verlaufseintrag herunterladen"
+  ],
+  [
+    "to inspect the original snapshots, including shared traveller contacts.",
+    "para examinar las versiones originales, incluidos contactos compartidos.",
+    "pour consulter les versions originales, y compris les coordonnées partagées.",
+    "um die ursprünglichen Datenstände samt gemeinsamen Kontaktdaten zu prüfen."
+  ],
+  [
+    "View",
+    "Ver",
+    "Voir",
+    "Ansehen"
+  ],
+  [
+    "changes",
+    "cambios",
+    "changements",
+    "Änderungen"
+  ],
+  [
+    "details",
+    "detalles",
+    "détails",
+    "Details"
+  ],
+  [
+    "Holiday activity",
+    "Actividad del viaje",
+    "Activité du voyage",
+    "Reiseaktivität"
+  ],
+  [
+    "Updates automatically",
+    "Se actualiza automáticamente",
+    "Mise à jour automatique",
+    "Wird automatisch aktualisiert"
+  ],
+  [
+    "Retry receipt history",
+    "Reintentar historial del recibo",
+    "Réessayer l’historique du reçu",
+    "Belegverlauf erneut laden"
+  ],
+  [
+    "Retry activity",
+    "Reintentar actividad",
+    "Réessayer l’activité",
+    "Aktivität erneut laden"
+  ],
+  [
+    "Loading activity…",
+    "Cargando actividad…",
+    "Chargement de l’activité…",
+    "Aktivität wird geladen…"
+  ],
+  [
+    "Checking for changes…",
+    "Comprobando cambios…",
+    "Recherche de changements…",
+    "Änderungen werden geprüft…"
+  ],
+  [
+    "to restore",
+    "para restaurar",
+    "pour restaurer",
+    "zum Wiederherstellen"
+  ],
+  [
+    "Load older changes",
+    "Cargar cambios anteriores",
+    "Charger les changements antérieurs",
+    "Ältere Änderungen laden"
+  ],
+  [
+    "The icon could not be saved. Close this picker to check the expense and try again.",
+    "No se pudo guardar el icono. Cierra este selector, comprueba el gasto y reinténtalo.",
+    "Impossible d’enregistrer l’icône. Fermez ce sélecteur, vérifiez la dépense et réessayez.",
+    "Symbol konnte nicht gespeichert werden. Schließe die Auswahl, prüfe die Ausgabe und versuche es erneut."
+  ],
+  [
+    "The icon could not be saved. Please try again.",
+    "No se pudo guardar el icono. Reinténtalo.",
+    "Impossible d’enregistrer l’icône. Réessayez.",
+    "Symbol konnte nicht gespeichert werden. Versuche es erneut."
+  ],
+  [
+    "Choose icon for {value0}. {value1}: {value2}",
+    "Elige un icono para {value0}. {value1}: {value2}",
+    "Choisir une icône pour {value0}. {value1} : {value2}",
+    "Symbol für {value0} wählen. {value1}: {value2}"
+  ],
+  [
+    "Close icon picker",
+    "Cerrar selector de iconos",
+    "Fermer le sélecteur d’icônes",
+    "Symbolauswahl schließen"
+  ],
+  [
+    "Suggested from the receipt reading",
+    "Sugerido al leer el recibo",
+    "Suggéré à partir de la lecture du reçu",
+    "Aus der Beleganalyse vorgeschlagen"
+  ],
+  [
+    "Suggested from this receipt",
+    "Sugerido por este recibo",
+    "Suggéré à partir de ce reçu",
+    "Aus diesem Beleg vorgeschlagen"
+  ],
+  [
+    "Your choice",
+    "Tu elección",
+    "Votre choix",
+    "Deine Auswahl"
+  ],
+  [
+    "Automatic follows the expense name and receipt items. Your choice stays until you change it.",
+    "Automático sigue el nombre del gasto y los artículos del recibo. Tu elección se mantiene hasta que la cambies.",
+    "Le mode automatique suit le nom de la dépense et les articles du reçu. Votre choix reste jusqu’à sa modification.",
+    "Automatisch folgt dem Ausgabennamen und den Belegartikeln. Deine Auswahl bleibt, bis du sie änderst."
+  ],
+  [
+    "Background colour",
+    "Color de fondo",
+    "Couleur de fond",
+    "Hintergrundfarbe"
+  ],
+  [
+    "{value0} background",
+    "Fondo {value0}",
+    "Fond {value0}",
+    "Hintergrund: {value0}"
+  ],
+  [
+    "Search symbols",
+    "Buscar símbolos",
+    "Rechercher des symboles",
+    "Symbole suchen"
+  ],
+  [
+    "Coffee, taxi, beach…",
+    "Café, taxi, playa…",
+    "Café, taxi, plage…",
+    "Kaffee, Taxi, Strand…"
+  ],
+  [
+    "Symbols",
+    "Símbolos",
+    "Symboles",
+    "Symbole"
+  ],
+  [
+    "No matching symbols. Try another word or choose All categories.",
+    "No hay símbolos que coincidan. Prueba otra palabra o elige todas las categorías.",
+    "Aucun symbole correspondant. Essayez un autre mot ou choisissez toutes les catégories.",
+    "Keine passenden Symbole. Versuche ein anderes Wort oder wähle alle Kategorien."
+  ],
+  [
+    "Use icon",
+    "Usar icono",
+    "Utiliser l’icône",
+    "Symbol verwenden"
+  ],
+  [
+    "Close item {value0}",
+    "Cerrar artículo {value0}",
+    "Fermer l’article {value0}",
+    "Artikel {value0} schließen"
+  ],
+  [
+    "Edit item {value0}",
+    "Editar artículo {value0}",
+    "Modifier l’article {value0}",
+    "Artikel {value0} bearbeiten"
+  ],
+  [
+    "1 item needs",
+    "1 artículo necesita",
+    "1 article nécessite",
+    "1 Artikel benötigt"
+  ],
+  [
+    "{value0} items need",
+    "{value0} artículos necesitan",
+    "{value0} articles nécessitent",
+    "{value0} Artikel benötigen"
+  ],
+  [
+    "Before you can save",
+    "Antes de guardar",
+    "Avant de pouvoir enregistrer",
+    "Vor dem Speichern"
+  ],
+  [
+    "Show fewer",
+    "Mostrar menos",
+    "Afficher moins",
+    "Weniger anzeigen"
+  ],
+  [
+    "{value0} more",
+    "{value0} más",
+    "{value0} de plus",
+    "{value0} weitere"
+  ],
+  [
+    "Purchase details",
+    "Detalles de la compra",
+    "Détails de l’achat",
+    "Kaufdetails"
+  ],
+  [
+    "Restore a TripTab JSON export, TripTab CSV or Splitwise CSV as a new holiday. CSV also accepts Date, Description, Amount, Currency, Paid by and Shared by columns.",
+    "Restaura un JSON de TripTab, CSV de TripTab o CSV de Splitwise como un viaje nuevo. CSV también acepta las columnas Date, Description, Amount, Currency, Paid by y Shared by.",
+    "Restaurez un export JSON TripTab, CSV TripTab ou CSV Splitwise dans un nouveau voyage. Le CSV accepte aussi les colonnes Date, Description, Amount, Currency, Paid by et Shared by.",
+    "Stelle einen TripTab-JSON-, TripTab-CSV- oder Splitwise-CSV-Export als neue Reise wieder her. CSV unterstützt auch die Spalten Date, Description, Amount, Currency, Paid by und Shared by."
+  ],
+  [
+    "expenses ·",
+    "gastos ·",
+    "dépenses ·",
+    "Ausgaben ·"
+  ],
+  [
+    "Uses the recorded bank charge of {value0} for the whole receipt.",
+    "Usa el cargo bancario registrado de {value0} para todo el recibo.",
+    "Utilise le débit bancaire enregistré de {value0} pour tout le reçu.",
+    "Verwendet den erfassten Bankbetrag von {value0} für den gesamten Beleg."
+  ],
+  [
+    "{value0} exchange rate: {value1} {value2} per {value3}, dated {value4}.",
+    "Tipo de cambio {value0}: {value1} {value2} por {value3}, del {value4}.",
+    "Taux de change {value0} : {value1} {value2} pour {value3}, daté du {value4}.",
+    "Wechselkurs {value0}: {value1} {value2} pro {value3}, vom {value4}."
+  ],
+  [
+    "Sent to {value0}",
+    "Enviado a {value0}",
+    "Envoyé à {value0}",
+    "Gesendet an {value0}"
+  ],
+  [
+    "Received from {value0}",
+    "Recibido de {value0}",
+    "Reçu de {value0}",
+    "Empfangen von {value0}"
+  ],
+  [
+    "Ways to pay {value0}",
+    "Formas de pagar a {value0}",
+    "Moyens de payer {value0}",
+    "Zahlungsmöglichkeiten für {value0}"
+  ],
+  [
+    "Pay {value0} {value1} with {value2} (opens {value3})",
+    "Paga {value1} a {value0} con {value2} (abre {value3})",
+    "Payer {value1} à {value0} avec {value2} (ouvre {value3})",
+    "{value1} an {value0} mit {value2} zahlen (öffnet {value3})"
+  ],
+  [
+    "Open {value0}’s {value1} page (opens {value2}; enter {value3})",
+    "Abre la página {value1} de {value0} (abre {value2}; introduce {value3})",
+    "Ouvrir la page {value1} de {value0} (ouvre {value2} ; saisir {value3})",
+    "{value1}-Seite von {value0} öffnen (öffnet {value2}; {value3} eingeben)"
+  ],
+  [
+    "Copy amount",
+    "Copiar importe",
+    "Copier le montant",
+    "Betrag kopieren"
+  ],
+  [
+    "Copy bank details",
+    "Copiar datos bancarios",
+    "Copier les coordonnées bancaires",
+    "Bankdaten kopieren"
+  ],
+  [
+    "opens",
+    "abre",
+    "ouvre",
+    "öffnet"
+  ],
+  [
+    "open",
+    "abre",
+    "ouvrir",
+    "öffnen"
+  ],
+  [
+    "’s page; enter",
+    ": página; introduce",
+    " : page ; saisir",
+    ": Seite; gib"
+  ],
+  [
+    "there.",
+    "allí.",
+    "ici.",
+    "dort ein."
+  ],
+  [
+    "Unable to save these payment details. Your edits are still here; try again.",
+    "No se pudieron guardar los datos de pago. Tus cambios siguen aquí; reinténtalo.",
+    "Impossible d’enregistrer ces coordonnées. Vos modifications sont conservées ; réessayez.",
+    "Zahlungsdaten konnten nicht gespeichert werden. Deine Änderungen bleiben erhalten; versuche es erneut."
+  ],
+  [
+    "(you)",
+    "(tú)",
+    "(vous)",
+    "(du)"
+  ],
+  [
+    "No payment details yet",
+    "Todavía no hay datos de pago",
+    "Aucune coordonnée de paiement",
+    "Noch keine Zahlungsdaten"
+  ],
+  [
+    "Only",
+    "Solo",
+    "Seul",
+    "Nur"
+  ],
+  [
+    "can change these.",
+    "puede cambiarlos.",
+    "peut les modifier.",
+    "kann diese ändern."
+  ],
+  [
+    "{value0} payment details for {value1}",
+    "Datos de pago de {value0} para {value1}",
+    "Coordonnées de paiement {value0} pour {value1}",
+    "{value0}-Zahlungsdaten für {value1}"
+  ],
+  [
+    "Payment details saved.",
+    "Datos de pago guardados.",
+    "Coordonnées de paiement enregistrées.",
+    "Zahlungsdaten gespeichert."
+  ],
+  [
+    "username",
+    "usuario",
+    "nom d’utilisateur",
+    "Benutzername"
+  ],
+  [
+    "Name, IBAN or sort code and account number",
+    "Nombre, IBAN o código bancario y número de cuenta",
+    "Nom, IBAN ou code bancaire et numéro de compte",
+    "Name, IBAN oder Bankleitzahl und Kontonummer"
+  ],
+  [
+    "Save payment details",
+    "Guardar datos de pago",
+    "Enregistrer les coordonnées de paiement",
+    "Zahlungsdaten speichern"
+  ],
+  [
+    "How to pay each traveller",
+    "Cómo pagar a cada viajero",
+    "Comment payer chaque voyageur",
+    "So bezahlst du jede Person"
+  ],
+  [
+    "Add a PayPal, Monzo, Revolut or Wise username, or bank details, so others can pay you from Settle up. Everyone on this holiday can see them and changes stay in its history. A traveller connected to an account can only be changed by that account.",
+    "Añade un usuario de PayPal, Monzo, Revolut o Wise, o datos bancarios, para recibir pagos desde Liquidar cuentas. Todos los viajeros pueden verlos y los cambios quedan en el historial. Solo la cuenta vinculada puede cambiar los datos de su viajero.",
+    "Ajoutez un nom d’utilisateur PayPal, Monzo, Revolut ou Wise, ou des coordonnées bancaires, pour recevoir les paiements depuis Régler les comptes. Tous les voyageurs peuvent les voir et les changements restent dans l’historique. Seul le compte lié peut modifier ses propres coordonnées.",
+    "Füge einen PayPal-, Monzo-, Revolut- oder Wise-Benutzernamen oder Bankdaten hinzu, um Zahlungen über Abrechnen zu erhalten. Alle Reisenden können sie sehen und Änderungen bleiben im Verlauf. Nur das verknüpfte Konto kann seine eigenen Angaben ändern."
+  ],
+  [
+    "MONEY ALREADY TRANSFERRED",
+    "DINERO YA TRANSFERIDO",
+    "ARGENT DÉJÀ TRANSFÉRÉ",
+    "BEREITS ÜBERTRAGENES GELD"
+  ],
+  [
+    "Review payment",
+    "Revisar pago",
+    "Vérifier le paiement",
+    "Zahlung prüfen"
+  ],
+  [
+    "Edit payment",
+    "Editar pago",
+    "Modifier le paiement",
+    "Zahlung bearbeiten"
+  ],
+  [
+    "Record a payment",
+    "Registrar un pago",
+    "Enregistrer un paiement",
+    "Zahlung erfassen"
+  ],
+  [
+    "Close payment editor",
+    "Cerrar editor de pagos",
+    "Fermer l’éditeur de paiement",
+    "Zahlungsformular schließen"
+  ],
+  [
+    "at {value0}",
+    "a las {value0}",
+    "à {value0}",
+    "um {value0}"
+  ],
+  [
+    "Timezone",
+    "Zona horaria",
+    "Fuseau horaire",
+    "Zeitzone"
+  ],
+  [
+    "owes",
+    "debe",
+    "doit",
+    "schuldet"
+  ],
+  [
+    "is owed",
+    "debe recibir",
+    "doit recevoir",
+    "bekommt"
+  ],
+  [
+    "Confirming records the transfer in TripTab. It does not send money.",
+    "Confirmar registra la transferencia en TripTab. No envía dinero.",
+    "La confirmation enregistre le transfert dans TripTab. Elle n’envoie pas d’argent.",
+    "Bestätigen erfasst die Überweisung in TripTab. Es wird kein Geld gesendet."
+  ],
+  [
+    "Choose a traveller",
+    "Elige un viajero",
+    "Choisir un voyageur",
+    "Reisende Person wählen"
+  ],
+  [
+    "Paid to",
+    "Pagado a",
+    "Payé à",
+    "Bezahlt an"
+  ],
+  [
+    "Time (optional)",
+    "Hora (opcional)",
+    "Heure (facultative)",
+    "Uhrzeit (optional)"
+  ],
+  [
+    "Payment method (optional)",
+    "Método de pago (opcional)",
+    "Mode de paiement (facultatif)",
+    "Zahlungsart (optional)"
+  ],
+  [
+    "Note (optional)",
+    "Nota (opcional)",
+    "Note (facultative)",
+    "Notiz (optional)"
+  ],
+  [
+    "Edit details",
+    "Editar detalles",
+    "Modifier les détails",
+    "Details bearbeiten"
+  ],
+  [
+    "Confirm payment",
+    "Confirmar pago",
+    "Confirmer le paiement",
+    "Zahlung bestätigen"
+  ],
+  [
+    "Unable to check notification settings. Try again.",
+    "No se pudieron comprobar los ajustes de notificaciones. Reinténtalo.",
+    "Impossible de vérifier les réglages de notification. Réessayez.",
+    "Benachrichtigungseinstellungen konnten nicht geprüft werden. Versuche es erneut."
+  ],
+  [
+    "Notification settings are unavailable. Checking again automatically.",
+    "Los ajustes de notificaciones no están disponibles. Se comprobarán de nuevo automáticamente.",
+    "Les réglages de notification sont indisponibles. Nouvelle vérification automatique.",
+    "Benachrichtigungseinstellungen sind nicht verfügbar. Sie werden automatisch erneut geprüft."
+  ],
+  [
+    "Notifications are getting ready. Try again shortly.",
+    "Las notificaciones se están preparando. Reinténtalo en un momento.",
+    "Les notifications sont en préparation. Réessayez dans un instant.",
+    "Benachrichtigungen werden vorbereitet. Versuche es gleich erneut."
+  ],
+  [
+    "Unable to change notifications. Try again.",
+    "No se pudieron cambiar las notificaciones. Reinténtalo.",
+    "Impossible de modifier les notifications. Réessayez.",
+    "Benachrichtigungen konnten nicht geändert werden. Versuche es erneut."
+  ],
+  [
+    "Notifications turned off on this device.",
+    "Notificaciones desactivadas en este dispositivo.",
+    "Notifications désactivées sur cet appareil.",
+    "Benachrichtigungen auf diesem Gerät deaktiviert."
+  ],
+  [
+    "Notifications are not available yet. Settings will update automatically.",
+    "Las notificaciones todavía no están disponibles. Los ajustes se actualizarán automáticamente.",
+    "Les notifications ne sont pas encore disponibles. Les réglages se mettront à jour automatiquement.",
+    "Benachrichtigungen sind noch nicht verfügbar. Die Einstellungen werden automatisch aktualisiert."
+  ],
+  [
+    "Allow notifications in your browser settings to receive trip updates.",
+    "Permite notificaciones en tu navegador para recibir actualizaciones del viaje.",
+    "Autorisez les notifications dans votre navigateur pour recevoir les nouvelles du voyage.",
+    "Erlaube Benachrichtigungen in den Browsereinstellungen, um Reiseaktualisierungen zu erhalten."
+  ],
+  [
+    "You’ll receive updates when another traveller changes a shared trip.",
+    "Recibirás actualizaciones cuando otro viajero cambie un viaje compartido.",
+    "Vous recevrez des nouvelles lorsqu’un autre voyageur modifie un voyage partagé.",
+    "Du erhältst Aktualisierungen, wenn andere Reisende eine gemeinsame Reise ändern."
+  ],
+  [
+    "TripTab on your phone",
+    "TripTab en tu teléfono",
+    "TripTab sur votre téléphone",
+    "TripTab auf deinem Smartphone"
+  ],
+  [
+    "Installed on this device",
+    "Instalado en este dispositivo",
+    "Installé sur cet appareil",
+    "Auf diesem Gerät installiert"
+  ],
+  [
+    "Install TripTab",
+    "Instalar TripTab",
+    "Installer TripTab",
+    "TripTab installieren"
+  ],
+  [
+    "Use your browser’s menu to install TripTab or choose “Add to Home Screen”.",
+    "Usa el menú del navegador para instalar TripTab o elige «Añadir a pantalla de inicio».",
+    "Utilisez le menu du navigateur pour installer TripTab ou choisissez «Ajouter à l’écran d’accueil».",
+    "Verwende das Browsermenü zum Installieren von TripTab oder wähle „Zum Home-Bildschirm“."
+  ],
+  [
+    "Updating…",
+    "Actualizando…",
+    "Mise à jour…",
+    "Wird aktualisiert…"
+  ],
+  [
+    "Turn off notifications",
+    "Desactivar notificaciones",
+    "Désactiver les notifications",
+    "Benachrichtigungen deaktivieren"
+  ],
+  [
+    "Allow notifications",
+    "Permitir notificaciones",
+    "Autoriser les notifications",
+    "Benachrichtigungen erlauben"
+  ],
+  [
+    "On iPhone, add TripTab to your Home Screen before enabling notifications. Support depends on your browser.",
+    "En iPhone, añade TripTab a la pantalla de inicio antes de activar notificaciones. La compatibilidad depende del navegador.",
+    "Sur iPhone, ajoutez TripTab à l’écran d’accueil avant d’activer les notifications. La prise en charge dépend du navigateur.",
+    "Füge TripTab auf dem iPhone zum Home-Bildschirm hinzu, bevor du Benachrichtigungen aktivierst. Die Unterstützung hängt vom Browser ab."
+  ],
+  [
+    "Add {count} copy",
+    "Añadir {count} copia",
+    "Ajouter {count} copie",
+    "{count} Kopie hinzufügen"
+  ],
+  [
+    "1 copy: {date}.",
+    "1 copia: {date}.",
+    "1 copie : {date}.",
+    "1 Kopie: {date}."
+  ],
+  [
+    "{count} day with spending · {amount} a day on average.",
+    "{count} día con gastos · {amount} al día de media.",
+    "{count} jour avec des dépenses · {amount} par jour en moyenne.",
+    "{count} Tag mit Ausgaben · durchschnittlich {amount} pro Tag."
+  ],
+  [
+    "{count} expense needs review and is not included.",
+    "{count} gasto necesita revisión y no está incluido.",
+    "{count} dépense nécessite une vérification et n’est pas incluse.",
+    "{count} Ausgabe muss geprüft werden und ist nicht enthalten."
+  ],
+  [
+    "Newest purchase first",
+    "Compras más recientes primero",
+    "Achats les plus récents d’abord",
+    "Neueste Käufe zuerst"
+  ],
+  [
+    "Oldest purchase first",
+    "Compras más antiguas primero",
+    "Achats les plus anciens d’abord",
+    "Älteste Käufe zuerst"
+  ],
+  [
+    "Highest amount first",
+    "Mayor importe primero",
+    "Montants les plus élevés d’abord",
+    "Höchste Beträge zuerst"
+  ],
+  [
+    "Lowest amount first",
+    "Menor importe primero",
+    "Montants les plus faibles d’abord",
+    "Niedrigste Beträge zuerst"
+  ],
+  [
+    "Profile and app settings",
+    "Perfil y ajustes de la aplicación",
+    "Profil et réglages de l’application",
+    "Profil und App-Einstellungen"
+  ],
+  [
+    "Enable trip notifications",
+    "Activar notificaciones del viaje",
+    "Activer les notifications du voyage",
+    "Reisebenachrichtigungen aktivieren"
+  ],
+  [
+    "Unable to load receipt AI settings.",
+    "No se pudieron cargar los ajustes de IA de recibos.",
+    "Impossible de charger les réglages de l’IA des reçus.",
+    "Beleg-KI-Einstellungen konnten nicht geladen werden."
+  ],
+  [
+    "Unable to connect your ChatGPT plan.",
+    "No se pudo conectar tu plan de ChatGPT.",
+    "Impossible de connecter votre abonnement ChatGPT.",
+    "Dein ChatGPT-Abonnement konnte nicht verbunden werden."
+  ],
+  [
+    "Receipt AI",
+    "IA de recibos",
+    "IA des reçus",
+    "Beleg-KI"
+  ],
+  [
+    "Read uploaded receipt images into items automatically with AI provided by TripTab. Review the results before saving an expense.",
+    "La IA de TripTab lee automáticamente los artículos de las fotos de recibos. Revisa los resultados antes de guardar un gasto.",
+    "L’IA de TripTab lit automatiquement les articles des photos de reçus. Vérifiez les résultats avant d’enregistrer une dépense.",
+    "Die KI von TripTab liest Artikel automatisch aus hochgeladenen Belegfotos. Prüfe die Ergebnisse vor dem Speichern einer Ausgabe."
+  ],
+  [
+    "Loading receipt AI settings…",
+    "Cargando ajustes de IA de recibos…",
+    "Chargement des réglages de l’IA des reçus…",
+    "Beleg-KI-Einstellungen werden geladen…"
+  ],
+  [
+    "To manage the shared AI settings, continue with ChatGPT to verify your account.",
+    "Para gestionar los ajustes de IA compartidos, continúa con ChatGPT para verificar tu cuenta.",
+    "Pour gérer les réglages d’IA partagés, continuez avec ChatGPT pour vérifier votre compte.",
+    "Fahre mit ChatGPT fort, um dein Konto zu bestätigen und die gemeinsamen KI-Einstellungen zu verwalten."
+  ],
+  [
+    "Continue with ChatGPT to verify",
+    "Continuar con ChatGPT para verificar",
+    "Continuer avec ChatGPT pour vérifier",
+    "Mit ChatGPT bestätigen"
+  ],
+  [
+    "The site owner manages the shared API key. You can use receipt AI without entering a key.",
+    "El propietario del sitio gestiona la clave API compartida. Puedes usar la IA de recibos sin introducir una clave.",
+    "Le propriétaire du site gère la clé API partagée. Vous pouvez utiliser l’IA des reçus sans saisir de clé.",
+    "Der Website-Eigentümer verwaltet den gemeinsamen API-Schlüssel. Du kannst die Beleg-KI ohne eigenen Schlüssel nutzen."
+  ],
+  [
+    "Your OpenAI API key funds receipt processing for all signed-in users. API usage is billed to the OpenAI account that owns the key, separately from a ChatGPT subscription.",
+    "Tu clave API de OpenAI paga el procesamiento de recibos de todos los usuarios con sesión iniciada. El uso de la API se factura a la cuenta de OpenAI propietaria de la clave, separado de una suscripción de ChatGPT.",
+    "Votre clé API OpenAI finance le traitement des reçus pour tous les utilisateurs connectés. L’utilisation de l’API est facturée au compte OpenAI propriétaire de la clé, séparément de l’abonnement ChatGPT.",
+    "Dein OpenAI-API-Schlüssel bezahlt die Belegverarbeitung für alle angemeldeten Nutzer. Die API-Nutzung wird dem OpenAI-Konto des Schlüsselinhabers berechnet, getrennt vom ChatGPT-Abonnement."
+  ],
+  [
+    "Receipt processing provider",
+    "Proveedor de procesamiento de recibos",
+    "Fournisseur de traitement des reçus",
+    "Anbieter der Belegverarbeitung"
+  ],
+  [
+    "OpenAI API key",
+    "Clave API de OpenAI",
+    "Clé API OpenAI",
+    "OpenAI-API-Schlüssel"
+  ],
+  [
+    "· currently disabled",
+    "· desactivado actualmente",
+    "· actuellement désactivé",
+    "· derzeit deaktiviert"
+  ],
+  [
+    "The ChatGPT plan option is switched off for now. You can switch providers here when it becomes available.",
+    "La opción del plan de ChatGPT está desactivada por ahora. Podrás cambiar de proveedor aquí cuando esté disponible.",
+    "L’option d’abonnement ChatGPT est désactivée pour le moment. Vous pourrez changer de fournisseur ici lorsqu’elle sera disponible.",
+    "Die ChatGPT-Abonnementoption ist derzeit ausgeschaltet. Du kannst hier den Anbieter wechseln, sobald sie verfügbar ist."
+  ],
+  [
+    "Replace OpenAI API key",
+    "Reemplazar clave API de OpenAI",
+    "Remplacer la clé API OpenAI",
+    "OpenAI-API-Schlüssel ersetzen"
+  ],
+  [
+    "Use a key created in your TripTab OpenAI project. The shared key is encrypted on the server and never shown again. This field clears after the key is saved.",
+    "Usa una clave creada en tu proyecto de OpenAI para TripTab. La clave compartida se cifra en el servidor y no vuelve a mostrarse. Este campo se vacía al guardarla.",
+    "Utilisez une clé créée dans votre projet OpenAI TripTab. La clé partagée est chiffrée sur le serveur et ne s’affiche plus. Ce champ se vide après l’enregistrement.",
+    "Verwende einen Schlüssel aus deinem TripTab-OpenAI-Projekt. Er wird auf dem Server verschlüsselt und nie wieder angezeigt. Dieses Feld wird nach dem Speichern geleert."
+  ],
+  [
+    "Remove API key",
+    "Eliminar clave API",
+    "Supprimer la clé API",
+    "API-Schlüssel entfernen"
+  ],
+  [
+    "Removing the key disables shared API receipt processing for everyone until a replacement is saved.",
+    "Eliminar la clave desactiva el procesamiento compartido de recibos para todos hasta guardar otra.",
+    "Supprimer la clé désactive le traitement partagé des reçus pour tous jusqu’à l’enregistrement d’une autre clé.",
+    "Das Entfernen des Schlüssels deaktiviert die gemeinsame Belegverarbeitung für alle, bis ein Ersatz gespeichert wird."
+  ],
+  [
+    "Connect ChatGPT plan",
+    "Conectar plan de ChatGPT",
+    "Connecter l’abonnement ChatGPT",
+    "ChatGPT-Abonnement verbinden"
+  ],
+  [
+    "Receipt model:",
+    "Modelo de recibos:",
+    "Modèle pour les reçus :",
+    "Belegmodell:"
+  ],
+  [
+    "Choose a JPEG, PNG or WebP receipt image. HEIC/HEIF works only in browsers that can open it.",
+    "Elige una imagen de recibo JPEG, PNG o WebP. HEIC/HEIF solo funciona en navegadores que puedan abrirlo.",
+    "Choisissez une image de reçu JPEG, PNG ou WebP. HEIC/HEIF fonctionne uniquement dans les navigateurs capables de l’ouvrir.",
+    "Wähle ein JPEG-, PNG- oder WebP-Belegfoto. HEIC/HEIF funktioniert nur in Browsern, die es öffnen können."
+  ],
+  [
+    "This image is empty. Choose another receipt photo.",
+    "Esta imagen está vacía. Elige otra foto del recibo.",
+    "Cette image est vide. Choisissez une autre photo du reçu.",
+    "Dieses Bild ist leer. Wähle ein anderes Belegfoto."
+  ],
+  [
+    "This photo is too large to prepare on your phone. Export a smaller JPEG image and try again.",
+    "Esta foto es demasiado grande para procesarla en el teléfono. Exporta un JPEG más pequeño y reinténtalo.",
+    "Cette photo est trop volumineuse pour être préparée sur votre téléphone. Exportez un JPEG plus petit et réessayez.",
+    "Dieses Foto ist zu groß zur Verarbeitung auf deinem Smartphone. Exportiere ein kleineres JPEG und versuche es erneut."
+  ],
+  [
+    "This photo could not be opened. Choose another JPEG, PNG or WebP image.",
+    "No se pudo abrir esta foto. Elige otra imagen JPEG, PNG o WebP.",
+    "Impossible d’ouvrir cette photo. Choisissez une autre image JPEG, PNG ou WebP.",
+    "Dieses Foto konnte nicht geöffnet werden. Wähle ein anderes JPEG-, PNG- oder WebP-Bild."
+  ],
+  [
+    "The image has no visible pixels.",
+    "La imagen no tiene píxeles visibles.",
+    "L’image n’a aucun pixel visible.",
+    "Das Bild enthält keine sichtbaren Pixel."
+  ],
+  [
+    "This browser cannot prepare receipt images.",
+    "Este navegador no puede preparar imágenes de recibos.",
+    "Ce navigateur ne peut pas préparer les images de reçus.",
+    "Dieser Browser kann Belegbilder nicht vorbereiten."
+  ],
+  [
+    "Unable to prepare an image within the 5 MB upload limit. Export a smaller JPEG and try again.",
+    "No se pudo preparar una imagen dentro del límite de 5 MB. Exporta un JPEG más pequeño y reinténtalo.",
+    "Impossible de préparer une image sous la limite de 5 Mo. Exportez un JPEG plus petit et réessayez.",
+    "Ein Bild unter der Uploadgrenze von 5 MB konnte nicht erstellt werden. Exportiere ein kleineres JPEG und versuche es erneut."
+  ],
+  [
+    "This browser could not open your HEIC/HEIF photo. Export it as JPEG from Photos or choose a JPEG, PNG or WebP image.",
+    "Este navegador no pudo abrir la foto HEIC/HEIF. Expórtala como JPEG desde Fotos o elige una imagen JPEG, PNG o WebP.",
+    "Ce navigateur n’a pas pu ouvrir votre photo HEIC/HEIF. Exportez-la en JPEG depuis Photos ou choisissez une image JPEG, PNG ou WebP.",
+    "Dieser Browser konnte dein HEIC/HEIF-Foto nicht öffnen. Exportiere es aus Fotos als JPEG oder wähle ein JPEG-, PNG- oder WebP-Bild."
+  ],
+  [
+    "Unable to open this receipt image. Choose a JPEG, PNG or WebP photo.",
+    "No se pudo abrir este recibo. Elige una foto JPEG, PNG o WebP.",
+    "Impossible d’ouvrir cette image de reçu. Choisissez une photo JPEG, PNG ou WebP.",
+    "Dieses Belegbild konnte nicht geöffnet werden. Wähle ein JPEG-, PNG- oder WebP-Foto."
+  ],
+  [
+    "Choose image",
+    "Elegir imagen",
+    "Choisir une image",
+    "Bild wählen"
+  ],
+  [
+    "Your image can still be uploaded and reviewed.",
+    "Todavía puedes subir y revisar la imagen.",
+    "Vous pouvez toujours téléverser et vérifier votre image.",
+    "Du kannst dein Bild weiterhin hochladen und prüfen."
+  ],
+  [
+    "Photos are resized and camera metadata is removed before uploading.",
+    "Se reduce el tamaño de las fotos y se eliminan los metadatos de la cámara antes de subirlas.",
+    "Les photos sont redimensionnées et les métadonnées de l’appareil photo supprimées avant le téléversement.",
+    "Fotos werden vor dem Hochladen verkleinert und Kamerametadaten entfernt."
+  ],
+  [
+    "Have the receipt?",
+    "¿Tienes el recibo?",
+    "Vous avez le reçu ?",
+    "Hast du den Beleg?"
+  ],
+  [
+    "Receipt details saved for ChatGPT.",
+    "Detalles del recibo guardados para ChatGPT.",
+    "Détails du reçu enregistrés pour ChatGPT.",
+    "Belegdetails für ChatGPT gespeichert."
+  ],
+  [
+    "Save your receipt details before sending the request to ChatGPT.",
+    "Guarda los detalles del recibo antes de enviar la solicitud a ChatGPT.",
+    "Enregistrez les détails du reçu avant d’envoyer la demande à ChatGPT.",
+    "Speichere die Belegdetails, bevor du die Anfrage an ChatGPT sendest."
+  ],
+  [
+    "Receipt attached. Save your expense to keep it.",
+    "Recibo adjunto. Guarda el gasto para conservarlo.",
+    "Reçu joint. Enregistrez la dépense pour le conserver.",
+    "Beleg angehängt. Speichere die Ausgabe, um ihn zu behalten."
+  ],
+  [
+    "Receipt request copied. Paste and send it in a ChatGPT or Codex conversation with TripTab tools enabled.",
+    "Solicitud del recibo copiada. Pégala y envíala en una conversación de ChatGPT o Codex con las herramientas de TripTab activadas.",
+    "Demande de reçu copiée. Collez-la et envoyez-la dans une conversation ChatGPT ou Codex avec les outils TripTab activés.",
+    "Beleganfrage kopiert. Füge sie in ein ChatGPT- oder Codex-Gespräch mit aktivierten TripTab-Werkzeugen ein und sende sie."
+  ],
+  [
+    "Review processed receipt",
+    "Revisar recibo procesado",
+    "Vérifier le reçu traité",
+    "Verarbeiteten Beleg prüfen"
+  ],
+  [
+    "Set up receipt AI",
+    "Configurar IA de recibos",
+    "Configurer l’IA des reçus",
+    "Beleg-KI einrichten"
+  ],
+  [
+    "Verify receipt AI setup",
+    "Comprobar configuración de IA de recibos",
+    "Vérifier la configuration de l’IA des reçus",
+    "Beleg-KI-Einrichtung prüfen"
+  ],
+  [
+    "Replace the photo",
+    "Reemplazar la foto",
+    "Remplacer la photo",
+    "Foto ersetzen"
+  ],
+  [
+    "Remove receipt image",
+    "Eliminar imagen del recibo",
+    "Supprimer l’image du reçu",
+    "Belegbild entfernen"
+  ],
+  [
+    "Connected ChatGPT tools",
+    "Herramientas de ChatGPT conectadas",
+    "Outils ChatGPT connectés",
+    "Verbundene ChatGPT-Werkzeuge"
+  ],
+  [
+    "Open ChatGPT",
+    "Abrir ChatGPT",
+    "Ouvrir ChatGPT",
+    "ChatGPT öffnen"
+  ],
+  [
+    "Link ChatGPT identity",
+    "Vincular identidad de ChatGPT",
+    "Lier l’identité ChatGPT",
+    "ChatGPT-Identität verknüpfen"
+  ],
+  [
+    "Copy receipt request",
+    "Copiar solicitud del recibo",
+    "Copier la demande de reçu",
+    "Beleganfrage kopieren"
+  ],
+  [
+    "Prepare receipt request",
+    "Preparar solicitud del recibo",
+    "Préparer la demande de reçu",
+    "Beleganfrage vorbereiten"
+  ],
+  [
+    "Retry updates",
+    "Reintentar actualizaciones",
+    "Réessayer les mises à jour",
+    "Aktualisierungen erneut laden"
+  ],
+  [
+    "You’re offline. Receipt updates resume when you reconnect.",
+    "Sin conexión. Las actualizaciones del recibo se reanudarán al reconectarte.",
+    "Vous êtes hors ligne. Les mises à jour du reçu reprendront après reconnexion.",
+    "Du bist offline. Belegaktualisierungen werden nach dem Verbinden fortgesetzt."
+  ],
+  [
+    "Unable to refresh receipt updates. We’ll keep trying automatically.",
+    "No se pudieron actualizar los recibos. Seguiremos reintentándolo automáticamente.",
+    "Impossible d’actualiser les reçus. Nous réessaierons automatiquement.",
+    "Belege konnten nicht aktualisiert werden. Wir versuchen es automatisch erneut."
+  ],
+  [
+    "Processed items and replies appear automatically while this receipt is open.",
+    "Los artículos procesados y las respuestas aparecen automáticamente mientras el recibo está abierto.",
+    "Les articles traités et les réponses apparaissent automatiquement tant que ce reçu est ouvert.",
+    "Verarbeitete Artikel und Antworten erscheinen automatisch, solange dieser Beleg geöffnet ist."
+  ],
+  [
+    "Request to send in ChatGPT",
+    "Solicitud para enviar en ChatGPT",
+    "Demande à envoyer dans ChatGPT",
+    "Anfrage zum Senden in ChatGPT"
+  ],
+  [
+    "This request is too long to prefill reliably. Copy the complete text below, open ChatGPT, then paste and send it with TripTab enabled.",
+    "Esta solicitud es demasiado larga para rellenarla automáticamente. Copia el texto completo, abre ChatGPT, pégalo y envíalo con TripTab activado.",
+    "Cette demande est trop longue pour être préremplie correctement. Copiez le texte complet ci-dessous, ouvrez ChatGPT, puis collez-le et envoyez-le avec TripTab activé.",
+    "Diese Anfrage ist zu lang zum zuverlässigen Vorbefüllen. Kopiere den vollständigen Text unten, öffne ChatGPT, füge ihn ein und sende ihn mit aktiviertem TripTab."
+  ],
+  [
+    "If ChatGPT opens without the request, copy this text into the conversation and send it with TripTab enabled.",
+    "Si ChatGPT se abre sin la solicitud, copia este texto en la conversación y envíalo con TripTab activado.",
+    "Si ChatGPT s’ouvre sans la demande, copiez ce texte dans la conversation et envoyez-le avec TripTab activé.",
+    "Wenn ChatGPT ohne die Anfrage geöffnet wird, kopiere diesen Text ins Gespräch und sende ihn mit aktiviertem TripTab."
+  ],
+  [
+    "Receipt assistant prompt",
+    "Instrucción para el asistente de recibos",
+    "Instruction pour l’assistant des reçus",
+    "Anweisung für den Belegassistenten"
+  ],
+  [
+    "Ask about who bought what, quantities, names or location. The assistant remembers this receipt and proposes changes for review.",
+    "Pregunta quién compró qué, cantidades, nombres o lugar. El asistente recuerda este recibo y propone cambios para revisar.",
+    "Posez des questions sur les achats, quantités, noms ou lieu. L’assistant garde le contexte du reçu et propose des changements à vérifier.",
+    "Frage nach Käufen, Mengen, Namen oder Ort. Der Assistent behält den Belegkontext und schlägt Änderungen zur Prüfung vor."
+  ],
+  [
+    "Questions are saved here and a prompt is prepared. Use it in a ChatGPT or Codex conversation with TripTab tools enabled. Replies appear here automatically.",
+    "Las preguntas se guardan aquí y se prepara una instrucción. Úsala en una conversación de ChatGPT o Codex con TripTab activado. Las respuestas aparecen automáticamente aquí.",
+    "Les questions sont enregistrées ici et une instruction est préparée. Utilisez-la dans une conversation ChatGPT ou Codex avec TripTab activé. Les réponses apparaissent automatiquement ici.",
+    "Fragen werden hier gespeichert und eine Anweisung vorbereitet. Verwende sie in einem ChatGPT- oder Codex-Gespräch mit aktivierten TripTab-Werkzeugen. Antworten erscheinen hier automatisch."
+  ],
+  [
+    "“This” refers to",
+    "«Esto» se refiere a",
+    "« Ceci » désigne",
+    "„Dies“ bezieht sich auf"
+  ],
+  [
+    ". You can also ask about other items or the whole receipt.",
+    ". También puedes preguntar sobre otros artículos o el recibo completo.",
+    ". Vous pouvez aussi poser des questions sur d’autres articles ou le reçu entier.",
+    ". Du kannst auch nach anderen Artikeln oder dem ganzen Beleg fragen."
+  ],
+  [
+    "Remembered receipt context",
+    "Contexto del recibo recordado",
+    "Contexte mémorisé du reçu",
+    "Gespeicherter Belegkontext"
+  ],
+  [
+    "Saved with this receipt for the assistant. All item discussions share these notes and names.",
+    "Guardado con este recibo para el asistente. Las conversaciones de todos los artículos comparten estas notas y nombres.",
+    "Enregistré avec ce reçu pour l’assistant. Les discussions de tous les articles partagent ces notes et noms.",
+    "Mit diesem Beleg für den Assistenten gespeichert. Alle Artikelgespräche teilen diese Notizen und Namen."
+  ],
+  [
+    "Earlier item",
+    "Artículo anterior",
+    "Ancien article",
+    "Früherer Artikel"
+  ],
+  [
+    "Saved name",
+    "Nombre guardado",
+    "Nom enregistré",
+    "Gespeicherter Name"
+  ],
+  [
+    "· for {value0}",
+    "· para {value0}",
+    "· pour {value0}",
+    "· für {value0}"
+  ],
+  [
+    "No notes or names remembered yet.",
+    "Todavía no hay notas ni nombres recordados.",
+    "Aucune note ni aucun nom mémorisé.",
+    "Noch keine Notizen oder Namen gespeichert."
+  ],
+  [
+    "{value0} conversation",
+    "Conversación de {value0}",
+    "Conversation sur {value0}",
+    "Gespräch über {value0}"
+  ],
+  [
+    "Receipt conversation",
+    "Conversación del recibo",
+    "Conversation du reçu",
+    "Beleggespräch"
+  ],
+  [
+    "Question saved · awaiting reply",
+    "Pregunta guardada · esperando respuesta",
+    "Question enregistrée · réponse en attente",
+    "Frage gespeichert · Antwort ausstehend"
+  ],
+  [
+    "Question saved · external processing needed",
+    "Pregunta guardada · requiere procesamiento externo",
+    "Question enregistrée · traitement externe nécessaire",
+    "Frage gespeichert · externe Verarbeitung erforderlich"
+  ],
+  [
+    "Retry reply",
+    "Reintentar respuesta",
+    "Réessayer la réponse",
+    "Antwort erneut anfordern"
+  ],
+  [
+    "Ask about this item’s quantity, price or cost shares, or anything else on the receipt.",
+    "Pregunta por la cantidad, precio o reparto de este artículo, o cualquier otro detalle del recibo.",
+    "Posez des questions sur la quantité, le prix ou le partage de cet article, ou sur tout autre détail du reçu.",
+    "Frage nach Menge, Preis oder Anteilen dieses Artikels oder nach anderen Belegdetails."
+  ],
+  [
+    "Ask about unclear items, missing charges or totals that do not match.",
+    "Pregunta por artículos poco claros, cargos que falten o totales que no coincidan.",
+    "Posez des questions sur les articles peu clairs, les frais manquants ou les totaux incohérents.",
+    "Frage nach unklaren Artikeln, fehlenden Beträgen oder abweichenden Summen."
+  ],
+  [
+    "Ask assistant",
+    "Preguntar al asistente",
+    "Demander à l’assistant",
+    "Assistenten fragen"
+  ],
+  [
+    "Save question & prepare prompt",
+    "Guardar pregunta y preparar instrucción",
+    "Enregistrer la question et préparer l’instruction",
+    "Frage speichern und Anweisung vorbereiten"
+  ],
+  [
+    "You’re offline. Replies will update when you reconnect.",
+    "Sin conexión. Las respuestas se actualizarán al reconectarte.",
+    "Vous êtes hors ligne. Les réponses seront actualisées après reconnexion.",
+    "Du bist offline. Antworten werden nach dem Verbinden aktualisiert."
+  ],
+  [
+    "Unable to refresh replies. We’ll keep trying automatically.",
+    "No se pudieron actualizar las respuestas. Seguiremos reintentándolo automáticamente.",
+    "Impossible d’actualiser les réponses. Nous réessaierons automatiquement.",
+    "Antworten konnten nicht aktualisiert werden. Wir versuchen es automatisch erneut."
+  ],
+  [
+    "Proposed changes need your review before the expense is updated.",
+    "Debes revisar los cambios propuestos antes de actualizar el gasto.",
+    "Vérifiez les changements proposés avant la mise à jour de la dépense.",
+    "Prüfe vorgeschlagene Änderungen, bevor die Ausgabe aktualisiert wird."
+  ],
+  [
+    "this item",
+    "este artículo",
+    "cet article",
+    "dieser Artikel"
+  ],
+  [
+    "Discuss {item}",
+    "Comentar {item}",
+    "Discuter de {item}",
+    "{item} besprechen"
+  ],
+  [
+    "Discuss this receipt",
+    "Comentar este recibo",
+    "Discuter de ce reçu",
+    "Diesen Beleg besprechen"
+  ],
+  [
+    "Question about {item}",
+    "Pregunta sobre {item}",
+    "Question sur {item}",
+    "Frage zu {item}"
+  ],
+  [
+    "Receipt question",
+    "Pregunta sobre el recibo",
+    "Question sur le reçu",
+    "Frage zum Beleg"
+  ],
+  [
+    "Assistant",
+    "Asistente",
+    "Assistant",
+    "Assistent"
+  ],
+  [
+    "an earlier traveller",
+    "un viajero anterior",
+    "un ancien voyageur",
+    "eine frühere Person"
+  ],
+  [
+    "An assistant reply is available.",
+    "Hay una respuesta del asistente.",
+    "Une réponse de l’assistant est disponible.",
+    "Eine Antwort des Assistenten ist verfügbar."
+  ],
+  [
+    "{count} assistant replies are available.",
+    "Hay {count} respuestas del asistente.",
+    "{count} réponses de l’assistant sont disponibles.",
+    "{count} Antworten des Assistenten sind verfügbar."
+  ],
+  [
+    "About {item}.",
+    "Sobre {item}.",
+    "À propos de {item}.",
+    "Zu {item}."
+  ],
+  [
+    "Your question could not be saved. Your draft is still here.",
+    "No se pudo guardar la pregunta. Tu borrador sigue aquí.",
+    "Impossible d’enregistrer votre question. Votre brouillon est conservé.",
+    "Deine Frage konnte nicht gespeichert werden. Der Entwurf bleibt erhalten."
+  ],
+  [
+    "Unable to get a reply. Your saved question is still here.",
+    "No se pudo obtener una respuesta. Tu pregunta guardada sigue aquí.",
+    "Impossible d’obtenir une réponse. Votre question enregistrée est conservée.",
+    "Eine Antwort konnte nicht abgerufen werden. Deine gespeicherte Frage bleibt erhalten."
+  ],
+  [
+    "1 reply is available from the assistant about {item}.",
+    "Hay 1 respuesta del asistente sobre {item}.",
+    "1 réponse de l’assistant est disponible sur {item}.",
+    "1 Antwort des Assistenten zu {item} ist verfügbar."
+  ],
+  [
+    "{count} replies are available from the assistant about {item}.",
+    "Hay {count} respuestas del asistente sobre {item}.",
+    "{count} réponses de l’assistant sont disponibles sur {item}.",
+    "{count} Antworten des Assistenten zu {item} sind verfügbar."
+  ],
+  [
+    "1 reply is available from the assistant.",
+    "Hay 1 respuesta del asistente.",
+    "1 réponse de l’assistant est disponible.",
+    "1 Antwort des Assistenten ist verfügbar."
+  ],
+  [
+    "{count} replies are available from the assistant.",
+    "Hay {count} respuestas del asistente.",
+    "{count} réponses de l’assistant sont disponibles.",
+    "{count} Antworten des Assistenten sind verfügbar."
+  ],
+  [
+    "Choose an available interface language.",
+    "Elige un idioma de interfaz disponible.",
+    "Choisissez une langue d’interface disponible.",
+    "Wähle eine verfügbare Oberflächensprache."
+  ],
+  [
+    "Your account changed. Reopen settings before changing language.",
+    "Tu cuenta ha cambiado. Abre de nuevo los ajustes antes de cambiar el idioma.",
+    "Votre compte a changé. Rouvrez les réglages avant de changer de langue.",
+    "Dein Konto hat sich geändert. Öffne die Einstellungen erneut, bevor du die Sprache änderst."
+  ],
+  [
+    "Sign in again to change your language.",
+    "Inicia sesión de nuevo para cambiar el idioma.",
+    "Reconnectez-vous pour changer de langue.",
+    "Melde dich erneut an, um die Sprache zu ändern."
+  ],
+  [
+    "Your language settings changed. Reopen settings and try again.",
+    "Tus ajustes de idioma han cambiado. Abre de nuevo los ajustes y reinténtalo.",
+    "Vos réglages de langue ont changé. Rouvrez les réglages et réessayez.",
+    "Deine Spracheinstellungen haben sich geändert. Öffne die Einstellungen erneut und versuche es noch einmal."
+  ],
+  [
+    "· {amount} a day for the {count} day left",
+    "· {amount} al día durante el {count} día restante",
+    "· {amount} par jour pour le {count} jour restant",
+    "· {amount} für den {count} übrigen Tag"
+  ]
+]

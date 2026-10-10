@@ -176,6 +176,7 @@ test('receipt migrations preserve unknown upload age and give legacy images a mi
   const deadline = Date.parse(String(legacy?.legacy_cleanup_after));
   assert.ok(deadline >= migrationStarted + RECEIPT_LIMITS.orphanAgeMs - 1 && deadline <= migrationFinished + RECEIPT_LIMITS.orphanAgeMs + 1);
   for (const untouched of [pending, known]) assert.equal(database.sqlite.prepare('SELECT legacy_cleanup_after FROM receipts WHERE id=?').get(untouched)?.legacy_cleanup_after, '');
+  for (const name of (await readdir(new URL('../drizzle/', import.meta.url))).filter(file => file.endsWith('.sql') && file > '0006_receipt_cleanup.sql').sort()) database.sqlite.exec(await readFile(new URL(`../drizzle/${name}`, import.meta.url), 'utf8'));
   assert.equal(await sweepReceiptOrphans(database.asD1(), actor, deadline - 1), 0);
   const bucket = new MemoryR2(); bucket.objects.set(imageKey(id), { bytes: png, contentType: 'image/png' });
   const result = await maintainSystemReceipts(database.asD1(), bucket.asR2(), { now: deadline, sweepLimit: 1, purgeLimit: 1 });
@@ -265,7 +266,7 @@ test('pending and deleting receipts cannot be read or attached to posted expense
   assert.equal(count(database, 'activity_events'), 1, 'only the successful pending reservation is audited');
 });
 
-test('shared image is retained until all expense/draft references are removed, then financial commit cleans it', async () => {
+test('shared image survives the Undo window, then maintenance removes it after the last reference', async () => {
   const { database, bucket } = await storage(); const id = await upload(database, bucket);
   let state = await store.readLedger(actor);
   state.data.trips[0].expenses = [expense(id)]; state.data.trips[0].drafts = [{ ...expense(id), id: 'draft-1', status: 'review' }];
@@ -276,13 +277,16 @@ test('shared image is retained until all expense/draft references are removed, t
   assert.equal(count(database), 1); assert.ok(bucket.objects.has(imageKey(id)));
   state.data.trips[0].drafts = [];
   await store.writeLedger(actor, state.data, state.revision, { source: 'chatgpt' });
-  assert.equal(count(database), 0); assert.equal(bucket.objects.size, 0);
+  assert.equal(count(database), 1); assert.equal(bucket.objects.size, 1);
+  const deadline=Date.parse(String(database.sqlite.prepare('SELECT until FROM receipt_restore_holds WHERE receipt_id=?').get(id)?.until));
+  assert.deepEqual(await maintainSystemReceipts(database.asD1(),bucket.asR2(),{now:deadline-1}),{marked:0,deleted:0,failed:0});
+  assert.deepEqual(await maintainSystemReceipts(database.asD1(),bucket.asR2(),{now:deadline}),{marked:1,deleted:1,failed:0});
   const events = await store.readActivity(actor, 'trip-1');
   assert.ok(events.events.some(event => event.entityType === 'draft' && event.action === 'delete' && event.before?.receiptId === id));
   const receiptHistory = receiptEvents(database, id);
   assert.equal(receiptHistory[2].source, 'chatgpt'); assert.equal(receiptHistory[2].actorId, actor);
   assert.equal(receiptHistory[2].after?.reason, 'receipt-detached');
-  assert.equal(receiptHistory[3].source, 'system'); assert.equal(receiptHistory[3].before?.initiatorId, actor);
+  assert.equal(receiptHistory[3].source, 'system'); assert.equal(receiptHistory[4].action,'delete');
 });
 
 test('receipt DELETE enforces auth/origin/membership/reference protection and returns private responses', async context => {
@@ -382,6 +386,9 @@ test('failed object cleanup cannot undo a financial deletion or permit reattachm
   bucket.failDelete = true; state.data.trips[0].expenses = [];
   state = await store.writeLedger(actor, state.data, state.revision);
   assert.equal(state.data.trips[0].expenses.length, 0); assert.equal(state.revision, 2);
+  assert.equal(database.sqlite.prepare('SELECT state FROM receipts WHERE id=?').get(id)?.state, 'active');
+  const deadline=Date.parse(String(database.sqlite.prepare('SELECT until FROM receipt_restore_holds WHERE receipt_id=?').get(id)?.until));
+  assert.equal((await maintainSystemReceipts(database.asD1(),bucket.asR2(),{now:deadline})).failed,1);
   assert.equal(database.sqlite.prepare('SELECT state FROM receipts WHERE id=?').get(id)?.state, 'deleting');
   state.data.trips[0].expenses = [expense(id)]; await assert.rejects(store.writeLedger(actor, state.data, state.revision), /does not belong/);
   bucket.failDelete = false; assert.equal((await maintainReceipts(database.asD1(), bucket.asR2(), actor)).deleted, 1);
@@ -643,4 +650,49 @@ test('global sweep cannot race a slow pending object put', async () => {
   };
   const id = await upload(database, bucket);
   assert.equal(receiptEvents(database, id).length, 2); assert.ok(bucket.objects.has(imageKey(id)));
+});
+
+test('Undo preserves the photo and trusted historical shares even after traveller weights change', async()=>{
+  const {database,bucket}=await storage(); const id=await upload(database,bucket);
+  let state=await store.readLedger(actor);
+  const original={...expense(id),adjustmentAllocation:'receipt-total' as const};
+  state.data.trips[0].expenses=[original]; state=await store.writeLedger(actor,state.data,state.revision,{preserveCalculationRules:true});
+  const saved=structuredClone(state.data.trips[0].expenses[0]);
+  state.data.trips[0].expenses=[]; state=await store.writeLedger(actor,state.data,state.revision);
+  state.data.trips[0].members[0].weight=3;
+  state.data.trips[0].expenses=[saved]; state=await store.writeLedger(actor,state.data,state.revision);
+  assert.deepEqual(state.data.trips[0].expenses[0],saved);
+  const deadline=Date.parse(String(database.sqlite.prepare('SELECT until FROM receipt_restore_holds WHERE receipt_id=?').get(id)?.until));
+  assert.deepEqual(await maintainSystemReceipts(database.asD1(),bucket.asR2(),{now:deadline}),{marked:0,deleted:0,failed:0});
+  assert.ok(bucket.objects.has(imageKey(id)));
+});
+
+const offlineSource=transpileWithSharedImports(await readFile(new URL('../app/api/offline-expenses/route.ts',import.meta.url),'utf8'),{compilerOptions:{module:ModuleKind.ESNext,target:ScriptTarget.ES2022}}).outputText.replace("'@/lib/store'",JSON.stringify(storeUrl)).replace("'@/lib/model'",JSON.stringify(new URL('../lib/model.ts',import.meta.url).href));
+const offlineRoute=await import(dataUrl(offlineSource)) as typeof import('../app/api/offline-expenses/route');
+function offlineRequest(accountId=actor,entry=expense('')) {const {receiptId,...value}=entry;void receiptId;return new Request('https://triptab.test/api/offline-expenses',{method:'POST',headers:{...provider(),'origin':'https://triptab.test','content-type':'application/json'},body:JSON.stringify({accountId,tripId:'trip-1',expense:value})});}
+test('offline append retries concurrent financial writes without overwriting them and stable IDs are idempotent',async()=>{
+  const {database}=await storage();let state=await store.readLedger(actor);
+  database.beforeWriteBatch=async()=>{const fresh=await store.readLedger(actor);fresh.data.trips[0].expenses=[{...expense(''),receiptId:undefined,id:'other-writer'}];await store.writeLedger(actor,fresh.data,fresh.revision);};
+  assert.equal((await offlineRoute.POST(offlineRequest())).status,200);
+  assert.equal((await offlineRoute.POST(offlineRequest())).status,200);
+  state=await store.readLedger(actor);assert.equal(state.data.trips[0].expenses.length,2);assert.ok(state.data.trips[0].expenses.some(value=>value.id==='other-writer'));
+  assert.equal((await offlineRoute.POST(offlineRequest(outsider))).status,409);
+  assert.equal((await offlineRoute.POST(offlineRequest(actor,{...expense(''),title:'Changed pending details'}))).status,409);
+});
+test('queued photo operations reject an account switch before uploading or deleting',async()=>{
+  const {database,bucket}=await storage();const id=await upload(database,bucket);
+  const uploadRequest=request('POST','tripId=trip-1',{body:png});uploadRequest.headers.set('X-TripTab-Account',outsider);
+  assert.equal((await route.POST(uploadRequest)).status,409);
+  const deleteRequest=request('DELETE',`id=${id}`);deleteRequest.headers.set('X-TripTab-Account',outsider);
+  assert.equal((await route.DELETE(deleteRequest)).status,409);assert.ok(bucket.objects.has(imageKey(id)));
+});
+
+
+test('exact Undo of a historical fractional króna payment preserves its original amount',async()=>{
+  const {database}=await storage();const historical=trip();historical.currency='ISK';database.sqlite.prepare('UPDATE trips SET data=? WHERE id=?').run(JSON.stringify(historical),'trip-1');let state=await store.readLedger(actor);
+  const payment={id:'legacy-payment',from:'b',to:'a',amount:50,date:'2026-10-10'};
+  state.data.trips[0].payments=[payment];state=await store.writeLedger(actor,state.data,state.revision,{preserveCalculationRules:true});
+  state.data.trips[0].payments=[];state=await store.writeLedger(actor,state.data,state.revision);
+  state.data.trips[0].payments=[payment];state=await store.writeLedger(actor,state.data,state.revision);
+  assert.deepEqual(state.data.trips[0].payments,[payment]);
 });

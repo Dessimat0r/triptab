@@ -1,15 +1,17 @@
 "use client";
+import { t as uiText } from "@/lib/ui-language";
+
 import { useLayoutEffect,useRef,useState } from 'react';
-import { RECEIPT_LANGUAGES,languageName,languageSchema,type ReceiptLanguage } from '@/lib/receipt-languages';
+import { RECEIPT_LANGUAGES,displayLanguageName,languageSchema,type ReceiptLanguage } from '@/lib/receipt-languages';
 import './receipt-languages.css';
-export function LanguageOptions(){return <>{RECEIPT_LANGUAGES.map(([code,label])=><option key={code} value={code}>{label}</option>)}</>;}
+export function LanguageOptions(){return <>{RECEIPT_LANGUAGES.map(([code])=><option key={code} value={code}>{displayLanguageName(code)}</option>)}</>;}
 export function TripReceiptLanguage({value,onChange,destination,busy=false,accountId,tripId,name}:{value:ReceiptLanguage|'auto';onChange:(language:ReceiptLanguage|'auto')=>void;destination:()=>string;busy?:boolean;accountId?:string;tripId?:string;name?:string}){
   const [pending,setPending]=useState(false),[error,setError]=useState(''),token=useRef(0),current=useRef({value,destination,accountId,tripId});
   useLayoutEffect(()=>{current.current={value,destination,accountId,tripId};});
   useLayoutEffect(()=>()=>{token.current++;},[]);
   return <div className="trip-receipt-language">
-    <label>Receipt language<select aria-label="Holiday receipt language" name={name} value={value} disabled={busy} onChange={event=>{token.current++;setError('');onChange(event.target.value as ReceiptLanguage|'auto');}}>
-      <option value="auto">Automatic detection</option><LanguageOptions />
+    <label>{uiText("Receipt language")}<select aria-label={uiText("Holiday receipt language")} name={name} value={value} disabled={busy} onChange={event=>{token.current++;setError('');onChange(event.target.value as ReceiptLanguage|'auto');}}>
+      <option value="auto">{uiText("Automatic detection")}</option><LanguageOptions />
     </select></label>
     <button type="button" className="quiet" disabled={busy||pending||!accountId} onClick={async()=>{
       const text=destination().trim(),before=current.current,request=++token.current;
@@ -25,13 +27,13 @@ export function TripReceiptLanguage({value,onChange,destination,busy=false,accou
         onChange(languageSchema.parse(result.language));
       }catch(cause){if(token.current===request)setError(cause instanceof Error?cause.message:'Unable to suggest a language.');}
       finally{setPending(false);}
-    }}>{pending?'Suggesting…':'Suggest from holiday name'}</button>
-    <small className="footnote">A starting hint for scans. Each receipt can detect a different language.</small>
-    {error&&<p className="error" role="alert">{error}</p>}
+    }}>{pending?uiText('Suggesting…'):uiText('Suggest from holiday name')}</button>
+    <small className="footnote">{uiText("A starting hint for scans. Each receipt can detect a different language.")}</small>
+    {error&&<p className="error" role="alert">{uiText(error)}</p>}
   </div>;
 }
 export function ReceiptLanguageSelect({tripLanguage,value,detected,onChange}:{tripLanguage?:ReceiptLanguage|'auto';value?:ReceiptLanguage|'auto';detected?:ReceiptLanguage;onChange:(value:ReceiptLanguage|'auto'|undefined)=>void}){
-  return <label className="receipt-language-control">Receipt language<select aria-label="Receipt language" value={value??'trip'} onChange={event=>onChange(event.target.value==='trip'?undefined:event.target.value as ReceiptLanguage|'auto')}>
-    <option value="trip">Holiday hint · {languageName(tripLanguage)}</option><option value="auto">Automatic detection (ignore holiday hint)</option><LanguageOptions />
-  </select><small>{detected?`Detected: ${languageName(detected)}. `:''}A selected language overrides detection.</small></label>;
+  return <label className="receipt-language-control">{uiText("Receipt language")}<select aria-label={uiText("Receipt language")} value={value??'trip'} onChange={event=>onChange(event.target.value==='trip'?undefined:event.target.value as ReceiptLanguage|'auto')}>
+    <option value="trip">{uiText("Holiday hint · ")}{displayLanguageName(tripLanguage)}</option><option value="auto">{uiText("Automatic detection (ignore holiday hint)")}</option><LanguageOptions />
+  </select><small>{detected?uiText("Detected: {value0}. ", { value0: displayLanguageName(detected) }):''}{uiText("A selected language overrides detection.")}</small></label>;
 }

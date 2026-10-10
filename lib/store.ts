@@ -1,16 +1,17 @@
 import { canonicalJson as canonical } from './data-utils';
 import { env } from 'cloudflare:workers';
 import { ZodError } from 'zod';
-import { LedgerValidationError, parseLedgerStructure, parseStoredTrip, validateLedger, type Ledger, type ReceiptMessage, type Trip } from './model';
+import { LedgerValidationError, parseLedgerStructure, parseStoredTrip, validateLedger, type Ledger, type Expense, type Draft, type Payment, type ReceiptMessage, type Trip } from './model';
 import type { LedgerFreshness } from './ledger-freshness';
 import { activityNotification, notifyMembers } from './notifications';
 import { AuthError, resolveIdentity, readAuthContext } from './auth';
-import { markRemovedReceipts, purgeDeletingReceipts, ReceiptLifecycleError } from './receipt-lifecycle';
+import { ReceiptLifecycleError } from './receipt-lifecycle';
 import { activityStatements, type ActivityEntity, type ActivitySource, type ActivityChange, type ActivityEvent } from './audit';
 import { assertReceiptActivityVersion, receiptActivityScope, resolveReceiptActivityFamily, validateReceiptActivityScope, ReceiptScopeChangedError, ReceiptScopeSizeError, type ReceiptActivityScope } from './activity-scope';
 export { activityStatements, type ActivityEntity, type ActivitySource, type ActivityChange, type ActivityEvent } from './audit';
 import { receiptMemorySchema, type ReceiptMemory } from './receipt-context';
 import { receiptAliasIdentity, ReceiptMemoryOwnershipError, validateReceiptMemoryOwnership } from './receipt-memory-ownership';
+import { OPEN_TRIP_IDS, openTripBindings, TripLifecycleError } from './trip-lifecycle';
 
 export class RequestError extends Error {
   constructor(message: string, public readonly status = 400) {
@@ -74,7 +75,7 @@ export function bucket() {
 }
 
 type ProfileRow = { id: string; email: string; display_name: string; created_at: string };
-export type Profile = { id: string; email: string; displayName: string; createdAt: string; authMethod: 'password' | 'chatgpt'; hasPassword: boolean; chatgptConnected: boolean; chatgptAvailable: boolean; emailVerified: boolean };
+export type Profile = { id: string; email: string; displayName: string; createdAt: string; authMethod: 'password' | 'chatgpt'; hasPassword: boolean; chatgptConnected: boolean; chatgptAvailable: boolean; emailVerified: boolean; uiLanguage?: "en"|"es"|"fr"|"de" };
 type StoredTrip = { id: string; owner: string; data: string };
 type MembershipRow = { trip_id: string; user_id: string; member_id: string; email: string | null };
 
@@ -270,7 +271,7 @@ export async function ensureProfile(request: Request, options: { allowSession?: 
   return { id: profile.id, email: profile.email, displayName: profile.displayName, createdAt: profile.createdAt,
     authMethod: identity.kind === 'session' ? 'password' : 'chatgpt', hasPassword: state.hasPassword,
     chatgptConnected: state.chatgptLinked, chatgptAvailable: state.chatgptAvailable,
-    emailVerified: identity.kind === 'chatgpt' && !!identity.emailVerified && identity.email === profile.email && state.emailVerified };
+    emailVerified: state.emailVerified,uiLanguage:profile.uiLanguage };
 }
 
 type LedgerSnapshot = { data: Ledger; revision: number; freshness: LedgerFreshness };
@@ -290,16 +291,17 @@ export async function readLedgerSnapshot(id: string): Promise<LedgerSnapshot>;
 export async function readLedgerSnapshot(id: string, options: { includeFreshness: false }): Promise<{ data: Ledger; revision: number }>;
 export async function readLedgerSnapshot(id: string, options: { includeFreshness?: boolean } = {}) {
   // Drive these reads from the indexed owner/member ID sets rather than scanning
-  // every trip (or every membership) in the database.
-  const visibleIds = 'SELECT id FROM trips WHERE owner = ? UNION SELECT trip_id FROM memberships WHERE user_id = ?';
+  // every trip (or every membership) in the database. Archived holidays stay
+  // accessible but are not part of the editable ledger or its 50-holiday limit.
+  const visibleIds = OPEN_TRIP_IDS;
   const results = await db().batch([
     db().prepare(`SELECT t.id, t.owner, t.data${options.includeFreshness === false ? '' : `, t.receipt_link_version AS dataVersion,
       COALESCE((SELECT e.sequence FROM activity_events e WHERE e.trip_id = t.id ORDER BY e.sequence DESC LIMIT 1), 0) AS latest`}
-      FROM trips t WHERE t.id IN (${visibleIds}) ORDER BY t.id`).bind(id, id),
+      FROM trips t WHERE t.id IN (${visibleIds}) ORDER BY t.id`).bind(...openTripBindings(id)),
     db().prepare('SELECT COALESCE((SELECT revision FROM sync_state WHERE id = 1), 0) AS revision'),
     db().prepare(`SELECT m.trip_id, m.user_id, m.member_id, p.email FROM memberships m JOIN trips t ON t.id = m.trip_id
       LEFT JOIN profiles p ON p.id = m.user_id WHERE m.trip_id IN (${visibleIds})
-      ORDER BY m.trip_id, m.member_id, m.user_id`).bind(id, id),
+      ORDER BY m.trip_id, m.member_id, m.user_id`).bind(...openTripBindings(id)),
   ]);
   const links = results[2].results as MembershipRow[];
   const linksByTrip = new Map<string, Map<string, MembershipRow>>();
@@ -496,7 +498,7 @@ async function validateTripReceiptMemory(trip: Trip, previous: Trip | undefined,
     }
   }
 
-  const activeMemberIds = new Set(trip.members.map(member => member.id));
+  const activeMemberIds = new Set(trip.members.filter(member => !member.retired).map(member => member.id));
   let changed = false;
   for (const entry of incomingEntries) {
     const saved = savedEntries.find(candidate => candidate.id === entry.id);
@@ -511,9 +513,9 @@ async function validateTripReceiptMemory(trip: Trip, previous: Trip | undefined,
   return changed;
 }
 
-export async function writeLedger(id: string, data: unknown, revision: unknown, options: { source?: ActivitySource; includeFreshness: true; tripSnapshot?: Trip }): Promise<LedgerSnapshot>;
-export async function writeLedger(id: string, data: unknown, revision: unknown, options?: { source?: ActivitySource; includeFreshness?: false; tripSnapshot?: Trip }): Promise<{ data: Ledger; revision: number }>;
-export async function writeLedger(id: string, data: unknown, revision: unknown, options: { source?: ActivitySource; includeFreshness?: boolean; tripSnapshot?: Trip } = {}) {
+export async function writeLedger(id: string, data: unknown, revision: unknown, options: { source?: ActivitySource; includeFreshness: true; tripSnapshot?: Trip; preserveCalculationRules?: boolean; ownerMemberIds?: Record<string,string> }): Promise<LedgerSnapshot>;
+export async function writeLedger(id: string, data: unknown, revision: unknown, options?: { source?: ActivitySource; includeFreshness?: false; tripSnapshot?: Trip; preserveCalculationRules?: boolean; ownerMemberIds?: Record<string,string> }): Promise<{ data: Ledger; revision: number }>;
+export async function writeLedger(id: string, data: unknown, revision: unknown, options: { source?: ActivitySource; includeFreshness?: boolean; tripSnapshot?: Trip; preserveCalculationRules?: boolean; ownerMemberIds?: Record<string,string> } = {}) {
   // Parse bounded structure first. New financial rules are applied after access
   // checks, with trusted stored snapshots allowing unchanged legacy entries to
   // remain available until their owner explicitly repairs them.
@@ -529,17 +531,23 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
   const baseline = await db().batch([
     db().prepare('SELECT id, owner, data, receipt_link_version FROM trips WHERE id IN (SELECT value FROM json_each(?))').bind(tripIdsJson),
     db().prepare('SELECT m.trip_id, m.user_id, m.member_id, p.email FROM memberships m LEFT JOIN profiles p ON p.id = m.user_id WHERE m.trip_id IN (SELECT value FROM json_each(?))').bind(tripIdsJson),
-    db().prepare("SELECT id, trip_id FROM receipts WHERE state = 'active' AND trip_id IN (SELECT value FROM json_each(?))").bind(tripIdsJson),
+    db().prepare("SELECT * FROM receipts WHERE state = 'active' AND trip_id IN (SELECT value FROM json_each(?))").bind(tripIdsJson),
     db().prepare('SELECT id, email, display_name, created_at FROM profiles WHERE id = ?').bind(id),
     db().prepare('SELECT COALESCE((SELECT revision FROM sync_state WHERE id = 1), 0) AS revision'),
+    // A deleted holiday keeps its append-only history under the same ID. A stale
+    // copy must never recreate it and expose that history to a new owner.
+    db().prepare(`SELECT ids.value AS id FROM json_each(?) ids WHERE NOT EXISTS (SELECT 1 FROM trips WHERE id = ids.value)
+      AND EXISTS (SELECT 1 FROM activity_events e WHERE e.trip_id = ids.value)`).bind(tripIdsJson),
   ]);
+  const deletedTripIds = new Set((baseline[5].results as { id: string }[]).map(row => row.id));
   const baselineRevision = (baseline[4].results as { revision: number }[])[0].revision;
   if (!scoped && baselineRevision !== revision) throw new Error('CONFLICT');
   const existingRows = { results: baseline[0].results as (StoredTrip & { receipt_link_version: number })[] };
   const linkedRows = { results: baseline[1].results as MembershipRow[] };
-  const receiptRows = { results: baseline[2].results as { id: string; trip_id: string }[] };
+  const receiptRows = { results: baseline[2].results as { id: string; trip_id: string; owner:string; created_at:string; content_type:string; size_bytes:number; sha256:string }[] };
   const profile = (baseline[3].results as ProfileRow[])[0];
   const existing = new Map(existingRows.results.map(row => [row.id, row]));
+  const ownerMembers = new Map<string,string>();
   const newTrips: Trip[] = [];
   const changedTrips: Trip[] = [];
   const changes: ActivityChange[] = [];
@@ -565,6 +573,10 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
         const old = previous.members.find(value => value.id === member.id);
         const link = links.find(value => value.member_id === member.id);
         if (link) {
+          // Payers follow these handles, so only the linked account may change them.
+          if (link.user_id !== id && canonical(member.payTo ?? null) !== canonical(old?.payTo ?? null)) {
+            throw new RequestError(`Only ${old?.name || member.name} can change their own payment details.`, 403);
+          }
           member.userId = link.user_id;
           member.email = link.email || old?.email;
         } else {
@@ -583,13 +595,18 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
       previousTrips.set(trip.id, prior);
     } else {
       if (scoped) throw new Error('CONFLICT');
+      if (deletedTripIds.has(trip.id)) throw new RequestError(`“${trip.name}” was deleted. Refresh to continue.`, 409);
       trip.ownerId = id;
       for (const member of trip.members) { delete member.userId; delete member.email; }
-      const firstMember = trip.members[0];
+      const chosen = options.ownerMemberIds?.[trip.id];
+      const firstMember = chosen ? trip.members.find(member=>member.id===chosen) : trip.members[0];
+      if (!firstMember) throw new RequestError('Choose which imported traveller represents you.');
+      ownerMembers.set(trip.id,firstMember.id);
       firstMember.userId = id;
       if (profile) {
         firstMember.email = profile.email;
         firstMember.name = profile.display_name.slice(0, 50);
+        for(const other of trip.members)if(other.id!==firstMember.id&&other.name.trim().toLowerCase()===firstMember.name.trim().toLowerCase())other.name=`${other.name.slice(0,44)} (${trip.members.indexOf(other)+1})`;
       }
     }
     for (const entry of [...trip.expenses, ...trip.drafts]) {
@@ -597,7 +614,7 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
         throw new RequestError('This receipt was removed or does not belong to the trip. Upload it again before saving.');
       }
     }
-    const actorMemberId = stored ? links.find(link => link.user_id === id)?.member_id : trip.members[0].id;
+    const actorMemberId = stored ? links.find(link => link.user_id === id)?.member_id : ownerMembers.get(trip.id);
     const memoryChanged = await validateTripReceiptMemory(trip, previousTrips.get(trip.id), actorMemberId);
     if ((await stampReceiptAuthors(trip, previousTrips.get(trip.id), actorMemberId, profile?.display_name.trim().slice(0, 80) || 'Traveller') || memoryChanged) && stored) {
       conversationAuthors.push({ tripId: trip.id, memberId: actorMemberId });
@@ -610,7 +627,30 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
     expenses: trip.expenses.map(entry => clearAssistantAuthors({ ...entry, conversation: entry.conversation?.map(message => ({ ...message })) })),
     drafts: trip.drafts.map(entry => clearAssistantAuthors({ ...entry, conversation: entry.conversation?.map(message => ({ ...message })) })),
   }));
-  ledger = validateLedger(ledger, { previous: { trips: validationPrevious }, source: !options.source || options.source === 'web' ? 'web' : 'mcp' });
+  // An exact restoration from trusted deletion history keeps its saved rounding
+  // and weights. A changed restoration is validated as a new financial entry.
+  for (const trip of ledger.trips) {
+    const prior = validationPrevious.find(value => value.id === trip.id);
+    if (!prior) continue;
+    for (const kind of ['expenses', 'drafts', 'payments'] as const) {
+      const missing = trip[kind].filter(entry => !prior[kind].some(old => old.id === entry.id));
+      if (!missing.length) continue;
+      const history = await db().prepare(`SELECT e.entity_id,e.before_data FROM activity_events e
+        JOIN json_each(?) requested ON e.entity_id=json_extract(requested.value,'$.id')
+        WHERE e.trip_id=? AND e.entity_type=?
+          AND length(CAST(e.before_data AS BLOB))<=json_extract(requested.value,'$.maxBytes')
+          AND action='delete' AND NOT EXISTS(SELECT 1 FROM activity_events newer
+            WHERE newer.trip_id=e.trip_id AND newer.entity_type=e.entity_type AND newer.entity_id=e.entity_id AND newer.sequence>e.sequence)`)
+        .bind(JSON.stringify(missing.map(entry=>({id:entry.id,maxBytes:new TextEncoder().encode(canonical(entry)).byteLength+500}))),trip.id,kind==='expenses'?'expense':kind==='drafts'?'draft':'payment').all<{entity_id:string;before_data:string}>();
+      for (const row of history.results) {
+        const incoming=missing.find(entry=>entry.id===row.entity_id);
+        const original=clearAssistantAuthors(JSON.parse(row.before_data));
+        if (kind!=='payments' && (!incoming || !('receiptId' in incoming) || !incoming.receiptId)) delete original.receiptId;
+        if (incoming && canonical(incoming)===canonical(original)) (prior[kind] as (Expense|Draft|Payment)[]).push(original);
+      }
+    }
+  }
+  ledger = validateLedger(ledger, { previous: { trips: validationPrevious }, source: !options.source || options.source === 'web' ? 'web' : 'mcp', preserveCalculationRules: options.preserveCalculationRules });
   checkLedgerSize(ledger);
   // Diff the final validated representation, so accepted normalization of new
   // fields and every explicit legacy repair have accurate history snapshots.
@@ -663,23 +703,27 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
     statements.push(db().prepare('INSERT INTO trips (id, owner, data) SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND last_write = ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data WHERE EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND last_write = ?) AND (trips.owner = ? OR EXISTS (SELECT 1 FROM memberships m WHERE m.trip_id = trips.id AND m.user_id = ?))').bind(trip.id, trip.ownerId!, JSON.stringify(trip), marker, marker, id, id));
   }
   for (const trip of newTrips) {
-    statements.push(db().prepare('INSERT INTO memberships (trip_id, user_id, member_id) SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND last_write = ?)').bind(trip.id, id, trip.members[0].id, marker));
+    statements.push(db().prepare('INSERT INTO memberships (trip_id, user_id, member_id) SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND last_write = ?)').bind(trip.id, id, ownerMembers.get(trip.id)!, marker));
   }
+  const restoreUntil = new Date(Date.now()+60_000).toISOString();
+  for (const receipt of receiptRows.results.filter(row=>removedReceiptIds.includes(row.id))) {
+    const snapshot={id:receipt.id,uploaderId:receipt.owner,state:'active',contentType:receipt.content_type,sizeBytes:receipt.size_bytes,sha256:receipt.sha256,createdAt:receipt.created_at};
+    changes.push({tripId:receipt.trip_id,entityType:'receipt',entityId:receipt.id,action:'update',before:snapshot,after:{...snapshot,reason:'receipt-detached',restoreUntil,initiatorId:id,initiatorName:profile?.display_name||'Traveller'}});
+  }
+  if (removedReceiptIds.length) statements.push(db().prepare(`INSERT INTO receipt_restore_holds(receipt_id,until)
+    SELECT r.id,? FROM receipts r WHERE r.state='active' AND r.id IN(SELECT value FROM json_each(?))
+      AND EXISTS(SELECT 1 FROM sync_state WHERE id=1 AND last_write=?)
+    ON CONFLICT(receipt_id) DO UPDATE SET until=excluded.until`)
+    .bind(restoreUntil,JSON.stringify(removedReceiptIds),marker));
   statements.push(...activityStatements(db(), changes, { id, displayName: profile?.display_name || 'Traveller' }, marker, scoped ? 'current' : revision + 1, options.source));
   const results = await db().batch(statements);
   if (!results[1].meta.changes) throw new Error('CONFLICT');
-  if (removedReceiptIds.length) {
-    // Cleanup follows the successful financial commit. The atomic reference
-    // check and deleting state prevent a concurrent save from reattaching an
-    // image while R2 deletion is in progress. Failures never undo saved money.
-    await markRemovedReceipts(db(), id, removedReceiptIds, { source: options.source }).then(() => purgeDeletingReceipts(db(), bucket(), id)).catch(() => {
-      console.warn('TripTab saved the entry; receipt cleanup will retry.');
-    });
-  }
+  // The one-minute photo hold commits with the deletion. Undo can reattach an
+  // active image before bounded scheduled maintenance removes its last copy.
   for (const trip of changedTrips) {
     const notification = activityNotification(profile?.display_name || 'A traveller', changes.filter(change => change.tripId === trip.id), { tripName: trip.name });
     if (!notification) continue;
-    await notifyMembers(trip.id, id, notification.title, notification.body).catch(() => {
+    await notifyMembers(trip.id, id, notification.title, notification.body, changes.filter(change=>change.tripId===trip.id).some(change=>['trip','member','invite'].includes(change.entityType)) ? undefined : [...new Set(changes.filter(change=>change.tripId===trip.id).flatMap(change=>[change.before,change.after].flatMap(value=>value ? [value.payer,value.from,value.to,...Object.keys(value.percentages as object || {}),...(Array.isArray(value.items)?value.items.flatMap((item:{members?:string[]})=>item.members||[]):[])] : [])).filter((value):value is string=>typeof value==='string'))]).catch(() => {
       console.warn('TripTab could not queue a holiday update notification.');
     });
   }
@@ -690,11 +734,12 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
 export function failure(e: unknown) {
   // Expected validation/auth failures do not need stack traces or submitted
   // values in logs. Storage faults retain a short, value-free diagnostic.
-  if (!(e instanceof RequestError) && !(e instanceof AuthError) && !(e instanceof ReceiptLifecycleError) && !(e instanceof LedgerValidationError) && !(e instanceof ZodError) && !(e instanceof Error && ['UNAUTHORIZED', 'CONFLICT'].includes(e.message))) console.error('TripTab request failed', { kind: e instanceof Error ? e.name : 'UnknownError' });
+  if (!(e instanceof RequestError) && !(e instanceof AuthError) && !(e instanceof ReceiptLifecycleError) && !(e instanceof TripLifecycleError) && !(e instanceof LedgerValidationError) && !(e instanceof ZodError) && !(e instanceof Error && ['UNAUTHORIZED', 'CONFLICT'].includes(e.message))) console.error('TripTab request failed', { kind: e instanceof Error ? e.name : 'UnknownError' });
   const m = e instanceof Error ? e.message : '';
   const issue = e instanceof ZodError ? e.issues[0] : undefined;
-  const knownFields = new Set(['trips', 'id', 'ownerId', 'name', 'currency', 'startDate', 'endDate', 'members', 'userId', 'email', 'expenses', 'drafts', 'payments', 'title', 'date', 'time', 'timezone', 'fx', 'rate', 'asOf', 'source', 'bankAmount', 'payer', 'items', 'amount', 'percentages', 'quantity', 'sourceText', 'units', 'total', 'allocations', 'label', 'conversation', 'role', 'text', 'createdAt', 'replyTo', 'itemId', 'authorMemberId', 'authorName', 'memory', 'notes', 'aliases', 'memberId', 'scopeMemberId', 'tax', 'tip', 'discount', 'receiptId', 'sourceDraftId', 'expenseId', 'status', 'from', 'to', 'note', 'method']);
+  const knownFields = new Set(['trips', 'id', 'ownerId', 'name', 'currency', 'startDate', 'endDate', 'members', 'userId', 'email', 'expenses', 'drafts', 'payments', 'title', 'date', 'time', 'timezone', 'fx', 'rate', 'asOf', 'source', 'bankAmount', 'payer', 'items', 'amount', 'percentages', 'quantity', 'sourceText', 'units', 'total', 'allocations', 'label', 'conversation', 'role', 'text', 'createdAt', 'replyTo', 'itemId', 'authorMemberId', 'authorName', 'memory', 'notes', 'aliases', 'memberId', 'scopeMemberId', 'tax', 'tip', 'discount', 'receiptId', 'sourceDraftId', 'expenseId', 'status', 'from', 'to', 'note', 'method', 'payTo', 'paypal', 'monzo', 'revolut', 'wise', 'bank']);
   for (const field of ['receiptScan', 'version', 'printedSubtotal', 'printedTotal', 'printedCurrency', 'calculatedSubtotal', 'calculatedTotal', 'warnings', 'code', 'itemIds', 'lineIndex', 'observedText', 'difference', 'resolved', 'sourceLines', 'kind', 'mappedTo', 'processedAt', 'processor', 'attemptId', 'imageIds', 'acknowledgement', 'missingTotalAcknowledgement', 'fingerprint', 'scanSource', 'confidence', 'fieldSources']) knownFields.add(field);
+  for (const field of ['memberWeights', 'weight', 'joinedOn', 'leftOn', 'budget']) knownFields.add(field);
   for (const field of ['icon', 'suggestedIcon', 'symbol', 'background', 'receiptLanguage', 'detectedLanguage', 'nameLanguage', 'translations', 'pairedText', 'sourceLanguage', 'provenance', 'languageViewId', 'readingLanguage', 'primaryVersion', 'itemVersions', 'itemKey', 'itemVersion']) knownFields.add(field);
   const issuePath = issue?.path.map(part => typeof part === 'number' ? String(part + 1) : knownFields.has(part) ? part : 'entry').join(' → ');
   // Zod's enum/literal messages can echo the supplied value; use a fixed message.
@@ -702,11 +747,11 @@ export function failure(e: unknown) {
     : issue && ['invalid_enum_value', 'invalid_literal'].includes(issue.code) ? 'Choose a supported value.' : issue?.message;
   const error = issue ? `${issuePath || 'Entry'}: ${issueMessage?.slice(0, 300) || 'Check this value.'}`
     : e instanceof LedgerValidationError ? e.message
-    : e instanceof RequestError || e instanceof AuthError || e instanceof ReceiptLifecycleError ? (m === 'UNAUTHORIZED' ? 'Sign in to TripTab to open your ledger.' : e.message)
+    : e instanceof RequestError || e instanceof AuthError || e instanceof ReceiptLifecycleError || e instanceof TripLifecycleError ? (m === 'UNAUTHORIZED' ? 'Sign in to TripTab to open your ledger.' : e.message)
     : m === 'UNAUTHORIZED' ? 'Sign in to TripTab to open your ledger.'
     : m === 'CONFLICT' ? 'Your ledger changed in another tab or in ChatGPT. Refresh before saving again.'
     : 'Unable to complete this request. Check your entries and try again.';
-  const status = e instanceof LedgerValidationError ? 400 : e instanceof RequestError || e instanceof AuthError || e instanceof ReceiptLifecycleError ? e.status : m === 'UNAUTHORIZED' ? 401 : m === 'CONFLICT' ? 409 : 400;
+  const status = e instanceof LedgerValidationError ? 400 : e instanceof RequestError || e instanceof AuthError || e instanceof ReceiptLifecycleError || e instanceof TripLifecycleError ? e.status : m === 'UNAUTHORIZED' ? 401 : m === 'CONFLICT' ? 409 : 400;
   return Response.json({ error }, { status, headers: { 'Cache-Control': 'private, no-store' } });
 }
 

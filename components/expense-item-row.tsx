@@ -1,5 +1,7 @@
 "use client";
 
+
+import { t as uiText } from "@/lib/ui-language";
 import { useState, type ReactNode } from "react";
 import { AlertTriangle, ChevronDown } from "lucide-react";
 
@@ -36,7 +38,7 @@ export default function ExpenseItemRow({ id, index, name, detail, price, flag, u
         {flag && <span className="item-flag"><AlertTriangle size={13} aria-hidden="true" />{flag}</span>}
         <span className="item-summary-price">{price}</span>
         <ChevronDown className="item-summary-chevron" size={18} aria-hidden="true" />
-        <span className="sr-only">{open ? `Close item ${index + 1}` : `Edit item ${index + 1}`}</span>
+        <span className="sr-only">{open ? uiText("Close item {value0}", { value0: index + 1 }) : uiText("Edit item {value0}", { value0: index + 1 })}</span>
       </summary>
       <div className="item-body">{children}</div>
     </details>

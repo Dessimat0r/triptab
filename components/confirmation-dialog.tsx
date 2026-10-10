@@ -1,5 +1,7 @@
 "use client";
 
+
+import { t as uiText } from "@/lib/ui-language";
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import ModalA11y from "./modal-accessibility";
@@ -52,12 +54,12 @@ export function useConfirmation(scope: string) {
     <ModalA11y className="overlay confirmation-overlay" onClose={() => finish(false)}>
       <section className="modal small confirmation-sheet" role="dialog" aria-modal="true"
         aria-labelledby={`${id}-title`} aria-describedby={`${id}-message`}>
-        <h2 id={`${id}-title`}>{pending.title}</h2>
-        <p id={`${id}-message`}>{pending.message}</p>
+        <h2 id={`${id}-title`}>{uiText(pending.title)}</h2>
+        <p id={`${id}-message`}>{uiText(pending.message)}</p>
         <div className="confirmation-actions">
-          <button type="button" className="quiet" data-autofocus onClick={() => finish(false)}>{pending.cancelLabel || "Cancel"}</button>
+          <button type="button" className="quiet" data-autofocus onClick={() => finish(false)}>{uiText(pending.cancelLabel || "Cancel")}</button>
           <button type="button" className={pending.destructive ? "danger quiet" : "primary"}
-            onClick={() => finish(true)}>{pending.confirmLabel}</button>
+            onClick={() => finish(true)}>{uiText(pending.confirmLabel)}</button>
         </div>
       </section>
     </ModalA11y>, document.body,

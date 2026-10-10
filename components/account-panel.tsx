@@ -1,8 +1,12 @@
 "use client";
+import { t as uiText } from "@/lib/ui-language";
+
 import { useId, useState } from "react";
 import { X, UserRound, LogOut, Sparkles } from "lucide-react";
 import ModalA11y from "./modal-accessibility";
 import PwaControls, { clearBrowserNotifications } from "./pwa-controls";
+import AccountSecurity from "./account-security";
+import { clearOfflineContext } from "@/lib/offline-store";
 import DataExport from "./data-export";
 import AccountActivityPanel from "./account-activity-panel";
 import ReceiptAISettings from "./receipt-ai-settings";
@@ -16,6 +20,7 @@ export type Profile = {
   chatgptConnected?: boolean;
   chatgptAvailable?: boolean;
   emailVerified?: boolean;
+  uiLanguage?: "en"|"es"|"fr"|"de";
 };
 export type AuthResponse = {
   profile?: Profile;
@@ -24,6 +29,7 @@ export type AuthResponse = {
   chatgptLinked?: boolean;
   chatgptAvailable?: boolean;
   emailVerified?: boolean;
+  notice?: string;
   error?: string;
 };
 export function profileFromAuth(body: AuthResponse): Profile | null {
@@ -74,13 +80,13 @@ export default function AccountPanel({
       >
         <div className="modalheading">
           <div>
-            <span className="eyebrow">YOUR ACCOUNT</span>
-            <h2 id="profile-title">Profile & app settings</h2>
+            <span className="eyebrow">{uiText("YOUR ACCOUNT")}</span>
+            <h2 id="profile-title">{uiText("Profile & app settings")}</h2>
           </div>
           <button
             className="iconbutton"
             onClick={onClose}
-            aria-label="Close profile"
+            aria-label={uiText("Close profile")}
           >
             <X />
           </button>
@@ -93,8 +99,8 @@ export default function AccountPanel({
                 {profile.email}
                 <small>
                   {profile.emailVerified
-                    ? "Verified email"
-                    : "Email not verified"}
+                    ? uiText("Verified email")
+                    : uiText("Email not verified")}
                 </small>
               </span>
             </div>
@@ -123,9 +129,7 @@ export default function AccountPanel({
                 }
               }}
             >
-              <label>
-                Display name
-                <input
+              <label>{uiText("Display name")}<input
                   required
                   maxLength={50}
                   value={name}
@@ -135,28 +139,25 @@ export default function AccountPanel({
               </label>
               {error && (
                 <p className="error" role="alert">
-                  {error}
+                  {uiText(error)}
                 </p>
               )}
               <button className="quiet phone-wide" disabled={busy}>
-                {busy ? "Saving…" : "Save profile"}
+                {busy ? uiText("Saving…") : uiText("Save profile")}
               </button>
             </form>
             <section className="account-section">
               <h3>
                 {profile.hasPassword
-                  ? "Change your password"
-                  : "Sign in with your email"}
+                  ? uiText("Change your password")
+                  : uiText("Sign in with your email")}
               </h3>
               <p className="footnote">
                 {profile.hasPassword
-                  ? "Changing your password signs out your other sessions."
-                  : "Add a TripTab password to sign in without ChatGPT. Your holidays and profile stay in this account."}
+                  ? uiText("Changing your password signs out your other sessions.")
+                  : uiText("Add a TripTab password to sign in without ChatGPT. Your holidays and profile stay in this account.")}
               </p>
-              <p className="footnote">
-                Password-reset emails are not available yet. Keep your password
-                safe.
-              </p>
+              <p className="footnote">{uiText("Verify your email in account settings so you can recover your account if you forget your password.")}</p>
               <form
                 onSubmit={async (event) => {
                   event.preventDefault();
@@ -193,9 +194,7 @@ export default function AccountPanel({
                 }}
               >
                 {profile.hasPassword && (
-                  <label htmlFor={`${id}-current-password`}>
-                    Current TripTab password
-                    <input
+                  <label htmlFor={`${id}-current-password`}>{uiText("Current TripTab password")}<input
                       id={`${id}-current-password`}
                       type="password"
                       autoComplete="current-password"
@@ -209,9 +208,7 @@ export default function AccountPanel({
                     />
                   </label>
                 )}
-                <label htmlFor={`${id}-new-password`}>
-                  New TripTab password
-                  <input
+                <label htmlFor={`${id}-new-password`}>{uiText("New TripTab password")}<input
                     id={`${id}-new-password`}
                     type="password"
                     autoComplete="new-password"
@@ -224,38 +221,29 @@ export default function AccountPanel({
                     aria-describedby={`${id}-password-hint`}
                   />
                 </label>
-                <small id={`${id}-password-hint`} className="muted">
-                  Use 12–128 characters.
-                </small>
+                <small id={`${id}-password-hint`} className="muted">{uiText("Use 12–128 characters.")}</small>
                 {passwordError && (
                   <p className="error" role="alert">
-                    {passwordError}
+                    {uiText(passwordError)}
                   </p>
                 )}
                 <button className="quiet phone-wide" disabled={passwordBusy}>
                   {passwordBusy
-                    ? "Saving password…"
+                    ? uiText("Saving password…")
                     : profile.hasPassword
-                      ? "Change password"
-                      : "Add password"}
+                      ? uiText("Change password")
+                      : uiText("Add password")}
                 </button>
               </form>
             </section>
             <section className="account-section account-ai">
               <h3>
-                <Sparkles size={17} aria-hidden="true" /> Optional AI features
-              </h3>
-              <p className="footnote">
-                ChatGPT or Codex can help read receipts, resolve inconsistencies,
-                and enter expenses in natural language. You can use all manual
-                expense, receipt, and sharing features without connecting them.
-              </p>
+                <Sparkles size={17} aria-hidden="true" />{uiText(" Optional AI features")}</h3>
+              <p className="footnote">{uiText("ChatGPT or Codex can help read receipts, resolve inconsistencies, and enter expenses in natural language. You can use all manual expense, receipt, and sharing features without connecting them.")}</p>
               {profile.chatgptConnected ? (
                 <>
-                  <p className="account-connection-status">ChatGPT identity is linked.</p>
-                  <p className="footnote">
-                    External TripTab tool availability is unknown. Enable TripTab in the conversation you use for assistance. ChatGPT and Codex connections must each be checked in that client.
-                  </p>
+                  <p className="account-connection-status">{uiText("ChatGPT identity is linked.")}</p>
+                  <p className="footnote">{uiText("External TripTab tool availability is unknown. Enable TripTab in the conversation you use for assistance. ChatGPT and Codex connections must each be checked in that client.")}</p>
                   <button
                     className="quiet"
                     disabled={accountBusy || !profile.hasPassword}
@@ -285,37 +273,30 @@ export default function AccountPanel({
                       }
                     }}
                   >
-                    {accountBusy ? "Unlinking…" : "Unlink ChatGPT"}
+                    {accountBusy ? uiText("Unlinking…") : uiText("Unlink ChatGPT")}
                   </button>
                   {!profile.hasPassword && (
-                    <small className="muted">
-                      Add a TripTab password above before unlinking ChatGPT so
-                      you can still sign in.
-                    </small>
+                    <small className="muted">{uiText("Add a TripTab password above before unlinking ChatGPT so you can still sign in.")}</small>
                   )}
                 </>
               ) : (
                 <a
                   className="quiet account-link"
                   href={chatgptLinkHref}
-                >
-                  Link ChatGPT · optional
-                </a>
+                >{uiText("Link ChatGPT · optional")}</a>
               )}
               {accountError && (
                 <p className="error" role="alert">
-                  {accountError}
+                  {uiText(accountError)}
                 </p>
               )}
             </section>
             <ReceiptAISettings key={profile.id} accountId={profile.id} verificationHref={chatgptLinkHref} onChanged={refreshActivity} />
           </>
         ) : (
-          <p className="footnote">
-            Create a TripTab account with your email to save your profile and
-            holidays. ChatGPT and Codex are optional.
-          </p>
+          <p className="footnote">{uiText("Create a TripTab account with your email to save your profile and holidays. ChatGPT and Codex are optional.")}</p>
         )}
+        {profile && <AccountSecurity key={profile.id} profile={profile} onSaved={onSaved} />}
         {profile && <DataExport key={profile.id} trips={trips} />}
         {profile && <AccountActivityPanel key={profile.id} accountId={profile.id} refreshKey={activityRefresh} />}
         <PwaControls accountId={profile?.id} onChanged={refreshActivity} />
@@ -335,6 +316,7 @@ export default function AccountPanel({
                   });
                   if (!response.ok) throw Error("Unable to sign out.");
                   await clearBrowserNotifications().catch(() => {});
+                  await clearOfflineContext().catch(() => {});
                   const destination =
                     profile.chatgptAvailable || profile.authMethod === "chatgpt"
                       ? "/signout-with-chatgpt?return_to=/"
@@ -350,8 +332,7 @@ export default function AccountPanel({
                 }
               }}
             >
-              <LogOut size={16} /> Sign out
-            </button>
+              <LogOut size={16} />{uiText(" Sign out")}</button>
           </div>
         )}
       </section>

@@ -15,6 +15,9 @@ import * as expenseReadiness from '../lib/expense-readiness';
 import * as quickExpense from '../lib/quick-expense';
 import * as dataUtils from '../lib/data-utils';
 import * as receiptLanguages from '../lib/receipt-languages';
+import * as expenseInsights from '../lib/expense-insights';
+import * as uiLanguage from '../lib/ui-language';
+import * as paymentLinks from '../lib/payment-links';
 import { createSourceFile, isArrayBindingPattern, isBindingElement, isCallExpression, isFunctionDeclaration, isIdentifier, isVariableStatement, JsxEmit, ModuleKind, ScriptKind, ScriptTarget, transpileModule } from 'typescript';
 
 // Run Home's actual render and event handlers with a small hook boundary. Child
@@ -85,6 +88,7 @@ function controller(trip: model.Trip, fetcher?: typeof fetch) {
   new Function('require', 'module', 'exports', 'fetch', compiled)((name: string) => {
     if (name === 'react') return hooks;
     if (name === '@/components/use-live-refresh') return {useLiveRefresh() {},dispatchLiveRefresh() {}};
+    if (name === '@/lib/ui-language') return uiLanguage;
     if (name === 'react/jsx-runtime') return runtime;
     if (name === '@/components/trip-language-preferences') return {useTripLanguagePreferences:()=>({preferences:{readingLanguage:'en',primaryVersion:'reading',itemVersions:{}},ready:true,busy:false,error:'',save:async()=>true}),PersonalLanguageSettings:component};
     if (name === '@/lib/model') return models;
@@ -98,6 +102,9 @@ function controller(trip: model.Trip, fetcher?: typeof fetch) {
     if (name === '@/lib/quick-expense') return quickExpense;
     if (name === '@/lib/data-utils') return dataUtils;
     if (name === '@/lib/receipt-languages') return receiptLanguages;
+    if (name === '@/lib/expense-insights') return expenseInsights;
+    if (name === '@/lib/ui-language') return uiLanguage;
+    if (name === '@/lib/payment-links') return paymentLinks;
     if (name === '@/components/receipt-scan-review') return {__esModule: true, default: component, receiptMoney: (amount: number, currency: string | null) => currency ? moneyFormat.formatMoney(amount, currency) : String(amount / 100)};
     if (name === '@/lib/receipt-chatgpt') return receiptChatgpt;
     if (name === '@/components/trip-routing') return {
@@ -107,6 +114,8 @@ function controller(trip: model.Trip, fetcher?: typeof fetch) {
     };
     if (name === '@/components/modal-accessibility') return { __esModule: true, default: component, useModalLayer() {} };
     if (name === '@/components/paged-list') return { __esModule: true, default: pagedList, useListPaging: () => (_key: string, step: number) => ({ shown: step, step, onMore() {} }) };
+    if (name === '@/components/expense-insights') return { ExpenseFilterBar: component, SpendingBreakdownPanel: component };
+    if (name === '@/components/payment-details') return { __esModule: true, default: component, SettlementPayActions: component };
     if (name === '@/components/editor-footer-reveal') return { useStickyFooterReveal: () => () => {} };
     if (name === '@/components/confirmation-dialog') return { useConfirmation: () => ({ confirm: async () => true, dialog: null, confirming: false }) };
     if (name === 'lucide-react') return new Proxy({}, { get: () => component });
@@ -228,6 +237,7 @@ test('closed item discussions render no chats, and visited chats remain mounted 
   const exported = {exports: {} as {default: (props: Record<string, unknown>) => Element}};
   new Function('require', 'module', 'exports', discussionCompiled)((name: string) => {
     if (name === 'react') return {...React, useState: () => [visited, (next: boolean) => {visited = next;} ]};
+    if (name === '@/lib/ui-language') return uiLanguage;
     if (name === 'react/jsx-runtime') return runtime;
     return {__esModule: true, default: chat};
   }, exported, exported.exports);
@@ -261,4 +271,41 @@ test('the real Save button disables only while posting and every other state use
     const checklist = rendered.find(element => Array.isArray(element.props.blockers)); assert(checklist);
     assert.deepEqual(checklist.props.blockers, expenseReadiness.expenseSaveBlockers(entry,holiday,state));
   }
+});
+
+test('searching and filtering lists only matching expenses without recalculating saved amounts', () => {
+  const holiday = fixture(30), editor = controller(holiday);
+  const initial = editor.render();
+  const bar = initial.find(element => typeof element.props.onChange === 'function' && element.props.filter);
+  assert(bar, 'the filter bar is shown once a holiday has expenses');
+  assert.equal(bar.props.total, 30);
+  (bar.props.onChange as (filter: unknown) => void)({ ...(bar.props.filter as object), query: 'DINNER 25' });
+  editor.resetCounts();
+  const filtered = editor.render();
+  const titles = filtered.filter(element => element.type === 'button' && element.props.className === 'expense-open')
+    .map(button => elements(button.props.children).find(element => element.type === 'b')?.props.children);
+  // Every fixture expense has an “Item 2”, so only the title can match 25.
+  assert.deepEqual(titles, ['Dinner 25']);
+  assert.equal(editor.calls.expenseShares, 0, 'filtering reuses the saved previews');
+  assert.equal(editor.calls.expenseTotal, 0);
+  const breakdown = filtered.find(element => element.props.breakdown);
+  assert.equal((breakdown?.props.breakdown as { counted: number }).counted, 1, 'the breakdown follows the search');
+  (bar.props.onChange as (filter: unknown) => void)({ ...(bar.props.filter as object), query: 'nothing matches' });
+  const empty = editor.render();
+  assert(empty.some(element => element.type === 'h3' && element.props.children === 'No matching expenses'));
+});
+
+test('settle up offers the payee’s payment links, or asks the person owed to add theirs', () => {
+  const holiday = fixture(1), editor = controller(holiday);
+  editor.state.view = 'balances';
+  let rendered = editor.render();
+  assert(!rendered.some(element => element.props.payee), 'no links without saved details');
+  assert(rendered.some(element => element.type === 'button' && element.props.children === 'Add payment details'), 'Alice is owed and has no details');
+  const withDetails = { ...holiday, members: holiday.members.map(member => member.id === 'alice' ? { ...member, payTo: { monzo: 'alice' } } : member) };
+  editor.state.ledger = { trips: [withDetails] };
+  rendered = editor.render();
+  const actions = rendered.find(element => element.props.payee);
+  assert.equal((actions?.props.payee as { id: string }).id, 'alice');
+  assert.equal(actions?.props.amount, model.settlements(withDetails)[0].amount);
+  assert(!rendered.some(element => element.type === 'button' && element.props.children === 'Add payment details'));
 });

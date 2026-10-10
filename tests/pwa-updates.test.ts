@@ -19,12 +19,12 @@ function worker(cacheAssets: () => Promise<void> = async () => {}) {
     clients: { async claim() { calls.push('claim'); } },
   };
   const caches = {
-    async open() { return { async addAll(urls: string[]) { assert(urls.includes('/offline.html')); assert(urls.every(url => url === '/offline.html' || url.startsWith('/icons/'))); calls.push('cache'); cached(); await cacheAssets(); } }; },
-    async keys() { return ['triptab-public-v4', 'triptab-public-v5', 'unrelated-cache']; },
+    async open() { return { async addAll(urls: string[]) { assert(urls.includes('/offline.html')); assert(urls.includes('/offline-language.js')); assert(urls.every(url => url === '/offline.html' || url === '/offline-store.js' || url === '/offline-capture.js' || url === '/offline-language.js' || url.startsWith('/icons/'))); calls.push('cache'); cached(); await cacheAssets(); } }; },
+    async keys() { return ['triptab-public-v4', 'triptab-public-v7', 'unrelated-cache']; },
     async delete(key: string) { calls.push(`delete:${key}`); return true; },
     async match() { return offline; },
   };
-  vm.runInNewContext(source, { self, caches, URL, Response, AbortController, setTimeout, clearTimeout, fetch: async () => {
+  vm.runInNewContext(source, { importScripts() {}, self, caches, URL, Response, AbortController, setTimeout, clearTimeout, fetch: async () => {
     if (disconnected) throw Error('offline'); return new Response('Current server page');
   } });
   async function lifecycle(name: string) {

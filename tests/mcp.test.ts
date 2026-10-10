@@ -1214,7 +1214,7 @@ test('appends and reads a receipt reply without marking it itemised or changing 
   const holiday = content(reply).data.trips[0];
   const draft = holiday.drafts[0];
   assert.deepEqual(holiday.expenses, originalExpenses);
-  assert.deepEqual({ ...draft, conversation: undefined }, { ...originalDraft, conversation: undefined, adjustmentAllocation: 'receipt-total' });
+  assert.deepEqual({ ...draft, conversation: undefined }, { ...originalDraft, conversation: undefined });
   assert.equal(draft.status, 'waiting');
   assert.deepEqual(draft.conversation![0], receiptQuestion);
   const answer = draft.conversation![1];
@@ -1328,7 +1328,7 @@ test('item chat can request corrections to another receipt item while preserving
   const { status, source, adjustmentAllocation, conversation, ...draftInput } = state.data.trips[0].drafts[0];
   assert.equal(status, 'review');
   assert.equal(source, undefined);
-  assert.equal(adjustmentAllocation, 'receipt-total');
+  assert.equal(adjustmentAllocation,undefined);
   const proposed = await invoke('update_receipt_draft', {
     trip_id: 'trip-1', revision: 4,
     draft: { ...draftInput, items: [originalItem, { ...otherItem, units: { total: 3, allocations: { a: 2.5, b: 0.5 } } }] },
@@ -1513,7 +1513,7 @@ test('remembered receipt context persists across AI corrections without altering
   reset();
   const trip = state.data.trips[0];
   trip.drafts[0].status = 'waiting';
-  trip.drafts[0].adjustmentAllocation = 'receipt-total';
+  trip.drafts[0].adjustmentAllocation = 'rotating-remainder';
   trip.drafts[0].conversation = [{ ...receiptQuestion, itemId: 'item-1', authorMemberId: 'a', authorName: 'Owner' }];
   trip.expenses = [{ ...expenseSchema.parse(initialTrip.drafts[0]), id: 'posted-expense', date: '2026-08-15', time: '20:30', timezone: 'Europe/Lisbon' }];
   const originalDraft = structuredClone(trip.drafts[0]);
@@ -1607,7 +1607,7 @@ test('Bob can edit his scoped aliases and collaborative notes/shared aliases whi
   trip.members[0].name = 'Alice';
   trip.members[1] = { ...trip.members[1], name: 'Bob', userId: bob };
   const draft = trip.drafts[0];
-  draft.adjustmentAllocation = 'receipt-total';
+  draft.adjustmentAllocation = 'rotating-remainder';
   draft.items.push({ id: 'item-2', name: 'Drinks', amount: 1500, members: ['a', 'b'] });
   draft.conversation = [{ ...receiptQuestion, authorMemberId: 'a', authorName: 'Alice' }];
   const aliceAliases = [
@@ -1647,7 +1647,7 @@ test('Bob can edit his scoped aliases and collaborative notes/shared aliases whi
 test('removed-speaker alias cleanup frees the full fifty-alias cap while retaining historical context and financial details', async () => {
   reset();
   const draft = state.data.trips[0].drafts[0];
-  draft.adjustmentAllocation = 'receipt-total';
+  draft.adjustmentAllocation = 'rotating-remainder';
   draft.memory = { notes: 'Earlier receipt context', aliases: Array.from({ length: 50 }, (_, index) => ({
     name: `former-${index}`, itemId: `removed-item-${index}`, scopeMemberId: 'removed-traveller',
   })) };

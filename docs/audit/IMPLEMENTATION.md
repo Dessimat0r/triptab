@@ -1,5 +1,7 @@
 # Audit implementation status
 
+**Continuation, October 2026:** the account recovery/lifecycle, expense insights, payments, notification controls, offline capture, broader currencies, penny rotation, imports and traveller features below now have implementations. See [the continuation record](CLAUDE-CONTINUATION.md) for current behaviour, remaining language/device limitations and required migrations. Older evidence and statuses below describe the earlier audit checkpoints.
+
 This document tracks the current follow-up to PR #1 and its stacked receipt-context, audit-coverage and receipt-specific-history work in PRs #2, #3 and #4. [The original audit](TRIPTAB_AUDIT.md), [second-pass review](SECOND_PASS_REVIEW.md) and their reproduction scripts remain unchanged historical evidence. Their original test counts and findings describe the versions examined then.
 
 [PR #1](https://github.com/Dessimat0r/triptab/pull/1) is merged. The prior Sites migration-only release succeeded and applied `0003_rainy_blazing_skull.sql` to the live ledger while retaining the existing app. The remaining application changes in the stacked PRs have not been deployed.

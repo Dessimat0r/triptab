@@ -80,16 +80,16 @@ export function useModalLayer(rootRef: RefObject<HTMLElement | null>, { active, 
         closeRef.current();
       } else if (event.key === 'Tab') {
         const elements = availableElements(root!);
-        const first = elements[0];
-        const last = elements[elements.length - 1];
-        if (!first) {
-          event.preventDefault();
-          focusFirst(root!);
-        } else if (!root!.contains(document.activeElement) ||
-          (event.shiftKey && (document.activeElement === first || !elements.includes(document.activeElement as HTMLElement))) ||
-          (!event.shiftKey && document.activeElement === last)) {
-          event.preventDefault();
-          (event.shiftKey ? last : first).focus({ preventScroll: true });
+        event.preventDefault();
+        if (!elements.length) focusFirst(root!);
+        else {
+          // Safari's keyboard-navigation setting can skip buttons/links and
+          // move focus to browser chrome without a DOM focusin event. Advance
+          // within the visible modal explicitly instead of relying on that hop.
+          const index = elements.indexOf(document.activeElement as HTMLElement);
+          const next = index < 0 ? (event.shiftKey ? elements.length - 1 : 0)
+            : (index + (event.shiftKey ? -1 : 1) + elements.length) % elements.length;
+          elements[next].focus({ preventScroll: true });
         }
       }
     }

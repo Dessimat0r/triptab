@@ -1,4 +1,6 @@
 "use client";
+import { t as uiText } from "@/lib/ui-language";
+
 
 import { useEffect, useId, useRef, useState } from "react";
 import { Download } from "lucide-react";
@@ -69,36 +71,34 @@ export default function DataExport({ trips = [], tripId, compact = false }: Data
   }
 
   return <section className={`${compact ? "panel" : "account-section"} data-export${compact ? " compact" : ""}`} aria-labelledby={`${id}-title`}>
-    <h3 id={`${id}-title`}>Download your data</h3>
-    <p className="footnote">Keep a copy of your profile and holidays you can currently access, including shared records. Photos and sign-in credentials are excluded.</p>
+    <h3 id={`${id}-title`}>{uiText("Download your data")}</h3>
+    <p className="footnote">{uiText("Keep a copy of your profile and holidays you can currently access, including shared records. Photos and sign-in credentials are excluded.")}</p>
     <div className="data-export-actions button-row">
-      <button type="button" className="quiet" disabled={busy} onClick={() => download("account", "json")}><Download size={17} aria-hidden="true" />Account JSON</button>
+      <button type="button" className="quiet" disabled={busy} onClick={() => download("account", "json")}><Download size={17} aria-hidden="true" />{uiText("Account JSON")}</button>
       {!compact && <>
-        <button type="button" className="quiet" disabled={busy} onClick={() => download("account-activity", "json")}><Download size={17} aria-hidden="true" />Account history JSON</button>
-        <button type="button" className="quiet" disabled={busy} onClick={() => download("account-activity", "csv")}><Download size={17} aria-hidden="true" />Account history CSV</button>
-        {accountHistoryCursors.json !== null && <button type="button" className="quiet" disabled={busy} onClick={() => download("account-activity", "json", true)}><Download size={17} aria-hidden="true" />Older account history JSON</button>}
-        {accountHistoryCursors.csv !== null && <button type="button" className="quiet" disabled={busy} onClick={() => download("account-activity", "csv", true)}><Download size={17} aria-hidden="true" />Older account history CSV</button>}
+        <button type="button" className="quiet" disabled={busy} onClick={() => download("account-activity", "json")}><Download size={17} aria-hidden="true" />{uiText("Account history JSON")}</button>
+        <button type="button" className="quiet" disabled={busy} onClick={() => download("account-activity", "csv")}><Download size={17} aria-hidden="true" />{uiText("Account history CSV")}</button>
+        {accountHistoryCursors.json !== null && <button type="button" className="quiet" disabled={busy} onClick={() => download("account-activity", "json", true)}><Download size={17} aria-hidden="true" />{uiText("Older account history JSON")}</button>}
+        {accountHistoryCursors.csv !== null && <button type="button" className="quiet" disabled={busy} onClick={() => download("account-activity", "csv", true)}><Download size={17} aria-hidden="true" />{uiText("Older account history CSV")}</button>}
       </>}
     </div>
     {(trips.length > 0 || tripId) && <>
-      {trips.length > 1 ? <label htmlFor={`${id}-trip`}>Holiday
-        <select id={`${id}-trip`} value={selectedTrip} disabled={busy} onChange={event => { setChoice(event.target.value); setHistory(null); setStatus(""); setError(""); }}>
+      {trips.length > 1 ? <label htmlFor={`${id}-trip`}>{uiText("Holiday")}<select id={`${id}-trip`} value={selectedTrip} disabled={busy} onChange={event => { setChoice(event.target.value); setHistory(null); setStatus(""); setError(""); }}>
           {trips.map(trip => <option key={trip.id} value={trip.id}>{trip.name}</option>)}
         </select>
-      </label> : <p className="footnote">{trips.find(trip => trip.id === selectedTrip)?.name || "This holiday"}</p>}
+      </label> : <p className="footnote">{trips.find(trip => trip.id === selectedTrip)?.name || uiText("This holiday")}</p>}
       <label className="checklabel" htmlFor={`${id}-receipts`}>
-        <input id={`${id}-receipts`} type="checkbox" checked={receipts} disabled={busy} onChange={event => setReceipts(event.target.checked)} />Include attached receipt details in holiday JSON
-      </label>
+        <input id={`${id}-receipts`} type="checkbox" checked={receipts} disabled={busy} onChange={event => setReceipts(event.target.checked)} />{uiText("Include attached receipt details in holiday JSON")}</label>
       <div className="data-export-actions button-row">
-        <button type="button" className="quiet" disabled={busy || !selectedTrip} onClick={() => download("trip", "json")}><Download size={17} aria-hidden="true" />Holiday JSON</button>
-        <button type="button" className="quiet" disabled={busy || !selectedTrip} onClick={() => download("trip", "csv")}><Download size={17} aria-hidden="true" />Expenses & payments CSV</button>
-        <button type="button" className="quiet" disabled={busy || !selectedTrip} onClick={() => download("activity", "csv")}><Download size={17} aria-hidden="true" />Latest history CSV</button>
-        {history?.tripId === selectedTrip && history.nextCursor !== null && <button type="button" className="quiet" disabled={busy} onClick={() => download("activity", "csv", true)}><Download size={17} aria-hidden="true" />Older history CSV</button>}
+        <button type="button" className="quiet" disabled={busy || !selectedTrip} onClick={() => download("trip", "json")}><Download size={17} aria-hidden="true" />{uiText("Holiday JSON")}</button>
+        <button type="button" className="quiet" disabled={busy || !selectedTrip} onClick={() => download("trip", "csv")}><Download size={17} aria-hidden="true" />{uiText("Expenses & payments CSV")}</button>
+        <button type="button" className="quiet" disabled={busy || !selectedTrip} onClick={() => download("activity", "csv")}><Download size={17} aria-hidden="true" />{uiText("Latest history CSV")}</button>
+        {history?.tripId === selectedTrip && history.nextCursor !== null && <button type="button" className="quiet" disabled={busy} onClick={() => download("activity", "csv", true)}><Download size={17} aria-hidden="true" />{uiText("Older history CSV")}</button>}
       </div>
-      <p className="footnote">JSON keeps item splits, receipt conversations and drafts. Financial CSV contains posted expenses and payments. History downloads arrive in pages of up to 50 changes.</p>
+      <p className="footnote">{uiText("JSON keeps item splits, receipt conversations and drafts. Financial CSV contains posted expenses and payments. History downloads arrive in pages of up to 50 changes.")}</p>
     </>}
-    {busy && <p role="status">Preparing your download…</p>}
-    {error && <p className="error" role="alert">{error}</p>}
-    {status && <p role="status" aria-live="polite">{status}</p>}
+    {busy && <p role="status">{uiText("Preparing your download…")}</p>}
+    {error && <p className="error" role="alert">{uiText(error)}</p>}
+    {status && <p role="status" aria-live="polite">{uiText(status)}</p>}
   </section>;
 }

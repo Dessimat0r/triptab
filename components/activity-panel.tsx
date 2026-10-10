@@ -1,6 +1,8 @@
 "use client";
+import { t as uiText } from "@/lib/ui-language";
+
 import { formatInstant, formatInstantDay, formatClockTime } from "@/lib/dates";
-import { languageName } from "@/lib/receipt-languages";
+import { displayLanguageName } from "@/lib/receipt-languages";
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useLiveRefresh } from "./use-live-refresh";
@@ -9,6 +11,7 @@ import type { ActivityEvent } from "@/lib/store";
 import { formatMoney } from "@/lib/money-format";
 import { receiptWarningLabel } from "@/lib/receipt-scan";
 import { expenseIconSchema, iconLabel } from "@/lib/expense-icons";
+import { paymentDetailsSummary, payToSchema } from "@/lib/payment-links";
 import "./activity-details.css";
 
 export type ActivityPanelProps = {
@@ -221,7 +224,7 @@ function itemDescription(value: unknown, currency: string | undefined, names: Re
   const source = auditRecord(item.scanSource);
   const evidence = source ? `Receipt evidence: ${typeof source.lineIndex === "number" ? `line ${source.lineIndex + 1}` : "line not identified"}${source.confidence ? ` · ${auditText(source.confidence)} confidence` : ""}\n${auditText(source.observedText) ? `Observed text: ${auditText(source.observedText)}\n` : ""}` : "";
   const translations = auditRecord(item.translations);
-  const bilingual = `${item.nameLanguage ? `Original language: ${languageName(item.nameLanguage)}\n` : ""}${translations ? Object.entries(translations).map(([code,value])=>{const translation=auditRecord(value);return `${languageName(code)}: ${auditText(translation?.text)}\nTranslated from: ${auditText(translation?.sourceText)}\nLast paired reading name: ${auditText(translation?.pairedText)}\nTranslation origin: ${auditText(translation?.provenance)}\n`;}).join("") : ""}`;
+  const bilingual = `${item.nameLanguage ? `Original language: ${displayLanguageName(item.nameLanguage)}\n` : ""}${translations ? Object.entries(translations).map(([code,value])=>{const translation=auditRecord(value);return `${displayLanguageName(code)}: ${auditText(translation?.text)}\nTranslated from: ${auditText(translation?.sourceText)}\nLast paired reading name: ${auditText(translation?.pairedText)}\nTranslation origin: ${auditText(translation?.provenance)}\n`;}).join("") : ""}`;
   const provenance = item.fieldSources ? `Field origins: ${readable(item.fieldSources)}\n` : "";
   return `${auditText(item.name) || "Description needs confirmation"} (item ${auditText(item.id)})\nFull line total: ${item.amount === null ? "Price needs confirmation" : money(item.amount, currency)}\n${bilingual}${purchasedDetail}${evidence}${provenance}${participantOrder}${split}`;
 }
@@ -303,8 +306,8 @@ function changes(event: ActivityEvent, currency: Currency | undefined, names: Re
     if (!same(before[key], after[key])) result.push({ label, before: describe(before[key], before), after: describe(after[key], after) });
   };
   for (const [key, label] of Object.entries({ name: "Name", title: "Title", currency: "Currency", date: "Transaction date", startDate: "Start date", endDate: "End date", time: "Transaction time", timezone: "Transaction timezone", method: "Payment method", note: "Note", email: "Traveller email" })) add(key, label);
-  add("receiptLanguage", "Receipt language setting", languageName);
-  add("detectedLanguage", "Detected receipt language", languageName);
+  add("receiptLanguage", "Receipt language setting", displayLanguageName);
+  add("detectedLanguage", "Detected receipt language", displayLanguageName);
   add("location", "Purchase place", value => {
     const place = auditRecord(value);
     const origin = { user: "Entered manually", receipt: "Read from receipt", chat: "From receipt conversation" }[auditText(place?.source)];
@@ -324,11 +327,17 @@ function changes(event: ActivityEvent, currency: Currency | undefined, names: Re
   add("receiptScan", "Receipt scan review", (value, snapshot) => scanDescription(value, auditText(snapshot.currency) || currency));
   add("status", String(event.entityType) === "invite" ? "Invitation status" : "Review status", value => String(event.entityType) === "invite" && value === "pending" ? "Waiting for the traveller to join" : STATES[auditText(value)] || readable(value));
   add("memberName", "Invited traveller name");
+  add("payTo", "Payment details", value => paymentDetailsSummary(payToSchema.safeParse(value).data));
   add("emailRestricted", "Invitation email restriction", value => value === true ? "Only the invited email can join" : value === false ? "Anyone with the link can join as this traveller" : "Not recorded");
   for (const [key, label] of Object.entries({ amount: "Amount", tax: "Tax", tip: "Tip", discount: "Discount", bankAmount: "Actual bank charge" })) add(key, label, (value, snapshot) => money(value, key === "bankAmount" || String(event.entityType) === "payment" ? currency : auditText(snapshot.currency) || currency));
   for (const [key, label] of Object.entries({ from: "Paid by", to: "Paid to", payer: "Receipt payer", memberId: "Traveller" })) add(key, label, value => traveller(value, names));
   add("percentages", "Whole-receipt split", value => percentages(value, names));
-  add("adjustmentAllocation", "Split calculation rule", value => value === "receipt-total" ? "People selected on receipt items; pennies rounded once on the receipt total" : value === "selected-participants" ? "People selected on receipt items; pennies rounded per item" : "Earlier rule: all travellers");
+  add("memberWeights", "Traveller weights", value => { const weights = auditRecord(value); return weights ? Object.entries(weights).map(([id, weight]) => `${traveller(id, names)} counts as ${String(weight)}`).join("\n") : "Everyone counts once"; });
+  add("weight", "Counts as", value => typeof value === "number" && value > 1 ? `${value} people` : "1 person");
+  add("joinedOn", "Joined on", value => typeof value === "string" ? value : "From the start");
+  add("leftOn", "Left on", value => typeof value === "string" ? value : "Until the end");
+  add("budget", "Group budget", value => typeof value === "number" ? money(value, currency) : "No budget");
+  add("adjustmentAllocation", "Split calculation rule", value => value === "rotating-remainder" ? "People selected on receipt items; pennies rounded once on the receipt total, with leftover pennies rotating between people" : value === "receipt-total" ? "People selected on receipt items; pennies rounded once on the receipt total" : value === "selected-participants" ? "People selected on receipt items; pennies rounded per item" : "Earlier rule: all travellers");
   add("fx", "Exchange rate", value => {
     const fx = auditRecord(value); return fx ? `Rate: ${fx.rate}\nAs of: ${auditText(fx.asOf)}\nSource: ${auditText(fx.source)}` : "No recorded rate";
   });
@@ -382,8 +391,8 @@ function changes(event: ActivityEvent, currency: Currency | undefined, names: Re
 
 export function ActivityChanges({ fields, before, after }: { fields: AuditChange[]; before: boolean; after: boolean }) {
   return fields.length ? <dl className="activity-changes">{fields.map((field, index) => <div key={`${field.label}-${index}`}>
-    <dt>{field.label}</dt><dd>{before && <span className="activity-before"><span className="muted">Before: </span>{field.before}</span>}{after && <span className="activity-after"><span className="muted">After: </span>{field.after}</span>}</dd>
-  </div>)}</dl> : <p className="footnote">No additional recorded field changes.</p>;
+    <dt>{field.label}</dt><dd>{before && <span className="activity-before"><span className="muted">{uiText("Before: ")}</span>{field.before}</span>}{after && <span className="activity-after"><span className="muted">{uiText("After: ")}</span>{field.after}</span>}</dd>
+  </div>)}</dl> : <p className="footnote">{uiText("No additional recorded field changes.")}</p>;
 }
 
 function eventLabel(event: ActivityEvent, currency?: Currency): string {
@@ -406,19 +415,19 @@ function ActivityDetailBody({ event, currency, memberNames, actorMemberNames }: 
   const snapshot = event.after || event.before || {};
   return <>
     <dl className="activity-identifiers">
-      <div><dt>Recorded at</dt><dd><time dateTime={event.createdAt}>{auditTimestamp(event.createdAt, true)}</time></dd></div>
-      <div><dt>Changed by</dt><dd>{actor}{tripName ? ` · current traveller name: ${tripName}` : ""}<br />{event.source === "system" ? "System reference" : "Account"} {event.actorId}</dd></div>
-      <div><dt>Record</dt><dd>{eventLabel(event, currency)} · {event.entityId}</dd></div>
-      <div><dt>Change reference</dt><dd>{event.id} · holiday revision {event.revision}</dd></div>
-      {event.entityType === "invite" && <div><dt>Invitation for</dt><dd>{auditText(snapshot.memberName) || memberNames[auditText(snapshot.memberId)] || "Earlier traveller"} · traveller {auditText(snapshot.memberId)}</dd></div>}
+      <div><dt>{uiText("Recorded at")}</dt><dd><time dateTime={event.createdAt}>{auditTimestamp(event.createdAt, true)}</time></dd></div>
+      <div><dt>{uiText("Changed by")}</dt><dd>{actor}{tripName ? uiText(" · current traveller name: {value0}", { value0: tripName }) : ""}<br />{event.source === "system" ? uiText("System reference") : uiText("Account")} {event.actorId}</dd></div>
+      <div><dt>{uiText("Record")}</dt><dd>{eventLabel(event, currency)} · {event.entityId}</dd></div>
+      <div><dt>{uiText("Change reference")}</dt><dd>{event.id}{uiText(" · holiday revision ")}{event.revision}</dd></div>
+      {event.entityType === "invite" && <div><dt>{uiText("Invitation for")}</dt><dd>{auditText(snapshot.memberName) || memberNames[auditText(snapshot.memberId)] || uiText("Earlier traveller")}{uiText(" · traveller ")}{auditText(snapshot.memberId)}</dd></div>}
       {event.entityType === "receipt" && <>
-        {!!snapshot.uploaderId && <div><dt>Image uploaded by</dt><dd>{accountReference(snapshot.uploaderId, actorMemberNames)}</dd></div>}
-        {!!snapshot.initiatorId && <div><dt>Cleanup initiated by</dt><dd>{auditText(snapshot.initiatorName) || accountReference(snapshot.initiatorId, actorMemberNames)} · account {auditText(snapshot.initiatorId)}</dd></div>}
-        {!!snapshot.sha256 && <div><dt>Image checksum (SHA-256)</dt><dd>{auditText(snapshot.sha256)}</dd></div>}
+        {!!snapshot.uploaderId && <div><dt>{uiText("Image uploaded by")}</dt><dd>{accountReference(snapshot.uploaderId, actorMemberNames)}</dd></div>}
+        {!!snapshot.initiatorId && <div><dt>{uiText("Cleanup initiated by")}</dt><dd>{auditText(snapshot.initiatorName) || accountReference(snapshot.initiatorId, actorMemberNames)}{uiText(" · account ")}{auditText(snapshot.initiatorId)}</dd></div>}
+        {!!snapshot.sha256 && <div><dt>{uiText("Image checksum (SHA-256)")}</dt><dd>{auditText(snapshot.sha256)}</dd></div>}
       </>}
     </dl>
-    <p className="footnote">Traveller references use current holiday names with stable IDs. Message authors retain their recorded names.</p>
-    {event.snapshotOmitted ? <p className="footnote">The full before and after details are too large for this history page. They remain saved. <a href={event.snapshotDownload} download>Download full shared history entry</a> to inspect the original snapshots, including shared traveller contacts.</p>
+    <p className="footnote">{uiText("Traveller references use current holiday names with stable IDs. Message authors retain their recorded names.")}</p>
+    {event.snapshotOmitted ? <p className="footnote">{uiText("The full before and after details are too large for this history page. They remain saved. ")}<a href={event.snapshotDownload} download>{uiText("Download full shared history entry")}</a>{uiText(" to inspect the original snapshots, including shared traveller contacts.")}</p>
       : <ActivityChanges fields={fields} before={!!event.before} after={!!event.after} />}
   </>;
 }
@@ -428,7 +437,7 @@ function ActivityEventDetails(props: ActivityDetailProps) {
   // Closed rows need only their summary. Keep the body mounted after its first
   // expansion so closing and refreshing preserve the reader's details.
   return <details onToggle={event => { if (event.currentTarget.open) setVisited(true); }}>
-    <summary>View {props.event.action === "update" ? "changes" : "details"}</summary>
+    <summary>{uiText("View ")}{props.event.action === "update" ? uiText("changes") : uiText("details")}</summary>
     {visited && <ActivityDetailBody {...props} />}
   </details>;
 }
@@ -445,24 +454,24 @@ export default function ActivityPanel({ tripId, accountId, expenseId, draftId, t
   // Each event's local day, formatted once; holiday History starts a heading where it changes.
   const grouped = !scope;
   const days = useMemo(() => grouped ? history.events.map(event => formatInstantDay(event.createdAt)) : null, [grouped, history.events]);
-  return <section className={`activity-panel${scope ? " receipt-activity" : ""}`} aria-label={scope ? heading : "Holiday activity"} aria-busy={history.loading}>
-    {scope ? <h2 className="subheading">{heading}</h2> : <div className="sectionheading"><h2>{heading}</h2><span className="muted">Updates automatically</span></div>}
+  return <section className={`activity-panel${scope ? " receipt-activity" : ""}`} aria-label={scope ? heading : uiText("Holiday activity")} aria-busy={history.loading}>
+    {scope ? <h2 className="subheading">{heading}</h2> : <div className="sectionheading"><h2>{heading}</h2><span className="muted">{uiText("Updates automatically")}</span></div>}
     {help && <p className="footnote">{help}</p>}
-    {history.error ? <button type="button" className="quiet" disabled={history.loading} onClick={history.retry}>{scope ? "Retry receipt history" : "Retry activity"}</button> : scope && <p className="footnote">History updates automatically.</p>}
-    {history.loading && !history.events.length && <p role="status">Loading activity…</p>}
-    {history.loading && !!history.events.length && <p role="status">Checking for changes…</p>}
+    {history.error ? <button type="button" className="quiet" disabled={history.loading} onClick={history.retry}>{scope ? uiText("Retry receipt history") : uiText("Retry activity")}</button> : scope && <p className="footnote">{uiText("History updates automatically.")}</p>}
+    {history.loading && !history.events.length && <p role="status">{uiText("Loading activity…")}</p>}
+    {history.loading && !!history.events.length && <p role="status">{uiText("Checking for changes…")}</p>}
     {history.error && <p className="error" role="alert">{history.error}</p>}
     {!history.loading && !history.error && !history.events.length && <p className="footnote">{emptyText ?? (scope ? "No recorded changes for this receipt yet." : "No recorded changes yet. Activity starts when this version of TripTab saves a change.")}</p>}
     <ol className={"activity-list" + (scope ? "" : " panel")}>{history.events.map((event, index) => {
       const actor = event.actorName || "Traveller", tripName = actorMemberNames[event.actorId];
       return <li key={event.id} className="activity-event">
         {days && days[index] !== days[index - 1] && <h3 className="activity-day">{days[index]}</h3>}
-        <p><strong>{actor}{tripName && tripName !== actor ? ` (${tripName})` : ""}</strong> {({ create: "created", update: "updated", delete: "removed" }[event.action]) || "changed"} <strong>{eventLabel(event, currency)}</strong></p>
+        <p><strong>{actor}{tripName && tripName !== actor ? ` (${tripName})` : ""}</strong> {({ create: "created", update: "updated", delete: "removed" }[event.action]) || uiText("changed")} <strong>{eventLabel(event, currency)}</strong></p>
         <p className="footnote"><time dateTime={event.createdAt}>{scope ? auditTimestamp(event.createdAt) : formatClockTime(event.createdAt)}</time> · {auditSource(event.source)}</p>
         <ActivityEventDetails event={event} currency={currency} memberNames={memberNames} actorMemberNames={actorMemberNames} />
-        {onRestore && event.action === "delete" && event.before && ["expense", "payment"].includes(event.entityType) && <button type="button" className="quiet" disabled={busy} onClick={() => onRestore(event)}>Review {event.entityType} to restore</button>}
+        {onRestore && event.action === "delete" && event.before && ["expense", "payment"].includes(event.entityType) && <button type="button" className="quiet" disabled={busy} onClick={() => onRestore(event)}>{uiText("Review ")}{event.entityType}{uiText(" to restore")}</button>}
       </li>;
     })}</ol>
-    {history.nextCursor !== null && <button type="button" className="quiet phone-wide" disabled={history.loading} onClick={history.loadOlder}>{history.loading ? "Loading…" : "Load older changes"}</button>}
+    {history.nextCursor !== null && <button type="button" className="quiet phone-wide" disabled={history.loading} onClick={history.loadOlder}>{history.loading ? uiText("Loading…") : uiText("Load older changes")}</button>}
   </section>;
 }

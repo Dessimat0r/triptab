@@ -1,4 +1,6 @@
 "use client";
+import { t as uiText } from "@/lib/ui-language";
+
 import { formatInstant } from "@/lib/dates";
 
 import { useId, useRef, useState } from "react";
@@ -45,17 +47,17 @@ export default function ReceiptChat({ messages, busy, itemId, scopeLabel, contex
   const visibleMessages = itemId ? messages.filter(message => messageItem(message) === itemId) : messages;
   const replies = visibleMessages.filter(message => message.role === "assistant");
   const answered = new Set(replies.map(message => message.replyTo).filter(Boolean));
-  const itemLabel = scopeLabel || (itemId && itemNames?.[itemId]) || "this item";
-  const heading = contextTitle || (itemId ? `Discuss ${itemLabel}` : "Discuss this receipt");
-  const questionLabel = itemId ? `Question about ${itemLabel}` : "Receipt question";
+  const itemLabel = scopeLabel || (itemId && itemNames?.[itemId]) || uiText("this item");
+  const heading = contextTitle || (itemId ? uiText("Discuss {item}", { item: itemLabel }) : uiText("Discuss this receipt"));
+  const questionLabel = itemId ? uiText("Question about {item}", { item: itemLabel }) : uiText("Receipt question");
   const visibleError = sendError || error;
   const authorLabel = (message: ReceiptMessage) => {
-    if (message.role === "assistant") return "Assistant";
+    if (message.role === "assistant") return uiText("Assistant");
     if (message.authorMemberId) {
-      if (message.authorMemberId === currentMemberId) return "You";
-      return message.authorName || memberNames?.[message.authorMemberId] || "Earlier traveller";
+      if (message.authorMemberId === currentMemberId) return uiText("You");
+      return message.authorName || memberNames?.[message.authorMemberId] || uiText("Earlier traveller");
     }
-    return message.authorName || "Earlier traveller";
+    return message.authorName || uiText("Earlier traveller");
   };
 
   async function sendQuestion() {
@@ -88,24 +90,24 @@ export default function ReceiptChat({ messages, busy, itemId, scopeLabel, contex
     <section className="receipt-chat" aria-labelledby={titleId} aria-busy={working} data-item-id={itemId}>
       <h3 id={titleId}>{heading}</h3>
       <p id={hintId} className="receipt-chat-hint">
-        {nativeAvailable ? "Ask about who bought what, quantities, names or location. The assistant remembers this receipt and proposes changes for review." : "Questions are saved here and a prompt is prepared. Use it in a ChatGPT or Codex conversation with TripTab tools enabled. Replies appear here automatically."}
+        {nativeAvailable ? uiText("Ask about who bought what, quantities, names or location. The assistant remembers this receipt and proposes changes for review.") : uiText("Questions are saved here and a prompt is prepared. Use it in a ChatGPT or Codex conversation with TripTab tools enabled. Replies appear here automatically.")}
       </p>
-      {itemId && <p className="receipt-chat-scope">“This” refers to {itemLabel}. You can also ask about other items or the whole receipt.</p>}
+      {itemId && <p className="receipt-chat-scope">{uiText("“This” refers to ")}{itemLabel}{uiText(". You can also ask about other items or the whole receipt.")}</p>}
       {memory && <details className="receipt-chat-memory">
-        <summary>Remembered receipt context</summary>
-        <p className="receipt-chat-hint">Saved with this receipt for the assistant. All item discussions share these notes and names.</p>
+        <summary>{uiText("Remembered receipt context")}</summary>
+        <p className="receipt-chat-hint">{uiText("Saved with this receipt for the assistant. All item discussions share these notes and names.")}</p>
         {memory.notes && <p className="receipt-chat-memory-notes">{memory.notes}</p>}
         {memory.aliases.length > 0 && <ul className="receipt-chat-aliases">
           {memory.aliases.map((alias, index) => <li key={`${alias.name}:${index}`}>
             <strong>{alias.name}</strong>
-            <span>{alias.itemId ? itemNames?.[alias.itemId] || "Earlier item" : alias.memberId ? memberNames?.[alias.memberId] || "Earlier traveller" : "Saved name"}
-              {alias.scopeMemberId ? ` · for ${memberNames?.[alias.scopeMemberId] || "an earlier traveller"}` : ""}</span>
+            <span>{alias.itemId ? itemNames?.[alias.itemId] || uiText("Earlier item") : alias.memberId ? memberNames?.[alias.memberId] || uiText("Earlier traveller") : uiText("Saved name")}
+              {alias.scopeMemberId ? uiText(" · for {value0}", { value0: memberNames?.[alias.scopeMemberId] || uiText("an earlier traveller") }) : ""}</span>
           </li>)}
         </ul>}
-        {!memory.notes && memory.aliases.length === 0 && <p className="receipt-chat-empty">No notes or names remembered yet.</p>}
+        {!memory.notes && memory.aliases.length === 0 && <p className="receipt-chat-empty">{uiText("No notes or names remembered yet.")}</p>}
       </details>}
       {visibleMessages.length ? (
-        <div className="receipt-chat-scroll" role="region" aria-label={itemId ? `${itemLabel} conversation` : "Receipt conversation"} tabIndex={0}>
+        <div className="receipt-chat-scroll" role="region" aria-label={itemId ? uiText("{value0} conversation", { value0: itemLabel }) : uiText("Receipt conversation")} tabIndex={0}>
           <ol className="receipt-chat-thread">
             {visibleMessages.map(message => (
               <li key={message.id} className={`receipt-chat-message ${message.role}`}>
@@ -113,10 +115,10 @@ export default function ReceiptChat({ messages, busy, itemId, scopeLabel, contex
                   <strong>{authorLabel(message)}</strong>
                   <time dateTime={message.createdAt}>{messageTime(message.createdAt)}</time>
                 </div>
-                {messageItem(message) && <span className="receipt-chat-context">{itemNames?.[messageItem(message)!] || (messageItem(message) === itemId && scopeLabel) || "Earlier item"}</span>}
+                {messageItem(message) && <span className="receipt-chat-context">{itemNames?.[messageItem(message)!] || (messageItem(message) === itemId && scopeLabel) || uiText("Earlier item")}</span>}
                 <p className="receipt-chat-text">{message.text}</p>
                 {message.role === "user" && !answered.has(message.id) && (
-                  <div className="receipt-chat-pending-row"><span className="receipt-chat-pending">{nativeAvailable ? "Question saved · awaiting reply" : "Question saved · external processing needed"}</span>{nativeAvailable && onRetry && <button type="button" className="textbutton" disabled={working || offline} onClick={() => void retryQuestion(message.id)}><RefreshCw size={14} aria-hidden="true" />Retry reply</button>}</div>
+                  <div className="receipt-chat-pending-row"><span className="receipt-chat-pending">{nativeAvailable ? uiText("Question saved · awaiting reply") : uiText("Question saved · external processing needed")}</span>{nativeAvailable && onRetry && <button type="button" className="textbutton" disabled={working || offline} onClick={() => void retryQuestion(message.id)}><RefreshCw size={14} aria-hidden="true" />{uiText("Retry reply")}</button>}</div>
                 )}
               </li>
             ))}
@@ -124,11 +126,11 @@ export default function ReceiptChat({ messages, busy, itemId, scopeLabel, contex
         </div>
       ) : (
         <p className="receipt-chat-empty">
-          {itemId ? "Ask about this item’s quantity, price or cost shares, or anything else on the receipt." : "Ask about unclear items, missing charges or totals that do not match."}
+          {itemId ? uiText("Ask about this item’s quantity, price or cost shares, or anything else on the receipt.") : uiText("Ask about unclear items, missing charges or totals that do not match.")}
         </p>
       )}
       <div className="receipt-chat-announcement" role="status" aria-live="polite" aria-atomic="true">
-        {replies.length > 0 ? `${replies.length} ${replies.length === 1 ? "reply is" : "replies are"} available from the assistant${itemId ? ` about ${itemLabel}` : ""}.` : ""}
+        {replies.length > 0 ? uiText(itemId ? replies.length === 1 ? "1 reply is available from the assistant about {item}." : "{count} replies are available from the assistant about {item}." : replies.length === 1 ? "1 reply is available from the assistant." : "{count} replies are available from the assistant.", { count: replies.length, item: itemLabel }) : ""}
       </div>
       <label htmlFor={questionId}>{questionLabel}</label>
       <textarea
@@ -147,15 +149,13 @@ export default function ReceiptChat({ messages, busy, itemId, scopeLabel, contex
       <div className="receipt-chat-actions">
         <button type="button" className="primary" disabled={working || !question.trim()} onClick={() => void sendQuestion()}>
           <MessageCircle size={17} aria-hidden="true" />
-          {nativeAvailable ? "Ask assistant" : "Save question & prepare prompt"}
+          {nativeAvailable ? uiText("Ask assistant") : uiText("Save question & prepare prompt")}
         </button>
         {refreshError && !offline && <button type="button" className="quiet" disabled={working} onClick={onRefresh}>
-          <RefreshCw size={17} aria-hidden="true" />
-          Retry updates
-        </button>}
+          <RefreshCw size={17} aria-hidden="true" />{uiText("Retry updates")}</button>}
       </div>
-      {visibleError && <p id={errorId} className="receipt-chat-error" role="alert">{visibleError}</p>}
-      <p className="receipt-chat-note" role="status">{offline ? "You’re offline. Replies will update when you reconnect. " : refreshError ? "Unable to refresh replies. We’ll keep trying automatically. " : ""}Proposed changes need your review before the expense is updated.</p>
+      {visibleError && <p id={errorId} className="receipt-chat-error" role="alert">{uiText(visibleError)}</p>}
+      <p className="receipt-chat-note" role="status">{offline ? uiText("You’re offline. Replies will update when you reconnect. ") : refreshError ? uiText("Unable to refresh replies. We’ll keep trying automatically. ") : ""}{uiText("Proposed changes need your review before the expense is updated.")}</p>
     </section>
   );
 }

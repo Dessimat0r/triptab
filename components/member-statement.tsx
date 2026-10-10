@@ -1,4 +1,6 @@
 "use client";
+import { t as uiText } from "@/lib/ui-language";
+
 
 import PagedList, { useListPaging } from "./paged-list";
 import { formatCalendarDate } from "@/lib/dates";
@@ -50,57 +52,57 @@ export default function MemberStatement({ trip, memberId, onClose }: MemberState
     <section className="modal member-statement" role="dialog" aria-modal="true" aria-labelledby={`${id}-title`} aria-describedby={`${id}-hint`}>
       <div className="modalheading">
         <div>
-          <span className="eyebrow">HOW THE BALANCE ADDS UP</span>
-          <h2 id={`${id}-title`}>{member?.name || "Traveller"}’s statement</h2>
-          <p id={`${id}-hint`} className="footnote">{trip.name} · All amounts below are in {trip.currency}.</p>
+          <span className="eyebrow">{uiText("HOW THE BALANCE ADDS UP")}</span>
+          <h2 id={`${id}-title`}>{member?.name || uiText("Traveller")}{uiText("’s statement")}</h2>
+          <p id={`${id}-hint`} className="footnote">{trip.name}{uiText(" · All amounts below are in ")}{trip.currency}.</p>
         </div>
-        <button type="button" className="iconbutton" aria-label="Close traveller statement" onClick={onClose}><X aria-hidden="true" /></button>
+        <button type="button" className="iconbutton" aria-label={uiText("Close traveller statement")} onClick={onClose}><X aria-hidden="true" /></button>
       </div>
       {error ? <p className="error" role="alert">{error}</p> : <>
         <div className="statement-summary">
-          <p className="statement-net"><span>{net > 0 ? "Should receive" : net < 0 ? "Still owes" : "Settled up"}</span><strong>{money(Math.abs(net))}</strong></p>
+          <p className="statement-net"><span>{net > 0 ? uiText("Should receive") : net < 0 ? uiText("Still owes") : uiText("Settled up")}</span><strong>{money(Math.abs(net))}</strong></p>
           <dl className="statement-totals">
-            <div><dt>Paid upfront</dt><dd>{money(paid)}</dd></div>
-            <div><dt>Cost share</dt><dd>−{money(cost)}</dd></div>
-            <div><dt>Payments sent</dt><dd>+{money(sent)}</dd></div>
-            <div><dt>Payments received</dt><dd>−{money(received)}</dd></div>
+            <div><dt>{uiText("Paid upfront")}</dt><dd>{money(paid)}</dd></div>
+            <div><dt>{uiText("Cost share")}</dt><dd>−{money(cost)}</dd></div>
+            <div><dt>{uiText("Payments sent")}</dt><dd>+{money(sent)}</dd></div>
+            <div><dt>{uiText("Payments received")}</dt><dd>−{money(received)}</dd></div>
           </dl>
-          <p className="footnote">Paid upfront − cost share + payments sent − payments received = balance. A positive balance is money to receive; a negative balance is money still owed.</p>
+          <p className="footnote">{uiText("Paid upfront − cost share + payments sent − payments received = balance. A positive balance is money to receive; a negative balance is money still owed.")}</p>
         </div>
         <section className="statement-section" aria-labelledby={`${id}-expenses`}>
-          <h3 id={`${id}-expenses`}>Expenses</h3>
-          <p className="footnote">Cost shares include receipt percentages, item assignments, tax, tips, discounts and currency conversion. Every penny follows the holiday’s saved split.</p>
-          {expenses.length ? <PagedList {...page("expenses", 10)} className="statement-entries" role="list" noun="expenses"
+          <h3 id={`${id}-expenses`}>{uiText("Expenses")}</h3>
+          <p className="footnote">{uiText("Cost shares include receipt percentages, item assignments, tax, tips, discounts and currency conversion. Every penny follows the holiday’s saved split.")}</p>
+          {expenses.length ? <PagedList {...page("expenses", 10)} className="statement-entries" role="list" noun={uiText("expenses")}
             items={expenses} itemKey={entry => entry.expense.id} renderItem={({ expense, cost, paid }) => <div key={expense.id} data-entry-id={expense.id} role="listitem" tabIndex={-1} className="statement-entry">
               <div className="statement-entry-heading">
                 <strong>{expense.title}</strong>
                 <time dateTime={expense.date}>{displayDate(expense.date)} · {expense.time}</time>
               </div>
-              <p className="footnote">Paid by {traveller(expense.payer)} · {expense.currency} receipt · {expense.timezone}</p>
+              <p className="footnote">{uiText("Paid by ")}{traveller(expense.payer)} · {expense.currency}{uiText(" receipt · ")}{expense.timezone}</p>
               <dl>
-                <div><dt>Cost share</dt><dd>{money(cost)}</dd></div>
-                <div><dt>Paid upfront</dt><dd>{money(paid)}</dd></div>
+                <div><dt>{uiText("Cost share")}</dt><dd>{money(cost)}</dd></div>
+                <div><dt>{uiText("Paid upfront")}</dt><dd>{money(paid)}</dd></div>
               </dl>
               {expense.currency !== trip.currency && <p className="footnote">{expense.bankAmount !== undefined
-                ? `Uses the recorded bank charge of ${money(expense.bankAmount)} for the whole receipt.`
-                : expense.fx ? `${expense.fx.source === "reference" ? "Daily reference" : "Manual"} exchange rate: ${expense.fx.rate} ${trip.currency} per ${expense.currency}, dated ${displayDate(expense.fx.asOf)}.` : ""}</p>}
-            </div>} /> : <p className="statement-empty">No expenses involving this traveller yet.</p>}
+                ? uiText("Uses the recorded bank charge of {value0} for the whole receipt.", { value0: money(expense.bankAmount) })
+                : expense.fx ? uiText("{value0} exchange rate: {value1} {value2} per {value3}, dated {value4}.", { value0: expense.fx.source === "reference" ? "Daily reference" : "Manual", value1: expense.fx.rate, value2: trip.currency, value3: expense.currency, value4: displayDate(expense.fx.asOf) }) : ""}</p>}
+            </div>} /> : <p className="statement-empty">{uiText("No expenses involving this traveller yet.")}</p>}
         </section>
         <section className="statement-section" aria-labelledby={`${id}-payments`}>
-          <h3 id={`${id}-payments`}>Recorded payments</h3>
-          {payments.length ? <PagedList {...page("payments", 10)} className="statement-entries" role="list" noun="payments"
+          <h3 id={`${id}-payments`}>{uiText("Recorded payments")}</h3>
+          {payments.length ? <PagedList {...page("payments", 10)} className="statement-entries" role="list" noun={uiText("payments")}
             items={payments} itemKey={payment => payment.id} renderItem={payment => <div key={payment.id} data-entry-id={payment.id} role="listitem" tabIndex={-1} className="statement-entry">
               <div className="statement-entry-heading">
-                <strong>{payment.from === memberId ? `Sent to ${traveller(payment.to)}` : `Received from ${traveller(payment.from)}`}</strong>
+                <strong>{payment.from === memberId ? uiText("Sent to {value0}", { value0: traveller(payment.to) }) : uiText("Received from {value0}", { value0: traveller(payment.from) })}</strong>
                 <span>{money(payment.amount)}</span>
               </div>
               <p className="footnote"><time dateTime={payment.date}>{displayDate(payment.date)}{payment.time ? ` · ${payment.time}` : ""}</time>{payment.timezone ? ` · ${payment.timezone}` : ""}{payment.method ? ` · ${payment.method}` : ""}</p>
               {payment.note && <p className="statement-payment-note">{payment.note}</p>}
-            </div>} /> : <p className="statement-empty">No payments sent or received yet.</p>}
-          <p className="footnote">Recorded payments describe money already transferred between travellers.</p>
+            </div>} /> : <p className="statement-empty">{uiText("No payments sent or received yet.")}</p>}
+          <p className="footnote">{uiText("Recorded payments describe money already transferred between travellers.")}</p>
         </section>
       </>}
-      <div className="statement-actions"><button type="button" className="quiet" onClick={onClose}>Close statement</button></div>
+      <div className="statement-actions"><button type="button" className="quiet" onClick={onClose}>{uiText("Close statement")}</button></div>
     </section>
   </ModalA11y>;
 }

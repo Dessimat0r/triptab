@@ -1,0 +1,26 @@
+.trip-controls { padding: 20px; margin-top: 18px; }
+.trip-controls h3, .archived-holiday h3 { margin: 0 0 12px; }
+.trip-controls details { border-top: 1px solid var(--border); padding-top: 14px; margin-top: 14px; }
+.trip-controls summary { cursor: pointer; }
+.trip-controls label { display: grid; gap: 8px; margin: 14px 0; }
+.archived-holiday { border-bottom: 1px solid var(--border); padding: 16px 0; }
+.archived-holiday:last-child { border-bottom: 0; }
+.archived-holiday .button-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.archived-holiday a { display: inline-flex; align-items: center; text-decoration: none; }
+.session-list { list-style: none; padding: 0; }
+.session-list li { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 12px 0; border-bottom: 1px solid var(--border); }
+.session-list small { flex: 1 1 160px; }
+
+.offline-capture, .shared-photo { padding: 18px; margin-bottom: 18px; }
+.offline-capture h3, .shared-photo h3 { margin: 0 0 12px; }
+.shared-photo label { display: grid; gap: 8px; margin: 12px 0; }
+.offline-capture > button, .offline-capture > a, .shared-photo > button { margin: 4px 8px 4px 0; }
+.offline-capture a { text-decoration: none; display: inline-flex; align-items: center; }
+.interface-language { padding: 12px; }
+.interface-language label { display: grid; gap: 6px; font-size: .8rem; }
+.interface-language select { min-height: 44px; width: 100%; }
+.interface-language small { display: block; margin-top: 6px; }
+
+.holiday-actions {display:flex;align-items:center;gap:4px;margin-top:10px;}
+.holiday-actions .newtrip {flex:1;margin-top:0;min-width:0;}
+.holiday-actions .iconbutton {flex-shrink:0;}

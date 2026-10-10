@@ -41,9 +41,12 @@ const worker = {
       try {
         const bindings = env as unknown as { DB?: D1Database; RECEIPTS?: R2Bucket };
         if (!bindings.DB || !bindings.RECEIPTS) throw new Error('Receipt maintenance bindings unavailable.');
-        const { maintainSystemReceipts } = await import("../lib/receipt-lifecycle");
+        const { maintainSystemReceipts, purgeDeletedTripReceipts } = await import("../lib/receipt-lifecycle");
+        const { flushNotificationDigests } = await import('../lib/notifications');
+        await flushNotificationDigests(bindings.DB, controller.scheduledTime);
         const result = await maintainSystemReceipts(bindings.DB, bindings.RECEIPTS, { now: controller.scheduledTime });
-        if (result.failed) throw new Error('Receipt cleanup needs a retry.');
+        const purged = await purgeDeletedTripReceipts(bindings.DB, bindings.RECEIPTS, { now: controller.scheduledTime });
+        if (result.failed || purged.failed) throw new Error('Receipt cleanup needs a retry.');
       } catch {
         // Database/provider exceptions can contain resource IDs or image keys.
         // Report failure to the scheduler without forwarding those values.

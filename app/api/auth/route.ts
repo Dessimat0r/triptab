@@ -1,4 +1,6 @@
+import { env } from 'cloudflare:workers';
 import { AuthError, authFailure, performAuthAction, readAuthState, resolveIdentity, signedOutAuthResult } from '@/lib/auth';
+import { configuredMailer } from '@/lib/email';
 import { db, readBoundedBody, RequestError } from '@/lib/store';
 import { browserPushCookie, revokeBrowserPush } from '@/lib/notifications';
 
@@ -24,7 +26,9 @@ export async function POST(request: Request) {
     const details = body as Record<string, unknown>;
     logoutRequest = details.action === 'logout';
     let previousActor: string | undefined;
-    if (['logout', 'login', 'register'].includes(String(details.action))) {
+    // Each of these can replace the browser's signed-in account.
+    const signsIn = ['login', 'register', 'reset_password'].includes(String(details.action));
+    if (logoutRequest || signsIn) {
       try { previousActor = (await resolveIdentity(request, {}, db())).id; }
       catch (error) {
         if (!logoutRequest && (!(error instanceof Error) || error.message !== 'UNAUTHORIZED')) throw error;
@@ -34,9 +38,9 @@ export async function POST(request: Request) {
       try { await revokeBrowserPush(request, previousActor); }
       catch { console.warn('TripTab could not revoke this browser’s notifications during logout.'); }
     }
-    const result = await performAuthAction(request, details, db());
+    const result = await performAuthAction(request, details, db(), { mailer: configuredMailer(env as unknown as Record<string, string | undefined>, request) });
     const nextActor = result.state.authenticated ? result.state.profile?.id : undefined;
-    const switched = (details.action === 'login' || details.action === 'register') && previousActor && nextActor && previousActor !== nextActor;
+    const switched = signsIn && previousActor && nextActor && previousActor !== nextActor;
     // Revoke only the old actor's hash-bound browser after the new credentials
     // succeed. Failed attempts and same-account logins preserve notifications.
     if (switched) await revokeBrowserPush(request, previousActor!);
@@ -44,7 +48,7 @@ export async function POST(request: Request) {
     if (result.cookie) headers.append('Set-Cookie', result.cookie);
     for (const value of result.additionalCookies || []) headers.append('Set-Cookie', value);
     if (details.action === 'logout' || switched) headers.append('Set-Cookie', await browserPushCookie(request));
-    return Response.json(result.state, { headers });
+    return Response.json(result.notice ? { ...result.state, notice: result.notice } : result.state, { headers });
   } catch (error) {
     const response = authFailure(error);
     if (logoutRequest) {

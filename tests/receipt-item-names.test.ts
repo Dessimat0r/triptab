@@ -6,6 +6,7 @@ import * as runtime from 'react/jsx-runtime';
 import { JsxEmit,ModuleKind,ScriptTarget,transpileModule } from 'typescript';
 import * as languages from '../lib/receipt-languages';
 import * as data from '../lib/data-utils';
+import * as uiLanguage from '../lib/ui-language';
 import type { DraftItem,Trip } from '../lib/model';
 import type { ReceiptEditor } from '../lib/receipt-processing';
 import type { LanguagePreferencesController } from '../components/trip-language-preferences';
@@ -23,7 +24,7 @@ function fixture(){
   const state:unknown[]=[],refs:{current:unknown}[]=[],effects:(()=>void|(()=>void))[]=[],cleanup:(()=>void)[]=[];let stateIndex=0,refIndex=0;
   const hooks={useState(initial:unknown){const index=stateIndex++;if(!(index in state))state[index]=initial;return [state[index],(next:unknown)=>{state[index]=typeof next==='function'?next(state[index]):next;}];},useRef(initial:unknown){return refs[refIndex++]??(refs[refIndex-1]={current:initial});},useLayoutEffect(effect:()=>void|(()=>void)){effects.push(effect);}};
   const exportedModule={exports:{} as {default:(props:Record<string,unknown>)=>unknown}};
-  new Function('require','module','exports','fetch',compiled)((name:string)=>name==='react'?hooks:name==='react/jsx-runtime'?runtime:name==='@/lib/receipt-languages'?languages:name==='@/lib/data-utils'?data:name==='lucide-react'?{RefreshCw:()=>null,Undo2:()=>null}:{},exportedModule,exportedModule.exports,fetcher);
+  new Function('require','module','exports','fetch',compiled)((name:string)=>name==='@/lib/ui-language'?uiLanguage:name==='react'?hooks:name==='react/jsx-runtime'?runtime:name==='@/lib/receipt-languages'?languages:name==='@/lib/data-utils'?data:name==='lucide-react'?{RefreshCw:()=>null,Undo2:()=>null}:{},exportedModule,exportedModule.exports,fetcher);
   const props={accountId:'account',trip,receipt,item,index:0,settings,onUpdate:(change:(item:DraftItem)=>DraftItem)=>{props.item=change(props.item);props.receipt={...props.receipt,items:[props.item]};}};
   let tree:Element[]=[];
   const render=()=>{stateIndex=0;refIndex=0;tree=elements(exportedModule.exports.default(props));for(const effect of effects.splice(0)){const dispose=effect();if(dispose)cleanup.push(dispose);}return tree;};

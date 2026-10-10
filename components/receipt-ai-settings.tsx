@@ -1,4 +1,6 @@
 "use client";
+import { t as uiText } from "@/lib/ui-language";
+
 
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { KeyRound, Trash2 } from "lucide-react";
@@ -250,49 +252,48 @@ export default function ReceiptAISettings({
   }
 
   return <section className="account-section receipt-ai-settings" aria-labelledby={`${id}-title`} aria-busy={busy}>
-    <h3 id={`${id}-title`}><KeyRound size={17} aria-hidden="true" />Receipt AI</h3>
-    <p className="footnote">Read uploaded receipt images into items automatically with AI provided by TripTab. Review the results before saving an expense.</p>
-    {!settings && !error && <p role="status">Loading receipt AI settings…</p>}
+    <h3 id={`${id}-title`}><KeyRound size={17} aria-hidden="true" />{uiText("Receipt AI")}</h3>
+    <p className="footnote">{uiText("Read uploaded receipt images into items automatically with AI provided by TripTab. Review the results before saving an expense.")}</p>
+    {!settings && !error && <p role="status">{uiText("Loading receipt AI settings…")}</p>}
     {settings && <>
       <p className="footnote" role="status">{settings.connected
         ? (settings.provider === "api" ? "Provided by TripTab. Shared receipt processing is ready." : "Your ChatGPT plan receipt processing is connected.")
         : (settings.reason ? reasonText[settings.reason] : "Receipt processing is not connected.")}</p>
       {settings.managementReason === "verification_required" && <>
-        <p className="footnote">To manage the shared AI settings, continue with ChatGPT to verify your account.</p>
-        <a className="quiet account-link" href={verificationHref}>Continue with ChatGPT to verify</a>
+        <p className="footnote">{uiText("To manage the shared AI settings, continue with ChatGPT to verify your account.")}</p>
+        <a className="quiet account-link" href={verificationHref}>{uiText("Continue with ChatGPT to verify")}</a>
       </>}
-      {!settings.manageable && settings.managementReason !== "verification_required" && <p className="footnote">The site owner manages the shared API key. You can use receipt AI without entering a key.</p>}
+      {!settings.manageable && settings.managementReason !== "verification_required" && <p className="footnote">{uiText("The site owner manages the shared API key. You can use receipt AI without entering a key.")}</p>}
       {settings.manageable && <>
-        <p className="footnote">Your OpenAI API key funds receipt processing for all signed-in users. API usage is billed to the OpenAI account that owns the key, separately from a ChatGPT subscription.</p>
-        <label htmlFor={`${id}-provider`}>Receipt processing provider
-          <select id={`${id}-provider`} value={settings.provider} disabled={busy || !settings.configured}
+        <p className="footnote">{uiText("Your OpenAI API key funds receipt processing for all signed-in users. API usage is billed to the OpenAI account that owns the key, separately from a ChatGPT subscription.")}</p>
+        <label htmlFor={`${id}-provider`}>{uiText("Receipt processing provider")}<select id={`${id}-provider`} value={settings.provider} disabled={busy || !settings.configured}
             onChange={event => {
               const provider = event.target.value;
               if (provider === "api" || (provider === "siwc" && settings.siwcAvailable)) void update({ provider }, "POST", "Receipt processing provider saved.");
             }}>
-            <option value="api">OpenAI API key</option>
-            <option value="siwc" disabled={!settings.siwcAvailable}>ChatGPT plan{settings.siwcAvailable ? "" : " · currently disabled"}</option>
+            <option value="api">{uiText("OpenAI API key")}</option>
+            <option value="siwc" disabled={!settings.siwcAvailable}>{uiText("ChatGPT plan")}{settings.siwcAvailable ? "" : uiText(" · currently disabled")}</option>
           </select>
         </label>
-        {!settings.siwcAvailable && <p className="footnote">The ChatGPT plan option is switched off for now. You can switch providers here when it becomes available.</p>}
+        {!settings.siwcAvailable && <p className="footnote">{uiText("The ChatGPT plan option is switched off for now. You can switch providers here when it becomes available.")}</p>}
         {settings.provider === "api" && settings.configured && <form onSubmit={event => {
           event.preventDefault();
           if (active.current || !apiKey.trim()) return;
           const submittedKey = apiKey.trim();
           void update({ apiKey: submittedKey }, "POST", "API key saved.");
         }}>
-          <label htmlFor={`${id}-api-key`}>{settings.apiConnected ? "Replace OpenAI API key" : "OpenAI API key"}
+          <label htmlFor={`${id}-api-key`}>{settings.apiConnected ? uiText("Replace OpenAI API key") : uiText("OpenAI API key")}
             <input id={`${id}-api-key`} name="receipt-ai-api-key" type="password" value={apiKey} autoComplete="off" autoCapitalize="none" autoCorrect="off" spellCheck={false}
               required maxLength={512} disabled={busy} aria-describedby={`${id}-key-hint`} onChange={event => setApiKey(event.target.value)} />
           </label>
-          <small id={`${id}-key-hint`} className="muted">Use a key created in your TripTab OpenAI project. The shared key is encrypted on the server and never shown again. This field clears after the key is saved.</small>
-          <button type="submit" className="quiet" disabled={busy || !apiKey.trim()}>{busy ? "Saving…" : (settings.apiConnected ? "Replace API key" : "Save API key")}</button>
+          <small id={`${id}-key-hint`} className="muted">{uiText("Use a key created in your TripTab OpenAI project. The shared key is encrypted on the server and never shown again. This field clears after the key is saved.")}</small>
+          <button type="submit" className="quiet" disabled={busy || !apiKey.trim()}>{busy ? uiText("Saving…") : (settings.apiConnected ? "Replace API key" : "Save API key")}</button>
         </form>}
-        {settings.apiConnected && <button type="button" className="quiet danger" disabled={busy} onClick={() => void update(undefined, "DELETE", "API key removed.")}><Trash2 size={17} aria-hidden="true" />Remove API key</button>}
-        {settings.apiConnected && <p className="footnote">Removing the key disables shared API receipt processing for everyone until a replacement is saved.</p>}
+        {settings.apiConnected && <button type="button" className="quiet danger" disabled={busy} onClick={() => void update(undefined, "DELETE", "API key removed.")}><Trash2 size={17} aria-hidden="true" />{uiText("Remove API key")}</button>}
+        {settings.apiConnected && <p className="footnote">{uiText("Removing the key disables shared API receipt processing for everyone until a replacement is saved.")}</p>}
       </>}
-      {settings.eligible && settings.provider === "siwc" && settings.siwcAvailable && !settings.connected && <button type="button" className="quiet" disabled={busy || !settings.configured} onClick={() => void connectPlan()}>Connect ChatGPT plan</button>}
-      {settings.model && <p className="footnote">Receipt model: {settings.model}</p>}
+      {settings.eligible && settings.provider === "siwc" && settings.siwcAvailable && !settings.connected && <button type="button" className="quiet" disabled={busy || !settings.configured} onClick={() => void connectPlan()}>{uiText("Connect ChatGPT plan")}</button>}
+      {settings.model && <p className="footnote">{uiText("Receipt model: ")}{settings.model}</p>}
     </>}
     {error && <p className="error" role="alert">{error}</p>}
     {notice && <p role="status" aria-live="polite">{notice}</p>}

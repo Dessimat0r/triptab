@@ -1,0 +1,8 @@
+.traveller-options { display: grid; gap: 8px; }
+.traveller-options h3 { margin: 0; }
+.traveller-options-row { display: grid; gap: 8px; padding: 12px 0; border-top: 1px solid var(--line); }
+.traveller-options-name { overflow-wrap: anywhere; }
+.traveller-options-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; }
+.traveller-options-fields label { display: grid; gap: 4px; font-size: var(--text-s); min-width: 0; }
+.traveller-options-fields input, .traveller-options-fields select { width: 100%; min-width: 0; }
+.traveller-options-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }

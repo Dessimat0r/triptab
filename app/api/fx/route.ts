@@ -1,13 +1,10 @@
 import { owner } from '@/lib/store';
 import { localTimestamp, validCalendarDate } from '@/lib/dates';
-import { validExchangeRate } from '@/lib/model';
+import { REFERENCE_RATE_CURRENCIES, validExchangeRate } from '@/lib/model';
 
 export const dynamic = 'force-dynamic';
 
-const CURRENCIES = new Set([
-  'AUD', 'CAD', 'CHF', 'CZK', 'DKK', 'EUR', 'GBP', 'HUF',
-  'ISK', 'NOK', 'PLN', 'RON', 'SEK', 'TRY', 'USD',
-]);
+const CURRENCIES = REFERENCE_RATE_CURRENCIES;
 const PRIVATE_HEADERS = { 'Cache-Control': 'private, no-store' };
 const BANK_FALLBACK = 'Enter the actual converted card charge or a manual exchange rate instead.';
 

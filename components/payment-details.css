@@ -1,0 +1,99 @@
+/* Travellers' payment handles and the one-tap pay actions in Settle up. */
+.payment-details-panel {
+  min-width: 0;
+  padding: var(--space-5);
+  margin-top: 22px;
+  overflow-wrap: anywhere;
+}
+.payment-details-row {
+  padding: var(--space-4) 0;
+  border-bottom: 1px solid var(--line);
+  min-width: 0;
+}
+.paged-list-items > .payment-details-row:last-child {
+  border-bottom: 0;
+}
+.payment-details-heading {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  gap: var(--space-3);
+  align-items: center;
+}
+.payment-details-identity {
+  min-width: 0;
+}
+.payment-details-identity small {
+  color: var(--muted);
+}
+.payment-details-form {
+  margin-top: var(--space-4);
+}
+.payment-details-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 var(--space-3);
+}
+.payment-details-form input,
+.payment-details-form textarea {
+  min-width: 0;
+  max-width: 100%;
+  font-size: 16px;
+}
+.payment-details-form label > .trip-details-error {
+  display: block;
+  margin: -12px 0 var(--space-3);
+  font-weight: 500;
+}
+.payment-details-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.settlement-pay {
+  flex-basis: 100%;
+  min-width: 0;
+}
+.settlement-pay-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.settlement-pay-actions .quiet {
+  min-height: 40px;
+  padding: 8px var(--space-3);
+  text-decoration: none;
+  color: var(--ink);
+}
+.settlement-pay small {
+  margin-top: var(--space-2);
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.settlement-bank span {
+  color: var(--ink);
+  user-select: all;
+}
+.settlement-pay-status:empty {
+  display: none;
+}
+.settlement-pay-hint {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 var(--space-2);
+}
+
+@media (max-width: 700px) {
+  .payment-details-panel {
+    padding: var(--panel-padding);
+  }
+  .payment-details-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .payment-details-actions > button {
+    flex: 1 1 auto;
+  }
+}
+
+.settlement-reminder { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }

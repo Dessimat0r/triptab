@@ -1,6 +1,6 @@
 {
   "id": "/",
-  "name": "TripTab — split holiday expenses",
+  "name": "TripTab \u2014 split holiday expenses",
   "short_name": "TripTab",
   "description": "Share holiday expenses, itemised receipts, and currency conversions with your travel group.",
   "lang": "en-GB",
@@ -35,5 +35,22 @@
       "type": "image/png",
       "purpose": "maskable"
     }
-  ]
+  ],
+  "share_target": {
+    "action": "/share-receipt",
+    "method": "POST",
+    "enctype": "multipart/form-data",
+    "params": {
+      "files": [
+        {
+          "name": "receipt",
+          "accept": [
+            "image/jpeg",
+            "image/png",
+            "image/webp"
+          ]
+        }
+      ]
+    }
+  }
 }

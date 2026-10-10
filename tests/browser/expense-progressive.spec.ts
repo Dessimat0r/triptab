@@ -106,7 +106,7 @@ test('a seven-line receipt opens at the top with one compact row per line and ea
   // The bulk action disappears once used; focus stays at the step it completed.
   await expect(page.getByRole('heading', { name: 'Split', exact: true })).toBeFocused();
   expect(await page.evaluate(() => document.activeElement === document.body)).toBe(false);
-  await expect(page.locator('.expense-shares')).toContainText('Gary £23.67');
+  await expect(page.locator('.expense-shares')).toContainText('Gary £23.66');
   // A line opens to edit and closes again.
   await rows.first().locator('.item-edit > summary').click();
   await expect(page.getByRole('textbox', { name: 'Item 1 total', exact: true })).toHaveValue('16.50');

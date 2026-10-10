@@ -7,6 +7,7 @@ export const ledgers = sqliteTable('ledgers', {
 });
 
 export const profiles = sqliteTable('profiles', {
+  deletedAt: text('deleted_at').notNull().default(''), uiLanguage: text('ui_language').notNull().default('en'),
   id: text('id').primaryKey(), email: text('email').notNull(), displayName: text('display_name').notNull(), createdAt: text('created_at').notNull(),
 });
 
@@ -17,14 +18,34 @@ export const authCredentials = sqliteTable('auth_credentials', {
   passwordSalt: text('password_salt').notNull(),
   iterations: integer('iterations').notNull(),
   createdAt: text('created_at').notNull(),
+  // Null until the holder opens a link sent to this exact address. An
+  // unverified address does not permanently reserve the email (see S-06).
+  emailVerifiedAt: text('email_verified_at'),
 }, table => [uniqueIndex('auth_credentials_email_idx').on(table.email)]);
 
+// One-use email links. Only a hash is stored; the raw token exists only in the
+// message sent to `email`, which must still match the credential when used.
+export const authEmailTokens = sqliteTable('auth_email_tokens', {
+  tokenHash: text('token_hash').primaryKey(),
+  userId: text('user_id').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
+  purpose: text('purpose', { enum: ['verify', 'reset'] }).notNull(),
+  email: text('email').notNull(),
+  expiresAt: text('expires_at').notNull(),
+  createdAt: text('created_at').notNull(),
+}, table => [
+  index('auth_email_tokens_user_idx').on(table.userId, table.purpose),
+  index('auth_email_tokens_expiry_idx').on(table.expiresAt),
+  check('auth_email_tokens_purpose_check', sql`${table.purpose} IN ('verify','reset')`),
+]);
+
 export const authSessions = sqliteTable('auth_sessions', {
+  sessionId: text('session_id').notNull().default(''), userAgent: text('user_agent').notNull().default(''),
   tokenHash: text('token_hash').primaryKey(),
   userId: text('user_id').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
   expiresAt: text('expires_at').notNull(),
   createdAt: text('created_at').notNull(),
 }, table => [
+  uniqueIndex('auth_sessions_id_idx').on(table.sessionId).where(sql`${table.sessionId} <> ''`),
   index('auth_sessions_user_idx').on(table.userId),
   index('auth_sessions_expiry_idx').on(table.expiresAt),
 ]);
@@ -75,6 +96,14 @@ export const memberships = sqliteTable('memberships', {
   index('memberships_user_idx').on(table.userId),
 ]);
 
+// Archiving is personal: it hides a holiday from one account's open list (and
+// its 50-holiday limit) without changing what other travellers see.
+export const tripArchives = sqliteTable('trip_archives', {
+  userId: text('user_id').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
+  tripId: text('trip_id').notNull().references(() => trips.id, { onDelete: 'cascade' }),
+  archivedAt: text('archived_at').notNull(),
+}, table => [primaryKey({ columns: [table.userId, table.tripId] }), index('trip_archives_trip_idx').on(table.tripId)]);
+
 export const invites = sqliteTable('invites', {
   tokenHash: text('token_hash').primaryKey(),
   auditId: text('audit_id').notNull().default(''),
@@ -106,6 +135,12 @@ export const receipts = sqliteTable('receipts', {
   index('receipts_cleanup_idx').on(table.state, table.createdAt),
   index('receipts_legacy_cleanup_idx').on(table.state, table.legacyCleanupAfter),
 ]);
+
+// Image objects whose holiday was deleted. The row outlives the receipt record
+// so R2 deletion can be retried; it is removed only after a later successful pass.
+export const receiptObjectPurges = sqliteTable('receipt_object_purges', {
+  receiptId: text('receipt_id').primaryKey(), owner: text('owner').notNull(), createdAt: text('created_at').notNull(),
+}, table => [index('receipt_object_purges_created_idx').on(table.createdAt)]);
 
 export const syncState = sqliteTable('sync_state', {
   id: integer('id').primaryKey(), revision: integer('revision').notNull().default(0), lastWrite: text('last_write').notNull().default(''),
@@ -174,7 +209,7 @@ export const accountActivityEvents = sqliteTable('account_activity_events', {
   sequence: integer('sequence').primaryKey({ autoIncrement: true }),
   id: text('id').notNull(), userId: text('user_id').notNull(),
   actorName: text('actor_name').notNull(), createdAt: text('created_at').notNull(),
-  entityType: text('entity_type', { enum: ['profile', 'password', 'session', 'chatgpt', 'notifications', 'language'] }).notNull(),
+  entityType: text('entity_type', { enum: ['profile', 'password', 'session', 'chatgpt', 'notifications', 'language', 'email', 'trip'] }).notNull(),
   entityId: text('entity_id').notNull(), action: text('action', { enum: ['create', 'update', 'delete'] }).notNull(),
   before: text('before_data'), after: text('after_data'),
   source: text('source', { enum: ['web', 'chatgpt', 'system'] }).notNull(),
@@ -191,3 +226,19 @@ export const pushSubscriptions = sqliteTable('push_subscriptions', {
   endpoint: text('endpoint').primaryKey(), userId: text('user_id').notNull(), createdAt: text('created_at').notNull(),
   generation: text('generation').notNull().default(''),
 }, table => [index('push_subscriptions_user_idx').on(table.userId)]);
+
+export const notificationPreferences = sqliteTable('notification_preferences', {
+  userId:text('user_id').primaryKey().references(()=>profiles.id,{onDelete:'cascade'}),
+  scope:text('scope',{enum:['all','involved','none']}).notNull().default('all'),
+  delivery:text('delivery',{enum:['immediate','daily','none']}).notNull().default('immediate'), reminders:integer('reminders').notNull().default(1),
+}, table => [check('notification_preferences_scope_check',sql`${table.scope} IN ('all','involved','none')`),check('notification_preferences_delivery_check',sql`${table.delivery} IN ('immediate','daily','none')`),check('notification_preferences_reminders_check',sql`${table.reminders} IN (0,1)`)]);
+export const notificationDigests = sqliteTable('notification_digests', {
+  userId:text('user_id').notNull().references(()=>profiles.id,{onDelete:'cascade'}), tripId:text('trip_id').notNull().references(()=>trips.id,{onDelete:'cascade'}),
+  updates:integer('updates').notNull().default(1),createdAt:text('created_at').notNull(),
+},table=>[primaryKey({columns:[table.userId,table.tripId]})]);
+export const settlementReminders = sqliteTable('settlement_reminders', {
+  tripId:text('trip_id').notNull().references(()=>trips.id,{onDelete:'cascade'}),fromMember:text('from_member').notNull(),toMember:text('to_member').notNull(),sentAt:text('sent_at').notNull(),marker:text('marker').notNull(),
+},table=>[primaryKey({columns:[table.tripId,table.fromMember,table.toMember]})]);
+export const receiptRestoreHolds = sqliteTable('receipt_restore_holds', {
+  receiptId:text('receipt_id').primaryKey().references(()=>receipts.id,{onDelete:'cascade'}),until:text('until').notNull(),
+},table=>[index('receipt_restore_holds_until_idx').on(table.until)]);

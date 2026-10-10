@@ -7,7 +7,8 @@ import { ModuleKind, ScriptTarget } from 'typescript';
 import { ledgerEtag, ledgerTagMatches, readLedgerFreshness } from '../lib/ledger-freshness';
 
 const sqlite = new DatabaseSync(':memory:');
-sqlite.exec(`CREATE TABLE trips(id TEXT PRIMARY KEY, owner TEXT, receipt_link_version INTEGER NOT NULL DEFAULT 0); CREATE INDEX trips_owner_idx ON trips(owner);
+sqlite.exec(`CREATE TABLE trip_archives(user_id TEXT,trip_id TEXT,archived_at TEXT,PRIMARY KEY(user_id,trip_id));
+    CREATE TABLE trips(id TEXT PRIMARY KEY, owner TEXT, receipt_link_version INTEGER NOT NULL DEFAULT 0); CREATE INDEX trips_owner_idx ON trips(owner);
 CREATE TABLE memberships(trip_id TEXT, user_id TEXT, member_id TEXT); CREATE INDEX memberships_user_idx ON memberships(user_id);
 CREATE UNIQUE INDEX memberships_trip_user_idx ON memberships(trip_id,user_id);
 CREATE TABLE profiles(id TEXT PRIMARY KEY,email TEXT); CREATE TABLE sync_state(id INTEGER PRIMARY KEY,revision INTEGER);

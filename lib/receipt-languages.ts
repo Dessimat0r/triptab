@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { getUiLanguage, getUiLocale, t } from './ui-language';
 
 export const RECEIPT_LANGUAGES = [
   ['en','English'],['de','German'],['fr','French'],['es','Spanish'],['it','Italian'],['pt','Portuguese'],
@@ -29,6 +30,16 @@ export const tripLanguagePreferencesSchema = z.object({
 export type TripLanguagePreferences = z.infer<typeof tripLanguagePreferencesSchema>;
 export const defaultLanguagePreferences = ():TripLanguagePreferences=>({readingLanguage:'en',primaryVersion:'reading',itemVersions:{}});
 export function languageName(code:unknown):string { return RECEIPT_LANGUAGES.find(language=>language[0]===code)?.[1] || 'Automatic detection'; }
+const displayNames = new Map<string, Intl.DisplayNames>();
+/** Interface labels only; language codes and receipt item content stay unchanged. */
+export function displayLanguageName(code: unknown): string {
+  if (!RECEIPT_LANGUAGES.some(language => language[0] === code)) return t('Automatic detection');
+  if (getUiLanguage() === 'en') return languageName(code);
+  const locale = getUiLocale();
+  let formatter = displayNames.get(locale);
+  if (!formatter) displayNames.set(locale, formatter = new Intl.DisplayNames(locale, { type: 'language' }));
+  return formatter.of(code as string) || languageName(code);
+}
 export function receiptLanguageHint(trip:{receiptLanguage?:ReceiptLanguage|'auto'},receipt?:{receiptLanguage?:ReceiptLanguage|'auto';detectedLanguage?:ReceiptLanguage}):ReceiptLanguage|undefined {
   const chosen=receipt?.receiptLanguage ?? trip.receiptLanguage;
   return chosen==='auto'?undefined:chosen;

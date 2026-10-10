@@ -8,6 +8,7 @@ import * as model from '../lib/model';
 import * as processing from '../lib/receipt-processing';
 import * as scan from '../lib/receipt-scan';
 import * as money from '../lib/money-format';
+import * as uiLanguage from '../lib/ui-language';
 import type { ReceiptEditor } from '../lib/receipt-processing';
 
 type Element = React.ReactElement<Record<string, unknown>>;
@@ -31,7 +32,8 @@ const compiled = transpileModule(source, {compilerOptions: {module: ModuleKind.C
 const exported = {exports: {} as {default: (props: {entry: ReceiptEditor; onChange(entry: ReceiptEditor): void}) => React.ReactNode; ReceiptReviewSummary: (props: {entry: ReceiptEditor}) => React.ReactNode}};
 new Function('require', 'module', 'exports', compiled)((name: string) => {
   if (name === 'react') return {useId: () => 'review-title', useMemo: (callback:()=>unknown) => callback(), useEffect() {}, useState: (initial: unknown) => [initial, () => {}]};
-  if (name === 'react/jsx-runtime') return runtime;
+  if (name === '@/lib/ui-language') return uiLanguage;
+    if (name === 'react/jsx-runtime') return runtime;
   if (name === '@/components/expense-quick-review') return {focusExpenseTarget() {}};
   if (name === '@/lib/model') return model;
   if (name === '@/lib/receipt-processing') return processing;

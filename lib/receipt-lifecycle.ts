@@ -118,14 +118,14 @@ export async function markRemovedReceipts(database: D1Database, user: string, id
 export async function sweepReceiptOrphans(database: D1Database, user: string, now = Date.now()) {
   const cutoff = new Date(now - RECEIPT_LIMITS.orphanAgeMs).toISOString();
   const rows = await database.prepare(`SELECT r.* FROM receipts r JOIN trips t ON t.id = r.trip_id
-    WHERE r.state = 'active' AND ${expired} AND ${access} AND ${unreferenced} AND ${identity}
-    ORDER BY r.created_at, r.id LIMIT ?`).bind(cutoff, new Date(now).toISOString(), user, user, user, user, user, RECEIPT_LIMITS.sweepBatch).all<ReceiptRow>();
+    WHERE r.state = 'active' AND ${expired} AND NOT EXISTS(SELECT 1 FROM receipt_restore_holds h WHERE h.receipt_id=r.id AND h.until>?) AND ${access} AND ${unreferenced} AND ${identity}
+    ORDER BY r.created_at, r.id LIMIT ?`).bind(cutoff, new Date(now).toISOString(), new Date(now).toISOString(), user, user, user, user, user, RECEIPT_LIMITS.sweepBatch).all<ReceiptRow>();
   if (!rows.results.length) return 0;
   const { revision } = await auditContext(database);
   return commitReceiptChanges(database, rows.results.map(row => ({
     statement: database.prepare(`UPDATE receipts AS r SET state = 'deleting' WHERE ${baseline}
-      AND EXISTS (SELECT 1 FROM trips t WHERE t.id = r.trip_id AND ${access} AND ${unreferenced}) AND ${identity}`)
-      .bind(...baselineValues(row), user, user, user, user, user),
+      AND EXISTS (SELECT 1 FROM trips t WHERE t.id = r.trip_id AND ${access} AND ${unreferenced}) AND ${identity} AND NOT EXISTS(SELECT 1 FROM receipt_restore_holds h WHERE h.receipt_id=r.id AND h.until>?)`)
+      .bind(...baselineValues(row), user, user, user, user, user, new Date(now).toISOString()),
     change: change(row, 'update', snapshot(row, 'upload-complete'), snapshot({ ...row, state: 'deleting' }, 'orphan-expired', systemActor)),
   })), systemActor, revision, 'system');
 }
@@ -186,17 +186,41 @@ export async function maintainSystemReceipts(database: D1Database, bucket: R2Buc
   if (!Number.isSafeInteger(now) || now < 0 || now > 8_640_000_000_000_000) throw new Error('Invalid receipt maintenance time.');
   const cutoff = new Date(now - RECEIPT_LIMITS.orphanAgeMs).toISOString(), current = new Date(now).toISOString();
   const rows = await database.prepare(`SELECT r.* FROM receipts r JOIN trips t ON t.id = r.trip_id
-    WHERE r.state = 'active' AND ${expired} AND ${unreferenced}
-    ORDER BY r.created_at, r.id LIMIT ?`).bind(cutoff, current, sweepLimit).all<ReceiptRow>();
+    WHERE r.state = 'active' AND (${expired} OR EXISTS(SELECT 1 FROM receipt_restore_holds h WHERE h.receipt_id=r.id AND h.until<=?)) AND NOT EXISTS(SELECT 1 FROM receipt_restore_holds h WHERE h.receipt_id=r.id AND h.until>?) AND ${unreferenced}
+    ORDER BY r.created_at, r.id LIMIT ?`).bind(cutoff, current, current, current, sweepLimit).all<ReceiptRow>();
   const { revision } = await auditContext(database);
   const marked = await commitReceiptChanges(database, rows.results.map(row => ({
     statement: database.prepare(`UPDATE receipts AS r SET state = 'deleting' WHERE ${baseline}
-      AND EXISTS (SELECT 1 FROM trips t WHERE t.id = r.trip_id AND ${unreferenced})`).bind(...baselineValues(row)),
+      AND EXISTS (SELECT 1 FROM trips t WHERE t.id = r.trip_id AND ${unreferenced}) AND NOT EXISTS(SELECT 1 FROM receipt_restore_holds h WHERE h.receipt_id=r.id AND h.until>?)`).bind(...baselineValues(row),current),
     change: change(row, 'update', snapshot(row, 'upload-complete'), snapshot({ ...row, state: 'deleting' }, 'orphan-expired', systemActor)),
   })), systemActor, revision, 'system');
   const deleting = await database.prepare(`SELECT * FROM receipts WHERE state = 'deleting' ORDER BY created_at, id LIMIT ?`)
     .bind(purgeLimit).all<ReceiptRow>();
   return { marked, ...await purgeReceiptRows(database, bucket, deleting.results) };
+}
+
+// A deleted holiday's objects are removed straight away, but each purge row is
+// kept for an hour so a later pass also catches an upload still in flight.
+const PURGE_RETENTION_MS = 60 * 60 * 1000;
+/** Retriable R2 deletion for receipts whose holiday was deleted (no audit: the holiday is gone). */
+export async function purgeDeletedTripReceipts(database: D1Database, bucket: R2Bucket, options: { now?: number; limit?: number } = {}) {
+  const now = options.now ?? Date.now(), limit = options.limit ?? RECEIPT_LIMITS.sweepBatch;
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > RECEIPT_LIMITS.perTrip) throw new Error('Invalid receipt purge limit.');
+  const rows = await database.prepare('SELECT receipt_id, owner, created_at FROM receipt_object_purges ORDER BY created_at, receipt_id LIMIT ?')
+    .bind(limit).all<{ receipt_id: string; owner: string; created_at: string }>();
+  const cutoff = new Date(now - PURGE_RETENTION_MS).toISOString();
+  let deleted = 0, failed = 0;
+  for (let index = 0; index < rows.results.length; index += 6) {
+    await Promise.all(rows.results.slice(index, index + 6).map(async row => {
+      try {
+        await bucket.delete(key(row.owner, row.receipt_id));
+        deleted++;
+        if (row.created_at <= cutoff) await database.prepare('DELETE FROM receipt_object_purges WHERE receipt_id = ? AND created_at = ?')
+          .bind(row.receipt_id, row.created_at).run();
+      } catch { failed++; }
+    }));
+  }
+  return { deleted, failed };
 }
 
 /** Upload failure retains a tombstone if object cleanup or completion auditing fails. */

@@ -1,4 +1,6 @@
 "use client";
+import { t as uiText } from "@/lib/ui-language";
+
 
 import { useEffect, useId, useState, type ReactNode } from "react";
 import { Check } from "lucide-react";
@@ -36,7 +38,7 @@ function UnitsLabel({ value, label, onChange }: { value?: string; label: string;
     });
     return () => { active = false; };
   }, [value]);
-  return <input aria-label={label} value={text} maxLength={40} placeholder="Bars, pieces, slices…" autoComplete="off" onChange={event => {
+  return <input aria-label={label} value={text} maxLength={40} placeholder={uiText("Bars, pieces, slices…")} autoComplete="off" onChange={event => {
     setText(event.target.value);
     onChange(event.target.value.trim() || undefined);
   }} />;
@@ -178,7 +180,7 @@ export default function ShareSplit({ id, members, selected, percentages, units, 
   }
   const modes: SplitMode[] = alwaysPercent ? ["equal", "custom"] : ["equal", "custom", "units"];
   return <fieldset id={id} className="share-split">
-    <legend className={legend ? undefined : "sr-only"}>{legend || `People for ${scope}`}</legend>
+    <legend className={legend ? undefined : "sr-only"}>{legend || uiText("People for {value0}", { value0: scope })}</legend>
     <div className="personchips">
       {members.map((member, i) => <button type="button" key={member.id} className={selected.includes(member.id) ? "chosen" : ""} aria-pressed={selected.includes(member.id)} onClick={() => toggle(member.id)}>
         <span aria-hidden="true" className={`chipavatar color${i % 5}`}>{member.name.slice(0, 1).toUpperCase()}</span>
@@ -187,8 +189,8 @@ export default function ShareSplit({ id, members, selected, percentages, units, 
       </button>)}
     </div>
     {showMethods && <details className="split-method" open={initiallyOpen || undefined}>
-      <summary>{chosen ? methodSummary[activeMode] : "Split method"}<span className="split-method-change">Change</span></summary>
-      <div className="split-modes" role="group" aria-label={`Split options for ${scope}`}>
+      <summary>{chosen ? methodSummary[activeMode] : uiText("Split method")}<span className="split-method-change">{uiText("Change")}</span></summary>
+      <div className="split-modes" role="group" aria-label={uiText("Split options for {value0}", { value0: scope })}>
         {modes.map(value => <button type="button" key={value} aria-pressed={chosen && activeMode === value} className={chosen && activeMode === value ? "chosen" : ""} onClick={() => chooseMode(value)}>{modeLabels[value]}</button>)}
         {methods}
       </div>
@@ -196,40 +198,39 @@ export default function ShareSplit({ id, members, selected, percentages, units, 
         {selected.map(id => {
           const member = members.find(person => person.id === id);
           return <label className="percentage-row" key={id}>
-            <span>{member?.name || "Unknown traveller"}</span>
-            <PercentageInput label={`${member?.name || id} percentage for ${scope}`} describedBy={statusId} invalid={!!error} value={percentages?.[id] ?? 0} onChange={value => onChange(selected, { ...percentages, [id]: value }, undefined)} />
+            <span>{member?.name || uiText("Unknown traveller")}</span>
+            <PercentageInput label={uiText("{value0} percentage for {value1}", { value0: member?.name || id, value1: scope })} describedBy={statusId} invalid={!!error} value={percentages?.[id] ?? 0} onChange={value => onChange(selected, { ...percentages, [id]: value }, undefined)} />
           </label>;
         })}
       </div>}
-      {activeMode === "units" && <section className="units-split" aria-label={`Unit allocation for ${scope}`}>
-        <p className="units-split-hint">Units divide the full line total; they do not multiply its price. Use up to six decimal places, with a total up to {MAX_UNITS.toLocaleString("en-GB")}.</p>
-        <label className="units-label-field">What do you call these? (optional)
-          <UnitsLabel value={units?.label} label={`What do you call these for ${scope}?`} onChange={label => onChange(selected, undefined, { ...units, total: unitTotal, allocations: units?.allocations || {}, label })} />
+      {activeMode === "units" && <section className="units-split" aria-label={uiText("Unit allocation for {value0}", { value0: scope })}>
+        <p className="units-split-hint">{uiText("Units divide the full line total; they do not multiply its price. Use up to six decimal places, with a total up to ")}{MAX_UNITS.toLocaleString("en-GB")}.</p>
+        <label className="units-label-field">{uiText("What do you call these? (optional)")}<UnitsLabel value={units?.label} label={uiText("What do you call these for {value0}?", { value0: scope })} onChange={label => onChange(selected, undefined, { ...units, total: unitTotal, allocations: units?.allocations || {}, label })} />
         </label>
         <div className="units-split-controls">
-          <label>Total {quantityLabel}
-            <UnitsInput value={unitTotal} label={`Total ${quantityLabel} for ${scope}`} describedBy={statusId} invalid={scaledTotal === null || scaledTotal <= 0} onChange={total => onChange(selected, undefined, { ...units, total, allocations: units?.allocations || {} })} />
+          <label>{uiText("Total ")}{quantityLabel}
+            <UnitsInput value={unitTotal} label={uiText("Total {value0} for {value1}", { value0: quantityLabel, value1: scope })} describedBy={statusId} invalid={scaledTotal === null || scaledTotal <= 0} onChange={total => onChange(selected, undefined, { ...units, total, allocations: units?.allocations || {} })} />
           </label>
-          <button type="button" className="quiet" disabled={scaledTotal === null || scaledTotal <= 0 || !selected.length} onClick={() => onChange(selected, undefined, equalUnits(selected, unitTotal, units?.label))}>Equal units</button>
+          <button type="button" className="quiet" disabled={scaledTotal === null || scaledTotal <= 0 || !selected.length} onClick={() => onChange(selected, undefined, equalUnits(selected, unitTotal, units?.label))}>{uiText("Equal units")}</button>
         </div>
         <div className="units-split-rows">
           {selected.map(id => {
             const member = members.find(person => person.id === id);
             const value = units?.allocations[id] ?? 0;
             return <label className="units-split-row" key={id}>
-              <span>{member?.name || "Unknown traveller"}</span>
-              <UnitsInput value={value} label={`${member?.name || id} ${quantityLabel} for ${scope}`} describedBy={statusId} invalid={unitsScale(value) === null || !!error} onChange={value => onChange(selected, undefined, { ...units, total: unitTotal, allocations: { ...units?.allocations, [id]: value } })} />
+              <span>{member?.name || uiText("Unknown traveller")}</span>
+              <UnitsInput value={value} label={uiText("{value0} {value1} for {value2}", { value0: member?.name || id, value1: quantityLabel, value2: scope })} describedBy={statusId} invalid={unitsScale(value) === null || !!error} onChange={value => onChange(selected, undefined, { ...units, total: unitTotal, allocations: { ...units?.allocations, [id]: value } })} />
             </label>;
           })}
         </div>
         {chosen && <div id={statusId} className={`split-total ${error ? "negative" : "positive"}`} role="status" aria-live="polite">
-          <strong>Allocated {allocatedUnits === null ? "—" : unitsText(allocatedUnits)} / {scaledTotal === null ? "—" : unitsText(scaledTotal)} {quantityLabel}</strong>
-          {scaledTotal !== null && allocatedUnits !== null && <span>{allocatedUnits === scaledTotal ? "Fully allocated" : allocatedUnits < scaledTotal ? `${unitsText(scaledTotal - allocatedUnits)} ${quantityLabel} remaining` : `${unitsText(allocatedUnits - scaledTotal)} ${quantityLabel} overallocated`}</span>}
+          <strong>{uiText("Allocated ")}{allocatedUnits === null ? "—" : unitsText(allocatedUnits)} / {scaledTotal === null ? "—" : unitsText(scaledTotal)} {quantityLabel}</strong>
+          {scaledTotal !== null && allocatedUnits !== null && <span>{allocatedUnits === scaledTotal ? uiText("Fully allocated") : allocatedUnits < scaledTotal ? uiText("{value0} {value1} remaining", { value0: unitsText(scaledTotal - allocatedUnits), value1: quantityLabel }) : uiText("{value0} {value1} overallocated", { value0: unitsText(allocatedUnits - scaledTotal), value1: quantityLabel })}</span>}
           {error && <span>{error}</span>}
         </div>}
       </section>}
       {chosen && activeMode === "custom" && <div id={statusId} className={`split-total ${error ? "negative" : "positive"}`} role="status" aria-live="polite">
-        <strong>Total {Number.isFinite(percentageTotal) ? Number(percentageTotal.toFixed(2)) : "—"}% / 100%</strong>
+        <strong>{uiText("Total ")}{Number.isFinite(percentageTotal) ? Number(percentageTotal.toFixed(2)) : "—"}% / 100%</strong>
         {error && <span>{error}</span>}
       </div>}
     </details>}
