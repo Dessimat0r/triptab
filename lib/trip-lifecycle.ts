@@ -1,5 +1,5 @@
 import { accountAuditStatement, activityStatements, type ActivityChange } from './audit';
-import type { Trip } from './model';
+import { isBill, type Trip } from './model';
 
 /** Holiday archive, leave, ownership transfer and deletion (audit F-23). */
 export class TripLifecycleError extends Error {
@@ -29,16 +29,16 @@ function summary(trip: Trip): Record<string, unknown> {
   return metadata;
 }
 
-export type ArchivedTrip = { id: string; name: string; currency: string; startDate?: string; endDate?: string; travellers: number; archivedAt: string; owner: boolean };
+export type ArchivedTrip = { id: string; name: string; currency: string; kind?: Trip['kind']; startDate?: string; endDate?: string; travellers: number; archivedAt: string; owner: boolean };
 export async function listArchivedTrips(database: D1Database, user: string): Promise<ArchivedTrip[]> {
   const rows = await database.prepare(`SELECT t.id, t.owner, a.archived_at, json_extract(t.data, '$.name') AS name,
-      json_extract(t.data, '$.currency') AS currency, json_extract(t.data, '$.startDate') AS start_date,
+      json_extract(t.data, '$.kind') AS kind, json_extract(t.data, '$.currency') AS currency, json_extract(t.data, '$.startDate') AS start_date,
       json_extract(t.data, '$.endDate') AS end_date, json_array_length(t.data, '$.members') AS travellers
     FROM trip_archives a JOIN trips t ON t.id = a.trip_id WHERE a.user_id = ? AND ${access}
     ORDER BY a.archived_at DESC, t.id LIMIT 500`).bind(user, user, user)
-    .all<{ id: string; owner: string; archived_at: string; name: string; currency: string; start_date: string | null; end_date: string | null; travellers: number }>();
+    .all<{ id: string; owner: string; archived_at: string; name: string; currency: string; kind: Trip['kind'] | null; start_date: string | null; end_date: string | null; travellers: number }>();
   return rows.results.map(row => ({ id: row.id, name: String(row.name ?? ''), currency: String(row.currency ?? ''),
-    ...(row.start_date ? { startDate: row.start_date } : {}), ...(row.end_date ? { endDate: row.end_date } : {}),
+    ...(row.kind ? { kind: row.kind } : {}), ...(row.start_date ? { startDate: row.start_date } : {}), ...(row.end_date ? { endDate: row.end_date } : {}),
     travellers: Number(row.travellers) || 0, archivedAt: row.archived_at, owner: row.owner === user }));
 }
 
@@ -147,12 +147,23 @@ export async function transferTripOwnership(database: D1Database, actor: Actor, 
  * design; image objects are queued for retriable deletion in the same commit.
  */
 export async function deleteTrip(database: D1Database, actor: Actor, rawTripId: unknown, confirmName: unknown) {
+  return deleteTripRecord(database, actor, rawTripId, confirmName, false);
+}
+
+export async function discardEmptyBill(database: D1Database, actor: Actor, rawTripId: unknown) {
+  return deleteTripRecord(database, actor, rawTripId, undefined, true);
+}
+
+async function deleteTripRecord(database: D1Database, actor: Actor, rawTripId: unknown, confirmName: unknown, discard: boolean) {
   const id = tripId(rawTripId);
   const row = await database.prepare('SELECT owner, data FROM trips WHERE id = ?').bind(id).first<{ owner: string; data: string }>();
-  if (!row || row.owner !== actor.id) throw new TripLifecycleError('Only the holiday owner can delete it.', 403);
+  const discardError = 'This bill has entries. Delete it from its settings instead.';
+  if (!row || row.owner !== actor.id) throw new TripLifecycleError(discard ? discardError : 'Only the holiday owner can delete it.', discard ? 409 : 403);
   const trip = JSON.parse(row.data) as Trip;
-  if (typeof confirmName !== 'string' || confirmName.trim() !== trip.name.trim()) throw new TripLifecycleError('Type the holiday name exactly to confirm deleting it.');
+  if (discard && (!isBill(trip) || trip.expenses.length || trip.payments.length || trip.drafts.length)) throw new TripLifecycleError(discardError, 409);
+  if (!discard && (typeof confirmName !== 'string' || confirmName.trim() !== trip.name.trim())) throw new TripLifecycleError('Type the holiday name exactly to confirm deleting it.');
   if (await database.prepare('SELECT 1 FROM memberships WHERE trip_id = ? AND user_id <> ? LIMIT 1').bind(id, actor.id).first()) {
+    if (discard) throw new TripLifecycleError(discardError, 409);
     throw new TripLifecycleError('Other travellers have joined this holiday with their accounts. Transfer it or archive it instead; only a holiday nobody else can open can be deleted.', 409);
   }
   await ensureSyncState(database);
@@ -160,8 +171,8 @@ export async function deleteTrip(database: D1Database, actor: Actor, rawTripId: 
   const change: ActivityChange = { tripId: id, entityType: 'trip', entityId: id, action: 'delete',
     before: { ...summary(trip), travellerCount: trip.members.length, expenseCount: trip.expenses.length, paymentCount: trip.payments.length }, after: null };
   const results = await database.batch([
-    advanceRevision(database, actor, marker, `EXISTS (SELECT 1 FROM trips t WHERE t.id = ? AND t.owner = ?
-      AND NOT EXISTS (SELECT 1 FROM memberships m WHERE m.trip_id = t.id AND m.user_id <> ?))`, [id, actor.id, actor.id]),
+    advanceRevision(database, actor, marker, `EXISTS (SELECT 1 FROM trips t WHERE t.id = ? AND t.owner = ? AND t.data = ?
+      AND NOT EXISTS (SELECT 1 FROM memberships m WHERE m.trip_id = t.id AND m.user_id <> ?))`, [id, actor.id, row.data, actor.id]),
     // Record the event while the holiday row still exists for its own history.
     ...activityStatements(database, [change], actor, marker, 'current'),
     database.prepare(`INSERT OR IGNORE INTO receipt_object_purges (receipt_id, owner, created_at)
@@ -173,6 +184,6 @@ export async function deleteTrip(database: D1Database, actor: Actor, rawTripId: 
     database.prepare(`DELETE FROM trip_archives WHERE trip_id = ? AND ${marked}`).bind(id, marker),
     database.prepare(`DELETE FROM trips WHERE id = ? AND ${marked}`).bind(id, marker),
   ]);
-  if (!results[0].meta.changes) throw new TripLifecycleError('Another traveller joined or the holiday changed. Refresh and try again.', 409);
+  if (!results[0].meta.changes) throw new TripLifecycleError(discard ? discardError : 'Another traveller joined or the holiday changed. Refresh and try again.', 409);
   return { tripName: trip.name };
 }

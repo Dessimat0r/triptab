@@ -2165,3 +2165,23 @@ test('only a linked traveller can change their own payment details; unlinked tra
   state.data.trips[0].members[2].payTo = { revolut: 'evil.example/path' };
   await assert.rejects(store.writeLedger(member, state.data, state.revision));
 });
+
+test('stored kind is immutable in both directions, including legacy holidays', async () => {
+  for (const kind of [undefined, 'holiday', 'bill'] as const) {
+    const database = await storage(); const state = await create(database, { ...trip(), kind });
+    state.data.trips[0].kind = kind === 'bill' ? 'holiday' : 'bill';
+    await assert.rejects(store.writeLedger(actor, state.data, state.revision), /can’t become a holiday/);
+  }
+});
+test('only a bill with no expenses, payments or drafts can change settlement currency', async () => {
+  for (const entries of ['empty', 'expense', 'payment', 'draft', 'holiday'] as const) {
+    const database = await storage(); const value: Trip = { ...trip(), ...(entries !== 'holiday' ? { kind: 'bill' } : {}) };
+    if (entries === 'expense') value.expenses = [dinner()];
+    if (entries === 'payment') value.payments = [{ id: 'p', from: 'a', to: 'b', amount: 100, date: '2026-10-10' }];
+    if (entries === 'draft') value.drafts = [{ ...dinner(), id: 'draft', status: 'review' }];
+    const state = await create(database, value); state.data.trips[0].currency = 'EUR';
+    for (const expense of state.data.trips[0].expenses) expense.fx = { rate: 1, asOf: '2026-10-10', source: 'manual' };
+    if (entries === 'empty') assert.equal((await store.writeLedger(actor, state.data, state.revision)).data.trips[0].currency, 'EUR');
+    else await assert.rejects(store.writeLedger(actor, state.data, state.revision), /settlement currency/);
+  }
+});

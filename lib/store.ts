@@ -1,7 +1,7 @@
 import { canonicalJson as canonical } from './data-utils';
 import { env } from 'cloudflare:workers';
 import { ZodError } from 'zod';
-import { LedgerValidationError, parseLedgerStructure, parseStoredTrip, validateLedger, type Ledger, type Expense, type Draft, type Payment, type ReceiptMessage, type Trip } from './model';
+import { isBill, LedgerValidationError, parseLedgerStructure, parseStoredTrip, validateLedger, type Ledger, type Expense, type Draft, type Payment, type ReceiptMessage, type Trip } from './model';
 import type { LedgerFreshness } from './ledger-freshness';
 import { activityNotification, notifyMembers } from './notifications';
 import { AuthError, resolveIdentity, readAuthContext } from './auth';
@@ -566,7 +566,8 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
         throw new Error('CONFLICT');
       }
       const previous = parseStoredTrip(JSON.parse(stored.data));
-      if (trip.currency !== previous.currency) throw new RequestError('A saved trip’s settlement currency cannot be changed.');
+      if ((trip.kind ?? 'holiday') !== (previous.kind ?? 'holiday')) throw new RequestError('A bill can’t become a holiday, or the reverse.');
+      if (trip.currency !== previous.currency && !(isBill(previous) && !previous.expenses.length && !previous.payments.length && !previous.drafts.length)) throw new RequestError('A saved trip’s settlement currency cannot be changed.');
       if (links.some(link => !trip.members.some(member => member.id === link.member_id))) throw new RequestError('An account-linked traveller cannot be removed.');
       trip.ownerId = stored.owner;
       for (const member of trip.members) {
