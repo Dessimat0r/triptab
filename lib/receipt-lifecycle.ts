@@ -199,6 +199,30 @@ export async function maintainSystemReceipts(database: D1Database, bucket: R2Buc
   return { marked, ...await purgeReceiptRows(database, bucket, deleting.results) };
 }
 
+// A deleted holiday's objects are removed straight away, but each purge row is
+// kept for an hour so a later pass also catches an upload still in flight.
+const PURGE_RETENTION_MS = 60 * 60 * 1000;
+/** Retriable R2 deletion for receipts whose holiday was deleted (no audit: the holiday is gone). */
+export async function purgeDeletedTripReceipts(database: D1Database, bucket: R2Bucket, options: { now?: number; limit?: number } = {}) {
+  const now = options.now ?? Date.now(), limit = options.limit ?? RECEIPT_LIMITS.sweepBatch;
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > RECEIPT_LIMITS.perTrip) throw new Error('Invalid receipt purge limit.');
+  const rows = await database.prepare('SELECT receipt_id, owner, created_at FROM receipt_object_purges ORDER BY created_at, receipt_id LIMIT ?')
+    .bind(limit).all<{ receipt_id: string; owner: string; created_at: string }>();
+  const cutoff = new Date(now - PURGE_RETENTION_MS).toISOString();
+  let deleted = 0, failed = 0;
+  for (let index = 0; index < rows.results.length; index += 6) {
+    await Promise.all(rows.results.slice(index, index + 6).map(async row => {
+      try {
+        await bucket.delete(key(row.owner, row.receipt_id));
+        deleted++;
+        if (row.created_at <= cutoff) await database.prepare('DELETE FROM receipt_object_purges WHERE receipt_id = ? AND created_at = ?')
+          .bind(row.receipt_id, row.created_at).run();
+      } catch { failed++; }
+    }));
+  }
+  return { deleted, failed };
+}
+
 /** Upload failure retains a tombstone if object cleanup or completion auditing fails. */
 async function abandonUpload(database: D1Database, bucket: R2Bucket, user: string, tripId: string, id: string, now: string, image: ImageMetadata) {
   const existing = await database.prepare('SELECT * FROM receipts WHERE id = ?').bind(id).first<ReceiptRow>();

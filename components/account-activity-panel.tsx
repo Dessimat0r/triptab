@@ -19,6 +19,11 @@ function accountChanges(event: AccountAuditEvent): AuditChange[] {
   add("hasPassword", "Password sign-in available", yesNo);
   add("active", event.entityId === "account" ? "Other browser sessions active" : "Browser session active", yesNo);
   add("connected", "ChatGPT account connected", yesNo);
+  add("verified", "Email address confirmed", yesNo);
+  add("emailVerified", "Email address confirmed", yesNo);
+  add("method", "Method", value => auditText(value) || "Not recorded");
+  add("holidayName", "Holiday", value => auditText(value) || "Not recorded");
+  add("archived", "Holiday archived for you", yesNo);
   add("service", "Notification delivery service", value => auditText(value) || "Not recorded");
   add("reason", "Reason", value => ({ enabled_on_device: "Enabled in this browser", disabled_on_device: "Disabled in this browser", logout_or_account_switch: "Signed out or switched accounts", provider_expired: "Notification provider expired the browser subscription" }[auditText(value)] || auditText(value) || "Not recorded"));
   for (const [key, label] of Object.entries({ enabled: "Push notifications enabled", subscribed: "Browser subscribed", subscriptionActive: "Browser subscription active", permissionGranted: "Notification permission granted" })) add(key, label, yesNo);
@@ -30,14 +35,14 @@ function accountChanges(event: AccountAuditEvent): AuditChange[] {
 }
 
 function accountLabel(event: AccountAuditEvent): string {
-  return ({ profile: "profile", password: "password sign-in", session: event.entityId === "account" ? "other browser sessions" : "browser session", chatgpt: "ChatGPT connection", notifications: "browser notifications", language: "receipt language preferences" }[event.entityType]) || "account setting";
+  return ({ profile: "profile", password: "password sign-in", session: event.entityId === "account" ? "other browser sessions" : "browser session", chatgpt: "ChatGPT connection", notifications: "browser notifications", language: "receipt language preferences", email: "email confirmation", trip: "holiday archive" }[event.entityType]) || "account setting";
 }
 
 export default function AccountActivityPanel({ refreshKey = 0, accountId }: { refreshKey?: number; accountId?: string }) {
   const history = useActivityPages<AccountAuditEvent>("/api/account-activity", `private-account:${accountId || ""}`, refreshKey, "userId", accountId);
   return <section className="account-section account-activity" aria-label="Private account activity" aria-busy={history.loading}>
     <h3>Account activity</h3>
-    <p className="footnote">Only you can see this account history. It records profile, sign-in, connection, notification and personal language changes without passwords or sign-in credentials.</p>
+    <p className="footnote">Only you can see this account history. It records profile, sign-in, email confirmation, connection, notification, holiday archive and personal language changes without passwords or sign-in credentials.</p>
     {history.error ? <button type="button" className="quiet" disabled={history.loading} onClick={history.retry}>Retry account activity</button> : <p className="footnote">History updates automatically.</p>}
     {history.loading && <p role="status">{history.events.length ? "Checking account activity…" : "Loading account activity…"}</p>}
     {history.error && <p className="error" role="alert">{history.error}</p>}

@@ -11,6 +11,7 @@ import { assertReceiptActivityVersion, receiptActivityScope, resolveReceiptActiv
 export { activityStatements, type ActivityEntity, type ActivitySource, type ActivityChange, type ActivityEvent } from './audit';
 import { receiptMemorySchema, type ReceiptMemory } from './receipt-context';
 import { receiptAliasIdentity, ReceiptMemoryOwnershipError, validateReceiptMemoryOwnership } from './receipt-memory-ownership';
+import { OPEN_TRIP_IDS, openTripBindings, TripLifecycleError } from './trip-lifecycle';
 
 export class RequestError extends Error {
   constructor(message: string, public readonly status = 400) {
@@ -270,7 +271,7 @@ export async function ensureProfile(request: Request, options: { allowSession?: 
   return { id: profile.id, email: profile.email, displayName: profile.displayName, createdAt: profile.createdAt,
     authMethod: identity.kind === 'session' ? 'password' : 'chatgpt', hasPassword: state.hasPassword,
     chatgptConnected: state.chatgptLinked, chatgptAvailable: state.chatgptAvailable,
-    emailVerified: identity.kind === 'chatgpt' && !!identity.emailVerified && identity.email === profile.email && state.emailVerified };
+    emailVerified: state.emailVerified };
 }
 
 type LedgerSnapshot = { data: Ledger; revision: number; freshness: LedgerFreshness };
@@ -290,16 +291,17 @@ export async function readLedgerSnapshot(id: string): Promise<LedgerSnapshot>;
 export async function readLedgerSnapshot(id: string, options: { includeFreshness: false }): Promise<{ data: Ledger; revision: number }>;
 export async function readLedgerSnapshot(id: string, options: { includeFreshness?: boolean } = {}) {
   // Drive these reads from the indexed owner/member ID sets rather than scanning
-  // every trip (or every membership) in the database.
-  const visibleIds = 'SELECT id FROM trips WHERE owner = ? UNION SELECT trip_id FROM memberships WHERE user_id = ?';
+  // every trip (or every membership) in the database. Archived holidays stay
+  // accessible but are not part of the editable ledger or its 50-holiday limit.
+  const visibleIds = OPEN_TRIP_IDS;
   const results = await db().batch([
     db().prepare(`SELECT t.id, t.owner, t.data${options.includeFreshness === false ? '' : `, t.receipt_link_version AS dataVersion,
       COALESCE((SELECT e.sequence FROM activity_events e WHERE e.trip_id = t.id ORDER BY e.sequence DESC LIMIT 1), 0) AS latest`}
-      FROM trips t WHERE t.id IN (${visibleIds}) ORDER BY t.id`).bind(id, id),
+      FROM trips t WHERE t.id IN (${visibleIds}) ORDER BY t.id`).bind(...openTripBindings(id)),
     db().prepare('SELECT COALESCE((SELECT revision FROM sync_state WHERE id = 1), 0) AS revision'),
     db().prepare(`SELECT m.trip_id, m.user_id, m.member_id, p.email FROM memberships m JOIN trips t ON t.id = m.trip_id
       LEFT JOIN profiles p ON p.id = m.user_id WHERE m.trip_id IN (${visibleIds})
-      ORDER BY m.trip_id, m.member_id, m.user_id`).bind(id, id),
+      ORDER BY m.trip_id, m.member_id, m.user_id`).bind(...openTripBindings(id)),
   ]);
   const links = results[2].results as MembershipRow[];
   const linksByTrip = new Map<string, Map<string, MembershipRow>>();
@@ -532,7 +534,12 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
     db().prepare("SELECT id, trip_id FROM receipts WHERE state = 'active' AND trip_id IN (SELECT value FROM json_each(?))").bind(tripIdsJson),
     db().prepare('SELECT id, email, display_name, created_at FROM profiles WHERE id = ?').bind(id),
     db().prepare('SELECT COALESCE((SELECT revision FROM sync_state WHERE id = 1), 0) AS revision'),
+    // A deleted holiday keeps its append-only history under the same ID. A stale
+    // copy must never recreate it and expose that history to a new owner.
+    db().prepare(`SELECT ids.value AS id FROM json_each(?) ids WHERE NOT EXISTS (SELECT 1 FROM trips WHERE id = ids.value)
+      AND EXISTS (SELECT 1 FROM activity_events e WHERE e.trip_id = ids.value)`).bind(tripIdsJson),
   ]);
+  const deletedTripIds = new Set((baseline[5].results as { id: string }[]).map(row => row.id));
   const baselineRevision = (baseline[4].results as { revision: number }[])[0].revision;
   if (!scoped && baselineRevision !== revision) throw new Error('CONFLICT');
   const existingRows = { results: baseline[0].results as (StoredTrip & { receipt_link_version: number })[] };
@@ -587,6 +594,7 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
       previousTrips.set(trip.id, prior);
     } else {
       if (scoped) throw new Error('CONFLICT');
+      if (deletedTripIds.has(trip.id)) throw new RequestError(`“${trip.name}” was deleted. Refresh to continue.`, 409);
       trip.ownerId = id;
       for (const member of trip.members) { delete member.userId; delete member.email; }
       const firstMember = trip.members[0];
@@ -694,7 +702,7 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
 export function failure(e: unknown) {
   // Expected validation/auth failures do not need stack traces or submitted
   // values in logs. Storage faults retain a short, value-free diagnostic.
-  if (!(e instanceof RequestError) && !(e instanceof AuthError) && !(e instanceof ReceiptLifecycleError) && !(e instanceof LedgerValidationError) && !(e instanceof ZodError) && !(e instanceof Error && ['UNAUTHORIZED', 'CONFLICT'].includes(e.message))) console.error('TripTab request failed', { kind: e instanceof Error ? e.name : 'UnknownError' });
+  if (!(e instanceof RequestError) && !(e instanceof AuthError) && !(e instanceof ReceiptLifecycleError) && !(e instanceof TripLifecycleError) && !(e instanceof LedgerValidationError) && !(e instanceof ZodError) && !(e instanceof Error && ['UNAUTHORIZED', 'CONFLICT'].includes(e.message))) console.error('TripTab request failed', { kind: e instanceof Error ? e.name : 'UnknownError' });
   const m = e instanceof Error ? e.message : '';
   const issue = e instanceof ZodError ? e.issues[0] : undefined;
   const knownFields = new Set(['trips', 'id', 'ownerId', 'name', 'currency', 'startDate', 'endDate', 'members', 'userId', 'email', 'expenses', 'drafts', 'payments', 'title', 'date', 'time', 'timezone', 'fx', 'rate', 'asOf', 'source', 'bankAmount', 'payer', 'items', 'amount', 'percentages', 'quantity', 'sourceText', 'units', 'total', 'allocations', 'label', 'conversation', 'role', 'text', 'createdAt', 'replyTo', 'itemId', 'authorMemberId', 'authorName', 'memory', 'notes', 'aliases', 'memberId', 'scopeMemberId', 'tax', 'tip', 'discount', 'receiptId', 'sourceDraftId', 'expenseId', 'status', 'from', 'to', 'note', 'method', 'payTo', 'paypal', 'monzo', 'revolut', 'wise', 'bank']);
@@ -706,11 +714,11 @@ export function failure(e: unknown) {
     : issue && ['invalid_enum_value', 'invalid_literal'].includes(issue.code) ? 'Choose a supported value.' : issue?.message;
   const error = issue ? `${issuePath || 'Entry'}: ${issueMessage?.slice(0, 300) || 'Check this value.'}`
     : e instanceof LedgerValidationError ? e.message
-    : e instanceof RequestError || e instanceof AuthError || e instanceof ReceiptLifecycleError ? (m === 'UNAUTHORIZED' ? 'Sign in to TripTab to open your ledger.' : e.message)
+    : e instanceof RequestError || e instanceof AuthError || e instanceof ReceiptLifecycleError || e instanceof TripLifecycleError ? (m === 'UNAUTHORIZED' ? 'Sign in to TripTab to open your ledger.' : e.message)
     : m === 'UNAUTHORIZED' ? 'Sign in to TripTab to open your ledger.'
     : m === 'CONFLICT' ? 'Your ledger changed in another tab or in ChatGPT. Refresh before saving again.'
     : 'Unable to complete this request. Check your entries and try again.';
-  const status = e instanceof LedgerValidationError ? 400 : e instanceof RequestError || e instanceof AuthError || e instanceof ReceiptLifecycleError ? e.status : m === 'UNAUTHORIZED' ? 401 : m === 'CONFLICT' ? 409 : 400;
+  const status = e instanceof LedgerValidationError ? 400 : e instanceof RequestError || e instanceof AuthError || e instanceof ReceiptLifecycleError || e instanceof TripLifecycleError ? e.status : m === 'UNAUTHORIZED' ? 401 : m === 'CONFLICT' ? 409 : 400;
   return Response.json({ error }, { status, headers: { 'Cache-Control': 'private, no-store' } });
 }
 

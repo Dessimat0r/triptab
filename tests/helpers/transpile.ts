@@ -6,7 +6,7 @@ type SharedTranspileOptions = TranspileOptions & {
 };
 
 const sharedImports: Readonly<Record<string, string>> = {
-  ...Object.fromEntries(['data-utils', 'receipt-ai-config', 'audit', 'receipt-languages'].flatMap(name => {
+  ...Object.fromEntries(['data-utils', 'receipt-ai-config', 'audit', 'receipt-languages', 'email', 'trip-lifecycle'].flatMap(name => {
     const url = new URL(`../../lib/${name}.ts`, import.meta.url).href;
     return [[`./${name}`, url], [`@/lib/${name}`, url]];
   })),
