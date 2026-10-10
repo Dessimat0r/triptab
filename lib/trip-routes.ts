@@ -1,3 +1,4 @@
+import type { Trip } from './model';
 export const TRIP_SECTIONS = [
   { id: "expenses", href: "/expenses", label: "Expenses" },
   { id: "balances", href: "/balances", label: "Balances" },
@@ -30,4 +31,8 @@ export function tripSectionHref(section: TripSection, search = ""): string {
   }
   const query = entry.toString();
   return query ? `${path}?${query}` : path;
+}
+
+export function sectionsFor(kind: Trip['kind']) {
+  return kind === 'bill' ? [{ id: 'expenses', href: '/expenses', label: 'Bill' }, TRIP_SECTIONS[4]] as const : TRIP_SECTIONS;
 }

@@ -8,7 +8,7 @@ import ModalA11y from "./modal-accessibility";
 import { formatCalendarDate, localDate } from "@/lib/dates";
 import { formatMoney } from "@/lib/money-format";
 import { spendingSummary, tripSummary } from "@/lib/trip-insights";
-import type { Trip } from "@/lib/model";
+import { expenseTotal, settlements, type Trip } from "@/lib/model";
 import "./trip-summary.css";
 
 /** Plain-text version for sharing in a chat or email. */
@@ -30,6 +30,15 @@ export function tripSummaryText(trip: Trip, today = localDate()): string {
     ...summary.transfers.map(transfer => uiText("• {from} pays {to} {amount}", { from: name(transfer.from), to: name(transfer.to), amount: money(transfer.amount) })),
   ];
   return lines.filter((line, index) => line || lines[index - 1]).join("\n").trim();
+}
+
+/** Shared text includes names and amounts only; no account or payment details. */
+export function billSummaryText(trip: Trip): string {
+  const total = trip.expenses.reduce((sum, expense) => sum + expenseTotal(expense, trip.currency), 0);
+  const name = (id: string) => trip.members.find(member => member.id === id)!.name;
+  const payers = [...new Set(trip.expenses.map(expense => expense.payer))].map(id => uiText('{value0} paid.', { value0: name(id) }));
+  const transfers = settlements(trip).map(transfer => uiText('{value0} owes {value1} {value2}.', { value0: name(transfer.from), value1: name(transfer.to), value2: formatMoney(transfer.amount, trip.currency) }));
+  return `${trip.name} — ${formatMoney(total, trip.currency)}\n${[...payers, ...(transfers.length ? transfers : [uiText('Everyone’s settled')])].join(' ')}`;
 }
 
 export function BudgetCard({ trip, today = localDate() }: { trip: Trip; today?: string }) {

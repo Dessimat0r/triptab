@@ -5,7 +5,7 @@ import { useEffect, useId, useState } from 'react';
 import { useConfirmation } from './confirmation-dialog';
 import ModalA11y from './modal-accessibility';
 import PagedList, { useListPaging } from './paged-list';
-import type { Trip } from '@/lib/model';
+import { isBill, type Trip } from '@/lib/model';
 import type { ArchivedTrip } from '@/lib/trip-lifecycle';
 import './trip-controls.css';
 
@@ -66,10 +66,10 @@ export default function TripControls({
     setSaving(true);
     setMessage('');
     try {
-      await change(value, trip.id, { memberId: owner, confirmName });
+      await change(value === 'delete' && isBill(trip) && !trip.expenses.length && !trip.payments.length && !trip.drafts.length && !trip.members.some(member => member.userId && member.userId !== accountId) ? 'discard' : value, trip.id, { memberId: owner, confirmName });
       await onChanged();
       setMessage(
-        value === 'transfer' ? 'Ownership transferred.' : 'Holiday updated.',
+        value === 'transfer' ? 'Ownership transferred.' : isBill(trip) ? 'Bill updated.' : 'Holiday updated.',
       );
     } catch (cause) {
       setMessage(
@@ -81,9 +81,15 @@ export default function TripControls({
       setSaving(false);
     }
   }
+  if (isBill(trip)) {
+    const empty = !trip.expenses.length && !trip.payments.length && !trip.drafts.length && !trip.members.some(member => member.userId && member.userId !== accountId);
+    return <section className="panel trip-controls"><h3>{uiText('Manage this bill')}</h3><p className="footnote">{uiText('Archive removes this bill from your open list. You can restore it from the archive.')}</p><button type="button" className="quiet" disabled={busy || saving} onClick={() => void action('archive')}>{uiText('Archive bill')}</button>
+      {own && <details><summary>{uiText('Delete bill')}</summary><p className="footnote">{uiText('Deletion removes the bill and receipt photos. Shared history is retained. Bills another account can open must be archived instead.')}</p>{!empty && <label>{uiText('Type ')}{trip.name}{uiText(' to confirm')}<input value={confirmName} disabled={busy || saving} onChange={event => setConfirmName(event.target.value)} autoComplete="off" /></label>}<button type="button" className="danger quiet" disabled={busy || saving || !empty && confirmName.trim() !== trip.name.trim()} onClick={() => void action('delete')}>{uiText('Delete bill')}</button></details>}
+      {message && <p className="footnote" role="status">{uiText(message)}</p>}{dialog}</section>;
+  }
   return (
     <section className="panel trip-controls">
-      <h3>{uiText('Manage this holiday')}</h3>
+      <h3>{uiText(isBill(trip) ? 'Manage this bill' : 'Manage this holiday')}</h3>
       <p className="footnote">
         {uiText(
           'Archive removes it from your open list. Other travellers keep their access, and you can restore it or download it from Archived holidays.',
@@ -98,7 +104,7 @@ export default function TripControls({
       </button>
       {own ? (
         <>
-          <details>
+          {!isBill(trip) && <details>
             <summary>{uiText('Transfer ownership')}</summary>
             <label>
               {uiText('New owner')}
@@ -128,9 +134,9 @@ export default function TripControls({
             >
               {uiText('Transfer ownership')}
             </button>
-          </details>
+          </details>}
           <details>
-            <summary>{uiText('Delete holiday')}</summary>
+            <summary>{uiText(isBill(trip) ? 'Delete bill' : 'Delete holiday')}</summary>
             <p className="footnote">
               {uiText(
                 'Deletion removes the holiday and receipt photos. Shared history is retained. Holidays that other accounts can still open must be transferred or archived instead.',
@@ -150,11 +156,11 @@ export default function TripControls({
             <button
               className="danger quiet"
               disabled={
-                busy || saving || confirmName.trim() !== trip.name.trim()
+                busy || saving || (!(isBill(trip) && !trip.expenses.length && !trip.payments.length && !trip.drafts.length) && confirmName.trim() !== trip.name.trim())
               }
               onClick={() => void action('delete')}
             >
-              {uiText('Delete holiday')}
+              {uiText(isBill(trip) ? 'Delete bill' : 'Delete holiday')}
             </button>
           </details>
         </>
@@ -249,7 +255,7 @@ export function ArchivedHolidays({
                 data-entry-id={trip.id}
                 tabIndex={-1}
               >
-                <h3>{trip.name}</h3>
+                <h3>{trip.name}</h3>{trip.kind === "bill" && <span className="mini-tag">{uiText("Bill")}</span>}
                 <p className="footnote">
                   {trip.travellers}
                   {uiText(' travellers · ')}

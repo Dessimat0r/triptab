@@ -4,16 +4,18 @@ import { t as uiText } from "@/lib/ui-language";
 
 import { createContext, useCallback, useContext, useSyncExternalStore, type AnchorHTMLAttributes, type ReactNode } from "react";
 import { History, Receipt, Sparkles, Users, Wallet } from "lucide-react";
-import { TRIP_SECTIONS, tripSectionForPathname, tripSectionHref, type TripSection } from "@/lib/trip-routes";
+import { sectionsFor, tripSectionForPathname, tripSectionHref, type TripSection } from "@/lib/trip-routes";
 import { navigateTripTab, subscribeTripTabLocation, tripTabLocationSnapshot } from "@/lib/trip-navigation";
 
+const KindContext = createContext<"bill" | "holiday" | undefined>(undefined);
 const SectionContext = createContext<((section: TripSection) => ReactNode) | null>(null);
 
-export function TripTabRouteProvider({ renderSection, children }: {
+export function TripTabRouteProvider({ renderSection, children, kind }: {
   renderSection: (section: TripSection) => ReactNode;
   children?: ReactNode;
+  kind?: "bill" | "holiday";
 }) {
-  return <SectionContext.Provider value={renderSection}>{children}</SectionContext.Provider>;
+  return <KindContext.Provider value={kind}><SectionContext.Provider value={renderSection}>{children}</SectionContext.Provider></KindContext.Provider>;
 }
 
 export function TripTabSection({ section }: { section: TripSection }) {
@@ -21,7 +23,8 @@ export function TripTabSection({ section }: { section: TripSection }) {
   const activeSection = tripSectionForPathname(location.split("?", 1)[0]);
   const renderSection = useContext(SectionContext);
   if (!renderSection) throw Error("Holiday sections must be rendered inside the shared TripTab application.");
-  return <section id={`panel-${activeSection}`} aria-labelledby={`tab-${activeSection}`}>{renderSection(activeSection)}</section>;
+  const kind = useContext(KindContext);
+  return <section id={`panel-${activeSection}`} aria-labelledby={`tab-${kind === "bill" && activeSection !== "history" ? "expenses" : activeSection}`}>{renderSection(activeSection)}</section>;
 }
 
 function useTripTabLocation(serverLocation = "/") {
@@ -54,19 +57,20 @@ export function TripTabLink({ href, onClick, ...props }: AnchorHTMLAttributes<HT
 
 const icons = { expenses: Receipt, balances: Wallet, receipts: Sparkles, settings: Users, history: History };
 
-export function TripTabNavigation({ receiptCount = 0 }: { receiptCount?: number }) {
+export function TripTabNavigation({ receiptCount = 0, kind }: { receiptCount?: number; kind?: "bill" | "holiday" }) {
   const location = useTripTabLocation();
   const search = useTripTabEntryQuery();
   const view = tripSectionForPathname(location.split("?", 1)[0]);
-  return <nav className="tabs" aria-label={uiText("Holiday sections")}>
-    {TRIP_SECTIONS.map(section => {
+  const selectedSection = kind === "bill" && view !== "history" ? "expenses" : view;
+  return <nav className="tabs" aria-label={uiText(kind === "bill" ? "Bill sections" : "Holiday sections")}>
+    {sectionsFor(kind).map(section => {
       const Icon = icons[section.id];
       return <TripTabLink
         key={section.id}
         id={`tab-${section.id}`}
         href={tripSectionHref(section.id, search)}
-        aria-current={view === section.id ? "page" : undefined}
-        className={view === section.id ? "selected" : ""}
+        aria-current={selectedSection === section.id ? "page" : undefined}
+        className={selectedSection === section.id ? "selected" : ""}
       >
         <Icon size={17} aria-hidden="true" />
         <span>{uiText(section.label)}</span>

@@ -1,5 +1,7 @@
 "use client";
 import { t as uiText, currencyDisplayName,subscribeUiLanguage,setUiLanguage,type UiLanguage } from "@/lib/ui-language";
+import BillView from "@/components/bill-view";
+import BillPeople from "@/components/bill-people";
 import BillStart, { type BillStartValues } from "@/components/bill-start";
 import { firstBillExpense, isFirstBillReceipt, type BillDefaults } from "@/lib/bills";
 import InterfaceLanguage from "@/components/interface-language";
@@ -90,6 +92,7 @@ import {
   ClipboardList,
 } from "lucide-react";
 import {
+  travellerFinancialPreview,
   isBill,
   balances,
   settlements,
@@ -268,6 +271,9 @@ export default function Home({ children }: { children: ReactNode }) {
     [holidayToolsOpen,setHolidayToolsOpen]=useState(false),
     [menu, setMenu] = useState(false),
     [create, setCreate] = useState(false),
+    [billOptions, setBillOptions] = useState(false),
+    [billPeople, setBillPeople] = useState(false),
+    [allBills, setAllBills] = useState(false),
     [billStart, setBillStart] = useState(false),
     [billScan, setBillScan] = useState(false),
     [help, setHelp] = useState(false),
@@ -1668,8 +1674,8 @@ export default function Home({ children }: { children: ReactNode }) {
   });
   const billEditorAdopts = !!trip && !!editing && !!editing.currency && billDefaults.current?.tripId === trip.id && billDefaults.current.currency
     && isFirstBillReceipt(trip, { sourceDraftId: editing.draftId });
-  const billEditorTrip = billEditorAdopts && trip && editing?.currency ? { ...trip, currency: editing.currency } : trip;
-  const billEditorExpense = billEditorAdopts && editing ? { ...editing, fx: undefined, bankAmount: undefined } : editing;
+  const billEditorTrip = useMemo(() => billEditorAdopts && trip && editing?.currency ? { ...trip, currency: editing.currency } : trip, [billEditorAdopts, trip, editing?.currency]);
+  const billEditorExpense = useMemo(() => billEditorAdopts && editing ? { ...editing, fx: undefined, bankAmount: undefined } : editing, [billEditorAdopts, editing]);
   const editorShares = useMemo(() => billEditorExpense && billEditorTrip ? previewShares(billEditorExpense, billEditorTrip) : null, [billEditorExpense, billEditorTrip]);
   const editorTotal = useMemo(() => billEditorExpense && billEditorTrip ? previewTotal(billEditorExpense, billEditorTrip) : null, [billEditorExpense, billEditorTrip]);
   const editorOriginalTotal = useMemo(() => editing ? receiptEditorTotal(editing) : 0, [editing]);
@@ -1767,29 +1773,9 @@ export default function Home({ children }: { children: ReactNode }) {
                     >{uiText("View settlements")}</button>}</div>
                   </div>
   ) : null;
-  const renderSection = (section: TripSection) => {
+  const renderExpenseRow = (e: Expense) => {
     if (!trip) return null;
-    switch (section) {
-      case "expenses": return (
-                    <>
-                      <div className="sectionheading">
-                        <h2>{uiText("Your expenses")}</h2>
-                        <span className="muted">{EXPENSE_SORTS.find(([value]) => value === expenseFilter.sort)?.[1]}</span>
-                      </div>
-                      {trip.expenses.length > 1 && <ExpenseFilterBar filter={expenseFilter} onChange={setExpenseFilter} members={trip.members} shown={visibleExpenses.length} total={trip.expenses.length} />}
-                      {trip.expenses.length > 0 && breakdown && <SpendingBreakdownPanel breakdown={breakdown} members={trip.members} currency={trip.currency}
-                        category={expenseFilter.category} onCategory={category => setExpenseFilter({ ...expenseFilter, category })}
-                        filtered={expenseFilterActive(expenseFilter)} />}
-                      <div className="panel expense-list">
-                        {trip.expenses.length && !visibleExpenses.length ? (
-                          <div className="empty">
-                            <Receipt size={30} />
-                            <h3>{uiText("No matching expenses")}</h3>
-                            <p>{uiText("Try another search, or clear the filters to see all ")}{trip.expenses.length}{uiText(" expenses.")}</p>
-                            <button className="quiet" onClick={() => setExpenseFilter({ ...NO_EXPENSE_FILTER, sort: expenseFilter.sort })}>{uiText("Clear filters")}</button>
-                          </div>
-                        ) : trip.expenses.length ? (
-                          <PagedList {...page(expenseFilterActive(expenseFilter) || expenseFilter.sort !== "recent" ? `expenses:${canonicalJson(expenseFilter)}` : "expenses", 20)} noun={uiText("expenses")} items={visibleExpenses} itemKey={e => e.id} renderItem={(e) => (
+    return (
                             <div
                               className="expense"
                               key={e.id} data-entry-id={e.id} tabIndex={-1}
@@ -1834,7 +1820,121 @@ export default function Home({ children }: { children: ReactNode }) {
                               </span>
                               </button>
                             </div>
-                          )} />
+    );
+  };
+  const renderDraftRow = (d: Draft) => {
+    if (!trip) return null;
+    return (
+                            <div className="draft" key={d.id} data-entry-id={d.id} tabIndex={-1}>
+                              <div className="draft-visual">
+                              {d.receiptId && (
+                                <img
+                                  src={"/api/receipt?id=" + d.receiptId}
+                                  alt={uiText("Receipt image for {value0}", { value0: d.title || "untitled receipt" })}
+                                  loading="lazy"
+                                  decoding="async"
+                                />
+                              )}
+                              <ExpenseIconPicker entry={d} disabled={saving || loading} onChange={icon => updateTrip({ ...trip, drafts: trip.drafts.map(draft => draft.id === d.id ? { ...draft, icon } : draft) })} />
+                              </div>
+                              <div>
+                                <b>{d.title}</b>
+                                <small
+                                  className={
+                                    d.status === "review" ? "ready" : "muted"
+                                  }
+                                >
+                                  {d.status === "review"
+                                    ? uiText("Ready to review")
+                                    : hasPendingReceiptQuestions(d.conversation) ? uiText("Question saved · external processing needed") : uiText("Not processed yet")}{" "}
+                                  · {d.items.length}{uiText(" items · ")}{d.currency}
+                                </small>
+                              </div>
+                              <button
+                                className="quiet"
+                                onClick={() => openDraft(d)}
+                              >{uiText("Review")}</button>
+                              <button
+                                className="iconbutton"
+                                aria-label={uiText("Remove draft")}
+                                disabled={saving}
+                                onClick={async () => {
+                                  if (!await confirm({ title: "Remove receipt draft?", message: `Remove the receipt draft “${d.title}”? Its removal will appear in activity history.`, confirmLabel: "Remove draft", destructive: true })) return;
+                                  void deleteWithUndo(trip, { message: `Removed the receipt draft “${d.title || "Untitled"}”.`, expenses: [], payments: [],
+                                    drafts: [{ entry: d, index: trip.drafts.findIndex(x => x.id === d.id) }] });
+                                }}
+                              >
+                                <X size={17} />
+                              </button>
+                            </div>
+    );
+  };
+  const renderPaymentRow = (p: Payment) => {
+    if (!trip) return null;
+    return (
+                              <div className="payment" key={p.id} data-entry-id={p.id} tabIndex={-1}>
+                                <div className="payment-line"><span className="payment-summary">{name(p.from)}{uiText(" paid ")}{name(p.to)}</span>
+                                <b className="payment-amount">{money(p.amount, trip.currency)}</b></div>
+                                <div className="payment-line"><small className="payment-meta">{expenseDate(p.date)}{p.time ? ` · ${p.time}` : ""}{p.method ? ` · ${p.method}` : ""}</small>
+                                <span className="payment-row-actions">
+                                <button className="quiet" disabled={saving || loading} onClick={() => void openPayment(undefined, p)}>{uiText("Edit")}</button>
+                                <button
+                                  aria-label={uiText("Undo recorded payment")}
+                                  className="iconbutton"
+                                  disabled={saving}
+                                  onClick={async () => {
+                                    if (!await confirm({ title: "Remove recorded payment?", message: `Remove the recorded payment of ${money(p.amount, trip.currency)} from ${name(p.from)} to ${name(p.to)}? It will remain in activity history.`, confirmLabel: "Remove payment", destructive: true })) return;
+                                    void deleteWithUndo(trip, { message: `Removed the payment from ${name(p.from)} to ${name(p.to)}.`, expenses: [], drafts: [],
+                                      payments: [{ entry: p, index: trip.payments.findIndex(x => x.id === p.id) }] });
+                                  }}
+                                >
+                                  <Trash2 size={17} />
+                                </button></span></div>
+                                {p.note && <small className="payment-note">{p.note}</small>}
+                              </div>
+    );
+  };
+  async function archiveBill() {
+    if (!trip || saving || loading) return;
+    setSaving(true); setError("");
+    try {
+      const response = await fetch("/api/trip", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "archive", tripId: trip.id }) });
+      const body = await response.json() as { error?: string };
+      if (!response.ok) throw Error(body.error || "Unable to archive this bill.");
+      await load({ fresh: true });
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Unable to archive this bill."); }
+    finally { setSaving(false); }
+  }
+  const renderSection = (section: TripSection) => {
+    if (!trip) return null;
+    if (isBill(trip) && section !== "history") return <BillView trip={trip} busy={saving || loading} calculationError={calculationError} due={due} onStatement={setStatement} onPayment={suggestion => void openPayment(suggestion)} onArchive={archiveBill}
+      receipts={<>
+        {trip.expenses.length >= 3 && breakdown && <SpendingBreakdownPanel breakdown={breakdown} members={trip.members} currency={trip.currency} category={expenseFilter.category} onCategory={category => setExpenseFilter({ ...expenseFilter, category })} filtered={expenseFilterActive(expenseFilter)} />}
+        <div className="panel expense-list">{trip.expenses.length ? <PagedList {...page("expenses", 20)} noun={uiText("expenses")} items={trip.expenses} itemKey={e => e.id} renderItem={renderExpenseRow} /> : <p className="empty">{uiText("No receipts yet")}</p>}</div>
+        {trip.drafts.length > 0 && <div className="panel"><PagedList {...page("drafts", 10)} noun={uiText("receipt drafts")} items={[...trip.drafts].reverse()} itemKey={d => d.id} renderItem={renderDraftRow} /></div>}
+      </>}
+      payments={trip.payments.length > 0 && <><h2>{uiText("Recorded payments")}</h2><div className="panel"><PagedList {...page("payments", 5)} noun={uiText("payments")} items={[...trip.payments].reverse()} itemKey={p => p.id} renderItem={renderPaymentRow} /></div></>} />;
+    switch (section) {
+      case "expenses": return (
+                    <>
+                      <div className="sectionheading">
+                        <h2>{uiText("Your expenses")}</h2>
+                        <span className="muted">{EXPENSE_SORTS.find(([value]) => value === expenseFilter.sort)?.[1]}</span>
+                      </div>
+                      {trip.expenses.length > 1 && <ExpenseFilterBar filter={expenseFilter} onChange={setExpenseFilter} members={trip.members} shown={visibleExpenses.length} total={trip.expenses.length} />}
+                      {trip.expenses.length > 0 && breakdown && <SpendingBreakdownPanel breakdown={breakdown} members={trip.members} currency={trip.currency}
+                        category={expenseFilter.category} onCategory={category => setExpenseFilter({ ...expenseFilter, category })}
+                        filtered={expenseFilterActive(expenseFilter)} />}
+                      <div className="panel expense-list">
+                        {trip.expenses.length && !visibleExpenses.length ? (
+                          <div className="empty">
+                            <Receipt size={30} />
+                            <h3>{uiText("No matching expenses")}</h3>
+                            <p>{uiText("Try another search, or clear the filters to see all ")}{trip.expenses.length}{uiText(" expenses.")}</p>
+                            <button className="quiet" onClick={() => setExpenseFilter({ ...NO_EXPENSE_FILTER, sort: expenseFilter.sort })}>{uiText("Clear filters")}</button>
+                          </div>
+                        ) : trip.expenses.length ? (
+                          <PagedList {...page(expenseFilterActive(expenseFilter) || expenseFilter.sort !== "recent" ? `expenses:${canonicalJson(expenseFilter)}` : "expenses", 20)} noun={uiText("expenses")} items={visibleExpenses} itemKey={e => e.id} renderItem={renderExpenseRow} />
                         ) : (
                           <div className="empty">
                             <Receipt size={30} />
@@ -1900,28 +2000,7 @@ export default function Home({ children }: { children: ReactNode }) {
                         <>
                           <h2 className="subheading">{uiText("Recorded payments")}<small className="muted">{uiText("Recently added")}</small></h2>
                           <div className="panel">
-                            <PagedList {...page("payments", 5)} noun={uiText("payments")} items={[...trip.payments].reverse()} itemKey={p => p.id} renderItem={(p) => (
-                              <div className="payment" key={p.id} data-entry-id={p.id} tabIndex={-1}>
-                                <div className="payment-line"><span className="payment-summary">{name(p.from)}{uiText(" paid ")}{name(p.to)}</span>
-                                <b className="payment-amount">{money(p.amount, trip.currency)}</b></div>
-                                <div className="payment-line"><small className="payment-meta">{expenseDate(p.date)}{p.time ? ` · ${p.time}` : ""}{p.method ? ` · ${p.method}` : ""}</small>
-                                <span className="payment-row-actions">
-                                <button className="quiet" disabled={saving || loading} onClick={() => void openPayment(undefined, p)}>{uiText("Edit")}</button>
-                                <button
-                                  aria-label={uiText("Undo recorded payment")}
-                                  className="iconbutton"
-                                  disabled={saving}
-                                  onClick={async () => {
-                                    if (!await confirm({ title: "Remove recorded payment?", message: `Remove the recorded payment of ${money(p.amount, trip.currency)} from ${name(p.from)} to ${name(p.to)}? It will remain in activity history.`, confirmLabel: "Remove payment", destructive: true })) return;
-                                    void deleteWithUndo(trip, { message: `Removed the payment from ${name(p.from)} to ${name(p.to)}.`, expenses: [], drafts: [],
-                                      payments: [{ entry: p, index: trip.payments.findIndex(x => x.id === p.id) }] });
-                                  }}
-                                >
-                                  <Trash2 size={17} />
-                                </button></span></div>
-                                {p.note && <small className="payment-note">{p.note}</small>}
-                              </div>
-                            )} />
+                            <PagedList {...page("payments", 5)} noun={uiText("payments")} items={[...trip.payments].reverse()} itemKey={p => p.id} renderItem={renderPaymentRow} />
                           </div>
                         </>
                       )}
@@ -1938,50 +2017,7 @@ export default function Home({ children }: { children: ReactNode }) {
                       </div>
                       <div className="panel">
                         {trip.drafts.length ? (
-                          <PagedList {...page("drafts", 10)} noun={uiText("receipt drafts")} items={[...trip.drafts].reverse()} itemKey={d => d.id} renderItem={(d) => (
-                            <div className="draft" key={d.id} data-entry-id={d.id} tabIndex={-1}>
-                              <div className="draft-visual">
-                              {d.receiptId && (
-                                <img
-                                  src={"/api/receipt?id=" + d.receiptId}
-                                  alt={uiText("Receipt image for {value0}", { value0: d.title || "untitled receipt" })}
-                                  loading="lazy"
-                                  decoding="async"
-                                />
-                              )}
-                              <ExpenseIconPicker entry={d} disabled={saving || loading} onChange={icon => updateTrip({ ...trip, drafts: trip.drafts.map(draft => draft.id === d.id ? { ...draft, icon } : draft) })} />
-                              </div>
-                              <div>
-                                <b>{d.title}</b>
-                                <small
-                                  className={
-                                    d.status === "review" ? "ready" : "muted"
-                                  }
-                                >
-                                  {d.status === "review"
-                                    ? uiText("Ready to review")
-                                    : hasPendingReceiptQuestions(d.conversation) ? uiText("Question saved · external processing needed") : uiText("Not processed yet")}{" "}
-                                  · {d.items.length}{uiText(" items · ")}{d.currency}
-                                </small>
-                              </div>
-                              <button
-                                className="quiet"
-                                onClick={() => openDraft(d)}
-                              >{uiText("Review")}</button>
-                              <button
-                                className="iconbutton"
-                                aria-label={uiText("Remove draft")}
-                                disabled={saving}
-                                onClick={async () => {
-                                  if (!await confirm({ title: "Remove receipt draft?", message: `Remove the receipt draft “${d.title}”? Its removal will appear in activity history.`, confirmLabel: "Remove draft", destructive: true })) return;
-                                  void deleteWithUndo(trip, { message: `Removed the receipt draft “${d.title || "Untitled"}”.`, expenses: [], payments: [],
-                                    drafts: [{ entry: d, index: trip.drafts.findIndex(x => x.id === d.id) }] });
-                                }}
-                              >
-                                <X size={17} />
-                              </button>
-                            </div>
-                          )} />
+                          <PagedList {...page("drafts", 10)} noun={uiText("receipt drafts")} items={[...trip.drafts].reverse()} itemKey={d => d.id} renderItem={renderDraftRow} />
                         ) : (
                           <div className="empty">
                             <Sparkles size={30} />
@@ -2275,7 +2311,7 @@ export default function Home({ children }: { children: ReactNode }) {
         </Link>
         <button className="sidebar-close iconbutton" aria-label={uiText("Close holiday menu")} onClick={()=>setMenu(false)}><X size={20}/></button><div className="side-label">{uiText("YOUR HOLIDAYS")}</div>
         <div className="tripnav">
-          {ledger.trips.map((t) => (
+          {ledger.trips.filter(t => !isBill(t)).map((t) => (
             <button
               className={trip?.id === t.id ? "active" : ""}
               key={t.id}
@@ -2297,6 +2333,15 @@ export default function Home({ children }: { children: ReactNode }) {
             </button>
           ))}
         </div>
+        {ledger.trips.some(isBill) && <><div className="side-label">{uiText("BILLS")}</div><div className="tripnav bill-nav">{ledger.trips.map((value, index) => ({ value, index })).filter(({ value }) => isBill(value)).sort((a, b) => {
+          const date = (value: Trip) => value.expenses.reduce((latest, expense) => expense.date > latest ? expense.date : latest, "");
+          return date(b.value).localeCompare(date(a.value)) || b.index - a.index;
+        }).slice(0, allBills ? undefined : 5).map(({ value: t }) => {
+          const member = t.members.find(member => member.userId === profile?.id), preview = member && travellerFinancialPreview(t, member.id);
+          let chip = uiText("Needs review");
+          if (preview?.available) chip = preview.netBalance < 0 ? uiText("You owe {value0}", { value0: money(-preview.netBalance, t.currency) }) : preview.netBalance > 0 ? uiText("You’re owed {value0}", { value0: money(preview.netBalance, t.currency) }) : uiText("Settled");
+          return <button type="button" key={t.id} className={trip?.id === t.id ? "active" : ""} onClick={() => { closeReceiptEditor(); setUploadOpen(false); setSelected(t.id); setMenu(false); setView("expenses"); }}><span className="tripicon"><Receipt size={17} /></span><span>{t.name}<small>{chip}</small></span></button>;
+        })}</div>{!allBills && ledger.trips.filter(isBill).length > 5 && <button type="button" className="textbutton" onClick={() => setAllBills(true)}>{uiText("Show all bills")}</button>}</>}
         <div className="holiday-actions"><button className="newtrip" onClick={()=>{setCreate(true);setMenu(false);}} disabled={loading||auth||saving}><Plus size={17}/>{uiText("New holiday")}</button>
           <button className="iconbutton" aria-label={uiText("More holiday options")} onClick={()=>{setHolidayToolsOpen(true);setMenu(false);}}>•••</button></div>
         <button className="newtrip" disabled={loading || auth || saving} onClick={() => { setBillStart(true); setMenu(false); }}>{uiText("Split a bill")}</button>
@@ -2342,7 +2387,7 @@ export default function Home({ children }: { children: ReactNode }) {
             >
               <Menu />
             </button>
-            <span className="breadcrumb">{uiText("Holidays ")}<span aria-hidden="true">/</span>{" "}
+            <span className="breadcrumb">{uiText(trip && isBill(trip) ? "Bills " : "Holidays ")}<span aria-hidden="true">/</span>{" "}
               <b>{trip?.name || uiText("Your next adventure")}</b>
             </span>
           </div>
@@ -2398,18 +2443,19 @@ export default function Home({ children }: { children: ReactNode }) {
           )}
           <div className="page-heading">
             <div>
-              <span className="eyebrow">{uiText("HOLIDAY LEDGER")}</span>
+              <span className="eyebrow">{uiText(trip && isBill(trip) ? "BILL" : "HOLIDAY LEDGER")}</span>
               <h1>{trip?.name || uiText("Every trip starts together.")}</h1>
               <p>
                 {trip
-                  ? uiText("{value0} travellers · Settle in {value1}{value2}", { value0: trip.members.length, value1: trip.currency, value2: trip.startDate ? " · " + formatCalendarDate(trip.startDate, { year: false }) : "" })
+                  ? isBill(trip) ? uiText("{value0} people · {value1}", { value0: trip.members.length, value1: calculationError ? uiText("Unavailable") : money(spent, trip.currency) }) : uiText("{value0} travellers · Settle in {value1}{value2}", { value0: trip.members.length, value1: trip.currency, value2: trip.startDate ? " · " + formatCalendarDate(trip.startDate, { year: false }) : "" })
                   : uiText("Create a holiday, add your people, and keep the tabs fair.")}
               </p>
+              {trip && isBill(trip) && <button type="button" className="quiet bill-options-trigger" aria-label={uiText("Bill options")} disabled={saving || loading} onClick={() => setBillOptions(true)}>•••</button>}
               {trip && lastRefreshed && <small className="muted">{uiText("Refreshed ")}{formatClockTime(lastRefreshed)}</small>}
               {trip && refreshError && <small className="error" role="status">{uiText(refreshError)} <button className="quiet" disabled={loading} onClick={() => void load({ background: true, fresh: true })}>{uiText("Retry refresh")}</button></small>}
             </div>
             {trip && <div className="expense-entry-actions">
-              <button className="primary" onClick={newExpense} disabled={saving}><Plus size={18} />{uiText(" Add expense")}</button>
+              <button className="primary" onClick={newExpense} disabled={saving}><Plus size={18} />{uiText(isBill(trip) ? "Add receipt" : " Add expense")}</button>
               <button type="button" className="quiet" disabled={saving || uploading} onClick={event => { newExpense(event); scanReceiptInput.current?.click(); }}><Camera size={18} />{uiText(" Scan receipt")}</button>
               <input ref={scanReceiptInput} type="file" hidden aria-label={uiText("Scan receipt photo")} accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif" capture="environment" onChange={async event => {
                 const file = event.target.files?.[0]; event.target.value = "";
@@ -2472,7 +2518,7 @@ export default function Home({ children }: { children: ReactNode }) {
           ) : (
             <>
               {calculationError && <p className="error" role="alert">{uiText("Balances are unavailable until the flagged receipt is corrected. ")}{calculationError}{uiText(" Your saved receipt details have been kept.")}</p>}
-              <div className="stats">
+              {!isBill(trip) && <div className="stats">
                 <div className="stat">
                   <span>{uiText("Total trip spend ")}<Receipt size={17} />
                   </span>
@@ -2507,11 +2553,11 @@ export default function Home({ children }: { children: ReactNode }) {
                       : uiText("Everyone is square")}
                   </small>
                 </div>
-              </div>
-              <TripTabNavigation receiptCount={trip.drafts.length} />
-              <div className="content-grid">
-                <TripTabRouteProvider renderSection={renderSection}>{children}</TripTabRouteProvider>
-                <aside className="right-rail">
+              </div>}
+              <TripTabNavigation kind={trip.kind} receiptCount={trip.drafts.length} />
+              <div className={"content-grid" + (isBill(trip) ? " content-grid--bill" : "")}>
+                <TripTabRouteProvider kind={trip.kind} renderSection={renderSection}>{children}</TripTabRouteProvider>
+                {!isBill(trip) && <aside className="right-rail">
                   {groupBalance(false)}
                   <div className="receipt-card">
                     <span className="mini-tag">
@@ -2527,7 +2573,7 @@ export default function Home({ children }: { children: ReactNode }) {
                       onClick={() => setHelp(true)}
                     >{uiText("How it works")}</button>
                   </div>
-                </aside>
+                </aside>}
               </div>
             </>
           )}
@@ -2548,6 +2594,8 @@ export default function Home({ children }: { children: ReactNode }) {
       {summaryOpen && trip && <TripSummary trip={trip} onClose={() => setSummaryOpen(false)} />}
       {repeatOpen && trip && trip.expenses.some(expense => expense.id === repeatOpen) && <RepeatExpenseDialog trip={trip} expense={trip.expenses.find(expense => expense.id === repeatOpen)!} busy={saving}
         onClose={() => setRepeatOpen("")} onRepeat={copies => updateTrip({ ...trip, expenses: [...trip.expenses, ...copies] })} />}
+      {billOptions && trip && isBill(trip) && <ModalA11y className="overlay" onClose={() => setBillOptions(false)}><section className="modal bill-options" role="dialog" aria-modal="true" aria-label={uiText("Bill options")}><div className="modalheading"><h2>{uiText("Bill options")}</h2><button type="button" className="iconbutton" aria-label={uiText("Close")} onClick={() => setBillOptions(false)}>×</button></div><button type="button" className="quiet" onClick={() => { setBillOptions(false); setBillPeople(true); }}>{uiText("People")}</button><TripDetails trip={trip} showPeople={false} busy={saving || loading} accountId={profile?.id} paging={page("names", 20)} onSave={updateTrip} /><TripSharing key={`${trip.id}:${profile?.id || "anonymous"}`} trip={trip} profile={profile} onChanged={() => load({ background: true })} /><TripControls trip={trip} accountId={profile?.id} busy={saving || loading} onChanged={async () => { setBillOptions(false); await load({ fresh: true }); }} /></section></ModalA11y>}
+      {billPeople && trip && isBill(trip) && <BillPeople trip={trip} accountId={profile?.id} busy={saving || loading} onSave={updateTrip} onClose={() => setBillPeople(false)} confirm={confirm} />}
       {billStart && profile && <BillStart ledger={ledger} displayName={profile.displayName.slice(0, 50)} busy={saving} onClose={() => setBillStart(false)} onStart={startBill} />}
       {create && (
         <ModalA11y className="overlay" onClose={() => setCreate(false)}>
@@ -3156,7 +3204,7 @@ export default function Home({ children }: { children: ReactNode }) {
                       <span>{uiText("Delete")}</span>
                     </button>
                   )}
-                  {trip.expenses.some((e) => e.id === editing.id) && <button type="button" className="quiet" disabled={saving}
+                  {!isBill(trip) && trip.expenses.some((e) => e.id === editing.id) && <button type="button" className="quiet" disabled={saving}
                     title={uiText("Copy the saved expense onto later days")}
                     onClick={() => {
                       if (editorDirty) { setError("Save or discard your changes first. Repeat copies the saved expense."); return; }

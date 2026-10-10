@@ -10,6 +10,11 @@ export const bill: Trip & { kind: 'bill' } = { ...holiday, id: 'dinner', kind: '
 const archived = { ...bill, id: 'archived-bill', name: 'Settled lunch', payments: members.slice(1).map(member => ({ id: `paid-${member.id}`, from: member.id, to: members[0].id, amount: 3160, date: '2026-10-10' })) };
 
 async function fixtures(page: Page) {
+  await page.addInitScript(() => {
+    const clicks: string[] = [];
+    Object.defineProperty(window, '__billClicks', { value: clicks });
+    document.addEventListener('click', event => { const button = (event.target as Element).closest('button'); if (button) clicks.push(button.getAttribute('aria-label') || button.textContent?.trim() || ''); }, true);
+  });
   let data: Ledger = structuredClone({ trips: [holiday, bill] }), revision = 1;
   const actions: string[] = [], archives: Trip[] = [archived];
   await page.route('**/api/**', async route => {
@@ -50,6 +55,24 @@ async function selectBill(page: Page) {
 }
 async function fits(page: Page) {
   expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(1);
+  const brokenWords = await page.locator('.bill-share b, .bill-share span, .bill-share strong').evaluateAll(elements => {
+    const failures: string[] = [];
+    for (const element of elements) {
+      const width = element.getBoundingClientRect().width;
+      const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) for (const match of node.textContent!.matchAll(/[^\s-]+/g)) {
+        const range = document.createRange(); range.setStart(node, match.index!); range.setEnd(node, match.index! + match[0].length);
+        const rects = [...range.getClientRects()].filter(rect => rect.width > 0);
+        if (new Set(rects.map(rect => Math.round(rect.y))).size > 1 && rects.reduce((sum, rect) => sum + rect.width, 0) <= width) failures.push(match[0]);
+      }
+    }
+    return failures;
+  });
+  expect(brokenWords).toEqual([]);
+  if (await page.locator('.bill-view').count()) {
+    const actions = await page.locator('.expense-entry-actions button').evaluateAll(buttons => buttons.map(button => button.getBoundingClientRect().toJSON()));
+    expect(Math.abs(actions[0].width - actions[1].width)).toBeLessThanOrEqual(1);
+  }
   for (const selector of ['.bill-start', '.bill-view', '.bill-people']) {
     const boxes = await page.locator(`${selector} input, ${selector} button`).evaluateAll(elements => elements.filter(el => el.getClientRects().length).map(el => el.getBoundingClientRect().toJSON()));
     for (const box of boxes) { expect(box.x).toBeGreaterThanOrEqual(-1); expect(box.right).toBeLessThanOrEqual(await page.evaluate(() => innerWidth) + 1); }
@@ -75,6 +98,8 @@ for (const width of [320, 390]) {
     await page.getByRole('textbox', { name: 'Expense name', exact: true }).fill('Lunch');
     await page.getByRole('textbox', { name: 'Amount', exact: true }).fill('48');
     await page.getByRole('button', { name: 'Save expense', exact: true }).click();
+    await expect(page.locator('.editor')).toHaveCount(0);
+    expect((await page.evaluate(() => (window as unknown as { __billClicks: string[] }).__billClicks)).length).toBeLessThanOrEqual(5);
     const created = state.ledger().trips.find(trip => trip.name === 'Lunch')!;
     expect((created as Trip & { kind?: 'bill' }).kind).toBe('bill'); expect(created.members).toHaveLength(4); expect(created.expenses).toHaveLength(1);
     expect(balances(created)).toEqual([3600, -1200, -1200, -1200]); await fits(page);
@@ -97,7 +122,7 @@ test('[P2] first EUR scan adopts its currency atomically without FX', async ({ p
   const created = state.ledger().trips.find(trip => trip.name === 'Scanned euro dinner')!; expect(created.currency).toBe('EUR'); expect(created.expenses[0].fx).toBeUndefined(); expect(created.expenses[0].bankAmount).toBeUndefined();
 });
 for (const path of ['/expenses', '/balances', '/receipts', '/travellers']) for (const width of [320, 390]) {
-  test.fixme(`[P3] bill shares and reduced navigation on ${path} at ${width}px`, async ({ page }) => {
+  test(`[P3] bill shares and reduced navigation on ${path} at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 844 }); await fixtures(page); await page.goto(path); await selectBill(page);
     // Navigate without reloading the client-selected trip.
     await page.evaluate(path => { history.pushState({}, '', path); dispatchEvent(new PopStateEvent('popstate')); }, path);
@@ -110,7 +135,7 @@ for (const path of ['/expenses', '/balances', '/receipts', '/travellers']) for (
     await expect(page.getByText('Total trip spend', { exact: true })).toHaveCount(0); await fits(page);
   });
 }
-test.fixme('[P3] mark paid, archive and archived bill label', async ({ page }) => {
+test('[P3] mark paid, archive and archived bill label', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 }); const state = await fixtures(page); await page.goto('/expenses'); await selectBill(page);
   for (let i = 0; i < 3; i++) {
     await page.getByRole('button', { name: 'Mark paid', exact: true }).first().click();
@@ -121,14 +146,14 @@ test.fixme('[P3] mark paid, archive and archived bill label', async ({ page }) =
   await page.getByRole('button', { name: 'Open holidays', exact: true }).click(); await page.getByRole('button', { name: 'More holiday options', exact: true }).click();
   await page.getByRole('button', { name: 'Archived holidays', exact: true }).click(); await expect(page.getByText('Bill', { exact: true }).first()).toBeVisible();
 });
-test.fixme('[P3] summary shares only names and amounts', async ({ page }) => {
+test('[P3] summary shares only names and amounts', async ({ page }) => {
   await page.addInitScript(() => { Object.defineProperty(navigator, 'clipboard', { value: { writeText: async (value: string) => { (window as unknown as { copied: string }).copied = value; } } }); });
   await page.setViewportSize({ width: 390, height: 844 }); await fixtures(page); await page.goto('/expenses'); await selectBill(page);
   await page.getByRole('button', { name: 'Copy summary', exact: true }).click();
   const copied = await page.evaluate(() => (window as unknown as { copied: string }).copied);
   expect(copied).toBe('Dinner at Taberna Real — €126.40\nAlex paid. Sam owes Alex €31.60. Jo owes Alex €31.60. Kim owes Alex €31.60.'); expect(copied).not.toContain('@');
 });
-test.fixme('[P3] People sheet reuses names and safe removal without dates or weights', async ({ page }) => {
+test('[P3] People sheet reuses names and safe removal without dates or weights', async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 844 }); await fixtures(page); await page.goto('/expenses'); await selectBill(page);
   await page.getByRole('button', { name: 'Bill options', exact: true }).click(); await page.getByRole('button', { name: 'People', exact: true }).click();
   await expect(page.getByRole('dialog', { name: 'People', exact: true })).toBeVisible();

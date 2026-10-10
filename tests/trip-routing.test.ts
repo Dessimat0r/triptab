@@ -67,3 +67,11 @@ test("invitation and account entry links survive browsers without URLSearchParam
     if (descriptor) Object.defineProperty(URLSearchParams.prototype, "size", descriptor);
   }
 });
+
+
+test('bill navigation has Bill and History while every existing section path remains valid', async () => {
+  const { sectionsFor } = await import('../lib/trip-routes');
+  assert.deepEqual(sectionsFor('bill').map(section => section.label), ['Bill', 'History']);
+  assert.equal(sectionsFor(undefined).length, 5);
+  assert.equal(sectionsFor('holiday').length, 5);
+});
