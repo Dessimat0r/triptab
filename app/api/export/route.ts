@@ -47,6 +47,7 @@ function financialCsv(trip: Trip): string {
     ...trip.members.map(member => `${member.name}_cost_share_hundredths`),
     'item_details_json', 'receipt_scan_json', 'field_sources_json',
     'receipt_location', 'receipt_location_source', 'receipt_location_hint_json',
+    'kind',
   ]];
   for (const expense of trip.expenses) {
     let original: number | undefined;
@@ -66,6 +67,7 @@ function financialCsv(trip: Trip): string {
       JSON.stringify(expense.items.map(({ id, name, nameLanguage, translations, amount, members, percentages, units, quantity, scanSource, fieldSources }) => ({ id, name, nameLanguage, translations, amount, members, percentages, units, quantity, scanSource, fieldSources }))),
       expense.receiptScan ? JSON.stringify(expense.receiptScan) : '', expense.fieldSources ? JSON.stringify(expense.fieldSources) : '',
       expense.location?.label, expense.location?.source, expense.locationHint ? JSON.stringify(expense.locationHint) : '',
+      trip.kind ?? 'holiday',
     ]);
   }
   for (const payment of trip.payments) {
@@ -73,6 +75,7 @@ function financialCsv(trip: Trip): string {
       'payment', payment.id, '', payment.date, payment.time, payment.timezone,
       '', '', '', trip.currency, payment.amount, decimal(payment.amount), '', name(payment.from), name(payment.to), payment.method, payment.note,
       '', '', '', '', '', '', '', '', '', '', ...trip.members.map(() => ''), '', '', '', '', '', '',
+      trip.kind ?? 'holiday',
     ]);
   }
   return csv(rows);

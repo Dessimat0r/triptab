@@ -160,3 +160,41 @@ test('[P3] People sheet reuses names and safe removal without dates or weights',
   await expect(page.getByRole('textbox', { name: 'Traveller 2 name', exact: true })).toBeVisible();
   await expect(page.getByText('Counts as', { exact: true })).toHaveCount(0); await expect(page.getByText('Joined on', { exact: true })).toHaveCount(0); await fits(page);
 });
+
+test('[P4] explicit name and settlement currency survive the first foreign-currency scan', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 }); const state = await fixtures(page); await page.goto('/expenses');
+  await page.getByRole('button', { name: 'Open holidays', exact: true }).click(); await page.getByRole('button', { name: 'Split a bill', exact: true }).click();
+  const sheet = page.getByRole('dialog', { name: 'Split a bill', exact: true });
+  await sheet.getByText('More options', { exact: true }).click();
+  await sheet.getByRole('textbox', { name: 'Name', exact: true }).fill('Birthday dinner');
+  await sheet.getByRole('combobox', { name: 'Currency', exact: true }).selectOption('GBP');
+  const chooser = page.waitForEvent('filechooser'); await sheet.getByRole('button', { name: 'Scan receipt', exact: true }).click(); await (await chooser).setFiles(pathPhoto);
+  await expect(page.getByRole('textbox', { name: 'Expense name', exact: true })).toHaveValue('Scanned euro dinner');
+  await expect(page.getByText(/1 EUR = 0\.85 GBP · Daily reference rate/)).toBeVisible();
+  await page.getByRole('button', { name: /^(Confirm & save expense|Save expense)$/ }).click();
+  await expect(page.locator('.editor')).toHaveCount(0);
+  const created = state.ledger().trips.find(trip => trip.name === 'Birthday dinner')!;
+  expect(created.currency).toBe('GBP'); expect(created.expenses[0].currency).toBe('EUR'); expect(created.expenses[0].fx?.rate).toBe(0.85);
+});
+
+test('[P4] a saved receipt draft prevents empty-bill discard', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 }); const state = await fixtures(page); await page.goto('/expenses');
+  await page.getByRole('button', { name: 'Open holidays', exact: true }).click(); await page.getByRole('button', { name: 'Split a bill', exact: true }).click();
+  const chooser = page.waitForEvent('filechooser'); await page.getByRole('button', { name: 'Scan receipt', exact: true }).last().click(); await (await chooser).setFiles(pathPhoto);
+  await expect(page.getByRole('textbox', { name: 'Expense name', exact: true })).toHaveValue('Scanned euro dinner');
+  await page.getByRole('button', { name: 'Close editor', exact: true }).click();
+  const confirmation = page.getByRole('dialog', { name: 'Discard unsaved changes?', exact: true });
+  await expect(confirmation).toHaveCount(0);
+  await expect(page.locator('.editor')).toHaveCount(0);
+  expect(state.actions).not.toContain('discard');
+  expect(state.ledger().trips.find(trip => trip.id !== bill.id && trip.kind === 'bill')?.drafts).toHaveLength(1);
+});
+
+test('[P4] invalid conversion data hides settlement suggestions', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 844 }); const state = await fixtures(page);
+  state.ledger().trips.find(trip => trip.id === bill.id)!.expenses[0].currency = 'GBP';
+  await page.goto('/expenses'); await selectBill(page);
+  await expect(page.getByText('Review the flagged receipts before using settlement suggestions.', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Mark paid', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Copy summary', exact: true })).toHaveCount(0);
+});

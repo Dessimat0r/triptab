@@ -40,7 +40,7 @@ export async function POST(request: Request) {
       case 'leave': {
         const result = await leaveTrip(db(), actor, details.tripId);
         await notifyMembers(String(details.tripId), profile.id, result.tripName,
-          `${profile.displayName} left the holiday. ${result.memberName}’s expenses and balance stay on it.`).catch(() => {
+          `${profile.displayName} left the ${result.kind === 'bill' ? 'bill' : 'holiday'}. ${result.memberName}’s expenses and balance stay on it.`).catch(() => {
           console.warn('TripTab could not queue a holiday update notification.');
         });
         return respond({ left: true });
@@ -48,7 +48,7 @@ export async function POST(request: Request) {
       case 'transfer': {
         const result = await transferTripOwnership(db(), actor, details.tripId, details.memberId);
         await notifyMembers(String(details.tripId), profile.id, result.tripName,
-          `${profile.displayName} made ${result.memberName} the holiday owner.`).catch(() => {
+          `${profile.displayName} made ${result.memberName} the ${result.kind === 'bill' ? 'bill' : 'holiday'} owner.`).catch(() => {
           console.warn('TripTab could not queue a holiday update notification.');
         });
         return respond({ ownerId: result.ownerId });

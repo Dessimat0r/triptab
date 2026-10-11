@@ -380,7 +380,7 @@ export type Payment = z.infer<typeof paymentSchema>;
 export type Trip = z.infer<typeof tripSchema>;
 export type Ledger = z.infer<typeof ledgerSchema>;
 
-export const isBill = (trip: Pick<Trip, 'kind'>) => trip.kind === 'bill';
+export const isBill = (trip?: Pick<Trip, 'kind'>) => trip?.kind === 'bill';
 
 // Stored ledgers may contain fields that were valid before stronger economic
 // rules were added. Parsing must keep their values so users can review and fix

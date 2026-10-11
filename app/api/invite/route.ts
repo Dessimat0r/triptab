@@ -159,6 +159,7 @@ export async function GET(request: Request) {
     const linked = await membership(invite.trip_id, profile.id);
     return Response.json({
       tripId: invite.trip_id, tripName: trip.name, memberName: member.name,
+      ...(trip.kind === 'bill' ? { kind: trip.kind } : {}),
       alreadyMember: invite.owner === profile.id || Boolean(linked), expiresAt: invite.expires_at,
       history: travellerFinancialPreview(trip, member.id), historySnapshot: await historySnapshot(invite),
     }, { headers: PRIVATE_HEADERS });
@@ -351,7 +352,7 @@ async function acceptInvite(profile: Profile, body: Record<string, unknown>) {
     }
     throw new RequestError('The trip or invitation changed. Refresh before joining again.', 409);
   }
-  const notification = joinedNotification(profile.displayName, nextTrip.name);
+  const notification = joinedNotification(profile.displayName, nextTrip.name, nextTrip.kind);
   await notifyMembers(invite.trip_id, profile.id, notification.title, notification.body).catch(() => {
     console.warn('The traveller joined but its notification could not be queued.');
   });
