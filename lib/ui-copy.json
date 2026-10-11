@@ -3076,5 +3076,77 @@
     "· {amount} al día durante el {count} día restante",
     "· {amount} par jour pour le {count} jour restant",
     "· {amount} für den {count} übrigen Tag"
+  ],
+  [
+    "Split a bill",
+    "Dividir una cuenta",
+    "Partager une addition",
+    "Rechnung aufteilen"
+  ],
+  [
+    "Who's splitting?",
+    "¿Quiénes comparten?",
+    "Qui partage ?",
+    "Wer teilt mit?"
+  ],
+  [
+    "Names, separated by commas",
+    "Nombres separados por comas",
+    "Noms séparés par des virgules",
+    "Namen, durch Kommas getrennt"
+  ],
+  [
+    "Named after the receipt",
+    "Nombre del recibo",
+    "Nom du reçu",
+    "Name vom Beleg"
+  ],
+  [
+    "Enter amount",
+    "Introducir importe",
+    "Saisir le montant",
+    "Betrag eingeben"
+  ],
+  [
+    "Each person needs a different name.",
+    "Cada persona necesita un nombre diferente.",
+    "Chaque personne doit avoir un nom différent.",
+    "Jede Person braucht einen anderen Namen."
+  ],
+  [
+    "A bill can be split between up to 20 people.",
+    "Una cuenta se puede dividir entre un máximo de 20 personas.",
+    "Une addition peut être partagée entre 20 personnes au maximum.",
+    "Eine Rechnung kann unter bis zu 20 Personen aufgeteilt werden."
+  ],
+  [
+    "Bill · {value0}",
+    "Cuenta · {value0}",
+    "Addition · {value0}",
+    "Rechnung · {value0}"
+  ],
+  [
+    "Unable to discard this bill.",
+    "No se pudo descartar esta cuenta.",
+    "Impossible de supprimer cette addition.",
+    "Diese Rechnung konnte nicht verworfen werden."
+  ],
+  [
+    "Add {value0}",
+    "Añadir {value0}",
+    "Ajouter {value0}",
+    "{value0} hinzufügen"
+  ],
+  [
+    "Remove {value0}",
+    "Quitar {value0}",
+    "Retirer {value0}",
+    "{value0} entfernen"
+  ],
+  [
+    "Name",
+    "Nombre",
+    "Nom",
+    "Name"
   ]
 ]

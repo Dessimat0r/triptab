@@ -1,7 +1,9 @@
+import path from 'node:path';
 import { formatMoney as money } from '../../lib/money-format';
 import { expect, test, type Page } from '@playwright/test';
-import { balances, travellerFinancialPreview, type Ledger, type Trip } from '../../lib/model';
+import { validateLedger, balances, travellerFinancialPreview, type Ledger, type Trip } from '../../lib/model';
 
+const pathPhoto = path.resolve('tests/fixtures/receipts/v1/images/long-receipt.png');
 const members = ['Alex', 'Sam', 'Jo', 'Kim'].map((name, i) => ({ id: `person-${i}`, name, ...(i === 0 ? { userId: 'bill-owner' } : {}) }));
 const holiday: Trip = { id: 'holiday', ownerId: 'bill-owner', name: 'Lisbon holiday', currency: 'GBP', members, expenses: [], payments: [], drafts: [] };
 export const bill: Trip & { kind: 'bill' } = { ...holiday, id: 'dinner', kind: 'bill', name: 'Dinner at Taberna Real', currency: 'EUR', expenses: [{ id: 'dinner-receipt', title: 'Dinner at Taberna Real', date: '2026-10-10', time: '19:00', timezone: 'Europe/Lisbon', currency: 'EUR', payer: members[0].id, items: [{ id: 'dinner-item', name: 'Dinner', amount: 12640, members: members.map(member => member.id) }], tax: 0, tip: 0, discount: 0 }] };
@@ -15,7 +17,7 @@ async function fixtures(page: Page) {
     let json: unknown = { events: [], notifications: [], items: [], invitations: [] };
     if (path === '/api/profile') json = { id: 'bill-owner', displayName: 'Alex', email: 'alex@example.invalid', authMethod: 'password' };
     if (path === '/api/ledger') {
-      if (request.method() === 'POST') { data = request.postDataJSON().data; revision++; }
+      if (request.method() === 'POST') { const next = request.postDataJSON().data as Ledger; for (const trip of next.trips) { if (!data.trips.some(old => old.id === trip.id)) { trip.ownerId = 'bill-owner'; trip.members[0].userId = 'bill-owner'; } } data = validateLedger(next, { previous: data }); revision++; }
       json = { data, revision };
     }
     if (path === '/api/trip') {
@@ -29,6 +31,14 @@ async function fixtures(page: Page) {
       } else json = { trips: archives.map(trip => ({ id: trip.id, name: trip.name, kind: (trip as Trip & { kind?: 'bill' }).kind, currency: trip.currency, travellers: trip.members.length, owner: true, archivedAt: '2026-10-10T21:00:00Z' })) };
     }
     if (path === '/api/trip-language') json = { accountId: 'bill-owner', tripId: url.searchParams.get('tripId'), revision: 1, preferences: { readingLanguage: 'en', primaryVersion: 'reading', itemVersions: {} } };
+    if (path === '/api/receipt' && request.method() === 'POST') json = { receiptId: 'bill-photo' };
+    if (path === '/api/receipt' && request.method() === 'GET') return route.fulfill({ contentType: 'image/png', path: pathPhoto });
+    if (path === '/api/receipt/process') {
+      const { tripId, draftId } = request.postDataJSON(); const current = data.trips.find(trip => trip.id === tripId)!; const draft = current.drafts.find(draft => draft.id === draftId)!;
+      Object.assign(draft, { title: 'Scanned euro dinner', currency: 'EUR', status: 'review', date: '2026-10-10', time: '19:00', timezone: 'Europe/Lisbon', source: 'ai', items: [{ id: 'scan-line', name: 'Food', amount: 4800, members: current.members.map(member => member.id) }], receiptScan: { version: 1, printedCurrency: 'EUR', printedTotal: 4800, status: 'matched', warnings: [] } });
+      json = { data, revision: ++revision };
+    }
+    if (path === '/api/fx') json = { rate: 0.85, asOf: '2026-10-10' };
     if (path === '/api/receipt/ai-status') json = { configured: true, connected: true, provider: 'api', eligible: true, manageable: false, siwcAvailable: false };
     await route.fulfill({ json, headers: path === '/api/ledger' ? { 'X-TripTab-Account': 'bill-owner' } : {} });
   });
@@ -53,7 +63,7 @@ test('[P0] holidays retain their existing navigation and panels', async ({ page 
   await expect(page.getByText('Total trip spend', { exact: true })).toBeVisible(); await fits(page);
 });
 for (const width of [320, 390]) {
-  test.fixme(`[P2] start a manual bill, name suggestions and first-save defaults at ${width}px`, async ({ page }) => {
+  test(`[P2] start a manual bill, name suggestions and first-save defaults at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 844 }); const state = await fixtures(page); await page.goto('/expenses');
     await page.getByRole('button', { name: 'Open holidays', exact: true }).click(); await page.getByRole('button', { name: 'Split a bill', exact: true }).click();
     const sheet = page.getByRole('dialog', { name: 'Split a bill', exact: true });
@@ -70,20 +80,21 @@ for (const width of [320, 390]) {
     expect(balances(created)).toEqual([3600, -1200, -1200, -1200]); await fits(page);
   });
 }
-test.fixme('[P2] closing an empty new bill discards it and returns to the previous holiday', async ({ page }) => {
+test('[P2] closing an empty new bill discards it and returns to the previous holiday', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 }); const state = await fixtures(page); await page.goto('/expenses');
   await page.getByRole('button', { name: 'Open holidays', exact: true }).click(); await page.getByRole('button', { name: 'Split a bill', exact: true }).click();
   await page.getByRole('button', { name: 'Enter amount', exact: true }).click(); await page.getByRole('button', { name: 'Close editor', exact: true }).click();
   await expect(page.getByRole('heading', { name: holiday.name })).toBeVisible(); expect(state.actions).toContain('discard'); expect(state.ledger().trips).toHaveLength(2);
 });
-test.fixme('[P2] first EUR receipt adopts its currency atomically without FX', async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 844 }); const state = await fixtures(page); await page.goto('/expenses');
+test('[P2] first EUR scan adopts its currency atomically without FX', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 }); const state = await fixtures(page);
+  state.ledger().trips.push({ ...holiday, id: 'recent-holiday', name: 'Recent holiday' }); await page.goto('/expenses');
   await page.getByRole('button', { name: 'Open holidays', exact: true }).click(); await page.getByRole('button', { name: 'Split a bill', exact: true }).click();
-  await page.getByRole('button', { name: 'Enter amount', exact: true }).click();
-  await page.getByRole('textbox', { name: 'Expense name', exact: true }).fill('Euro dinner'); await page.getByRole('textbox', { name: 'Amount', exact: true }).fill('24');
-  await page.getByRole('combobox', { name: 'Currency', exact: true }).selectOption('EUR');
-  await page.getByRole('button', { name: 'Save expense', exact: true }).click();
-  const created = state.ledger().trips.find(trip => trip.name === 'Euro dinner')!; expect(created.currency).toBe('EUR'); expect(created.expenses[0].fx).toBeUndefined(); expect(created.expenses[0].bankAmount).toBeUndefined();
+  const chooser = page.waitForEvent('filechooser'); await page.getByRole('button', { name: 'Scan receipt', exact: true }).last().click(); await (await chooser).setFiles(pathPhoto);
+  await expect(page.getByRole('textbox', { name: 'Expense name', exact: true })).toHaveValue('Scanned euro dinner');
+  await page.getByRole('button', { name: /^(Confirm & save expense|Save expense)$/ }).click();
+  await expect(page.locator('.editor')).toHaveCount(0);
+  const created = state.ledger().trips.find(trip => trip.name === 'Scanned euro dinner')!; expect(created.currency).toBe('EUR'); expect(created.expenses[0].fx).toBeUndefined(); expect(created.expenses[0].bankAmount).toBeUndefined();
 });
 for (const path of ['/expenses', '/balances', '/receipts', '/travellers']) for (const width of [320, 390]) {
   test.fixme(`[P3] bill shares and reduced navigation on ${path} at ${width}px`, async ({ page }) => {

@@ -1,5 +1,7 @@
 "use client";
 import { t as uiText, currencyDisplayName,subscribeUiLanguage,setUiLanguage,type UiLanguage } from "@/lib/ui-language";
+import BillStart, { type BillStartValues } from "@/components/bill-start";
+import { firstBillExpense, isFirstBillReceipt, type BillDefaults } from "@/lib/bills";
 import InterfaceLanguage from "@/components/interface-language";
 
 import { canonicalJson, sha256Hex } from "@/lib/data-utils";
@@ -88,6 +90,7 @@ import {
   ClipboardList,
 } from "lucide-react";
 import {
+  isBill,
   balances,
   settlements,
   total,
@@ -265,6 +268,8 @@ export default function Home({ children }: { children: ReactNode }) {
     [holidayToolsOpen,setHolidayToolsOpen]=useState(false),
     [menu, setMenu] = useState(false),
     [create, setCreate] = useState(false),
+    [billStart, setBillStart] = useState(false),
+    [billScan, setBillScan] = useState<File | null>(null),
     [help, setHelp] = useState(false),
     [editing, setEditing] = useState<ReceiptEditor | null>(
       null,
@@ -302,6 +307,7 @@ export default function Home({ children }: { children: ReactNode }) {
     [summaryOpen, setSummaryOpen] = useState(false),
     [repeatOpen, setRepeatOpen] = useState(""),
     [referenceRate, setReferenceRate] = useState<{ rate: number; currency: Currency; date: string; time: string; timezone: string } | null>(null);
+  const billDefaults = useRef<BillDefaults | null>(null);
   const editorBaseline = useRef<{ tripId: string; expense?: Expense } | null>(null);
   const scanReceiptInput = useRef<HTMLInputElement>(null);
   const pendingEditorFocus = useRef<{ editorId: string; target: string; focus: string } | null>(null);
@@ -667,6 +673,47 @@ export default function Home({ children }: { children: ReactNode }) {
       setSaving(false);
     }
   }
+  async function startBill(values: BillStartValues) {
+    const previousTripId = trip?.id || "";
+    const bill: Trip = { id: uid(), kind: "bill", name: values.name || uiText("Bill · {value0}", { value0: formatCalendarDate(today()) }), currency: values.currency,
+      members: values.names.map(name => ({ id: uid(), name })), expenses: [], drafts: [], payments: [] };
+    if (!await save({ trips: [...ledger.trips, bill] })) return;
+    const saved = latestSnapshot.current.data.trips.find(value => value.id === bill.id)!;
+    billDefaults.current = { tripId: bill.id, name: !values.name, currency: values.currencyDefault, previousTripId };
+    setSelected(bill.id); setView("expenses"); setBillStart(false); newExpense(undefined, saved);
+    if (values.file) setBillScan(values.file);
+  }
+  // The photo is chosen during the tap that starts the bill, because browsers
+  // only open a file picker for a direct user gesture. It is read once the new
+  // bill's editor is open.
+  async function scanReceiptFile(file: File) {
+    if (!editing) return;
+    const session = receiptSession.current, editorId = editing.id;
+    setUploading(true); setError("");
+    try {
+      const prepared = await prepareReceiptImage(file);
+      if (session === receiptSession.current && activeReceiptEditor.current?.id === editorId) await captureEditorReceipt(prepared);
+    } catch (cause) {
+      if (session === receiptSession.current) setError(cause instanceof Error ? cause.message : "Unable to prepare the receipt photo.");
+    } finally { if (session === receiptSession.current) setUploading(false); }
+  }
+  useEffect(() => {
+    if (billScan && editing && trip?.id === billDefaults.current?.tripId) { const file = billScan; setBillScan(null); void scanReceiptFile(file); }
+  }, [billScan, editing, trip?.id]);
+  async function discardNewBill(restore = true) {
+    const defaults = billDefaults.current;
+    if (!defaults) return;
+    const current = latestSnapshot.current.data.trips.find(value => value.id === defaults.tripId);
+    if (!current || current.expenses.length || current.payments.length || current.drafts.length) return;
+    try {
+      const response = await fetch("/api/trip", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "discard", tripId: current.id }) });
+      const result = await response.json() as { error?: string };
+      if (!response.ok) throw Error(result.error || "Unable to discard this bill.");
+      billDefaults.current = null;
+      if (restore) setSelected(defaults.previousTripId);
+      await load({ fresh: true });
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Unable to discard this bill."); }
+  }
   async function updateTrip(next: Trip) {
     return save({
       trips: ledger.trips.map((t) => (t.id === next.id ? next : t)),
@@ -764,23 +811,23 @@ export default function Home({ children }: { children: ReactNode }) {
     }
     setEditorConflict(null); setError("");
   }
-  function newExpense(event?: MouseEvent<HTMLElement>) {
+  function newExpense(event?: MouseEvent<HTMLElement>, current = trip) {
     // Safari does not focus tapped buttons; capture a useful modal return target.
     event?.currentTarget.focus({preventScroll:true});
     setReceiptHistoryOpen(false);
     setCaptureNotes("");
     setRestoration(null);
-    if (!trip) return;
+    if (!current) return;
     resetReceiptReview();
     setPaste("");
     setFxError("");
-    editorBaseline.current = { tripId: trip.id };
+    editorBaseline.current = { tripId: current.id };
     setEditorConflict(null); setReferenceRate(null);
     // Expenses are usually entered where the previous one was bought, even
     // when catching up later from a phone set to the home time zone. The
     // default date and time are "now" in that same zone, so all three
     // describe one instant.
-    const timezone = trip.expenses[0]?.timezone
+    const timezone = current.expenses[0]?.timezone
       || Intl.DateTimeFormat().resolvedOptions().timeZone || "Europe/London";
     const entry: ReceiptEditor = {
       id: uid(),
@@ -790,14 +837,14 @@ export default function Home({ children }: { children: ReactNode }) {
       date: today(timezone),
       time: localTime(new Date(), timezone),
       timezone,
-      currency: trip.currency,
-      payer: trip.members.find(member => member.userId === profile?.id)?.id || trip.members[0].id,
+      currency: current.currency,
+      payer: current.members.find(member => member.userId === profile?.id)?.id || current.members[0].id,
       items: [
         {
           id: uid(),
           name: "",
           amount: 0,
-          members: defaultParticipants(trip.members, today(timezone)),
+          members: defaultParticipants(current.members, today(timezone)),
         },
       ],
       tax: 0,
@@ -806,7 +853,7 @@ export default function Home({ children }: { children: ReactNode }) {
       fieldSources: { title: "default", date: "default", time: "default", timezone: "default", currency: "default", payer: "default", tax: "default", tip: "default", discount: "default" },
     };
     setEditing(entry);
-    blankReceiptEditor.current = { tripId: trip.id, editorId: entry.id, financial: structuredClone(receiptEditableValue(entry)) };
+    blankReceiptEditor.current = { tripId: current.id, editorId: entry.id, financial: structuredClone(receiptEditableValue(entry)) };
   }
   function openDraft(d: Draft) {
     if (!trip) return;
@@ -894,6 +941,7 @@ export default function Home({ children }: { children: ReactNode }) {
       confirmLabel: "Discard changes", cancelLabel: "Keep editing", destructive: true,
     })) return;
     closeReceiptEditor();
+    await discardNewBill();
   }
   function isReceiptSessionCurrent(session: number, tripId: string, accountId: string, requireEditor = true) {
     return session === receiptSession.current && receiptSessionScope.current.accountId === accountId
@@ -1294,7 +1342,7 @@ export default function Home({ children }: { children: ReactNode }) {
     e.preventDefault();
     if (receiptHistoryOpen) return;
     if (!trip || !editing || saving || expenseSubmitInFlight.current) return;
-    const blockers = visibleExpenseBlockers(expenseSaveBlockers(editing, trip, {
+    const blockers = visibleExpenseBlockers(expenseSaveBlockers(billEditorExpense || editing, billEditorTrip || trip, {
       uploading, processing: receiptProcessing, conflict: !!editorConflict, offline, fxLookupPending: fxLoading,
     }), quickMode);
     if (blockers.length) {
@@ -1305,13 +1353,13 @@ export default function Home({ children }: { children: ReactNode }) {
       return;
     }
     if (!editorIsCurrent()) { setSaveAttempted(true); return; }
-    const reviewed = acknowledgeReceiptReview(editing);
+    const reviewed = acknowledgeReceiptReview(billEditorExpense || editing);
     const scanError = receiptScanSaveError(reviewed, { allowAcknowledgement: true, previous: editorBaseline.current?.expense });
     if (scanError) { setError(scanError); return; }
     const parsedExpense = expenseSchema.safeParse(reviewed);
     if (!parsedExpense.success) { setError("Review the receipt: add its currency, named item prices and valid cost shares before saving."); return; }
     const { draftId } = editing;
-    const expense = parsedExpense.data;
+    let expense = parsedExpense.data;
     if (draftId) expense.sourceDraftId = draftId;
     const latestDraft = trip.drafts.find(draft => draft.id === draftId);
     const binding = editorDraftBinding.current;
@@ -1327,6 +1375,9 @@ export default function Home({ children }: { children: ReactNode }) {
       return;
     }
     const awaitingReply = !!latestDraft && hasPendingReceiptQuestions(expense.conversation);
+    // A retained draft locks the bill's currency, so adoption waits for a save that consumes it.
+    const adopted = firstBillExpense(trip, expense, awaitingReply ? null : billDefaults.current);
+    expense = adopted.expense;
     expense.languageViewId = editing.languageViewId || editing.expenseId || editing.id;
     if (!exists && expense.id === draftId && awaitingReply) expense.id = uid();
     const retainedDraft: Draft | null = awaitingReply && latestDraft ? {
@@ -1339,13 +1390,14 @@ export default function Home({ children }: { children: ReactNode }) {
     try {
       if (
         await updateTrip({
-          ...trip,
+          ...adopted.trip,
           expenses: exists
             ? trip.expenses.map((x) => (x.id === expense.id ? expense : x))
             : [expense, ...trip.expenses],
           drafts: trip.drafts.flatMap(draft => draft.id === draftId ? retainedDraft ? [retainedDraft] : [] : [draft]),
         })
       ) {
+        if (billDefaults.current?.tripId === trip.id) billDefaults.current = null;
         closeReceiptEditor();
         return true;
       }
@@ -1630,13 +1682,19 @@ export default function Home({ children }: { children: ReactNode }) {
     pendingEditorFocus.current = null;
     if (editing?.id === request.editorId) focusExpenseTarget(request.target, request.focus);
   });
-  const editorShares = useMemo(() => editing && trip ? previewShares(editing, trip) : null, [editing, trip]);
-  const editorTotal = useMemo(() => editing && trip ? previewTotal(editing, trip) : null, [editing, trip]);
+  const billEditorDraft = trip && editing?.draftId ? trip.drafts.find(draft => draft.id === editing.draftId) : undefined;
+  const billEditorAdopts = !!trip && !!editing && !!editing.currency && billDefaults.current?.tripId === trip.id && billDefaults.current.currency
+    && isFirstBillReceipt(trip, { sourceDraftId: editing.draftId })
+    && !(billEditorDraft && hasPendingReceiptQuestions(mergeReceiptConversation(billEditorDraft.conversation, editing.conversation)));
+  const billEditorTrip = useMemo(() => billEditorAdopts && trip && editing?.currency ? { ...trip, currency: editing.currency } : trip, [billEditorAdopts, trip, editing?.currency]);
+  const billEditorExpense = useMemo(() => billEditorAdopts && editing ? { ...editing, fx: undefined, bankAmount: undefined } : editing, [billEditorAdopts, editing]);
+  const editorShares = useMemo(() => billEditorExpense && billEditorTrip ? previewShares(billEditorExpense, billEditorTrip) : null, [billEditorExpense, billEditorTrip]);
+  const editorTotal = useMemo(() => billEditorExpense && billEditorTrip ? previewTotal(billEditorExpense, billEditorTrip) : null, [billEditorExpense, billEditorTrip]);
   const editorOriginalTotal = useMemo(() => editing ? receiptEditorTotal(editing) : 0, [editing]);
   const editorScan = useMemo(() => editing?.receiptScan ? reconcileReceiptScan(editing) : undefined, [editing]);
-  const editorBlockers = useMemo(() => editing && trip ? expenseSaveBlockers(editing, trip, {
+  const editorBlockers = useMemo(() => editing && trip ? expenseSaveBlockers(billEditorExpense || editing, billEditorTrip || trip, {
     uploading, processing: receiptProcessing, conflict: !!editorConflict, offline, fxLookupPending: fxLoading,
-  }) : [], [editing, trip, uploading, receiptProcessing, editorConflict, offline, fxLoading]);
+  }) : [], [editing, trip, billEditorExpense, billEditorTrip, uploading, receiptProcessing, editorConflict, offline, fxLoading]);
   // Save stays available to explain and focus blockers. Only an active save request disables it.
   const saveDisabled = saving;
   const manualFxWarning = editing && trip ? manualFxReview(editing, trip.currency, referenceRate) : undefined;
@@ -1650,7 +1708,7 @@ export default function Home({ children }: { children: ReactNode }) {
   // Foreign-currency receipts need a rate before Save. Look up the daily
   // reference rate once per currency/date/time/zone instead of asking for a
   // tap; a manual rate or bank charge always takes priority.
-  const autoFxKey = editing && trip && editing.currency && editing.currency !== trip.currency && !editing.fx
+  const autoFxKey = !billEditorAdopts && editing && trip && editing.currency && editing.currency !== trip.currency && !editing.fx
     && editing.bankAmount === undefined && editing.date && editing.time && editing.timezone && !receiptHistoryOpen
     ? [trip.id, editing.id, editing.currency, trip.currency, editing.date, editing.time, editing.timezone].join("|") : "";
   const autoFxAttempted = useRef("");
@@ -2240,7 +2298,7 @@ export default function Home({ children }: { children: ReactNode }) {
               className={trip?.id === t.id ? "active" : ""}
               key={t.id}
               onClick={() => {
-                closeReceiptEditor(); setUploadOpen(false); setSelected(t.id);
+                closeReceiptEditor(); void discardNewBill(false); setUploadOpen(false); setSelected(t.id);
                 setMenu(false);
                 setView("expenses");
               }}
@@ -2258,6 +2316,7 @@ export default function Home({ children }: { children: ReactNode }) {
           ))}
         </div>
         <div className="holiday-actions"><button className="newtrip" onClick={()=>{setCreate(true);setMenu(false);}} disabled={loading||auth||saving}><Plus size={17}/>{uiText("New holiday")}</button>
+          <button className="newtrip" disabled={loading || auth || saving} onClick={() => { setBillStart(true); setMenu(false); }}><Receipt size={17}/>{uiText("Split a bill")}</button>
           <button className="iconbutton" aria-label={uiText("More holiday options")} onClick={()=>{setHolidayToolsOpen(true);setMenu(false);}}>•••</button></div>
         <div className="side-bottom">
           {chatgptConnected ? (
@@ -2349,7 +2408,7 @@ export default function Home({ children }: { children: ReactNode }) {
               onJoined={async (id) => {
                 setInvite("");
                 replaceEntryUrl("/expenses");
-                closeReceiptEditor(); setUploadOpen(false); setSelected(id);
+                closeReceiptEditor(); void discardNewBill(false); setUploadOpen(false); setSelected(id);
                 await load({ background: true, fresh: true });
                 await refreshProfile(profile?.id || "");
               }}
@@ -2370,17 +2429,9 @@ export default function Home({ children }: { children: ReactNode }) {
             {trip && <div className="expense-entry-actions">
               <button className="primary" onClick={newExpense} disabled={saving}><Plus size={18} />{uiText(" Add expense")}</button>
               <button type="button" className="quiet" disabled={saving || uploading} onClick={event => { newExpense(event); scanReceiptInput.current?.click(); }}><Camera size={18} />{uiText(" Scan receipt")}</button>
-              <input ref={scanReceiptInput} type="file" hidden aria-label={uiText("Scan receipt photo")} accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif" capture="environment" onChange={async event => {
+              <input ref={scanReceiptInput} type="file" hidden aria-label={uiText("Scan receipt photo")} accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif" capture="environment" onChange={event => {
                 const file = event.target.files?.[0]; event.target.value = "";
-                if (!file || !editing) return;
-                const session = receiptSession.current, editorId = editing.id;
-                setUploading(true); setError("");
-                try {
-                  const prepared = await prepareReceiptImage(file);
-                  if (session === receiptSession.current && activeReceiptEditor.current?.id === editorId) await captureEditorReceipt(prepared);
-                } catch (cause) {
-                  if (session === receiptSession.current) setError(cause instanceof Error ? cause.message : "Unable to prepare the receipt photo.");
-                } finally { if (session === receiptSession.current) setUploading(false); }
+                if (file) void scanReceiptFile(file);
               }} />
             </div>}
           </div>
@@ -2418,6 +2469,7 @@ export default function Home({ children }: { children: ReactNode }) {
                 disabled={auth || loading}
               >
                 <Plus size={18} />{uiText(" Create your first holiday")}</button>
+              <button type="button" className="quiet" onClick={() => setBillStart(true)} disabled={auth || loading}>{uiText("Split a bill")}</button>
               <div className="intro-features">
                 <span>
                   <Receipt size={19} />{uiText(" Itemised receipts")}</span>
@@ -2506,6 +2558,7 @@ export default function Home({ children }: { children: ReactNode }) {
       {summaryOpen && trip && <TripSummary trip={trip} onClose={() => setSummaryOpen(false)} />}
       {repeatOpen && trip && trip.expenses.some(expense => expense.id === repeatOpen) && <RepeatExpenseDialog trip={trip} expense={trip.expenses.find(expense => expense.id === repeatOpen)!} busy={saving}
         onClose={() => setRepeatOpen("")} onRepeat={copies => updateTrip({ ...trip, expenses: [...trip.expenses, ...copies] })} />}
+      {billStart && profile && <BillStart ledger={ledger} displayName={profile.displayName.slice(0, 50)} busy={saving} onClose={() => setBillStart(false)} onStart={startBill} />}
       {create && (
         <ModalA11y className="overlay" onClose={() => setCreate(false)}>
           <section
@@ -2559,7 +2612,7 @@ export default function Home({ children }: { children: ReactNode }) {
                   payments: [],
                 };
                 if (await save({ trips: [...ledger.trips, t] })) {
-                  closeReceiptEditor(); setUploadOpen(false); setSelected(t.id);
+                  closeReceiptEditor(); void discardNewBill(false); setUploadOpen(false); setSelected(t.id);
                   setView("expenses");
                   setCreate(false); setNewTripLanguage("auto");
                 }
@@ -3078,7 +3131,7 @@ export default function Home({ children }: { children: ReactNode }) {
                   })}
                 </div>
                 <div className="conflict-actions">
-                  <button type="button" className="quiet" onClick={() => { if (editorConflict.latest) openExpense(editorConflict.latest, false); else closeReceiptEditor(); setError(""); }}>{editorConflict.latest ? uiText("Use latest saved") : uiText("Discard my edits")}</button>
+                  <button type="button" className="quiet" onClick={() => { if (editorConflict.latest) openExpense(editorConflict.latest, false); else { closeReceiptEditor(); void discardNewBill(); } setError(""); }}>{editorConflict.latest ? uiText("Use latest saved") : uiText("Discard my edits")}</button>
                   <button type="button" className="primary" onClick={keepExpenseEdits}>{editorConflict.latest ? uiText("Continue with my edits") : uiText("Save as a new expense")}</button>
                 </div>
                 <p className="footnote">{uiText("Review your split and press Save expense to commit your choice.")}</p>

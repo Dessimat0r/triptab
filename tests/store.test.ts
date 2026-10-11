@@ -2185,3 +2185,13 @@ test('only a bill with no expenses, payments or drafts can change settlement cur
     else await assert.rejects(store.writeLedger(actor, state.data, state.revision), /settlement currency/);
   }
 });
+
+test('first approved bill scan may adopt currency only while consuming its sole review draft', async () => {
+  const database = await storage();
+  const value: Trip = { ...trip(), kind: 'bill', drafts: [{ ...dinner(), currency: 'EUR', id: 'scan', status: 'review' }] };
+  const state = await create(database, value);
+  state.data.trips[0].currency = 'EUR';
+  await assert.rejects(store.writeLedger(actor, state.data, state.revision), /settlement currency/);
+  state.data.trips[0].expenses = [{ ...dinner(), currency: 'EUR', sourceDraftId: 'scan' }]; state.data.trips[0].drafts = [];
+  assert.equal((await store.writeLedger(actor, state.data, state.revision)).data.trips[0].currency, 'EUR');
+});
