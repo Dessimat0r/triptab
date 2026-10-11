@@ -1,12 +1,12 @@
 'use client';
-import { useId, useMemo, useState } from 'react';
+import { useId, useMemo, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import ModalA11y from './modal-accessibility';
 import { t as uiText, currencyDisplayName } from '@/lib/ui-language';
 import { CURRENCIES, type Currency, type Ledger } from '@/lib/model';
 import './bills.css';
 
-export type BillStartValues = { names: string[]; name: string; currency: Currency; currencyDefault: boolean; scan: boolean };
+export type BillStartValues = { names: string[]; name: string; currency: Currency; currencyDefault: boolean; file?: File };
 export default function BillStart({ ledger, displayName, busy, onClose, onStart }: {
   ledger: Ledger; displayName: string; busy: boolean; onClose: () => void; onStart: (values: BillStartValues) => Promise<void>;
 }) {
@@ -28,11 +28,20 @@ export default function BillStart({ ledger, displayName, busy, onClose, onStart 
     }
     setNames(next); setEntry(''); setError(''); return next;
   }
-  async function start(scan: boolean) {
+  const picker = useRef<HTMLInputElement>(null), pending = useRef<string[]>([]);
+  function values(next: string[], file?: File): BillStartValues { return { names: [displayName, ...next], name: name.trim(), currency, currencyDefault, file }; }
+  async function enter() {
     if (busy) return;
     const next = add(entry.split(','));
     if (next === false) return;
-    await onStart({ names: [displayName, ...next], name: name.trim(), currency, currencyDefault, scan });
+    await onStart(values(next));
+  }
+  // The picker opens inside this tap; the bill is created once a photo is chosen.
+  function scan() {
+    if (busy) return;
+    const next = add(entry.split(','));
+    if (next === false) return;
+    pending.current = next; picker.current?.click();
   }
   return <ModalA11y className="overlay" onClose={() => { if (!busy) onClose(); }}>
     <section className="modal small bill-start" role="dialog" aria-modal="true" aria-labelledby={`${id}-title`}>
@@ -46,7 +55,11 @@ export default function BillStart({ ledger, displayName, busy, onClose, onStart 
       {suggestions.length > 0 && <div className="bill-suggestions">{suggestions.map(name => <button type="button" className="quiet" key={name} disabled={busy} aria-label={uiText('Add {value0}', { value0: name })} onClick={() => add([name])}>{name}</button>)}</div>}
       <details><summary>{uiText('More options')}</summary><label>{uiText('Name')}<input value={name} maxLength={100} disabled={busy} placeholder={uiText('Named after the receipt')} onChange={event => setName(event.target.value)} /></label><label>{uiText('Currency')}<select value={currency} disabled={busy} onChange={event => { setCurrency(event.target.value as Currency); setCurrencyDefault(false); }}>{CURRENCIES.map(({ code, name }) => <option key={code} value={code}>{code} · {currencyDisplayName(code, name)}</option>)}</select></label></details>
       {error && <p className="error" role="alert">{uiText(error)}</p>}
-      <div className="bill-start-actions"><button type="button" className="primary" disabled={busy} onClick={() => void start(true)}>{uiText('Scan receipt')}</button><button type="button" className="quiet" disabled={busy} onClick={() => void start(false)}>{uiText('Enter amount')}</button></div>
+      <div className="bill-start-actions"><button type="button" className="primary" disabled={busy} onClick={scan}>{uiText('Scan receipt')}</button><button type="button" className="quiet" disabled={busy} onClick={() => void enter()}>{uiText('Enter amount')}</button>
+        <input ref={picker} type="file" hidden aria-label={uiText('Scan receipt photo')} accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif" capture="environment" onChange={event => {
+          const file = event.target.files?.[0]; event.target.value = '';
+          if (file) void onStart(values(pending.current, file));
+        }} /></div>
     </section>
   </ModalA11y>;
 }

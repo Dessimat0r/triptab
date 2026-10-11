@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { balances, settlements, validateLedger, parseStoredTrip, type Trip } from '../lib/model';
-import { discardEmptyBill, listArchivedTrips, TripLifecycleError } from '../lib/trip-lifecycle';
+import { deleteTrip, discardEmptyBill, listArchivedTrips, TripLifecycleError } from '../lib/trip-lifecycle';
 import { storage } from './helpers/sqlite-d1';
 const base: Trip = { id: 'bill', kind: 'bill', name: 'Dinner', currency: 'GBP', members: [{ id: 'alex', name: 'Alex' }, { id: 'sam', name: 'Sam' }], expenses: [], payments: [], drafts: [] };
 
@@ -52,7 +52,7 @@ test('discard rejects holidays, entries, a different actor and another joined ac
   for (const value of [{ ...base, kind: undefined }, { ...base, payments: [{ id: 'p', from: 'sam', to: 'alex', amount: 100, date: '2026-10-10' }] }, { ...base, expenses: [{ id: 'e' }] as Trip['expenses'] }, { ...base, drafts: [{ id: 'd' }] as Trip['drafts'] }]) {
     const db = await seeded(value); await assert.rejects(discardEmptyBill(db.asD1(), actor, base.id), conflict); assert.ok(db.sqlite.prepare('SELECT 1 FROM trips').get());
   }
-  const db = await seeded(); await assert.rejects(discardEmptyBill(db.asD1(), { id: 'other', displayName: 'Sam' }, base.id), conflict);
+  const db = await seeded(); await assert.rejects(discardEmptyBill(db.asD1(), { id: 'other', displayName: 'Sam' }, base.id), (error: unknown) => error instanceof TripLifecycleError && error.status === 403);
   db.sqlite.prepare('INSERT INTO memberships(trip_id,user_id,member_id) VALUES(?,?,?)').run(base.id, 'other', 'sam');
   await assert.rejects(discardEmptyBill(db.asD1(), actor, base.id), conflict);
 });
@@ -77,4 +77,12 @@ test('first receipt defaults adopt currency and title together, preserving expli
   const explicit = firstBillExpense(base, expense, { ...defaults, name: false, currency: false });
   assert.deepEqual(explicit, { trip: base, expense });
   assert.deepEqual(firstBillExpense({ ...base, expenses: [expense] }, expense, defaults).trip.currency, 'GBP');
+});
+
+test('a holiday delete loses to a save that lands between its read and commit', async () => {
+  const holiday: Trip = { ...base, kind: undefined, name: 'Trip' };
+  const db = await seeded(holiday);
+  db.beforeBatch = () => { db.beforeBatch = undefined; db.sqlite.prepare('UPDATE trips SET data=? WHERE id=?').run(JSON.stringify({ ...holiday, name: 'Trip 2' }), holiday.id); };
+  await assert.rejects(deleteTrip(db.asD1(), actor, holiday.id, 'Trip'), conflict);
+  assert.ok(db.sqlite.prepare('SELECT 1 FROM trips').get());
 });
