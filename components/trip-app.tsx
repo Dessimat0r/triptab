@@ -1912,6 +1912,13 @@ export default function Home({ children }: { children: ReactNode }) {
                               </div>
     );
   };
+  function billChip(bill: Trip) {
+    if (!bill.expenses.length && !bill.payments.length) return uiText("No receipts yet");
+    const member = bill.members.find(value => value.userId === profile?.id), preview = member && travellerFinancialPreview(bill, member.id);
+    if (preview?.available) return preview.netBalance < 0 ? uiText("You owe {value0}", { value0: money(-preview.netBalance, bill.currency) }) : preview.netBalance > 0 ? uiText("You’re owed {value0}", { value0: money(preview.netBalance, bill.currency) }) : uiText("Settled");
+    if (member) return uiText("Needs review");
+    try { return settlements(bill).length ? uiText("Not settled") : uiText("Settled"); } catch { return uiText("Needs review"); }
+  }
   async function archiveBill() {
     if (!trip || saving || loading) return;
     setSaving(true); setError("");
@@ -2355,10 +2362,8 @@ export default function Home({ children }: { children: ReactNode }) {
           const date = (value: Trip) => value.expenses.reduce((latest, expense) => expense.date > latest ? expense.date : latest, "");
           return date(b.value).localeCompare(date(a.value)) || b.index - a.index;
         }).slice(0, allBills ? undefined : 5).map(({ value: t }) => {
-          const member = t.members.find(member => member.userId === profile?.id), preview = member && travellerFinancialPreview(t, member.id);
-          let chip = uiText("Needs review");
-          if (preview?.available) chip = preview.netBalance < 0 ? uiText("You owe {value0}", { value0: money(-preview.netBalance, t.currency) }) : preview.netBalance > 0 ? uiText("You’re owed {value0}", { value0: money(preview.netBalance, t.currency) }) : uiText("Settled");
-          return <button type="button" key={t.id} className={trip?.id === t.id ? "active" : ""} onClick={() => { closeReceiptEditor(); setUploadOpen(false); setSelected(t.id); setMenu(false); setView("expenses"); }}><span className="tripicon"><Receipt size={17} /></span><span>{t.name}<small>{chip}</small></span></button>;
+          const chip = billChip(t);
+          return <button type="button" key={t.id} className={trip?.id === t.id ? "active" : ""} onClick={() => { closeReceiptEditor(); void discardNewBill(false); setUploadOpen(false); setSelected(t.id); setMenu(false); setView("expenses"); }}><span className="tripicon"><Receipt size={17} /></span><span>{t.name}<small>{chip}</small></span></button>;
         })}</div>{!allBills && ledger.trips.filter(isBill).length > 5 && <button type="button" className="textbutton" onClick={() => setAllBills(true)}>{uiText("Show all bills")}</button>}</>}
         <div className="holiday-actions"><button className="newtrip" onClick={()=>{setCreate(true);setMenu(false);}} disabled={loading||auth||saving}><Plus size={17}/>{uiText("New holiday")}</button>
           <button className="newtrip" disabled={loading || auth || saving} onClick={() => { setBillStart(true); setMenu(false); }}><Receipt size={17}/>{uiText("Split a bill")}</button>

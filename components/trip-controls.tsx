@@ -89,7 +89,7 @@ export default function TripControls({
   }
   return (
     <section className="panel trip-controls">
-      <h3>{uiText(isBill(trip) ? 'Manage this bill' : 'Manage this holiday')}</h3>
+      <h3>{uiText('Manage this holiday')}</h3>
       <p className="footnote">
         {uiText(
           'Archive removes it from your open list. Other travellers keep their access, and you can restore it or download it from Archived holidays.',
@@ -104,7 +104,7 @@ export default function TripControls({
       </button>
       {own ? (
         <>
-          {!isBill(trip) && <details>
+          <details>
             <summary>{uiText('Transfer ownership')}</summary>
             <label>
               {uiText('New owner')}
@@ -134,9 +134,9 @@ export default function TripControls({
             >
               {uiText('Transfer ownership')}
             </button>
-          </details>}
+          </details>
           <details>
-            <summary>{uiText(isBill(trip) ? 'Delete bill' : 'Delete holiday')}</summary>
+            <summary>{uiText('Delete holiday')}</summary>
             <p className="footnote">
               {uiText(
                 'Deletion removes the holiday and receipt photos. Shared history is retained. Holidays that other accounts can still open must be transferred or archived instead.',
@@ -156,11 +156,11 @@ export default function TripControls({
             <button
               className="danger quiet"
               disabled={
-                busy || saving || (!(isBill(trip) && !trip.expenses.length && !trip.payments.length && !trip.drafts.length) && confirmName.trim() !== trip.name.trim())
+                busy || saving || confirmName.trim() !== trip.name.trim()
               }
               onClick={() => void action('delete')}
             >
-              {uiText(isBill(trip) ? 'Delete bill' : 'Delete holiday')}
+              {uiText('Delete holiday')}
             </button>
           </details>
         </>

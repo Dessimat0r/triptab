@@ -3394,5 +3394,23 @@
     "Esta persona no tiene movimientos. Su eliminación queda en el historial.",
     "Cette personne n’a aucune entrée. Son retrait reste dans l’historique.",
     "Diese Person hat keine Einträge. Ihre Entfernung bleibt im Verlauf."
+  ],
+  [
+    "Add a receipt to see who owes what.",
+    "Añade un recibo para ver quién debe qué.",
+    "Ajoutez un reçu pour voir qui doit quoi.",
+    "Füge einen Beleg hinzu, um zu sehen, wer wem was schuldet."
+  ],
+  [
+    "Not settled",
+    "Sin saldar",
+    "Non réglé",
+    "Nicht beglichen"
+  ],
+  [
+    "Needs review",
+    "Requiere revisión",
+    "À vérifier",
+    "Muss geprüft werden"
   ]
 ]
