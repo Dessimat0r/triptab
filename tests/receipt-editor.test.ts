@@ -1,3 +1,4 @@
+import { firstBillExpense, isFirstBillReceipt } from '../lib/bills';
 import { canonicalJson, sha256Hex } from '../lib/data-utils';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -31,6 +32,7 @@ const controllerSource = `return function createController(initial, boundary) {
   let receiptPending = false, receiptCopied = false, receiptPrompt = '', receiptHistoryOpen = false, restoration = null;
   let paste = '', fxError = '', referenceRate = null,captureNotes='',uploadOpen=false;
   const setSaveAttempted=()=>{},setSaveAnnouncement=()=>{},focusExpenseTarget=()=>{};
+  const billDefaults={current:null};
   const quickMode=false;const expenseSubmitInFlight={current:false};
   const setCaptureNotes=next=>{captureNotes=next},setUploadOpen=next=>{uploadOpen=next};
   let uploading = false, receiptProcessing = false, receiptItemized = false, receiptHandoffError = '', receiptHandoffOpened = false, receiptAIConnecting = false;
@@ -48,7 +50,7 @@ const controllerSource = `return function createController(initial, boundary) {
   const receiptAIStatusRequest={current:0},receiptAIStatusInFlight={current:null};
   const updates = [], editorBaseline = {current:null};
   const latestSnapshot = {current:{data:{trips:[trip]},revision:0}};
-  const {CURRENT_CALCULATION_RULE,stampCalculationRules,tripMemberWeights,defaultParticipants,canonicalJson,sha256Hex,itemSchema,draftItemSchema,expenseSchema,acknowledgeReceiptReview,expenseSaveBlockers,visibleExpenseBlockers,receiptScanSaveError,receiptEditorTotal,itemSplitError,receiptSplitError,total,equalFinancialValue,equalSavedValue,buildReceiptPrompt,isBlankReceipt,isUnchangedInitialReceipt,matchingReceiptProposal,mayFillInitialReceipt,receiptEditableValue,receiptProposalEditor} = boundary;
+  const {firstBillExpense,isFirstBillReceipt,CURRENT_CALCULATION_RULE,stampCalculationRules,tripMemberWeights,defaultParticipants,canonicalJson,sha256Hex,itemSchema,draftItemSchema,expenseSchema,acknowledgeReceiptReview,expenseSaveBlockers,visibleExpenseBlockers,receiptScanSaveError,receiptEditorTotal,itemSplitError,receiptSplitError,total,equalFinancialValue,equalSavedValue,buildReceiptPrompt,isBlankReceipt,isUnchangedInitialReceipt,matchingReceiptProposal,mayFillInitialReceipt,receiptEditableValue,receiptProposalEditor} = boundary;
   const uid = boundary.uid, today = () => '2026-10-04', localTime = () => '12:00';
   const money = (amount, currency) => currency+' '+amount/100;
   const previewTotal = entry => total(entry);
@@ -88,7 +90,11 @@ const controllerSource = `return function createController(initial, boundary) {
     trip = parsed.trips[0]; latestSnapshot.current = {data:{trips:[trip]},revision:updates.length+1};
     updates.push(structuredClone(trip)); return true;
   }
-  ${handlers}
+  function billPreview(){
+    const adopts=!!trip && !!editing && !!editing.currency && billDefaults.current?.tripId===trip.id && billDefaults.current.currency && isFirstBillReceipt(trip,{sourceDraftId:editing.draftId});
+    return {trip:adopts?{...trip,currency:editing.currency}:trip,expense:adopts?{...editing,fx:undefined,bankAmount:undefined}:editing};
+  }
+  ${handlers.replaceAll('billEditorExpense || editing', 'billPreview().expense || editing').replaceAll('billEditorTrip || trip', 'billPreview().trip || trip')}
   return {${names.join(',')},get editing(){return editing},get trip(){return trip},get blockers(){return editing?expenseSaveBlockers(editing,trip):[]},get error(){return error},get fxError(){return fxError},get fxLoading(){return fxLoading},get referenceRate(){return referenceRate},get updates(){return updates},get baseline(){return editorBaseline.current},get processed(){return processedReceipt},
     edit(next){editing={...editing,...next};activeReceiptEditor.current=editing},remote(next,revision=updates.length){trip=structuredClone(next);latestSnapshot.current={data:{trips:[trip]},revision}},
     get prompt(){return receiptPrompt},get handoffError(){return receiptHandoffError},get clipboard(){return clipboard},get requests(){return requests},get processing(){return receiptProcessing},get itemized(){return receiptItemized},get pending(){return receiptPending},get uploading(){return uploading},get connecting(){return receiptAIConnecting},
@@ -123,7 +129,7 @@ type Controller = {
   restoring(): void; restoration: unknown;
 };
 const createController = new Function(compiled)() as (initial: Trip, boundary: object) => Controller;
-const controller = (trip: Trip) => createController(trip, { canonicalJson, sha256Hex, uid: randomUUID, ledgerSchema, CURRENT_CALCULATION_RULE, stampCalculationRules, tripMemberWeights, defaultParticipants, itemSchema, draftItemSchema, expenseSchema, acknowledgeReceiptReview, expenseSaveBlockers, visibleExpenseBlockers, itemSplitError, receiptSplitError, total, validateLedger, equalFinancialValue, equalSavedValue, buildReceiptPrompt, isBlankReceipt, isUnchangedInitialReceipt, matchingReceiptProposal, mayFillInitialReceipt, receiptEditableValue, receiptProposalEditor, receiptEditorTotal, receiptScanSaveError });
+const controller = (trip: Trip) => createController(trip, { firstBillExpense, isFirstBillReceipt, canonicalJson, sha256Hex, uid: randomUUID, ledgerSchema, CURRENT_CALCULATION_RULE, stampCalculationRules, tripMemberWeights, defaultParticipants, itemSchema, draftItemSchema, expenseSchema, acknowledgeReceiptReview, expenseSaveBlockers, visibleExpenseBlockers, itemSplitError, receiptSplitError, total, validateLedger, equalFinancialValue, equalSavedValue, buildReceiptPrompt, isBlankReceipt, isUnchangedInitialReceipt, matchingReceiptProposal, mayFillInitialReceipt, receiptEditableValue, receiptProposalEditor, receiptEditorTotal, receiptScanSaveError });
 const stamp = '2026-10-04T12:00:00Z';
 const question: ReceiptMessage = { id: 'question', role: 'user', text: 'Check the replacement image', createdAt: stamp };
 const reply: ReceiptMessage = { id: 'reply', role: 'assistant', replyTo: question.id, text: 'Reviewed replacement image', createdAt: stamp };
