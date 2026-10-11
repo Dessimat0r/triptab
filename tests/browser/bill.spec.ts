@@ -170,7 +170,7 @@ test('[P4] explicit name and settlement currency survive the first foreign-curre
   await sheet.getByRole('combobox', { name: 'Currency', exact: true }).selectOption('GBP');
   const chooser = page.waitForEvent('filechooser'); await sheet.getByRole('button', { name: 'Scan receipt', exact: true }).click(); await (await chooser).setFiles(pathPhoto);
   await expect(page.getByRole('textbox', { name: 'Expense name', exact: true })).toHaveValue('Scanned euro dinner');
-  await expect.poll(() => page.getByRole('button', { name: /^(Confirm & save expense|Save expense)$/ }).isEnabled()).toBe(true);
+  await expect(page.getByText(/1 EUR = 0\.85 GBP · Daily reference rate/)).toBeVisible();
   await page.getByRole('button', { name: /^(Confirm & save expense|Save expense)$/ }).click();
   await expect(page.locator('.editor')).toHaveCount(0);
   const created = state.ledger().trips.find(trip => trip.name === 'Birthday dinner')!;
