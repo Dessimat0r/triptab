@@ -5,3 +5,4 @@
 .bill-start-actions { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-3); margin-top: var(--space-5); }
 .bill-start-actions button { min-height: 44px; white-space: normal; }
 @media (max-width: 359px) { .bill-start-actions { grid-template-columns: 1fr; } }
+.holiday-actions { flex-wrap: wrap; }
