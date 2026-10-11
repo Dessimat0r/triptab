@@ -3148,5 +3148,269 @@
     "Nombre",
     "Nom",
     "Name"
+  ],
+  [
+    "Bill",
+    "Cuenta",
+    "Addition",
+    "Rechnung"
+  ],
+  [
+    "BILL",
+    "CUENTA",
+    "ADDITION",
+    "RECHNUNG"
+  ],
+  [
+    "BILLS",
+    "CUENTAS",
+    "ADDITIONS",
+    "RECHNUNGEN"
+  ],
+  [
+    "Bills ",
+    "Cuentas ",
+    "Additions ",
+    "Rechnungen "
+  ],
+  [
+    "Bill options",
+    "Opciones de cuenta",
+    "Options de l’addition",
+    "Rechnungsoptionen"
+  ],
+  [
+    "Bill sections",
+    "Secciones de cuenta",
+    "Sections de l’addition",
+    "Rechnungsbereiche"
+  ],
+  [
+    "{value0} people · {value1}",
+    "{value0} personas · {value1}",
+    "{value0} personnes · {value1}",
+    "{value0} Personen · {value1}"
+  ],
+  [
+    "People",
+    "Personas",
+    "Personnes",
+    "Personen"
+  ],
+  [
+    "Close people",
+    "Cerrar personas",
+    "Fermer les personnes",
+    "Personen schließen"
+  ],
+  [
+    "New person name",
+    "Nombre de nueva persona",
+    "Nom de la nouvelle personne",
+    "Name der neuen Person"
+  ],
+  [
+    "Who owes what",
+    "Quién debe cuánto",
+    "Qui doit combien",
+    "Wer schuldet wie viel"
+  ],
+  [
+    "Paid {value0} · share {value1}",
+    "Pagó {value0} · parte {value1}",
+    "Payé {value0} · part {value1}",
+    "Bezahlt {value0} · Anteil {value1}"
+  ],
+  [
+    "Is owed {value0}",
+    "Se le debe {value0}",
+    "À recevoir {value0}",
+    "Bekommt {value0}"
+  ],
+  [
+    "Owes {value0}",
+    "Debe {value0}",
+    "Doit {value0}",
+    "Schuldet {value0}"
+  ],
+  [
+    "Payments sent {value0} · received {value1}",
+    "Pagos enviados {value0} · recibidos {value1}",
+    "Paiements envoyés {value0} · reçus {value1}",
+    "Zahlungen gesendet {value0} · erhalten {value1}"
+  ],
+  [
+    "Everyone’s settled",
+    "Todos están al día",
+    "Tout est réglé",
+    "Alle sind ausgeglichen"
+  ],
+  [
+    "Archive bill",
+    "Archivar cuenta",
+    "Archiver l’addition",
+    "Rechnung archivieren"
+  ],
+  [
+    "Copy summary",
+    "Copiar resumen",
+    "Copier le résumé",
+    "Zusammenfassung kopieren"
+  ],
+  [
+    "Bill summary",
+    "Resumen de cuenta",
+    "Résumé de l’addition",
+    "Rechnungsübersicht"
+  ],
+  [
+    "Summary copied.",
+    "Resumen copiado.",
+    "Résumé copié.",
+    "Zusammenfassung kopiert."
+  ],
+  [
+    "Summary shared.",
+    "Resumen compartido.",
+    "Résumé partagé.",
+    "Zusammenfassung geteilt."
+  ],
+  [
+    "Select the summary to copy it.",
+    "Selecciona el resumen para copiarlo.",
+    "Sélectionnez le résumé pour le copier.",
+    "Wähle die Zusammenfassung zum Kopieren aus."
+  ],
+  [
+    "{value0} paid.",
+    "{value0} pagó.",
+    "{value0} a payé.",
+    "{value0} hat bezahlt."
+  ],
+  [
+    "{value0} owes {value1} {value2}.",
+    "{value0} debe a {value1} {value2}.",
+    "{value0} doit {value2} à {value1}.",
+    "{value0} schuldet {value1} {value2}."
+  ],
+  [
+    "No receipts yet",
+    "Aún no hay recibos",
+    "Aucun reçu pour le moment",
+    "Noch keine Belege"
+  ],
+  [
+    "Add receipt",
+    "Añadir recibo",
+    "Ajouter un reçu",
+    "Beleg hinzufügen"
+  ],
+  [
+    "Bill details",
+    "Detalles de cuenta",
+    "Détails de l’addition",
+    "Rechnungsdetails"
+  ],
+  [
+    "Bill name",
+    "Nombre de cuenta",
+    "Nom de l’addition",
+    "Rechnungsname"
+  ],
+  [
+    "Save bill details",
+    "Guardar detalles de cuenta",
+    "Enregistrer les détails",
+    "Rechnungsdetails speichern"
+  ],
+  [
+    "Bill details saved.",
+    "Detalles de cuenta guardados.",
+    "Détails de l’addition enregistrés.",
+    "Rechnungsdetails gespeichert."
+  ],
+  [
+    "Manage this bill",
+    "Administrar esta cuenta",
+    "Gérer cette addition",
+    "Diese Rechnung verwalten"
+  ],
+  [
+    "Bill updated.",
+    "Cuenta actualizada.",
+    "Addition mise à jour.",
+    "Rechnung aktualisiert."
+  ],
+  [
+    "Delete bill",
+    "Eliminar cuenta",
+    "Supprimer l’addition",
+    "Rechnung löschen"
+  ],
+  [
+    "Archive removes this bill from your open list. You can restore it from the archive.",
+    "Archivar quita esta cuenta de la lista abierta. Puedes restaurarla desde el archivo.",
+    "L’archivage retire cette addition de la liste active. Vous pouvez la restaurer depuis les archives.",
+    "Archivieren entfernt diese Rechnung aus der offenen Liste. Du kannst sie aus dem Archiv wiederherstellen."
+  ],
+  [
+    "Deletion removes the bill and receipt photos. Shared history is retained. Bills another account can open must be archived instead.",
+    "La eliminación quita la cuenta y las fotos de recibos. Se conserva el historial compartido. Las cuentas accesibles por otra persona deben archivarse.",
+    "La suppression retire l’addition et les photos des reçus. L’historique partagé est conservé. Les additions accessibles à un autre compte doivent être archivées.",
+    "Löschen entfernt die Rechnung und Belegfotos. Der gemeinsame Verlauf bleibt erhalten. Für andere Konten zugängliche Rechnungen müssen archiviert werden."
+  ],
+  [
+    "Show all bills",
+    "Mostrar todas las cuentas",
+    "Afficher toutes les additions",
+    "Alle Rechnungen anzeigen"
+  ],
+  [
+    "You owe {value0}",
+    "Debes {value0}",
+    "Vous devez {value0}",
+    "Du schuldest {value0}"
+  ],
+  [
+    "You’re owed {value0}",
+    "Se te debe {value0}",
+    "Vous devez recevoir {value0}",
+    "Du bekommst {value0}"
+  ],
+  [
+    "Unable to archive this bill.",
+    "No se pudo archivar esta cuenta.",
+    "Impossible d’archiver cette addition.",
+    "Diese Rechnung konnte nicht archiviert werden."
+  ],
+  [
+    "Remove {value0}?",
+    "¿Quitar a {value0}?",
+    "Retirer {value0} ?",
+    "{value0} entfernen?"
+  ],
+  [
+    "This person has no entries. Their removal stays in history.",
+    "Esta persona no tiene movimientos. Su eliminación queda en el historial.",
+    "Cette personne n’a aucune entrée. Son retrait reste dans l’historique.",
+    "Diese Person hat keine Einträge. Ihre Entfernung bleibt im Verlauf."
+  ],
+  [
+    "Add a receipt to see who owes what.",
+    "Añade un recibo para ver quién debe qué.",
+    "Ajoutez un reçu pour voir qui doit quoi.",
+    "Füge einen Beleg hinzu, um zu sehen, wer wem was schuldet."
+  ],
+  [
+    "Not settled",
+    "Sin saldar",
+    "Non réglé",
+    "Nicht beglichen"
+  ],
+  [
+    "Needs review",
+    "Requiere revisión",
+    "À vérifier",
+    "Muss geprüft werden"
   ]
 ]

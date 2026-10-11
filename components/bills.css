@@ -5,4 +5,18 @@
 .bill-start-actions { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-3); margin-top: var(--space-5); }
 .bill-start-actions button { min-height: 44px; white-space: normal; }
 @media (max-width: 359px) { .bill-start-actions { grid-template-columns: 1fr; } }
+.content-grid--bill { display: block; }
+.bill-view { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-5); }
+.bill-view h2 { font-size: var(--text-l); margin-block: var(--space-4); }
+.bill-view > div { min-width: 0; }
+.bill-share { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-2); width: 100%; padding: var(--space-4); min-height: 44px; border: 0; border-bottom: 1px solid var(--border); background: transparent; color: inherit; text-align: start; }
+.bill-share b, .bill-share span, .bill-share strong { overflow-wrap: normal; word-break: normal; }
+.bill-shares { padding: 0; }
+.bill-share-actions { display: flex; flex-wrap: wrap; gap: var(--space-3); margin-block: var(--space-4); }
+.bill-people form { display: flex; flex-wrap: wrap; align-items: end; gap: var(--space-3); margin-block: var(--space-4); }
+.bill-people label { display: grid; gap: var(--space-2); flex: 1 1 160px; min-width: 0; }
+.bill-options-trigger { min-width: 44px; min-height: 44px; margin-inline-end: var(--space-3); }
+@media (min-width: 901px) { .bill-view { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
+@media (max-width: 700px) { .bill-view .sectionheading { flex-wrap: wrap; gap: var(--space-3); } }
+@media (max-width: 480px) { .bill-people, .bill-options { padding: var(--space-4); } .bill-people .trip-details-panel { padding: var(--space-4); } }
 .holiday-actions { flex-wrap: wrap; }

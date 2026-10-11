@@ -8,10 +8,11 @@ import { Check } from "lucide-react";
 import { validCalendarDate } from "@/lib/dates";
 import { TripReceiptLanguage } from "@/components/receipt-language-select";
 import { receiptLanguageSchema } from "@/lib/receipt-languages";
-import type { Trip } from "@/lib/model";
+import { isBill, type Trip } from "@/lib/model";
 
 export type TripDetailsProps = {
   trip: Trip;
+  showPeople?: boolean;
   paging: { shown: number; step: number; onMore: () => void };
   accountId?: string;
   busy: boolean;
@@ -30,7 +31,7 @@ export function parseBudget(text: string): number | undefined | null {
   return Number.isSafeInteger(hundredths) && hundredths > 0 && hundredths <= 100000000 ? hundredths : null;
 }
 
-function TravellerName({ trip, member, index, busy, onSave }: {
+export function TravellerName({ trip, member, index, busy, onSave }: {
   trip: Trip; member: Member; index: number; busy: boolean; onSave: TripDetailsProps["onSave"];
 }) {
   const id = useId();
@@ -80,7 +81,7 @@ function TravellerName({ trip, member, index, busy, onSave }: {
   </form>;
 }
 
-function TripDetailsForm({ trip, paging, accountId, busy, error: externalError, onSave }: TripDetailsProps) {
+function TripDetailsForm({ trip, showPeople = true, paging, accountId, busy, error: externalError, onSave }: TripDetailsProps) {
   const id = useId();
   const [draft, setDraft] = useState<Partial<{ name: string; startDate: string; endDate: string; receiptLanguage: string; budget: string }>>({});
   const [submitting, setSubmitting] = useState(false);
@@ -95,8 +96,8 @@ function TripDetailsForm({ trip, paging, accountId, busy, error: externalError, 
     setDraft(previous => ({ ...previous, [field]: value })); setError(""); setSaved(false);
   }
   return <section className="panel trip-details-panel" aria-labelledby={`${id}-heading`}>
-    <h3 id={`${id}-heading`}>{uiText("Holiday details")}</h3>
-    <p className="footnote">{uiText("Travellers in this holiday can update its name, dates, budget and display names.")}</p>
+    <h3 id={`${id}-heading`}>{uiText(isBill(trip) ? "Bill details" : "Holiday details")}</h3>
+    {!isBill(trip) && <p className="footnote">{uiText("Travellers in this holiday can update its name, dates, budget and display names.")}</p>}
     <form className="holiday-details-form" onSubmit={async event => {
       event.preventDefault();
       if (locked) return;
@@ -120,9 +121,9 @@ function TripDetailsForm({ trip, paging, accountId, busy, error: externalError, 
         setError(cause instanceof Error ? cause.message : "Unable to save the holiday details. Your edits are still here.");
       } finally { setSubmitting(false); }
     }}>
-      <label htmlFor={`${id}-name`}>{uiText("Holiday name")}<input id={`${id}-name`} value={values.name} required maxLength={100} disabled={locked} onChange={event => change("name", event.target.value)} />
+      <label htmlFor={`${id}-name`}>{uiText(isBill(trip) ? "Bill name" : "Holiday name")}<input id={`${id}-name`} value={values.name} required maxLength={100} disabled={locked} onChange={event => change("name", event.target.value)} />
       </label>
-      <div className="fieldpair holiday-dates">
+      {!isBill(trip) && <><div className="fieldpair holiday-dates">
         <label htmlFor={`${id}-start`}>{uiText("Start date (optional)")}<input id={`${id}-start`} type="date" value={values.startDate} max={values.endDate || undefined} disabled={locked} onChange={event => change("startDate", event.target.value)} />
         </label>
         <label htmlFor={`${id}-end`}>{uiText("End date (optional)")}<input id={`${id}-end`} type="date" value={values.endDate} min={values.startDate || undefined} disabled={locked} onChange={event => change("endDate", event.target.value)} />
@@ -130,20 +131,20 @@ function TripDetailsForm({ trip, paging, accountId, busy, error: externalError, 
       </div>
       <label htmlFor={`${id}-budget`}>{uiText("Group budget in ")}{trip.currency}{uiText(" (optional)")}<input id={`${id}-budget`} inputMode="decimal" autoComplete="off" value={values.budget} disabled={locked} placeholder={uiText("e.g. 2000")} onChange={event => change("budget", event.target.value)} />
       </label>
-      <TripReceiptLanguage value={receiptLanguageSchema.parse(values.receiptLanguage)} onChange={value=>change("receiptLanguage",value)} destination={()=>values.name} busy={locked} accountId={accountId} tripId={trip.id} />
+      <TripReceiptLanguage value={receiptLanguageSchema.parse(values.receiptLanguage)} onChange={value=>change("receiptLanguage",value)} destination={()=>values.name} busy={locked} accountId={accountId} tripId={trip.id} /></>}
       {(error || externalError) && <p className="error" role="alert">{externalError || uiText(error)}</p>}
       <div className="holiday-details-actions">
-        <button type="submit" className="primary phone-wide" disabled={locked || !changed}>{submitting ? uiText("Saving…") : uiText("Save holiday details")}</button>
-        {saved && <p className="trip-details-success" role="status"><Check size={15} aria-hidden="true" />{uiText(" Holiday details saved.")}</p>}
+        <button type="submit" className="primary phone-wide" disabled={locked || !changed}>{submitting ? uiText("Saving…") : uiText(isBill(trip) ? "Save bill details" : "Save holiday details")}</button>
+        {saved && <p className="trip-details-success" role="status"><Check size={15} aria-hidden="true" />{uiText(isBill(trip) ? "Bill details saved." : " Holiday details saved.")}</p>}
       </div>
     </form>
     <p className="footnote">{uiText("Settle in ")}{trip.currency}{uiText(". Each expense keeps its original currency and transaction time. Saved expenses and payments keep the same traveller assignments when a display name changes.")}</p>
-    <div className="trip-traveller-names">
+    {showPeople && <div className="trip-traveller-names">
       <h3>{uiText("Traveller display names")}</h3>
       <p className="footnote">{uiText("These labels belong to this holiday. Connected accounts and personal profiles keep their identities.")}</p>
       <PagedList {...paging} noun={uiText("traveller names")} items={trip.members} itemKey={member => member.id}
         renderItem={(member, index) => <TravellerName key={member.id} trip={trip} member={member} index={index} busy={locked} onSave={onSave} />} />
-    </div>
+    </div>}
   </section>;
 }
 
