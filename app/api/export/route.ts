@@ -40,13 +40,14 @@ function exportContacts<T>(value: T, actor: string, organiser = false): T {
 function financialCsv(trip: Trip): string {
   const name = (id: string) => trip.members.find(member => member.id === id)?.name || id;
   const rows: unknown[][] = [[
-    'trip_name', 'Kind', 'record_type', 'record_id', 'title', 'transaction_date_local', 'transaction_time_local', 'transaction_timezone',
+    'record_type', 'record_id', 'title', 'transaction_date_local', 'transaction_time_local', 'transaction_timezone',
     'receipt_currency', 'receipt_amount_hundredths', 'receipt_amount', 'settlement_currency', 'settlement_amount_hundredths', 'settlement_amount',
     'paid_by', 'from', 'to', 'payment_method', 'note', 'tax_hundredths', 'tip_hundredths', 'discount_hundredths',
     'bank_charge_hundredths', 'fx_rate', 'fx_as_of', 'fx_source', 'receipt_id', 'entry_source', 'calculation_error',
     ...trip.members.map(member => `${member.name}_cost_share_hundredths`),
     'item_details_json', 'receipt_scan_json', 'field_sources_json',
     'receipt_location', 'receipt_location_source', 'receipt_location_hint_json',
+    'kind',
   ]];
   for (const expense of trip.expenses) {
     let original: number | undefined;
@@ -58,7 +59,7 @@ function financialCsv(trip: Trip): string {
     try { original = total(expense); converted = expenseTotal(expense, trip.currency); shares = expenseShares(expense, trip.members, trip.currency); }
     catch (cause) { calculationError = cause instanceof Error ? cause.message : 'This receipt needs review'; }
     rows.push([
-      trip.name, trip.kind ?? 'holiday', 'expense', expense.id, expense.title, expense.date, expense.time, expense.timezone,
+      'expense', expense.id, expense.title, expense.date, expense.time, expense.timezone,
       expense.currency, original, decimal(original), trip.currency, converted, decimal(converted),
       name(expense.payer), '', '', '', '', expense.tax, expense.tip, expense.discount,
       expense.bankAmount, expense.fx?.rate, expense.fx?.asOf, expense.fx?.source, expense.receiptId, expense.source || 'manual', calculationError,
@@ -66,13 +67,15 @@ function financialCsv(trip: Trip): string {
       JSON.stringify(expense.items.map(({ id, name, nameLanguage, translations, amount, members, percentages, units, quantity, scanSource, fieldSources }) => ({ id, name, nameLanguage, translations, amount, members, percentages, units, quantity, scanSource, fieldSources }))),
       expense.receiptScan ? JSON.stringify(expense.receiptScan) : '', expense.fieldSources ? JSON.stringify(expense.fieldSources) : '',
       expense.location?.label, expense.location?.source, expense.locationHint ? JSON.stringify(expense.locationHint) : '',
+      trip.kind ?? 'holiday',
     ]);
   }
   for (const payment of trip.payments) {
     rows.push([
-      trip.name, trip.kind ?? 'holiday', 'payment', payment.id, '', payment.date, payment.time, payment.timezone,
+      'payment', payment.id, '', payment.date, payment.time, payment.timezone,
       '', '', '', trip.currency, payment.amount, decimal(payment.amount), '', name(payment.from), name(payment.to), payment.method, payment.note,
       '', '', '', '', '', '', '', '', '', '', ...trip.members.map(() => ''), '', '', '', '', '', '',
+      trip.kind ?? 'holiday',
     ]);
   }
   return csv(rows);

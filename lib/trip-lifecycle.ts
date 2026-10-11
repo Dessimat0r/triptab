@@ -19,12 +19,12 @@ const access = '(t.owner = ? OR EXISTS (SELECT 1 FROM memberships m WHERE m.trip
 const identity = 'NOT EXISTS (SELECT 1 FROM auth_links WHERE oai_user_id = ? AND user_id <> ?)';
 const marked = 'EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND last_write = ?)';
 
-function tripMessage(trip: Pick<Trip, 'kind'> | undefined, text: string) {
+export function tripMessage(trip: Pick<Trip, 'kind'> | undefined, text: string) {
   return trip && isBill(trip) ? text.replaceAll('holiday', 'bill').replaceAll('Holiday', 'Bill') : text;
 }
 
 function tripId(value: unknown) {
-  if (typeof value !== 'string' || !value || value.length > 100) throw new TripLifecycleError('Choose a valid ledger.');
+  if (typeof value !== 'string' || !value || value.length > 100) throw new TripLifecycleError('Choose a valid holiday.');
   return value;
 }
 function summary(trip: Trip): Record<string, unknown> {
@@ -51,7 +51,7 @@ export async function setTripArchived(database: D1Database, actor: Actor, rawTri
   const id = tripId(rawTripId);
   const trip = await database.prepare(`SELECT json_extract(t.data, '$.kind') AS kind, json_extract(t.data, '$.name') AS name, EXISTS (SELECT 1 FROM trip_archives a WHERE a.trip_id = t.id AND a.user_id = ?) AS archived
     FROM trips t WHERE t.id = ? AND ${access}`).bind(actor.id, id, actor.id, actor.id).first<{ name: string; kind?: Trip['kind']; archived: number }>();
-  if (!trip) throw new TripLifecycleError('You do not have access to this ledger.', 403);
+  if (!trip) throw new TripLifecycleError('You do not have access to this holiday.', 403);
   if (!!trip.archived === archived) return { archived };
   const holidayName = String(trip.name ?? '').slice(0, 100);
   const audit = accountAuditStatement(database, { userId: actor.id, actorName: actor.displayName, entityType: 'trip', entityId: id,

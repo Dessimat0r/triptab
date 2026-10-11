@@ -103,3 +103,34 @@ test('a holiday delete loses to a save that lands between its read and commit', 
   await assert.rejects(deleteTrip(db.asD1(), actor, holiday.id, 'Trip'), conflict);
   assert.ok(db.sqlite.prepare('SELECT 1 FROM trips').get());
 });
+
+test('isBill tolerates a missing trip', async () => {
+  const { isBill } = await import('../lib/model');
+  assert.equal(isBill(undefined), false); assert.equal(isBill({}), false); assert.equal(isBill({ kind: 'bill' }), true);
+});
+
+test('every bill lifecycle message has a translation and holiday wording is unchanged', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const { tripMessage } = await import('../lib/trip-lifecycle');
+  const copy = (await import('../lib/ui-copy.json', { with: { type: 'json' } })).default as string[][];
+  const { SPANISH_UI } = await import('../lib/ui-spanish');
+  const source = await readFile(new URL('../lib/trip-lifecycle.ts', import.meta.url), 'utf8');
+  const messages = [...source.matchAll(/tripMessage\([^,]+, '((?:[^'\\]|\\.)*)'\)/g)].map(match => match[1].replace(/\\'/g, "'"));
+  assert.ok(messages.length >= 8);
+  for (const message of messages) {
+    assert.equal(tripMessage({ kind: 'holiday' }, message), message); assert.equal(tripMessage(undefined, message), message);
+    const bill = tripMessage({ kind: 'bill' }, message);
+    assert.notEqual(bill, message);
+    assert.ok(copy.some(row => row[0] === bill && row.length === 4 && row.every(Boolean)) || bill in SPANISH_UI, `missing translation: ${bill}`);
+  }
+  for (const text of ['Only the bill owner can discard it.', 'This bill has entries. Delete it from its settings instead.', 'Unable to change this bill.']) assert.ok(copy.some(row => row[0] === text) || text in SPANISH_UI, `missing translation: ${text}`);
+});
+
+test('a retained draft keeps the bill currency locked on the first receipt', async () => {
+  const { billReceiptCurrencyChange } = await import('../lib/bills');
+  const expense: Trip['expenses'][number] = { id: 'e', title: 'Restaurant', currency: 'EUR', payer: 'alex', date: '2026-10-10', time: '19:00', timezone: 'Europe/London', items: [{ id: 'i', name: 'Food', amount: 1200, members: ['alex', 'sam'] }], tax: 0, tip: 0, discount: 0, sourceDraftId: 'd' };
+  const draft = { ...expense, id: 'd', status: 'review' as const } as unknown as Trip['drafts'][number];
+  const previous = { ...base, drafts: [draft] };
+  assert.equal(billReceiptCurrencyChange(previous, { ...previous, currency: 'EUR', expenses: [expense], drafts: [] }), true);
+  assert.equal(billReceiptCurrencyChange(previous, { ...previous, currency: 'EUR', expenses: [expense], drafts: [{ ...draft, status: 'waiting' } as unknown as Trip['drafts'][number]] }), false);
+});

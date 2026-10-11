@@ -3820,5 +3820,29 @@
     "Requiere revisión",
     "À vérifier",
     "Muss geprüft werden"
+  ],
+  [
+    "Only the bill owner can discard it.",
+    "Solo el propietario de la cuenta puede descartarla.",
+    "Seul le propriétaire de la note peut l’annuler.",
+    "Nur der Rechnungsinhaber kann sie verwerfen."
+  ],
+  [
+    "Unable to change this bill.",
+    "No se pudo cambiar esta cuenta.",
+    "Impossible de modifier cette note.",
+    "Diese Rechnung konnte nicht geändert werden."
+  ],
+  [
+    "Bill owner account",
+    "Cuenta del propietario de la cuenta",
+    "Compte du propriétaire de la note",
+    "Konto des Rechnungsinhabers"
+  ],
+  [
+    "Revoked by the bill owner",
+    "Revocada por el propietario de la cuenta",
+    "Révoquée par le propriétaire de la note",
+    "Vom Rechnungsinhaber widerrufen"
   ]
 ]

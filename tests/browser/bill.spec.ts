@@ -184,7 +184,7 @@ test('[P4] a saved receipt draft prevents empty-bill discard', async ({ page }) 
   await expect(page.getByRole('textbox', { name: 'Expense name', exact: true })).toHaveValue('Scanned euro dinner');
   await page.getByRole('button', { name: 'Close editor', exact: true }).click();
   const confirmation = page.getByRole('dialog', { name: 'Discard unsaved changes?', exact: true });
-  if (await confirmation.isVisible()) await confirmation.getByRole('button', { name: 'Discard changes', exact: true }).click();
+  await expect(confirmation).toHaveCount(0);
   await expect(page.locator('.editor')).toHaveCount(0);
   expect(state.actions).not.toContain('discard');
   expect(state.ledger().trips.find(trip => trip.id !== bill.id && trip.kind === 'bill')?.drafts).toHaveLength(1);

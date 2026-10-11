@@ -325,9 +325,9 @@ test('real saved receipt purchased quantities, units, memory and item conversati
 
   const financialRows = parseCsv(await (await route.GET(request('scope=trip&tripId=mine&format=csv'))).text());
   const header = financialRows[0];
-  assert.deepEqual(header.slice(-6,-3), ['item_details_json', 'receipt_scan_json', 'field_sources_json'], 'scan evidence appends without moving existing financial columns');
-  assert.equal(header[10], 'receipt_amount');
-  assert.equal(header[29], 'Alice_cost_share_hundredths');
+  assert.deepEqual(header.slice(-7,-4), ['item_details_json', 'receipt_scan_json', 'field_sources_json'], 'scan evidence appends without moving existing financial columns');
+  assert.equal(header[8], 'receipt_amount');
+  assert.equal(header[27], 'Alice_cost_share_hundredths');
   assert.ok(financialRows.every(row => row.length === header.length));
   assert.equal(financialRows[1][header.indexOf('receipt_amount_hundredths')], '1001', 'line amount is the full price, not a per-unit price');
   assert.equal(financialRows[1][header.indexOf('Alice_cost_share_hundredths')], '834');
@@ -554,8 +554,9 @@ test('bill exports retain kind in JSON and label every financial CSV row', async
   const snapshot = await json<Snapshot>(await route.GET(request('scope=trip&tripId=mine')));
   assert.equal(snapshot.data.trips[0].kind, 'bill');
   const rows = parseCsv(await (await route.GET(request('scope=trip&tripId=mine&format=csv'))).text());
-  assert.deepEqual(rows[0].slice(0, 2), ['trip_name', 'Kind']);
-  assert.ok(rows.slice(1).every(row => row[0] === 'Dinner' && row[1] === 'bill'));
+  assert.equal(rows[0].at(-1), 'kind', 'kind appends after the existing columns');
+  assert.equal(rows[0][0], 'record_type');
+  assert.ok(rows.slice(1).every(row => row.at(-1) === 'bill'));
   const legacy = parseCsv(await (await route.GET(request('scope=trip&tripId=shared&format=csv', 'joined'))).text());
-  assert.ok(legacy.slice(1).every(row => row[1] === 'holiday'));
+  assert.ok(legacy.slice(1).every(row => row.at(-1) === 'holiday'));
 });

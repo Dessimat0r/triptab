@@ -430,8 +430,8 @@ async function deliverNotifications(tripId: string, actor: string, title: string
     if (!users.length) return;
     const now = new Date().toISOString();
     const recent = new Date(Date.now() - 30000).toISOString();
-    const shortTitle = compactText(title, 50) || 'Ledger updated';
-    const shortBody = compactText(body, 160) || 'Your ledger has a saved update.';
+    const shortTitle = compactText(title, 50) || 'Holiday updated';
+    const shortBody = compactText(body, 160) || 'Your holiday has a saved update.';
     const placeholders = users.map(() => '?').join(',');
     const previous = await db().prepare(`SELECT user_id, MAX(created_at) AS latest FROM notifications WHERE user_id IN (${placeholders}) GROUP BY user_id`).bind(...users).all<{ user_id: string; latest: string }>();
     const throttled = new Set((previous.results ?? []).filter(row => row.latest > recent).map(row => row.user_id));

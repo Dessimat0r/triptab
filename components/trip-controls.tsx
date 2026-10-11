@@ -20,7 +20,7 @@ async function change(
     body: JSON.stringify({ action, tripId, ...extra }),
   });
   const body = (await response.json()) as { error?: string };
-  if (!response.ok) throw Error(body.error || 'Unable to change this ledger.');
+  if (!response.ok) throw Error(body.error || 'Unable to change this holiday.');
 }
 
 export default function TripControls({
@@ -75,7 +75,7 @@ export default function TripControls({
       setMessage(
         cause instanceof Error
           ? cause.message
-          : 'Unable to change this ledger.',
+          : isBill(trip) ? 'Unable to change this bill.' : 'Unable to change this holiday.',
       );
     } finally {
       setSaving(false);

@@ -300,7 +300,7 @@ function readable(value: unknown): string {
   return object ? Object.entries(object).filter(([key]) => !PRIVATE_FIELD.test(key)).map(([key, value]) => `${fieldLabel(key)}: ${readable(value)}`).join("\n") || "No recorded details" : "Not recorded";
 }
 
-function changes(event: ActivityEvent, currency: Currency | undefined, names: Record<string, string>, accountNames: Record<string, string>): AuditChange[] {
+function changes(event: ActivityEvent, currency: Currency | undefined, names: Record<string, string>, accountNames: Record<string, string>, tripKind?: Trip["kind"]): AuditChange[] {
   const before = event.before || {}, after = event.after || {}, result: AuditChange[] = [], handled = new Set(["id"]);
   const add = (key: string, label: string, describe: (value: unknown, snapshot: Record<string, unknown>) => string = readable) => {
     handled.add(key);
@@ -342,7 +342,7 @@ function changes(event: ActivityEvent, currency: Currency | undefined, names: Re
   add("fx", "Exchange rate", value => {
     const fx = auditRecord(value); return fx ? `Rate: ${fx.rate}\nAs of: ${auditText(fx.asOf)}\nSource: ${auditText(fx.source)}` : "No recorded rate";
   });
-  for (const [key, label, entity] of [["receiptId", "Receipt image", "Image"], ["sourceDraftId", "Linked receipt draft", "Draft"], ["expenseId", "Receipt review target", "Expense"], ["userId", "Traveller account", "Account"], ["ownerId", "Ledger owner account", "Account"], ["uploaderId", "Image uploaded by", "Account"], ["initiatorId", "Cleanup initiated by account", "Account"]]) add(key, label, value => entity === "Account" ? accountReference(value, accountNames) : reference(value, entity));
+  for (const [key, label, entity] of [["receiptId", "Receipt image", "Image"], ["sourceDraftId", "Linked receipt draft", "Draft"], ["expenseId", "Receipt review target", "Expense"], ["userId", "Traveller account", "Account"], ["ownerId", tripKind === "bill" ? "Bill owner account" : "Holiday organiser account", "Account"], ["uploaderId", "Image uploaded by", "Account"], ["initiatorId", "Cleanup initiated by account", "Account"]]) add(key, label, value => entity === "Account" ? accountReference(value, accountNames) : reference(value, entity));
   for (const [key, label, entity] of [["memberOrder", "Traveller order", "Traveller"], ["expenseOrder", "Expense order", "Expense"], ["paymentOrder", "Payment order", "Payment"], ["draftOrder", "Receipt draft order", "Draft"]]) add(key, label, value => order(value, id => key === "memberOrder" ? traveller(id, names) : `${entity} ${id}`));
   handled.add("items");
   const oldItems = new Map(entries(before.items).map(item => [auditText(item.id), item])), newItems = new Map(entries(after.items).map(item => [auditText(item.id), item]));
@@ -379,7 +379,7 @@ function changes(event: ActivityEvent, currency: Currency | undefined, names: Re
   if (!same(oldMemory?.notes, newMemory?.notes)) result.push({ label: "Remembered receipt notes", before: auditText(oldMemory?.notes) || "No saved notes", after: auditText(newMemory?.notes) || "No saved notes" });
   if (!same(oldMemory?.aliases || [], newMemory?.aliases || [])) result.push({ label: "Remembered names", before: memoryAliases(oldMemory?.aliases, before, names), after: memoryAliases(newMemory?.aliases, after, names) });
   add("state", String(event.entityType) === "invite" ? "Invitation state" : "Image state", value => STATES[auditText(value)] || readable(value));
-  add("reason", "Reason", value => String(event.entityType) === "invite" && value === "owner" ? "Revoked by the ledger owner" : REASONS[auditText(value)] || readable(value));
+  add("reason", "Reason", value => String(event.entityType) === "invite" && value === "owner" ? tripKind === "bill" ? "Revoked by the bill owner" : "Revoked by the holiday organiser" : REASONS[auditText(value)] || readable(value));
   add("deletionReason", "Original image removal reason", value => REASONS[auditText(value)] || readable(value));
   add("contentType", "Image format", value => ({ "image/jpeg": "JPEG image", "image/png": "PNG image", "image/webp": "WebP image" }[auditText(value)] || readable(value)));
   add("sizeBytes", "Stored image size", value => typeof value === "number" ? `${value.toLocaleString("en-GB")} bytes` : "Not recorded");
@@ -411,7 +411,7 @@ type ActivityDetailProps = Pick<ActivityPanelProps, "currency" | "tripKind"> & {
 };
 
 function ActivityDetailBody({ event, currency, tripKind, memberNames, actorMemberNames }: ActivityDetailProps) {
-  const fields = useMemo(() => changes(event, currency, memberNames, actorMemberNames), [event, currency, memberNames, actorMemberNames]);
+  const fields = useMemo(() => changes(event, currency, memberNames, actorMemberNames, tripKind), [event, currency, memberNames, actorMemberNames, tripKind]);
   const actor = event.actorName || "Traveller", tripName = actorMemberNames[event.actorId];
   const snapshot = event.after || event.before || {};
   return <>
