@@ -12,7 +12,7 @@ export type OfflineExpense = {
 export type OfflineContext = {
   accountId: string;
   name: string;
-  trips: Pick<Trip, 'id' | 'name' | 'currency' | 'members'>[];
+  trips: Pick<Trip, 'id' | 'name' | 'kind' | 'currency' | 'members'>[];
   currencies: readonly { code: string; name: string }[];
 };
 type Store = {

@@ -2577,3 +2577,32 @@ test('connected receipt drafts accept the same display suggestion and preserve u
       ? {symbol:expenseIcon.symbol,background:expenseIcon.symbol==='Martini'?'pink':'orange'} : undefined);
   }
 });
+
+test('MCP creates bills idempotently and exposes kind in summaries and details', async () => {
+  reset();
+  const args = { ...create, kind: 'bill', name: 'Dinner', startDate: undefined, endDate: undefined };
+  const first = await invoke('create_holiday', args);
+  assert.equal(first.result.isError, undefined);
+  const saved = content(first).data.trips.find(trip => trip.kind === 'bill')!;
+  assert.ok(saved);
+  assert.equal(saved.name, 'Dinner');
+  assert.equal(saved.startDate, undefined);
+  assert.equal(saved.endDate, undefined);
+  assert.equal(saved.members[0].name, profile.displayName);
+  const retry = content(await invoke('create_holiday', args));
+  assert.equal(retry.trip_id, content(first).trip_id);
+  assert.equal(state.writes, 1);
+  const summaries = content(await invoke('get_trip_ledger', {})).data.trips;
+  assert.equal(summaries.find(trip => trip.id === saved.id)?.kind, 'bill');
+  assert.equal(summaries.find(trip => trip.id === 'trip-1')?.kind, 'holiday');
+});
+
+test('MCP rejects bill dates and over twenty people before writing', async () => {
+  for (const extra of [{ startDate: '2026-10-10' }, { endDate: '2026-10-11' }, { travellers: Array.from({ length: 21 }, (_, i) => `Person ${i}`) }]) {
+    reset();
+    const reply = await invoke('create_holiday', { ...create, kind: 'bill', startDate: undefined, endDate: undefined, ...extra });
+    assert.equal(reply.result.isError, true);
+    assert.match(reply.result.content![0].text, /Invalid tool fields/);
+    assert.equal(state.writes, 0);
+  }
+});

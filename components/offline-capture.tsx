@@ -70,9 +70,10 @@ export default function OfflineCapture({
         store.operation('contexts', 'put', {
           accountId,
           name,
-          trips: ledger.trips.map(({ id, name, currency, members }) => ({
+          trips: ledger.trips.map(({ id, name, kind, currency, members }) => ({
             id,
             name,
+            kind,
             currency,
             members: members.map(
               ({ id, name, userId, weight, joinedOn, leftOn, retired }) => ({
@@ -232,9 +233,10 @@ export default function OfflineCapture({
               await store.operation('contexts', 'put', {
                 accountId,
                 name,
-                trips: ledger.trips.map(({ id, name, currency, members }) => ({
+                trips: ledger.trips.map(({ id, name, kind, currency, members }) => ({
                   id,
                   name,
+                  kind,
                   currency,
                   members: members.map(
                     ({

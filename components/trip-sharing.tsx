@@ -5,7 +5,7 @@ import { formatInstant } from "@/lib/dates";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useLiveRefresh } from "./use-live-refresh";
 import { Link, Copy, Users, Check } from "lucide-react";
-import type { Trip, TravellerFinancialPreview } from "@/lib/model";
+import { isBill, type Trip, type TravellerFinancialPreview } from "@/lib/model";
 import type { Profile } from "./account-panel";
 import { useConfirmation } from "./confirmation-dialog";
 
@@ -91,7 +91,7 @@ export function TripSharing({ trip, profile, onChanged }: { trip: Trip; profile:
     } finally { setBusy(false); }
   }
 
-  if (!owner) return <p className="footnote">{uiText("The holiday organiser can invite people to join this trip.")}</p>;
+  if (!owner) return <p className="footnote">{uiText(isBill(trip) ? "The bill owner can invite people to join this bill." : "The holiday organiser can invite people to join this trip.")}</p>;
   return <div className="panel sharing-panel">
     <h3>{uiText("Invite a traveller")}</h3>
     <p className="footnote">{uiText("Share a one-use link. They create a TripTab account with their email or sign in, then review the traveller’s saved expenses and payments before joining. ChatGPT is optional.")}</p>
@@ -152,7 +152,7 @@ export function TripSharing({ trip, profile, onChanged }: { trip: Trip; profile:
 }
 
 type JoinInfo = {
-  tripId: string; tripName: string; memberName: string; alreadyMember?: boolean;
+  tripId: string; tripName: string; kind?: Trip["kind"]; memberName: string; alreadyMember?: boolean;
   history: TravellerFinancialPreview; historySnapshot: string; error?: string;
 };
 export function JoinTrip({ token, accountId, onJoined, onAuthenticate }: {
@@ -207,11 +207,11 @@ export function JoinTrip({ token, accountId, onJoined, onAuthenticate }: {
   return <div className="panel join-panel">
     <div className="large-icon"><Users size={30} aria-hidden="true" /></div>
     <h2>{info ? uiText("Join {value0}", { value0: info.tripName }) : uiText("Your holiday invitation")}</h2>
-    <p>{info ? uiText("You’ve been invited as {value0}. Your account will take over this traveller’s recorded history and share access to this holiday.", { value0: info.memberName }) : uiText("Sign in to view your invitation and join the holiday.")}</p>
+    <p>{info ? uiText(info.kind === "bill" ? "You’ve been invited as {value0}. Your account will take over this person’s recorded history and share access to this bill." : "You’ve been invited as {value0}. Your account will take over this traveller’s recorded history and share access to this holiday.", { value0: info.memberName }) : uiText("Sign in to view your invitation and join the holiday.")}</p>
     {error && <p className="error" role="alert">{uiText(error)}</p>}
     {auth ? onAuthenticate ? <button className="primary" type="button" onClick={onAuthenticate}>{uiText("Create an account or sign in")}</button>
       : <a className="primary" href={"/?account=login&invite=" + encodeURIComponent(token)}>{uiText("Create an account or sign in")}</a>
-      : info?.alreadyMember ? <button className="primary" onClick={() => onJoined(info.tripId)}>{uiText("Open holiday")}</button>
+      : info?.alreadyMember ? <button className="primary" onClick={() => onJoined(info.tripId)}>{uiText(info?.kind === "bill" ? "Open bill" : "Open holiday")}</button>
       : info && history && <form onSubmit={async event => {
         event.preventDefault(); if (busy || !acceptedHistory) return;
         infoRequest.current?.abort(); infoRequest.current = null;
@@ -246,7 +246,7 @@ export function JoinTrip({ token, accountId, onJoined, onAuthenticate }: {
           <input type="checkbox" required checked={acceptedHistory} disabled={busy} onChange={event => setAcceptedHistorySnapshot(event.target.checked ? info.historySnapshot : null)} />
           <span>{uiText("I have reviewed this history and agree to join as ")}{info.memberName}.</span>
         </label>
-        <button className="primary" disabled={busy || !acceptedHistory}>{busy ? uiText("Joining…") : uiText("Confirm history & join holiday")}</button>
+        <button className="primary" disabled={busy || !acceptedHistory}>{busy ? uiText("Joining…") : uiText(info?.kind === "bill" ? "Confirm history & join bill" : "Confirm history & join holiday")}</button>
       </form>}
   </div>;
 }

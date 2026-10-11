@@ -726,7 +726,7 @@ export default function Home({ children }: { children: ReactNode }) {
     const current = latestSnapshot.current.data.trips.find(value => value.id === notice.tripId);
     if (!current) { setError("This holiday is no longer available, so the deletion can’t be undone."); return; }
     if ([...notice.expenses, ...notice.payments, ...notice.drafts].some(({ entry }) => [...current.expenses, ...current.payments, ...current.drafts].some(value => value.id === entry.id))) {
-      setError("That entry is already back in the holiday."); return;
+      setError(isBill(current) ? "That entry is already back in the bill." : "That entry is already back in the holiday."); return;
     }
     const lostPhotos = new Set<string>();
     for (const { entry } of [...notice.expenses, ...notice.drafts]) {
@@ -752,7 +752,7 @@ export default function Home({ children }: { children: ReactNode }) {
   }
   function editorIsCurrent(current: Trip | undefined = trip) {
     const baseline = editorBaseline.current;
-    if (baseline && current?.id !== baseline.tripId) { setError("This holiday is no longer available. Your edits are still here."); return false; }
+    if (baseline && current?.id !== baseline.tripId) { setError(isBill(trip) ? "This bill is no longer available. Your edits are still here." : "This holiday is no longer available. Your edits are still here."); return false; }
     if (!baseline?.expense) {
       if (editing && current?.expenses.some(value => value.id === editing.id)) {
         setError("This expense is already recorded. Your edits are still here; close this form and review its current version from Expenses.");
@@ -788,7 +788,7 @@ export default function Home({ children }: { children: ReactNode }) {
   }
   function keepExpenseEdits() {
     if (!editing || !editorConflict || !trip) return;
-    if (editorBaseline.current?.tripId !== trip.id) { setError("This holiday is no longer available."); return; }
+    if (editorBaseline.current?.tripId !== trip.id) { setError(isBill(trip) ? "This bill is no longer available." : "This holiday is no longer available."); return; }
     const latest = editorConflict.latest;
     if (latest) {
       editorBaseline.current = { tripId: trip.id, expense: structuredClone(latest) };
@@ -927,7 +927,7 @@ export default function Home({ children }: { children: ReactNode }) {
     if (editorDirty && !await confirm({
       title: "Discard unsaved changes?",
       message: editing?.draftId
-        ? "Your receipt photo and its saved draft stay on this holiday, but the changes you made since opening it will be lost."
+        ? isBill(trip) ? "Your receipt photo and its saved draft stay on this bill, but the changes you made since opening it will be lost." : "Your receipt photo and its saved draft stay on this holiday, but the changes you made since opening it will be lost."
         : "This expense hasn’t been saved. Closing now loses what you entered.",
       confirmLabel: "Discard changes", cancelLabel: "Keep editing", destructive: true,
     })) return;
@@ -1480,7 +1480,7 @@ export default function Home({ children }: { children: ReactNode }) {
     const tripId = trip.id;
     const fresh = await load();
     const current = fresh?.data.trips.find(value => value.id === tripId);
-    if (!current) { setError("This holiday is no longer available."); return; }
+    if (!current) { setError(isBill(trip) ? "This bill is no longer available." : "This holiday is no longer available."); return; }
     const original = existing && current.payments.find(value => value.id === existing.id);
     if (existing && !original) { setError("This payment was removed. The current balances have been refreshed."); return; }
     let updatedSuggestion;
@@ -1494,7 +1494,7 @@ export default function Home({ children }: { children: ReactNode }) {
   }
   async function savePayment(payment: Payment) {
     if (!trip || !paymentEditor || saving) return false;
-    if (paymentEditor.tripId !== trip.id) { setError("This holiday changed. Your payment details are still here; reopen the original holiday to continue."); return false; }
+    if (paymentEditor.tripId !== trip.id) { setError(isBill(trip) ? "This bill changed. Your payment details are still here; reopen the original bill to continue." : "This holiday changed. Your payment details are still here; reopen the original holiday to continue."); return false; }
     const current = trip.payments.find(value => value.id === payment.id);
     if (current && !paymentEditor.original) { setError("This payment is already recorded. Your details are still here; close this form and review its current version from Balances."); return false; }
     if (paymentEditor.original && !current) { setError("This payment was removed. Your entered details are still here; record it as a new payment if needed."); return false; }
@@ -2006,7 +2006,7 @@ export default function Home({ children }: { children: ReactNode }) {
                       )}
                     </>
                   );
-      case "history": return <ActivityPanel tripId={trip.id} accountId={profile?.id} refreshKey={activityRefreshKey} currency={trip.currency} memberNames={memberNames} actorMemberNames={actorMemberNames} busy={saving || loading} onRestore={event => void reviewRestore(event)} />;
+      case "history": return <ActivityPanel tripId={trip.id} tripKind={trip.kind} accountId={profile?.id} refreshKey={activityRefreshKey} currency={trip.currency} memberNames={memberNames} actorMemberNames={actorMemberNames} busy={saving || loading} onRestore={event => void reviewRestore(event)} />;
       case "receipts": return (
                     <>
                       <div className="sectionheading">
@@ -2583,7 +2583,7 @@ export default function Home({ children }: { children: ReactNode }) {
               {saving
                 ? uiText("Saving…")
                 : trip
-                  ? uiText("Shared holiday ledger, saved securely.")
+                  ? uiText(isBill(trip) ? "Shared bill ledger, saved securely." : "Shared holiday ledger, saved securely.")
                   : uiText("Good trips. Fair tabs.")}
             </span>
           </footer>
@@ -2875,7 +2875,7 @@ export default function Home({ children }: { children: ReactNode }) {
                           onSend={sendReceiptQuestion} onRefresh={() => void load({ background: true, fresh: true })} />}
                       </div>;
                     })()}
-                    {editing.bankAmount !== undefined && (editing.currency === trip.currency || editing.bankAmount < 0) && <div id={editing.currency === trip.currency ? EXPENSE_TARGETS.fx : undefined} className="error" role="alert"><p>{uiText("The saved bank charge is ")}{money(editing.bankAmount, trip.currency)}. {editing.currency === trip.currency ? uiText("A receipt already in the holiday currency cannot use a currency-conversion bank charge.") : uiText("A bank charge must be greater than zero.")}{uiText(" Review it before saving.")}</p><button type="button" className="quiet" onClick={() => setEditing({ ...editing, bankAmount: undefined })}>{uiText("Remove bank charge")}</button></div>}
+                    {editing.bankAmount !== undefined && (editing.currency === trip.currency || editing.bankAmount < 0) && <div id={editing.currency === trip.currency ? EXPENSE_TARGETS.fx : undefined} className="error" role="alert"><p>{uiText("The saved bank charge is ")}{money(editing.bankAmount, trip.currency)}. {editing.currency === trip.currency ? uiText(isBill(trip) ? "A receipt already in the bill currency cannot use a currency-conversion bank charge." : "A receipt already in the holiday currency cannot use a currency-conversion bank charge.") : uiText("A bank charge must be greater than zero.")}{uiText(" Review it before saving.")}</p><button type="button" className="quiet" onClick={() => setEditing({ ...editing, bankAmount: undefined })}>{uiText("Remove bank charge")}</button></div>}
                     {fxPanel}
                     {quickMode && <div className="expense-payer">{payerField}</div>}
                     <PurchaseDetails key={`details:${editing.id}`} id={EXPENSE_TARGETS.details} needsAttention={purchaseDetailsNeedAttention}

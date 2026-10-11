@@ -103,7 +103,7 @@ function TripDetailsForm({ trip, showPeople = true, paging, accountId, busy, err
       if (locked) return;
       setError(""); setSaved(false);
       const name = values.name.trim();
-      if (!name || name.length > 100) { setError("Enter a holiday name between 1 and 100 characters."); return; }
+      if (!name || name.length > 100) { setError(isBill(trip) ? "Enter a bill name between 1 and 100 characters." : "Enter a holiday name between 1 and 100 characters."); return; }
       if (values.startDate && !validCalendarDate(values.startDate)) { setError("Enter a valid holiday start date."); return; }
       if (values.endDate && !validCalendarDate(values.endDate)) { setError("Enter a valid holiday end date."); return; }
       if (values.startDate && values.endDate && values.endDate < values.startDate) { setError("The end date must be on or after the start date."); return; }
@@ -116,9 +116,9 @@ function TripDetailsForm({ trip, showPeople = true, paging, accountId, busy, err
       setSubmitting(true);
       try {
         if (await onSave(next)) { setDraft({}); setSaved(true); }
-        else setError("Unable to save the holiday details. Your edits are still here; try again.");
+        else setError(isBill(trip) ? "Unable to save the bill details. Your edits are still here; try again." : "Unable to save the holiday details. Your edits are still here; try again.");
       } catch (cause) {
-        setError(cause instanceof Error ? cause.message : "Unable to save the holiday details. Your edits are still here.");
+        setError(cause instanceof Error ? cause.message : isBill(trip) ? "Unable to save the bill details. Your edits are still here." : "Unable to save the holiday details. Your edits are still here.");
       } finally { setSubmitting(false); }
     }}>
       <label htmlFor={`${id}-name`}>{uiText(isBill(trip) ? "Bill name" : "Holiday name")}<input id={`${id}-name`} value={values.name} required maxLength={100} disabled={locked} onChange={event => change("name", event.target.value)} />

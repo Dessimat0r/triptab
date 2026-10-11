@@ -3168,10 +3168,10 @@
     "RECHNUNGEN"
   ],
   [
-    "Bills ",
-    "Cuentas ",
-    "Additions ",
-    "Rechnungen "
+    "Bills",
+    "Cuentas",
+    "Additions",
+    "Rechnungen"
   ],
   [
     "Bill options",
@@ -3394,5 +3394,413 @@
     "Esta persona no tiene movimientos. Su eliminación queda en el historial.",
     "Cette personne n’a aucune entrée. Son retrait reste dans l’historique.",
     "Diese Person hat keine Einträge. Ihre Entfernung bleibt im Verlauf."
+  ],
+  [
+    "Open bill",
+    "Abrir cuenta",
+    "Ouvrir la note",
+    "Rechnung öffnen"
+  ],
+  [
+    "Confirm history & join bill",
+    "Confirmar historial y unirse a la cuenta",
+    "Confirmer l’historique et rejoindre la note",
+    "Verlauf bestätigen und Rechnung beitreten"
+  ],
+  [
+    "The bill owner can invite people to join this bill.",
+    "El propietario puede invitar a personas a esta cuenta.",
+    "Le propriétaire peut inviter des personnes à rejoindre cette note.",
+    "Der Rechnungsinhaber kann Personen zu dieser Rechnung einladen."
+  ],
+  [
+    "You’ve been invited as {value0}. Your account will take over this person’s recorded history and share access to this bill.",
+    "Te han invitado como {value0}. Tu cuenta asumirá el historial registrado de esta persona y compartirá el acceso a esta cuenta.",
+    "Vous avez été invité en tant que {value0}. Votre compte reprendra l’historique de cette personne et partagera l’accès à cette note.",
+    "Du wurdest als {value0} eingeladen. Dein Konto übernimmt den gespeicherten Verlauf dieser Person und erhält Zugriff auf diese Rechnung."
+  ],
+  [
+    "Enter a bill name between 1 and 100 characters.",
+    "Introduce un nombre de cuenta de entre 1 y 100 caracteres.",
+    "Saisissez un nom de note de 1 à 100 caractères.",
+    "Gib einen Rechnungsnamen mit 1 bis 100 Zeichen ein."
+  ],
+  [
+    "Unable to save the bill details. Your edits are still here; try again.",
+    "No se pudieron guardar los detalles de la cuenta. Tus cambios siguen aquí; inténtalo de nuevo.",
+    "Impossible d’enregistrer les détails de la note. Vos modifications sont conservées ; réessayez.",
+    "Die Rechnungsdetails konnten nicht gespeichert werden. Deine Änderungen sind noch vorhanden; versuche es erneut."
+  ],
+  [
+    "Unable to save the bill details. Your edits are still here.",
+    "No se pudieron guardar los detalles de la cuenta. Tus cambios siguen aquí.",
+    "Impossible d’enregistrer les détails de la note. Vos modifications sont conservées.",
+    "Die Rechnungsdetails konnten nicht gespeichert werden. Deine Änderungen sind noch vorhanden."
+  ],
+  [
+    "This person is no longer on the bill.",
+    "Esta persona ya no está en la cuenta.",
+    "Cette personne ne fait plus partie de la note.",
+    "Diese Person gehört nicht mehr zur Rechnung."
+  ],
+  [
+    "Unable to calculate this statement. Review the bill receipts.",
+    "No se pudo calcular este estado. Revisa los recibos de la cuenta.",
+    "Impossible de calculer ce relevé. Vérifiez les reçus de la note.",
+    "Diese Abrechnung konnte nicht berechnet werden. Prüfe die Belege der Rechnung."
+  ],
+  [
+    "Cost shares include receipt percentages, item assignments, tax, tips, discounts and currency conversion. Every penny follows the bill’s saved split.",
+    "Las partes incluyen porcentajes, asignaciones de artículos, impuestos, propinas, descuentos y conversión de divisas. Cada céntimo sigue el reparto guardado de la cuenta.",
+    "Les parts incluent les pourcentages, les articles attribués, les taxes, les pourboires, les remises et la conversion monétaire. Chaque centime suit la répartition enregistrée de la note.",
+    "Kostenanteile berücksichtigen Prozentsätze, Artikelzuordnungen, Steuern, Trinkgelder, Rabatte und Währungsumrechnung. Jeder Cent folgt der gespeicherten Aufteilung der Rechnung."
+  ],
+  [
+    "Your receipt photo and its saved draft stay on this bill, but the changes you made since opening it will be lost.",
+    "La foto del recibo y su borrador guardado permanecen en esta cuenta, pero se perderán los cambios realizados desde que lo abriste.",
+    "La photo du reçu et son brouillon restent dans cette note, mais les modifications effectuées depuis son ouverture seront perdues.",
+    "Dein Belegfoto und der gespeicherte Entwurf bleiben in dieser Rechnung, aber Änderungen seit dem Öffnen gehen verloren."
+  ],
+  [
+    "Shared bill ledger, saved securely.",
+    "Cuenta compartida, guardada de forma segura.",
+    "Note partagée, enregistrée en toute sécurité.",
+    "Gemeinsame Rechnung, sicher gespeichert."
+  ],
+  [
+    "Ledger owner account",
+    "Cuenta del propietario del registro",
+    "Compte du propriétaire du registre",
+    "Konto des Registerinhabers"
+  ],
+  [
+    "Revoked by the ledger owner",
+    "Revocada por el propietario del registro",
+    "Révoquée par le propriétaire du registre",
+    "Vom Registerinhaber widerrufen"
+  ],
+  [
+    "· bill revision",
+    "· revisión de la cuenta",
+    "· révision de la note",
+    "· Rechnungsversion"
+  ],
+  [
+    "Person references use current bill names with stable IDs. Message authors retain their recorded names.",
+    "Las referencias a personas usan los nombres actuales de la cuenta con identificadores estables. Los autores conservan sus nombres registrados.",
+    "Les références aux personnes utilisent les noms actuels de la note avec des identifiants stables. Les auteurs conservent leurs noms enregistrés.",
+    "Personenverweise verwenden aktuelle Namen der Rechnung mit festen Kennungen. Nachrichtenautoren behalten ihre gespeicherten Namen."
+  ],
+  [
+    "See who changed this bill and the complete details before and after each change. Earlier records remain in the history.",
+    "Consulta quién cambió esta cuenta y los detalles completos antes y después de cada cambio. Los registros anteriores permanecen en el historial.",
+    "Voyez qui a modifié cette note et tous les détails avant et après chaque modification. Les anciens enregistrements restent dans l’historique.",
+    "Sieh, wer diese Rechnung geändert hat, und alle Details vor und nach jeder Änderung. Frühere Einträge bleiben im Verlauf."
+  ],
+  [
+    "Bill activity",
+    "Actividad de la cuenta",
+    "Activité de la note",
+    "Rechnungsaktivität"
+  ],
+  [
+    "Person joined",
+    "Persona incorporada",
+    "Personne ajoutée",
+    "Person beigetreten"
+  ],
+  [
+    "Ledger updated",
+    "Registro actualizado",
+    "Registre mis à jour",
+    "Register aktualisiert"
+  ],
+  [
+    "Ledger requests must come from TripTab.",
+    "Las solicitudes del registro deben proceder de TripTab.",
+    "Les requêtes du registre doivent provenir de TripTab.",
+    "Registeranfragen müssen von TripTab kommen."
+  ],
+  [
+    "Choose a valid ledger.",
+    "Elige un registro válido.",
+    "Choisissez un registre valide.",
+    "Wähle ein gültiges Register."
+  ],
+  [
+    "You are not a traveller on this bill.",
+    "No participas en esta cuenta.",
+    "Vous ne participez pas à cette note.",
+    "Du bist kein Teilnehmer dieser Rechnung."
+  ],
+  [
+    "As the owner, transfer this bill to another traveller before leaving it. You can also archive or delete it.",
+    "Como propietario, transfiere esta cuenta a otra persona antes de salir. También puedes archivarla o eliminarla.",
+    "En tant que propriétaire, transférez cette note à une autre personne avant de la quitter. Vous pouvez aussi l’archiver ou la supprimer.",
+    "Übertrage als Inhaber diese Rechnung vor dem Verlassen an einen anderen Teilnehmer. Du kannst sie auch archivieren oder löschen."
+  ],
+  [
+    "Your traveller entry changed. Refresh the bill and try again.",
+    "Tu entrada de participante cambió. Actualiza la cuenta e inténtalo de nuevo.",
+    "Votre entrée de participant a changé. Actualisez la note et réessayez.",
+    "Dein Teilnehmereintrag wurde geändert. Lade die Rechnung neu und versuche es erneut."
+  ],
+  [
+    "This bill changed while you were leaving. Refresh and try again.",
+    "Esta cuenta cambió mientras salías. Actualiza e inténtalo de nuevo.",
+    "Cette note a changé pendant votre départ. Actualisez et réessayez.",
+    "Diese Rechnung wurde während des Verlassens geändert. Lade sie neu und versuche es erneut."
+  ],
+  [
+    "Only the bill owner can transfer it.",
+    "Solo el propietario puede transferir la cuenta.",
+    "Seul le propriétaire peut transférer la note.",
+    "Nur der Rechnungsinhaber kann sie übertragen."
+  ],
+  [
+    "Choose a traveller who has joined this bill with their own account.",
+    "Elige a una persona que se haya unido a esta cuenta con su propia cuenta de usuario.",
+    "Choisissez une personne ayant rejoint cette note avec son propre compte.",
+    "Wähle einen Teilnehmer, der dieser Rechnung mit seinem eigenen Konto beigetreten ist."
+  ],
+  [
+    "You already own this bill.",
+    "Ya eres el propietario de esta cuenta.",
+    "Vous êtes déjà propriétaire de cette note.",
+    "Du bist bereits Inhaber dieser Rechnung."
+  ],
+  [
+    "This bill or its travellers changed. Refresh and try again.",
+    "Esta cuenta o sus participantes cambiaron. Actualiza e inténtalo de nuevo.",
+    "Cette note ou ses participants ont changé. Actualisez et réessayez.",
+    "Diese Rechnung oder ihre Teilnehmer wurden geändert. Lade sie neu und versuche es erneut."
+  ],
+  [
+    "Only the bill owner can delete it.",
+    "Solo el propietario puede eliminar la cuenta.",
+    "Seul le propriétaire peut supprimer la note.",
+    "Nur der Rechnungsinhaber kann sie löschen."
+  ],
+  [
+    "Type the bill name exactly to confirm deleting it.",
+    "Escribe el nombre exacto de la cuenta para confirmar su eliminación.",
+    "Saisissez le nom exact de la note pour confirmer sa suppression.",
+    "Gib den Rechnungsnamen exakt ein, um das Löschen zu bestätigen."
+  ],
+  [
+    "Other travellers have joined this bill with their accounts. Transfer it or archive it instead; only a bill nobody else can open can be deleted.",
+    "Otras personas se han unido a esta cuenta con sus cuentas de usuario. Transfiérela o archívala; solo se puede eliminar una cuenta que nadie más pueda abrir.",
+    "D’autres personnes ont rejoint cette note avec leur compte. Transférez-la ou archivez-la ; seule une note que personne d’autre ne peut ouvrir peut être supprimée.",
+    "Andere Teilnehmer sind dieser Rechnung mit ihren Konten beigetreten. Übertrage oder archiviere sie; nur eine Rechnung, die niemand sonst öffnen kann, kann gelöscht werden."
+  ],
+  [
+    "Another traveller joined or the bill changed. Refresh and try again.",
+    "Otra persona se unió o la cuenta cambió. Actualiza e inténtalo de nuevo.",
+    "Une autre personne a rejoint la note ou celle-ci a changé. Actualisez et réessayez.",
+    "Ein weiterer Teilnehmer ist beigetreten oder die Rechnung wurde geändert. Lade sie neu und versuche es erneut."
+  ],
+  [
+    "More options",
+    "Más opciones",
+    "Plus d’options",
+    "Weitere Optionen"
+  ],
+  [
+    "View statement for {value0}",
+    "Ver estado de {value0}",
+    "Voir le relevé de {value0}",
+    "Abrechnung für {value0} anzeigen"
+  ],
+  [
+    "Mark paid",
+    "Marcar como pagado",
+    "Marquer comme payé",
+    "Als bezahlt markieren"
+  ],
+  [
+    "Leave this bill?",
+    "¿Salir de esta cuenta?",
+    "Quitter cette note ?",
+    "Diese Rechnung verlassen?"
+  ],
+  [
+    "Leave bill",
+    "Salir de la cuenta",
+    "Quitter la note",
+    "Rechnung verlassen"
+  ],
+  [
+    "Choose a connected person",
+    "Elige a una persona conectada",
+    "Choisissez une personne connectée",
+    "Wähle eine verbundene Person"
+  ],
+  [
+    "Restore bill",
+    "Restaurar cuenta",
+    "Restaurer la note",
+    "Rechnung wiederherstellen"
+  ],
+  [
+    "The new owner will manage invitations and bill ownership. You stay as a participant.",
+    "El nuevo propietario gestionará las invitaciones y la propiedad de la cuenta. Tú seguirás como participante.",
+    "Le nouveau propriétaire gérera les invitations et la propriété de la note. Vous resterez participant.",
+    "Der neue Inhaber verwaltet Einladungen und die Rechnung. Du bleibst Teilnehmer."
+  ],
+  [
+    "Unable to change this ledger.",
+    "No se pudo modificar este registro.",
+    "Impossible de modifier ce registre.",
+    "Dieses Register konnte nicht geändert werden."
+  ],
+  [
+    "This bill is no longer available.",
+    "Esta cuenta ya no está disponible.",
+    "Cette note n’est plus disponible.",
+    "Diese Rechnung ist nicht mehr verfügbar."
+  ],
+  [
+    "This bill is no longer available. Your edits are still here.",
+    "Esta cuenta ya no está disponible. Tus cambios siguen aquí.",
+    "Cette note n’est plus disponible. Vos modifications sont conservées.",
+    "Diese Rechnung ist nicht mehr verfügbar. Deine Änderungen sind noch vorhanden."
+  ],
+  [
+    "That entry is already back in the bill.",
+    "Esta entrada ya está en la cuenta.",
+    "Cette entrée est déjà rétablie dans la note.",
+    "Dieser Eintrag ist bereits wieder in der Rechnung."
+  ],
+  [
+    "This bill changed. Your payment details are still here; reopen the original bill to continue.",
+    "Esta cuenta cambió. Tus detalles de pago siguen aquí; vuelve a abrir la cuenta original para continuar.",
+    "Cette note a changé. Vos détails de paiement sont conservés ; rouvrez la note d’origine pour continuer.",
+    "Diese Rechnung wurde geändert. Deine Zahlungsdetails sind noch vorhanden; öffne die ursprüngliche Rechnung erneut, um fortzufahren."
+  ],
+  [
+    "A receipt already in the bill currency cannot use a currency-conversion bank charge.",
+    "Un recibo en la moneda de la cuenta no puede usar un cargo bancario de conversión.",
+    "Un reçu dans la devise de la note ne peut pas utiliser un débit bancaire de conversion.",
+    "Ein Beleg in der Rechnungswährung kann keine Bankbelastung zur Währungsumrechnung verwenden."
+  ],
+  [
+    "Open TripTab and sign in to create your verified profile before creating a bill.",
+    "Abre TripTab e inicia sesión para crear tu perfil verificado antes de crear una cuenta.",
+    "Ouvrez TripTab et connectez-vous pour créer votre profil vérifié avant de créer une note.",
+    "Öffne TripTab und melde dich an, um vor dem Erstellen einer Rechnung dein verifiziertes Profil anzulegen."
+  ],
+  [
+    "You do not have access to this ledger.",
+    "No tienes acceso a este registro.",
+    "Vous n’avez pas accès à ce registre.",
+    "Du hast keinen Zugriff auf dieses Register."
+  ],
+  [
+    "You already have {count} open holidays and bills. Archive one before restoring another.",
+    "Ya tienes {count} viajes y cuentas abiertos. Archiva uno antes de restaurar otro.",
+    "Vous avez déjà {count} voyages et notes ouverts. Archivez-en un avant d’en restaurer un autre.",
+    "Du hast bereits {count} offene Reisen und Rechnungen. Archiviere eine, bevor du eine weitere wiederherstellst."
+  ],
+  [
+    "Choose a valid ledger list.",
+    "Elige una lista de registros válida.",
+    "Choisissez une liste de registres valide.",
+    "Wähle eine gültige Registerliste."
+  ],
+  [
+    "Send valid ledger details.",
+    "Envía detalles de registro válidos.",
+    "Envoyez des détails de registre valides.",
+    "Sende gültige Registerdetails."
+  ],
+  [
+    "Choose a valid ledger action.",
+    "Elige una acción de registro válida.",
+    "Choisissez une action de registre valide.",
+    "Wähle eine gültige Registeraktion."
+  ],
+  [
+    "Bills don’t have dates or a budget.",
+    "Las cuentas no tienen fechas ni presupuesto.",
+    "Les notes n’ont ni dates ni budget.",
+    "Rechnungen haben keine Reisedaten und kein Budget."
+  ],
+  [
+    "Bills don’t track traveller dates or family weights.",
+    "Las cuentas no registran fechas de participantes ni ponderaciones familiares.",
+    "Les notes ne suivent ni les dates des participants ni les pondérations familiales.",
+    "Rechnungen erfassen keine Teilnehmerdaten oder Familiengewichtungen."
+  ],
+  [
+    "Your ledger has a saved update.",
+    "Tu registro tiene una actualización guardada.",
+    "Votre registre contient une mise à jour enregistrée.",
+    "Dein Register enthält eine gespeicherte Aktualisierung."
+  ],
+  [
+    "This bill has entries. Delete it from its settings instead.",
+    "Esta cuenta tiene entradas. Elimínala desde su configuración.",
+    "Cette note contient des entrées. Supprimez-la depuis ses paramètres.",
+    "Diese Rechnung enthält Einträge. Lösche sie stattdessen in ihren Einstellungen."
+  ],
+  [
+    "A bill can’t become a holiday, or the reverse.",
+    "Una cuenta no puede convertirse en un viaje, ni al revés.",
+    "Une note ne peut pas devenir un voyage, et inversement.",
+    "Eine Rechnung kann nicht zu einer Reise werden oder umgekehrt."
+  ],
+  [
+    "Bill dates changed",
+    "Fechas de la cuenta modificadas",
+    "Dates de la note modifiées",
+    "Rechnungsdaten geändert"
+  ],
+  [
+    "Bill currency changed",
+    "Moneda de la cuenta modificada",
+    "Devise de la note modifiée",
+    "Rechnungswährung geändert"
+  ],
+  [
+    "Bill language changed",
+    "Idioma de la cuenta modificado",
+    "Langue de la note modifiée",
+    "Rechnungssprache geändert"
+  ],
+  [
+    "Bill renamed",
+    "Cuenta renombrada",
+    "Note renommée",
+    "Rechnung umbenannt"
+  ],
+  [
+    "Bill budget changed",
+    "Presupuesto de la cuenta modificado",
+    "Budget de la note modifié",
+    "Rechnungsbudget geändert"
+  ],
+  [
+    "Bill order changed",
+    "Orden de la cuenta modificado",
+    "Ordre de la note modifié",
+    "Rechnungsreihenfolge geändert"
+  ],
+  [
+    "Bill details changed",
+    "Detalles de la cuenta modificados",
+    "Détails de la note modifiés",
+    "Rechnungsdetails geändert"
+  ],
+  [
+    "{value0} left the bill. {value1}’s expenses and balance stay on it.",
+    "{value0} salió de la cuenta. Los gastos y el saldo de {value1} permanecen en ella.",
+    "{value0} a quitté la note. Les dépenses et le solde de {value1} y restent.",
+    "{value0} hat die Rechnung verlassen. Die Ausgaben und der Saldo von {value1} bleiben erhalten."
+  ],
+  [
+    "{value0} made {value1} the bill owner.",
+    "{value0} hizo a {value1} propietario de la cuenta.",
+    "{value0} a désigné {value1} comme propriétaire de la note.",
+    "{value0} hat {value1} zum Rechnungsinhaber gemacht."
   ]
 ]

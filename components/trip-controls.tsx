@@ -20,7 +20,7 @@ async function change(
     body: JSON.stringify({ action, tripId, ...extra }),
   });
   const body = (await response.json()) as { error?: string };
-  if (!response.ok) throw Error(body.error || 'Unable to change this holiday.');
+  if (!response.ok) throw Error(body.error || 'Unable to change this ledger.');
 }
 
 export default function TripControls({
@@ -45,10 +45,10 @@ export default function TripControls({
     if (
       value === 'leave' &&
       !(await confirm({
-        title: 'Leave this holiday?',
+        title: isBill(trip) ? 'Leave this bill?' : 'Leave this holiday?',
         message:
           'You will lose access. Your expenses, payments and balance remain in the group’s records.',
-        confirmLabel: 'Leave holiday',
+        confirmLabel: isBill(trip) ? 'Leave bill' : 'Leave holiday',
         destructive: true,
       }))
     )
@@ -58,7 +58,7 @@ export default function TripControls({
       !(await confirm({
         title: 'Transfer ownership?',
         message:
-          'The new owner will manage invitations and holiday ownership. You stay as a traveller.',
+          isBill(trip) ? 'The new owner will manage invitations and bill ownership. You stay as a participant.' : 'The new owner will manage invitations and holiday ownership. You stay as a traveller.',
         confirmLabel: 'Transfer ownership',
       }))
     )
@@ -75,7 +75,7 @@ export default function TripControls({
       setMessage(
         cause instanceof Error
           ? cause.message
-          : 'Unable to change this holiday.',
+          : 'Unable to change this ledger.',
       );
     } finally {
       setSaving(false);
@@ -84,6 +84,8 @@ export default function TripControls({
   if (isBill(trip)) {
     const empty = !trip.expenses.length && !trip.payments.length && !trip.drafts.length && !trip.members.some(member => member.userId && member.userId !== accountId);
     return <section className="panel trip-controls"><h3>{uiText('Manage this bill')}</h3><p className="footnote">{uiText('Archive removes this bill from your open list. You can restore it from the archive.')}</p><button type="button" className="quiet" disabled={busy || saving} onClick={() => void action('archive')}>{uiText('Archive bill')}</button>
+      {own && <details><summary>{uiText('Transfer ownership')}</summary><label>{uiText('New owner')}<select value={owner} disabled={busy || saving} onChange={event => setOwner(event.target.value)}><option value="">{uiText('Choose a connected person')}</option>{trip.members.filter(member => member.userId && member.userId !== accountId).map(member => <option key={member.id} value={member.id}>{member.name}</option>)}</select></label><button type="button" className="quiet" disabled={busy || saving || !owner} onClick={() => void action('transfer')}>{uiText('Transfer ownership')}</button></details>}
+      {!own && <button type="button" className="danger quiet" disabled={busy || saving} onClick={() => void action('leave')}>{uiText('Leave bill')}</button>}
       {own && <details><summary>{uiText('Delete bill')}</summary><p className="footnote">{uiText('Deletion removes the bill and receipt photos. Shared history is retained. Bills another account can open must be archived instead.')}</p>{!empty && <label>{uiText('Type ')}{trip.name}{uiText(' to confirm')}<input value={confirmName} disabled={busy || saving} onChange={event => setConfirmName(event.target.value)} autoComplete="off" /></label>}<button type="button" className="danger quiet" disabled={busy || saving || !empty && confirmName.trim() !== trip.name.trim()} onClick={() => void action('delete')}>{uiText('Delete bill')}</button></details>}
       {message && <p className="footnote" role="status">{uiText(message)}</p>}{dialog}</section>;
   }
@@ -287,7 +289,7 @@ export function ArchivedHolidays({
                       }
                     }}
                   >
-                    {uiText('Restore holiday')}
+                    {uiText(trip.kind === 'bill' ? 'Restore bill' : 'Restore holiday')}
                   </button>
                   <a
                     className="quiet"

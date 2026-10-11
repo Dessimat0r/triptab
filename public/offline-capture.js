@@ -115,7 +115,7 @@
         notice('Open TripTab online to refresh your holidays first.');
         return;
       }
-      for (const value of context.trips) option(holiday, value.id, value.name);
+      for (const value of context.trips) option(holiday, value.id, value.kind === 'bill' ? `${t('Bill')} · ${value.name}` : value.name);
       for (const value of context.currencies)
         option(currency, value.code, `${value.code} · ${globalThis.TripTabUi.currencyName(value.code, value.name)}`);
       selectTrip();

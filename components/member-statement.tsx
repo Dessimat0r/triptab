@@ -6,7 +6,7 @@ import PagedList, { useListPaging } from "./paged-list";
 import { formatCalendarDate } from "@/lib/dates";
 import { useId } from "react";
 import { X } from "lucide-react";
-import { balances, expenseShares, expenseTotal, type Trip } from "@/lib/model";
+import { isBill, balances, expenseShares, expenseTotal, type Trip } from "@/lib/model";
 import ModalA11y from "./modal-accessibility";
 
 export type MemberStatementProps = {
@@ -31,7 +31,7 @@ export default function MemberStatement({ trip, memberId, onClose }: MemberState
   const payments = trip.payments.filter(payment => payment.from === memberId || payment.to === memberId)
     .slice().sort((left, right) => right.date.localeCompare(left.date) || (right.time || "").localeCompare(left.time || ""));
   try {
-    if (!member) throw Error("This traveller is no longer in the holiday.");
+    if (!member) throw Error(isBill(trip) ? "This person is no longer on the bill." : "This traveller is no longer in the holiday.");
     net = balances(trip)[index];
     expenses = trip.expenses.map(expense => ({
       expense,
@@ -40,7 +40,7 @@ export default function MemberStatement({ trip, memberId, onClose }: MemberState
     })).filter(row => row.cost !== 0 || row.paid !== 0)
       .sort((left, right) => right.expense.date.localeCompare(left.expense.date) || right.expense.time.localeCompare(left.expense.time));
   } catch (cause) {
-    error = cause instanceof Error ? cause.message : "Unable to calculate this statement. Review the holiday expenses.";
+    error = cause instanceof Error ? cause.message : isBill(trip) ? "Unable to calculate this statement. Review the bill receipts." : "Unable to calculate this statement. Review the holiday expenses.";
   }
   const cost = expenses.reduce((sum, row) => sum + row.cost, 0);
   const paid = expenses.reduce((sum, row) => sum + row.paid, 0);
@@ -71,7 +71,7 @@ export default function MemberStatement({ trip, memberId, onClose }: MemberState
         </div>
         <section className="statement-section" aria-labelledby={`${id}-expenses`}>
           <h3 id={`${id}-expenses`}>{uiText("Expenses")}</h3>
-          <p className="footnote">{uiText("Cost shares include receipt percentages, item assignments, tax, tips, discounts and currency conversion. Every penny follows the holiday’s saved split.")}</p>
+          <p className="footnote">{uiText(isBill(trip) ? "Cost shares include receipt percentages, item assignments, tax, tips, discounts and currency conversion. Every penny follows the bill’s saved split." : "Cost shares include receipt percentages, item assignments, tax, tips, discounts and currency conversion. Every penny follows the holiday’s saved split.")}</p>
           {expenses.length ? <PagedList {...page("expenses", 10)} className="statement-entries" role="list" noun={uiText("expenses")}
             items={expenses} itemKey={entry => entry.expense.id} renderItem={({ expense, cost, paid }) => <div key={expense.id} data-entry-id={expense.id} role="listitem" tabIndex={-1} className="statement-entry">
               <div className="statement-entry-heading">

@@ -816,3 +816,19 @@ test('a batch chooses an available affected item with its own receipt rather tha
   ], { tripName: 'Vienna' })!;
   assert.deepEqual(message, { title: 'Vienna · Dessert +1 receipt', body: 'Chris updated 2 expenses · Strudel.' });
 });
+
+test('bill notification titles and bodies use Bill while holiday wording stays compatible', () => {
+  const change = { entityType: 'trip' as const, action: 'update' as const, before: { currency: 'GBP' }, after: { currency: 'EUR' } };
+  const bill = notifications.activityNotification('Alex', [change], { kind: 'bill' })!;
+  assert.match(bill.title, /Bill/);
+  assert.match(bill.body, /bill/);
+  assert.doesNotMatch(JSON.stringify(bill), /holiday/i);
+  const named = notifications.activityNotification('Alex', [{ entityType: 'expense', action: 'create' }], { kind: 'bill', tripName: 'Dinner' })!;
+  assert.match(named.title, /^Bill · Dinner/);
+  assert.doesNotMatch(JSON.stringify(named), /holiday/i);
+  const joined = notifications.joinedNotification('Sam', 'Dinner', 'bill');
+  assert.match(joined.title, /^Bill/);
+  assert.match(joined.body, /joined the bill/);
+  const holiday = notifications.activityNotification('Alex', [change])!;
+  assert.match(holiday.title, /Holiday/);
+});

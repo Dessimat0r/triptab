@@ -723,7 +723,7 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
   // The one-minute photo hold commits with the deletion. Undo can reattach an
   // active image before bounded scheduled maintenance removes its last copy.
   for (const trip of changedTrips) {
-    const notification = activityNotification(profile?.display_name || 'A traveller', changes.filter(change => change.tripId === trip.id), { tripName: trip.name });
+    const notification = activityNotification(profile?.display_name || 'A traveller', changes.filter(change => change.tripId === trip.id), { tripName: trip.name, kind: trip.kind });
     if (!notification) continue;
     await notifyMembers(trip.id, id, notification.title, notification.body, changes.filter(change=>change.tripId===trip.id).some(change=>['trip','member','invite'].includes(change.entityType)) ? undefined : [...new Set(changes.filter(change=>change.tripId===trip.id).flatMap(change=>[change.before,change.after].flatMap(value=>value ? [value.payer,value.from,value.to,...Object.keys(value.percentages as object || {}),...(Array.isArray(value.items)?value.items.flatMap((item:{members?:string[]})=>item.members||[]):[])] : [])).filter((value):value is string=>typeof value==='string'))]).catch(() => {
       console.warn('TripTab could not queue a holiday update notification.');

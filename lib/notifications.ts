@@ -1,3 +1,4 @@
+import type { Trip } from './model';
 import { canonicalJson, encodeBase64url as base64url, sha256Hex } from './data-utils';
 import { env, waitUntil } from 'cloudflare:workers';
 import { db, RequestError } from './store';
@@ -154,7 +155,7 @@ type NotificationChange = {
   before?: Record<string, unknown> | null;
   after?: Record<string, unknown> | null;
 };
-export type NotificationContext = { tripName?: string; receiptName?: string; itemName?: string; receiptCount?: number; itemCount?: number };
+export type NotificationContext = { kind?: Trip['kind']; tripName?: string; receiptName?: string; itemName?: string; receiptCount?: number; itemCount?: number };
 
 function compactText(value: string, limit: number) {
   const clean = value.replace(/[\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, ' ').replace(/\s+/g, ' ').trim();
@@ -196,7 +197,8 @@ function contextualNotification(actorName: string, description: { title: string;
   const trip = compactText(context.tripName || '', context.receiptName ? 22 : 50);
   const receipt = countedName(context.receiptName, context.receiptCount, 'receipt', receiptBudget);
   const item = countedName(context.itemName, context.itemCount, 'item', 48);
-  const title = trip && receipt ? `${trip} · ${receipt}` : trip || receipt || description.title;
+  const contextTitle = trip && receipt ? `${trip} · ${receipt}` : trip || receipt || description.title;
+  const title = context.kind === 'bill' && trip ? `Bill · ${contextTitle}` : contextTitle;
   if (!trip && !receipt && !item) return { title: compactText(title, 50), body: compactText(`${shortActor(actorName)} ${description.summary}.`, 160) };
   // Reserve space for every supplied label. Long names cannot hide the action.
   const action = compactText(description.summary.replace(/ on (?:an expense|a receipt)$/, ''), 80);
@@ -223,7 +225,8 @@ function changedItems(event: NotificationChange) {
 }
 
 /** Describe saved field categories separately from the named receipt context. */
-function updateDescription(event: NotificationChange): { title: string; summary: string } | null {
+function updateDescription(event: NotificationChange, kind?: Trip['kind']): { title: string; summary: string } | null {
+  const noun = kind === 'bill' ? 'bill' : 'holiday', heading = kind === 'bill' ? 'Bill' : 'Holiday';
   const { before, after, entityType } = event;
   if (!before || !after) return null;
   const details: { label: string; title: string }[] = [];
@@ -283,25 +286,26 @@ function updateDescription(event: NotificationChange): { title: string; summary:
     add('the payment method', 'Payment method changed', ['method']);
     add('the payment note', 'Payment note changed', ['note']);
   } else if (entityType === 'trip') {
-    add('the holiday dates', 'Holiday dates changed', ['startDate', 'endDate']);
-    add('the holiday currency', 'Holiday currency changed', ['currency']);
-    add('the receipt language', 'Holiday language changed', ['receiptLanguage']);
-    add('the holiday name', 'Holiday renamed', ['name']);
-    add('the group budget', 'Holiday budget changed', ['budget']);
-    add('the display order', 'Holiday order changed', ['expenseOrder', 'paymentOrder', 'memberOrder', 'draftOrder']);
+    add(`the ${noun} dates`, `${heading} dates changed`, ['startDate', 'endDate']);
+    add(`the ${noun} currency`, `${heading} currency changed`, ['currency']);
+    add('the receipt language', `${heading} language changed`, ['receiptLanguage']);
+    add(`the ${noun} name`, `${heading} renamed`, ['name']);
+    add('the group budget', `${heading} budget changed`, ['budget']);
+    add('the display order', `${heading} order changed`, ['expenseOrder', 'paymentOrder', 'memberOrder', 'draftOrder']);
   }
   if (!details.length) return null;
   const subject = entityType === 'expense' ? ' on an expense' : entityType === 'payment' ? ' on a payment' : '';
-  return { title: new Set(details.map(detail => detail.title)).size === 1 ? details[0].title : entityType === 'trip' ? 'Holiday details changed' : `${entityType === 'expense' ? 'Expense' : 'Payment'} updated`,
+  return { title: new Set(details.map(detail => detail.title)).size === 1 ? details[0].title : entityType === 'trip' ? `${heading} details changed` : `${entityType === 'expense' ? 'Expense' : 'Payment'} updated`,
     summary: `changed ${list(details.slice(0, 2).map(detail => detail.label))}${details.length > 2 ? ' and other details' : ''}${subject}` };
 }
 
-function groupDescription(events: readonly NotificationChange[]) {
+function groupDescription(events: readonly NotificationChange[], kind?: Trip['kind']) {
+  const nounTrip = kind === 'bill' ? 'bill' : 'holiday', headingTrip = kind === 'bill' ? 'Bill' : 'Holiday';
   const entity = events[0].entityType;
   const actions = new Set(events.map(event => event.action));
   const action = actions.size === 1 ? events[0].action : undefined;
   const verb = action === 'create' ? entity === 'payment' ? 'recorded' : 'added' : action === 'delete' ? 'removed' : action === 'update' ? 'updated' : 'changed';
-  if (entity === 'trip') return { title: 'Holiday details changed', summary: action === 'create' ? 'created a holiday' : action === 'delete' ? 'removed a holiday' : 'updated the holiday details' };
+  if (entity === 'trip') return { title: `${headingTrip} details changed`, summary: action === 'create' ? `created a ${nounTrip}` : action === 'delete' ? `removed a ${nounTrip}` : `updated the ${nounTrip} details` };
   const noun = entity === 'member' ? 'traveller' : entity === 'invite' ? 'invitation' : entity === 'receipt' ? 'receipt image' : entity;
   const heading = noun[0].toUpperCase() + noun.slice(1);
   return { title: `${heading}${events.length > 1 ? 's' : ''} ${action === 'create' ? entity === 'payment' ? 'recorded' : 'added' : action === 'delete' ? 'removed' : 'updated'}`,
@@ -312,13 +316,13 @@ function groupDescription(events: readonly NotificationChange[]) {
 export function activityNotification(actorName: string, changes: readonly NotificationChange[], context: NotificationContext = {}) {
   const events = changes.filter(change => change.entityType !== 'draft');
   if (!events.length) return null;
-  let description = events.length === 1 && events[0].action === 'update' ? updateDescription(events[0]) : null;
+  let description = events.length === 1 && events[0].action === 'update' ? updateDescription(events[0], context.kind) : null;
   if (!description) {
     const priority: ActivityEntity[] = ['expense', 'payment', 'member', 'receipt', 'invite', 'trip'];
     const types = [...new Set(events.map(event => event.entityType))].sort((a, b) => priority.indexOf(a) - priority.indexOf(b));
-    const groups = types.map(type => groupDescription(events.filter(event => event.entityType === type)));
+    const groups = types.map(type => groupDescription(events.filter(event => event.entityType === type), context.kind));
     const remaining = events.filter(event => !types.slice(0, 2).includes(event.entityType)).length;
-    description = groups.length === 1 ? groups[0] : { title: 'Holiday activity', summary: `${list(groups.slice(0, 2).map(group => group.summary))}${remaining ? `, plus ${remaining} other ${remaining === 1 ? 'update' : 'updates'}` : ''}` };
+    description = groups.length === 1 ? groups[0] : { title: context.kind === 'bill' ? 'Bill activity' : 'Holiday activity', summary: `${list(groups.slice(0, 2).map(group => group.summary))}${remaining ? `, plus ${remaining} other ${remaining === 1 ? 'update' : 'updates'}` : ''}` };
   }
   const receipts = events.filter(event => event.entityType === 'expense');
   let receipt = receipts[0];
@@ -340,8 +344,8 @@ export function activityNotification(actorName: string, changes: readonly Notifi
   });
 }
 
-export function joinedNotification(actorName: string, tripName?: string) {
-  return contextualNotification(actorName, { title: 'Traveller joined', summary: 'joined the holiday' }, { tripName });
+export function joinedNotification(actorName: string, tripName?: string, kind?: Trip['kind']) {
+  return contextualNotification(actorName, { title: kind === 'bill' ? 'Person joined' : 'Traveller joined', summary: kind === 'bill' ? 'joined the bill' : 'joined the holiday' }, { tripName, kind });
 }
 
 async function signingKey() {
@@ -426,8 +430,8 @@ async function deliverNotifications(tripId: string, actor: string, title: string
     if (!users.length) return;
     const now = new Date().toISOString();
     const recent = new Date(Date.now() - 30000).toISOString();
-    const shortTitle = compactText(title, 50) || 'Holiday updated';
-    const shortBody = compactText(body, 160) || 'Your holiday has a saved update.';
+    const shortTitle = compactText(title, 50) || 'Ledger updated';
+    const shortBody = compactText(body, 160) || 'Your ledger has a saved update.';
     const placeholders = users.map(() => '?').join(',');
     const previous = await db().prepare(`SELECT user_id, MAX(created_at) AS latest FROM notifications WHERE user_id IN (${placeholders}) GROUP BY user_id`).bind(...users).all<{ user_id: string; latest: string }>();
     const throttled = new Set((previous.results ?? []).filter(row => row.latest > recent).map(row => row.user_id));

@@ -80,3 +80,19 @@ test('the public offline form shares translations and preserves interpolated acc
     assert.equal(context.TripTabUi.t('{count} expenses waiting to sync for {name}.', { count: 2, name: 'Alice {count}' }), translateUi('{count} expenses waiting to sync for {name}.', language, { count: 2, name: 'Alice {count}' }));
   }
 });
+
+test('all dedicated bill interface strings exist in Spanish, French and German', () => {
+  const sources = new Set<string>();
+  for (const file of ['bill-start.tsx', 'bill-view.tsx', 'bill-people.tsx']) {
+    const source = readFileSync(new URL(`../components/${file}`, import.meta.url), 'utf8');
+    for (const match of source.matchAll(/uiText\((["'])(.*?)\1/g)) sources.add(match[2].trim());
+  }
+  for (const text of ['Open bill', 'Confirm history & join bill', 'Shared bill ledger, saved securely.', 'Bill activity', 'This person is no longer on the bill.', 'Enter a bill name between 1 and 100 characters.', 'Only the bill owner can delete it.', 'The bill owner can invite people to join this bill.']) sources.add(text);
+  for (const language of ['es', 'fr', 'de'] as const) {
+    const catalog = getUiCatalog(language);
+    for (const source of sources) {
+      assert.ok(Object.hasOwn(catalog, source), `${language}: ${source}`);
+      assert.ok(catalog[source].trim(), `${language}: ${source}`);
+    }
+  }
+});

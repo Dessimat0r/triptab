@@ -19,8 +19,12 @@ const access = '(t.owner = ? OR EXISTS (SELECT 1 FROM memberships m WHERE m.trip
 const identity = 'NOT EXISTS (SELECT 1 FROM auth_links WHERE oai_user_id = ? AND user_id <> ?)';
 const marked = 'EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND last_write = ?)';
 
+function tripMessage(trip: Pick<Trip, 'kind'> | undefined, text: string) {
+  return trip && isBill(trip) ? text.replaceAll('holiday', 'bill').replaceAll('Holiday', 'Bill') : text;
+}
+
 function tripId(value: unknown) {
-  if (typeof value !== 'string' || !value || value.length > 100) throw new TripLifecycleError('Choose a valid holiday.');
+  if (typeof value !== 'string' || !value || value.length > 100) throw new TripLifecycleError('Choose a valid ledger.');
   return value;
 }
 function summary(trip: Trip): Record<string, unknown> {
@@ -45,9 +49,9 @@ export async function listArchivedTrips(database: D1Database, user: string): Pro
 /** Personal: other travellers keep seeing the holiday and notifications continue. */
 export async function setTripArchived(database: D1Database, actor: Actor, rawTripId: unknown, archived: boolean) {
   const id = tripId(rawTripId);
-  const trip = await database.prepare(`SELECT json_extract(t.data, '$.name') AS name, EXISTS (SELECT 1 FROM trip_archives a WHERE a.trip_id = t.id AND a.user_id = ?) AS archived
-    FROM trips t WHERE t.id = ? AND ${access}`).bind(actor.id, id, actor.id, actor.id).first<{ name: string; archived: number }>();
-  if (!trip) throw new TripLifecycleError('You do not have access to this holiday.', 403);
+  const trip = await database.prepare(`SELECT json_extract(t.data, '$.kind') AS kind, json_extract(t.data, '$.name') AS name, EXISTS (SELECT 1 FROM trip_archives a WHERE a.trip_id = t.id AND a.user_id = ?) AS archived
+    FROM trips t WHERE t.id = ? AND ${access}`).bind(actor.id, id, actor.id, actor.id).first<{ name: string; kind?: Trip['kind']; archived: number }>();
+  if (!trip) throw new TripLifecycleError('You do not have access to this ledger.', 403);
   if (!!trip.archived === archived) return { archived };
   const holidayName = String(trip.name ?? '').slice(0, 100);
   const audit = accountAuditStatement(database, { userId: actor.id, actorName: actor.displayName, entityType: 'trip', entityId: id,
@@ -68,7 +72,7 @@ export async function setTripArchived(database: D1Database, actor: Actor, rawTri
     audit,
   ]);
   if (!results[0].meta.changes && await database.prepare('SELECT 1 FROM trip_archives WHERE user_id = ? AND trip_id = ?').bind(actor.id, id).first()) {
-    throw new TripLifecycleError(`You already have ${MAX_OPEN_TRIPS} open holidays. Archive one before restoring another.`, 409);
+    throw new TripLifecycleError(`You already have ${MAX_OPEN_TRIPS} open holidays and bills. Archive one before restoring another.`, 409);
   }
   return { archived };
 }
@@ -92,11 +96,11 @@ export async function leaveTrip(database: D1Database, actor: Actor, rawTripId: u
   const row = await database.prepare(`SELECT t.owner, t.data, m.member_id FROM trips t
     LEFT JOIN memberships m ON m.trip_id = t.id AND m.user_id = ? WHERE t.id = ?`).bind(actor.id, id)
     .first<{ owner: string; data: string; member_id: string | null }>();
-  if (!row || (row.owner !== actor.id && !row.member_id)) throw new TripLifecycleError('You are not a traveller on this holiday.', 403);
-  if (row.owner === actor.id) throw new TripLifecycleError('As the owner, transfer this holiday to another traveller before leaving it. You can also archive or delete it.', 409);
+  if (!row || (row.owner !== actor.id && !row.member_id)) throw new TripLifecycleError(tripMessage(row ? JSON.parse(row.data) : undefined, 'You are not a traveller on this holiday.'), 403);
+  if (row.owner === actor.id) throw new TripLifecycleError(tripMessage(row ? JSON.parse(row.data) : undefined, 'As the owner, transfer this holiday to another traveller before leaving it. You can also archive or delete it.'), 409);
   const trip = JSON.parse(row.data) as Trip;
   const member = trip.members.find(value => value.id === row.member_id);
-  if (!member) throw new TripLifecycleError('Your traveller entry changed. Refresh the holiday and try again.', 409);
+  if (!member) throw new TripLifecycleError(tripMessage(trip, 'Your traveller entry changed. Refresh the holiday and try again.'), 409);
   const unlinked = { ...member };
   delete unlinked.userId; delete unlinked.email;
   const next = { ...trip, members: trip.members.map(value => value.id === member.id ? unlinked : value) };
@@ -112,8 +116,8 @@ export async function leaveTrip(database: D1Database, actor: Actor, rawTripId: u
     ...activityStatements(database, [{ tripId: id, entityType: 'member', entityId: member.id, action: 'update',
       before: { ...member, userId: actor.id }, after: unlinked }], actor, marker, 'current'),
   ]);
-  if (!results[0].meta.changes) throw new TripLifecycleError('This holiday changed while you were leaving. Refresh and try again.', 409);
-  return { tripName: trip.name, memberName: member.name };
+  if (!results[0].meta.changes) throw new TripLifecycleError(tripMessage(trip, 'This holiday changed while you were leaving. Refresh and try again.'), 409);
+  return { tripName: trip.name, kind: trip.kind, memberName: member.name };
 }
 
 /** The new owner must already have joined with their own account. */
@@ -121,11 +125,11 @@ export async function transferTripOwnership(database: D1Database, actor: Actor, 
   const id = tripId(rawTripId);
   if (typeof rawMemberId !== 'string' || !rawMemberId || rawMemberId.length > 100) throw new TripLifecycleError('Choose a traveller.');
   const row = await database.prepare('SELECT owner, data FROM trips WHERE id = ?').bind(id).first<{ owner: string; data: string }>();
-  if (!row || row.owner !== actor.id) throw new TripLifecycleError('Only the holiday owner can transfer it.', 403);
+  if (!row || row.owner !== actor.id) throw new TripLifecycleError(tripMessage(row ? JSON.parse(row.data) : undefined, 'Only the holiday owner can transfer it.'), 403);
   const target = await database.prepare('SELECT user_id FROM memberships WHERE trip_id = ? AND member_id = ?')
     .bind(id, rawMemberId).first<{ user_id: string }>();
-  if (!target) throw new TripLifecycleError('Choose a traveller who has joined this holiday with their own account.', 409);
-  if (target.user_id === actor.id) throw new TripLifecycleError('You already own this holiday.');
+  if (!target) throw new TripLifecycleError(tripMessage(row ? JSON.parse(row.data) : undefined, 'Choose a traveller who has joined this holiday with their own account.'), 409);
+  if (target.user_id === actor.id) throw new TripLifecycleError(tripMessage(row ? JSON.parse(row.data) : undefined, 'You already own this holiday.'));
   const trip = JSON.parse(row.data) as Trip;
   const next = { ...trip, ownerId: target.user_id };
   await ensureSyncState(database);
@@ -137,8 +141,8 @@ export async function transferTripOwnership(database: D1Database, actor: Actor, 
     ...activityStatements(database, [{ tripId: id, entityType: 'trip', entityId: id, action: 'update',
       before: { ...summary(trip), ownerId: actor.id }, after: summary(next) }], actor, marker, 'current'),
   ]);
-  if (!results[0].meta.changes) throw new TripLifecycleError('This holiday or its travellers changed. Refresh and try again.', 409);
-  return { tripName: trip.name, ownerId: target.user_id, memberName: trip.members.find(member => member.id === rawMemberId)?.name || 'A traveller' };
+  if (!results[0].meta.changes) throw new TripLifecycleError(tripMessage(trip, 'This holiday or its travellers changed. Refresh and try again.'), 409);
+  return { tripName: trip.name, kind: trip.kind, ownerId: target.user_id, memberName: trip.members.find(member => member.id === rawMemberId)?.name || 'A traveller' };
 }
 
 /**
@@ -158,13 +162,13 @@ async function deleteTripRecord(database: D1Database, actor: Actor, rawTripId: u
   const id = tripId(rawTripId);
   const row = await database.prepare('SELECT owner, data FROM trips WHERE id = ?').bind(id).first<{ owner: string; data: string }>();
   const discardError = 'This bill has entries. Delete it from its settings instead.';
-  if (!row || row.owner !== actor.id) throw new TripLifecycleError(discard ? discardError : 'Only the holiday owner can delete it.', discard ? 409 : 403);
+  if (!row || row.owner !== actor.id) throw new TripLifecycleError(discard ? discardError : tripMessage(row ? JSON.parse(row.data) : undefined, 'Only the holiday owner can delete it.'), discard ? 409 : 403);
   const trip = JSON.parse(row.data) as Trip;
   if (discard && (!isBill(trip) || trip.expenses.length || trip.payments.length || trip.drafts.length)) throw new TripLifecycleError(discardError, 409);
-  if (!discard && (typeof confirmName !== 'string' || confirmName.trim() !== trip.name.trim())) throw new TripLifecycleError('Type the holiday name exactly to confirm deleting it.');
+  if (!discard && (typeof confirmName !== 'string' || confirmName.trim() !== trip.name.trim())) throw new TripLifecycleError(tripMessage(trip, 'Type the holiday name exactly to confirm deleting it.'));
   if (await database.prepare('SELECT 1 FROM memberships WHERE trip_id = ? AND user_id <> ? LIMIT 1').bind(id, actor.id).first()) {
     if (discard) throw new TripLifecycleError(discardError, 409);
-    throw new TripLifecycleError('Other travellers have joined this holiday with their accounts. Transfer it or archive it instead; only a holiday nobody else can open can be deleted.', 409);
+    throw new TripLifecycleError(tripMessage(trip, 'Other travellers have joined this holiday with their accounts. Transfer it or archive it instead; only a holiday nobody else can open can be deleted.'), 409);
   }
   await ensureSyncState(database);
   const marker = crypto.randomUUID(), now = new Date().toISOString();
@@ -184,6 +188,6 @@ async function deleteTripRecord(database: D1Database, actor: Actor, rawTripId: u
     database.prepare(`DELETE FROM trip_archives WHERE trip_id = ? AND ${marked}`).bind(id, marker),
     database.prepare(`DELETE FROM trips WHERE id = ? AND ${marked}`).bind(id, marker),
   ]);
-  if (!results[0].meta.changes) throw new TripLifecycleError(discard ? discardError : 'Another traveller joined or the holiday changed. Refresh and try again.', 409);
+  if (!results[0].meta.changes) throw new TripLifecycleError(discard ? discardError : tripMessage(trip, 'Another traveller joined or the holiday changed. Refresh and try again.'), 409);
   return { tripName: trip.name };
 }

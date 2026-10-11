@@ -78,3 +78,20 @@ test('first receipt defaults adopt currency and title together, preserving expli
   assert.deepEqual(explicit, { trip: base, expense });
   assert.deepEqual(firstBillExpense({ ...base, expenses: [expense] }, expense, defaults).trip.currency, 'GBP');
 });
+
+test('the final bill browser gate contains no deferred phases', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const source = await readFile(new URL('./browser/bill.spec.ts', import.meta.url), 'utf8');
+  assert.doesNotMatch(source, /test\.fixme\s*\(/);
+});
+
+test('lifecycle errors use bill wording for known bills and retain holiday wording otherwise', async () => {
+  const { leaveTrip, transferTripOwnership, deleteTrip } = await import('../lib/trip-lifecycle');
+  for (const kind of ['bill', 'holiday'] as const) {
+    const db = await seeded({ ...base, kind });
+    const message = (error: unknown) => error instanceof TripLifecycleError && error.message.includes(kind) && !error.message.includes(kind === 'bill' ? 'holiday' : 'bill');
+    await assert.rejects(leaveTrip(db.asD1(), actor, base.id), message);
+    await assert.rejects(transferTripOwnership(db.asD1(), { id: 'other', displayName: 'Sam' }, base.id, 'sam'), message);
+    await assert.rejects(deleteTrip(db.asD1(), actor, base.id, 'wrong'), message);
+  }
+});
