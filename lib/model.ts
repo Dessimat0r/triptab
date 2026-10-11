@@ -363,6 +363,7 @@ const memberSchema = z.object({ id, name: z.string().trim().min(1).max(50), user
   joinedOn: dateSchema.optional(), leftOn: dateSchema.optional(),
 });
 export const tripSchema = z.object({
+  kind: z.enum(['holiday', 'bill']).optional(),
   id, ownerId: accountId.optional(), name: z.string().min(1).max(100), currency: currencySchema,
   receiptLanguage:receiptLanguageSchema.optional(),
   startDate: dateSchema.optional(), endDate: dateSchema.optional(),
@@ -378,6 +379,8 @@ export type Draft = z.infer<typeof draftSchema>;
 export type Payment = z.infer<typeof paymentSchema>;
 export type Trip = z.infer<typeof tripSchema>;
 export type Ledger = z.infer<typeof ledgerSchema>;
+
+export const isBill = (trip: Pick<Trip, 'kind'>) => trip.kind === 'bill';
 
 // Stored ledgers may contain fields that were valid before stronger economic
 // rules were added. Parsing must keep their values so users can review and fix
@@ -474,6 +477,11 @@ export function validateLedger(data: unknown, options: { previous?: Ledger; sour
   if (!unique(ledger.trips.map(trip => trip.id))) throw new LedgerValidationError('Duplicate trips');
   for (const trip of ledger.trips) {
     const prior = previous?.trips.find(value => value.id === trip.id);
+    if (isBill(trip) && (!prior || !sameStoredValue(trip, prior))) {
+      if (trip.startDate !== undefined || trip.endDate !== undefined || trip.budget !== undefined) throw new LedgerValidationError('Bills don’t have dates or a budget.');
+      if (trip.members.some(member => member.joinedOn !== undefined || member.leftOn !== undefined || member.weight !== undefined)) throw new LedgerValidationError('Bills don’t track traveller dates or family weights.');
+      if (trip.members.length > 20) throw new LedgerValidationError('A bill can be split between up to 20 people.');
+    }
     if (trip.startDate && trip.endDate && trip.endDate < trip.startDate) {
       throw new LedgerValidationError('Holiday end date must be on or after its start date');
     }

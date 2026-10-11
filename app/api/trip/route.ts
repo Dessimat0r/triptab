@@ -1,7 +1,7 @@
 import { bucket, db, ensureProfile, failure, readBoundedBody, RequestError, sameOrigin } from '@/lib/store';
 import { notifyMembers } from '@/lib/notifications';
 import { purgeDeletedTripReceipts } from '@/lib/receipt-lifecycle';
-import { deleteTrip, leaveTrip, listArchivedTrips, setTripArchived, transferTripOwnership } from '@/lib/trip-lifecycle';
+import { discardEmptyBill, deleteTrip, leaveTrip, listArchivedTrips, setTripArchived, transferTripOwnership } from '@/lib/trip-lifecycle';
 
 export const dynamic = 'force-dynamic';
 const PRIVATE_HEADERS = { 'Cache-Control': 'private, no-store' };
@@ -53,8 +53,10 @@ export async function POST(request: Request) {
         });
         return respond({ ownerId: result.ownerId });
       }
+      case 'discard':
       case 'delete': {
-        await deleteTrip(db(), actor, details.tripId, details.confirmName);
+        if (details.action === 'discard') await discardEmptyBill(db(), actor, details.tripId);
+        else await deleteTrip(db(), actor, details.tripId, details.confirmName);
         // The deletion is committed; image cleanup that fails here is retried
         // by scheduled maintenance from the durable purge records.
         await Promise.resolve().then(() => purgeDeletedTripReceipts(db(), bucket(), { limit: 200 })).catch(() => {
