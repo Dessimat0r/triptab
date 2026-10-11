@@ -3802,5 +3802,23 @@
     "{value0} hizo a {value1} propietario de la cuenta.",
     "{value0} a désigné {value1} comme propriétaire de la note.",
     "{value0} hat {value1} zum Rechnungsinhaber gemacht."
+  ],
+  [
+    "Add a receipt to see who owes what.",
+    "Añade un recibo para ver quién debe qué.",
+    "Ajoutez un reçu pour voir qui doit quoi.",
+    "Füge einen Beleg hinzu, um zu sehen, wer wem was schuldet."
+  ],
+  [
+    "Not settled",
+    "Sin saldar",
+    "Non réglé",
+    "Nicht beglichen"
+  ],
+  [
+    "Needs review",
+    "Requiere revisión",
+    "À vérifier",
+    "Muss geprüft werden"
   ]
 ]

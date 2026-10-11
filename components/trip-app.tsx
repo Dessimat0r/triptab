@@ -275,7 +275,7 @@ export default function Home({ children }: { children: ReactNode }) {
     [billPeople, setBillPeople] = useState(false),
     [allBills, setAllBills] = useState(false),
     [billStart, setBillStart] = useState(false),
-    [billScan, setBillScan] = useState(false),
+    [billScan, setBillScan] = useState<File | null>(null),
     [help, setHelp] = useState(false),
     [editing, setEditing] = useState<ReceiptEditor | null>(
       null,
@@ -687,12 +687,26 @@ export default function Home({ children }: { children: ReactNode }) {
     const saved = latestSnapshot.current.data.trips.find(value => value.id === bill.id)!;
     billDefaults.current = { tripId: bill.id, name: !values.name, currency: values.currencyDefault, previousTripId };
     setSelected(bill.id); setView("expenses"); setBillStart(false); newExpense(undefined, saved);
-    if (values.scan) setBillScan(true);
+    if (values.file) setBillScan(values.file);
+  }
+  // The photo is chosen during the tap that starts the bill, because browsers
+  // only open a file picker for a direct user gesture. It is read once the new
+  // bill's editor is open.
+  async function scanReceiptFile(file: File) {
+    if (!editing) return;
+    const session = receiptSession.current, editorId = editing.id;
+    setUploading(true); setError("");
+    try {
+      const prepared = await prepareReceiptImage(file);
+      if (session === receiptSession.current && activeReceiptEditor.current?.id === editorId) await captureEditorReceipt(prepared);
+    } catch (cause) {
+      if (session === receiptSession.current) setError(cause instanceof Error ? cause.message : "Unable to prepare the receipt photo.");
+    } finally { if (session === receiptSession.current) setUploading(false); }
   }
   useEffect(() => {
-    if (billScan && editing && trip?.id === billDefaults.current?.tripId) { setBillScan(false); scanReceiptInput.current?.click(); }
+    if (billScan && editing && trip?.id === billDefaults.current?.tripId) { const file = billScan; setBillScan(null); void scanReceiptFile(file); }
   }, [billScan, editing, trip?.id]);
-  async function discardNewBill() {
+  async function discardNewBill(restore = true) {
     const defaults = billDefaults.current;
     if (!defaults) return;
     const current = latestSnapshot.current.data.trips.find(value => value.id === defaults.tripId);
@@ -702,7 +716,8 @@ export default function Home({ children }: { children: ReactNode }) {
       const result = await response.json() as { error?: string };
       if (!response.ok) throw Error(result.error || "Unable to discard this bill.");
       billDefaults.current = null;
-      setSelected(defaults.previousTripId); await load({ fresh: true });
+      if (restore) setSelected(defaults.previousTripId);
+      await load({ fresh: true });
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Unable to discard this bill."); }
   }
   async function updateTrip(next: Trip) {
@@ -1352,8 +1367,6 @@ export default function Home({ children }: { children: ReactNode }) {
     const { draftId } = editing;
     let expense = parsedExpense.data;
     if (draftId) expense.sourceDraftId = draftId;
-    const adopted = firstBillExpense(trip, expense, billDefaults.current);
-    expense = adopted.expense;
     const latestDraft = trip.drafts.find(draft => draft.id === draftId);
     const binding = editorDraftBinding.current;
     if (draftId && binding?.draftId === draftId && (!latestDraft || latestDraft.receiptId !== binding.receiptId || latestDraft.expenseId !== binding.expenseId)) {
@@ -1368,6 +1381,9 @@ export default function Home({ children }: { children: ReactNode }) {
       return;
     }
     const awaitingReply = !!latestDraft && hasPendingReceiptQuestions(expense.conversation);
+    // A retained draft locks the bill's currency, so adoption waits for a save that consumes it.
+    const adopted = firstBillExpense(trip, expense, awaitingReply ? null : billDefaults.current);
+    expense = adopted.expense;
     expense.languageViewId = editing.languageViewId || editing.expenseId || editing.id;
     if (!exists && expense.id === draftId && awaitingReply) expense.id = uid();
     const retainedDraft: Draft | null = awaitingReply && latestDraft ? {
@@ -1672,8 +1688,10 @@ export default function Home({ children }: { children: ReactNode }) {
     pendingEditorFocus.current = null;
     if (editing?.id === request.editorId) focusExpenseTarget(request.target, request.focus);
   });
+  const billEditorDraft = trip && editing?.draftId ? trip.drafts.find(draft => draft.id === editing.draftId) : undefined;
   const billEditorAdopts = !!trip && !!editing && !!editing.currency && billDefaults.current?.tripId === trip.id && billDefaults.current.currency
-    && isFirstBillReceipt(trip, { sourceDraftId: editing.draftId });
+    && isFirstBillReceipt(trip, { sourceDraftId: editing.draftId })
+    && !(billEditorDraft && hasPendingReceiptQuestions(mergeReceiptConversation(billEditorDraft.conversation, editing.conversation)));
   const billEditorTrip = useMemo(() => billEditorAdopts && trip && editing?.currency ? { ...trip, currency: editing.currency } : trip, [billEditorAdopts, trip, editing?.currency]);
   const billEditorExpense = useMemo(() => billEditorAdopts && editing ? { ...editing, fx: undefined, bankAmount: undefined } : editing, [billEditorAdopts, editing]);
   const editorShares = useMemo(() => billEditorExpense && billEditorTrip ? previewShares(billEditorExpense, billEditorTrip) : null, [billEditorExpense, billEditorTrip]);
@@ -1894,6 +1912,13 @@ export default function Home({ children }: { children: ReactNode }) {
                               </div>
     );
   };
+  function billChip(bill: Trip) {
+    if (!bill.expenses.length && !bill.payments.length) return uiText("No receipts yet");
+    const member = bill.members.find(value => value.userId === profile?.id), preview = member && travellerFinancialPreview(bill, member.id);
+    if (preview?.available) return preview.netBalance < 0 ? uiText("You owe {value0}", { value0: money(-preview.netBalance, bill.currency) }) : preview.netBalance > 0 ? uiText("You’re owed {value0}", { value0: money(preview.netBalance, bill.currency) }) : uiText("Settled");
+    if (member) return uiText("Needs review");
+    try { return settlements(bill).length ? uiText("Not settled") : uiText("Settled"); } catch { return uiText("Needs review"); }
+  }
   async function archiveBill() {
     if (!trip || saving || loading) return;
     setSaving(true); setError("");
@@ -2316,7 +2341,7 @@ export default function Home({ children }: { children: ReactNode }) {
               className={trip?.id === t.id ? "active" : ""}
               key={t.id}
               onClick={() => {
-                closeReceiptEditor(); setUploadOpen(false); setSelected(t.id);
+                closeReceiptEditor(); void discardNewBill(false); setUploadOpen(false); setSelected(t.id);
                 setMenu(false);
                 setView("expenses");
               }}
@@ -2337,14 +2362,12 @@ export default function Home({ children }: { children: ReactNode }) {
           const date = (value: Trip) => value.expenses.reduce((latest, expense) => expense.date > latest ? expense.date : latest, "");
           return date(b.value).localeCompare(date(a.value)) || b.index - a.index;
         }).slice(0, allBills ? undefined : 5).map(({ value: t }) => {
-          const member = t.members.find(member => member.userId === profile?.id), preview = member && travellerFinancialPreview(t, member.id);
-          let chip = uiText("Needs review");
-          if (preview?.available) chip = preview.netBalance < 0 ? uiText("You owe {value0}", { value0: money(-preview.netBalance, t.currency) }) : preview.netBalance > 0 ? uiText("You’re owed {value0}", { value0: money(preview.netBalance, t.currency) }) : uiText("Settled");
-          return <button type="button" key={t.id} className={trip?.id === t.id ? "active" : ""} onClick={() => { closeReceiptEditor(); setUploadOpen(false); setSelected(t.id); setMenu(false); setView("expenses"); }}><span className="tripicon"><Receipt size={17} /></span><span>{t.name}<small>{chip}</small></span></button>;
+          const chip = billChip(t);
+          return <button type="button" key={t.id} className={trip?.id === t.id ? "active" : ""} onClick={() => { closeReceiptEditor(); void discardNewBill(false); setUploadOpen(false); setSelected(t.id); setMenu(false); setView("expenses"); }}><span className="tripicon"><Receipt size={17} /></span><span>{t.name}<small>{chip}</small></span></button>;
         })}</div>{!allBills && ledger.trips.filter(isBill).length > 5 && <button type="button" className="textbutton" onClick={() => setAllBills(true)}>{uiText("Show all bills")}</button>}</>}
         <div className="holiday-actions"><button className="newtrip" onClick={()=>{setCreate(true);setMenu(false);}} disabled={loading||auth||saving}><Plus size={17}/>{uiText("New holiday")}</button>
+          <button className="newtrip" disabled={loading || auth || saving} onClick={() => { setBillStart(true); setMenu(false); }}><Receipt size={17}/>{uiText("Split a bill")}</button>
           <button className="iconbutton" aria-label={uiText("More holiday options")} onClick={()=>{setHolidayToolsOpen(true);setMenu(false);}}>•••</button></div>
-        <button className="newtrip" disabled={loading || auth || saving} onClick={() => { setBillStart(true); setMenu(false); }}>{uiText("Split a bill")}</button>
         <div className="side-bottom">
           {chatgptConnected ? (
             <div className="assistant-status">
@@ -2435,7 +2458,7 @@ export default function Home({ children }: { children: ReactNode }) {
               onJoined={async (id) => {
                 setInvite("");
                 replaceEntryUrl("/expenses");
-                closeReceiptEditor(); setUploadOpen(false); setSelected(id);
+                closeReceiptEditor(); void discardNewBill(false); setUploadOpen(false); setSelected(id);
                 await load({ background: true, fresh: true });
                 await refreshProfile(profile?.id || "");
               }}
@@ -2457,17 +2480,9 @@ export default function Home({ children }: { children: ReactNode }) {
             {trip && <div className="expense-entry-actions">
               <button className="primary" onClick={newExpense} disabled={saving}><Plus size={18} />{uiText(isBill(trip) ? "Add receipt" : " Add expense")}</button>
               <button type="button" className="quiet" disabled={saving || uploading} onClick={event => { newExpense(event); scanReceiptInput.current?.click(); }}><Camera size={18} />{uiText(" Scan receipt")}</button>
-              <input ref={scanReceiptInput} type="file" hidden aria-label={uiText("Scan receipt photo")} accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif" capture="environment" onChange={async event => {
+              <input ref={scanReceiptInput} type="file" hidden aria-label={uiText("Scan receipt photo")} accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif" capture="environment" onChange={event => {
                 const file = event.target.files?.[0]; event.target.value = "";
-                if (!file || !editing) return;
-                const session = receiptSession.current, editorId = editing.id;
-                setUploading(true); setError("");
-                try {
-                  const prepared = await prepareReceiptImage(file);
-                  if (session === receiptSession.current && activeReceiptEditor.current?.id === editorId) await captureEditorReceipt(prepared);
-                } catch (cause) {
-                  if (session === receiptSession.current) setError(cause instanceof Error ? cause.message : "Unable to prepare the receipt photo.");
-                } finally { if (session === receiptSession.current) setUploading(false); }
+                if (file) void scanReceiptFile(file);
               }} />
             </div>}
           </div>
@@ -2650,7 +2665,7 @@ export default function Home({ children }: { children: ReactNode }) {
                   payments: [],
                 };
                 if (await save({ trips: [...ledger.trips, t] })) {
-                  closeReceiptEditor(); setUploadOpen(false); setSelected(t.id);
+                  closeReceiptEditor(); void discardNewBill(false); setUploadOpen(false); setSelected(t.id);
                   setView("expenses");
                   setCreate(false); setNewTripLanguage("auto");
                 }
@@ -3169,7 +3184,7 @@ export default function Home({ children }: { children: ReactNode }) {
                   })}
                 </div>
                 <div className="conflict-actions">
-                  <button type="button" className="quiet" onClick={() => { if (editorConflict.latest) openExpense(editorConflict.latest, false); else closeReceiptEditor(); setError(""); }}>{editorConflict.latest ? uiText("Use latest saved") : uiText("Discard my edits")}</button>
+                  <button type="button" className="quiet" onClick={() => { if (editorConflict.latest) openExpense(editorConflict.latest, false); else { closeReceiptEditor(); void discardNewBill(); } setError(""); }}>{editorConflict.latest ? uiText("Use latest saved") : uiText("Discard my edits")}</button>
                   <button type="button" className="primary" onClick={keepExpenseEdits}>{editorConflict.latest ? uiText("Continue with my edits") : uiText("Save as a new expense")}</button>
                 </div>
                 <p className="footnote">{uiText("Review your split and press Save expense to commit your choice.")}</p>

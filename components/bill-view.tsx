@@ -27,7 +27,7 @@ export default function BillView({ trip, receipts, payments, calculationError, d
     <div className="bill-receipts"><h2>{uiText('Receipts')}</h2>{receipts}{payments}</div>
     <div className="bill-finances">
       <h2>{uiText('Who owes what')}</h2>
-      {failed ? <p className="error" role="alert">{uiText('Review the flagged receipts before using settlement suggestions.')}</p> : <div className="panel bill-shares">{trip.members.map((member, i) => {
+      {failed ? <p className="error" role={calculationError ? undefined : 'alert'}>{uiText('Review the flagged receipts before using settlement suggestions.')}</p> : <div className="panel bill-shares">{trip.members.map((member, i) => {
         const preview = previews[i]; if (!preview.available) return null;
         return <button type="button" className="bill-share" key={member.id} aria-label={uiText('View statement for {value0}', { value0: member.name })} onClick={() => onStatement(member.id)}>
           <b>{member.name}</b><span>{uiText('Paid {value0} · share {value1}', { value0: money(preview.paidUpfront, trip.currency), value1: money(preview.costShare, trip.currency) })}</span>
@@ -38,7 +38,7 @@ export default function BillView({ trip, receipts, payments, calculationError, d
       {!failed && <><div className="sectionheading"><h2>{uiText('Settle up')}</h2><button type="button" className="quiet" disabled={busy || trip.members.length < 2} onClick={() => onPayment()}>{uiText('Record payment')}</button></div><div className="panel bill-settlements">{due.length ? due.map(transfer => <div className="settlement" key={`${transfer.from}:${transfer.to}`}>
         <div><strong>{name(transfer.from)}</strong><span>{uiText(' pays ')}{name(transfer.to)}</span></div><b>{money(transfer.amount, trip.currency)}</b><button type="button" className="quiet" disabled={busy} onClick={() => onPayment(transfer)}>{uiText('Mark paid')}</button>
         <SettlementPayActions payee={trip.members.find(member => member.id === transfer.to)!} amount={transfer.amount} currency={trip.currency} reference={`TripTab: ${trip.name}`} />
-      </div>) : <div className="empty"><h3>{uiText('Everyone’s settled')}</h3>{trip.expenses.length > 0 && <button type="button" className="quiet" disabled={busy || trip.drafts.length > 0} onClick={() => void onArchive()}>{uiText('Archive bill')}</button>}</div>}</div></>}
+      </div>) : !trip.expenses.length && !trip.payments.length ? <div className="empty"><h3>{uiText('Add a receipt to see who owes what.')}</h3></div> : <div className="empty"><h3>{uiText('Everyone’s settled')}</h3>{trip.expenses.length > 0 && <button type="button" className="quiet" disabled={busy || trip.drafts.length > 0} onClick={() => void onArchive()}>{uiText('Archive bill')}</button>}</div>}</div></>}
       {!failed && trip.expenses.length > 0 && <div className="bill-share-actions"><button type="button" className="quiet" onClick={() => void share(true)}>{uiText('Copy summary')}</button>{canShare && <button type="button" className="quiet" onClick={() => void share(false)}>{uiText('Share')}</button>}</div>}
       {status && <p role="status">{uiText(status)}</p>}{fallback && <textarea readOnly aria-label={uiText('Bill summary')} value={fallback} />}
     </div>
