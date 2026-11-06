@@ -1,5 +1,5 @@
 import { canonicalJson, sha256Hex } from '@/lib/data-utils';
-import { env } from 'cloudflare:workers';
+import { env, waitUntil } from 'cloudflare:workers';
 import { z } from 'zod';
 import { bucket, db, ensureProfile, failure, readBoundedBody, readLedger, receiptAccess, receiptKey, RequestError, sameOrigin, writeLedger } from '@/lib/store';
 import { getReceiptAIAccess, ReceiptAIAccessError, type ReceiptAIEnvironment } from '@/lib/receipt-ai-access';
@@ -58,7 +58,11 @@ export async function POST(request: Request) {
       if (!bytes.length || bytes.byteLength > 5 * 1024 * 1024) throw new RequestError('Use a receipt image no larger than 5 MB.', 413);
       imageData={bytes,mimeType,owner:access.owner,version:object.version,size:object.size};
     }
-    const signal = AbortSignal.any([request.signal, AbortSignal.timeout(90_000)]);
+    // F-11: a phone that locks or leaves the app drops this request. The paid
+    // reading continues on the server until its own time limit and stores the
+    // proposal, which the app picks up on its next refresh. The draft
+    // fingerprint above and the unchanged-draft check below keep it idempotent.
+    const signal = AbortSignal.timeout(90_000);
     const database = db();
     const {preferences:{readingLanguage}} = await readTripLanguagePreferences(database,profile.id,trip.id);
     const connection = await getReceiptAIAccess(request, profile, database, env as unknown as ReceiptAIEnvironment);
@@ -66,47 +70,53 @@ export async function POST(request: Request) {
     operation = { attemptId: crypto.randomUUID(), tripId: trip.id, draftId: draft.id, receiptId: values.receiptId };
     logOperation('native-processing-started', operation, { provider: connection.provider });
     const context={...connection,trip,draft,readingLanguage,callerMemberId:trip.members.find(member=>member.userId===profile.id)?.id??null};
-    const answer = values.questionId ? await processReceiptQuestion({...context,questionId:values.questionId},{signal}) : undefined;
-    const transcription = imageData ? await processReceiptImage({...context,image:imageData},{signal}) : undefined;
-    // An unrelated ledger edit does not invalidate a paid transcription. Rebase
-    // only onto an unchanged source draft and member context, always retaining
-    // the latest other entries. Every CAS retry repeats the access checks;
-    // inference itself runs once.
-    for (let attempt = 0; attempt < 3; attempt++) {
-      if (signal.aborted) throw new RequestError('Receipt processing was cancelled or timed out. Your saved receipt is unchanged.', 408);
-      if ((await ensureProfile(request)).id !== profile.id) throw new RequestError('Your signed-in account changed. Open this receipt again.', 409);
-      const latest = await readLedger(profile.id);
-      const currentTrip = latest.data.trips.find(value => value.id === trip.id);
-      const currentDraft = currentTrip?.drafts.find(value => value.id === draft.id);
-      const currentAccess = imageData && values.receiptId ? await receiptAccess(profile.id, values.receiptId) : undefined;
-      if (!currentTrip || !currentDraft || JSON.stringify(currentDraft) !== JSON.stringify(draft)
-        || currentTrip.ownerId !== trip.ownerId || currentTrip.receiptLanguage !== trip.receiptLanguage || JSON.stringify(currentTrip.members) !== JSON.stringify(trip.members)
-        || imageData && (!currentAccess || currentAccess.tripId !== trip.id || currentAccess.owner !== imageData.owner)) {
-        throw new RequestError('This receipt changed during processing. Refresh before trying again.', 409);
+    const started = operation;
+    const work = (async (): Promise<Response> => {
+      const answer = values.questionId ? await processReceiptQuestion({...context,questionId:values.questionId},{signal}) : undefined;
+      const transcription = imageData ? await processReceiptImage({...context,image:imageData},{signal}) : undefined;
+      // An unrelated ledger edit does not invalidate a paid transcription. Rebase
+      // only onto an unchanged source draft and member context, always retaining
+      // the latest other entries. Every CAS retry repeats the access checks;
+      // inference itself runs once.
+      for (let attempt = 0; attempt < 3; attempt++) {
+        if (signal.aborted) throw new RequestError('Receipt processing was cancelled or timed out. Your saved receipt is unchanged.', 408);
+        if ((await ensureProfile(request)).id !== profile.id) throw new RequestError('Your signed-in account changed. Open this receipt again.', 409);
+        const latest = await readLedger(profile.id);
+        const currentTrip = latest.data.trips.find(value => value.id === trip.id);
+        const currentDraft = currentTrip?.drafts.find(value => value.id === draft.id);
+        const currentAccess = imageData && values.receiptId ? await receiptAccess(profile.id, values.receiptId) : undefined;
+        if (!currentTrip || !currentDraft || JSON.stringify(currentDraft) !== JSON.stringify(draft)
+          || currentTrip.ownerId !== trip.ownerId || currentTrip.receiptLanguage !== trip.receiptLanguage || JSON.stringify(currentTrip.members) !== JSON.stringify(trip.members)
+          || imageData && (!currentAccess || currentAccess.tripId !== trip.id || currentAccess.owner !== imageData.owner)) {
+          throw new RequestError('This receipt changed during processing. Refresh before trying again.', 409);
+        }
+        if(imageData && values.receiptId) {
+          const currentImage = await bucket().head(receiptKey(imageData.owner, values.receiptId));
+          if (!currentImage || currentImage.version !== imageData.version || currentImage.size !== imageData.size
+            || currentImage.httpMetadata?.contentType !== imageData.mimeType) throw new RequestError('This receipt image changed during processing. Refresh before trying again.', 409);
+        }
+        const tripSnapshot = structuredClone(currentTrip);
+        const proposal = answer && values.questionId ? applyReceiptQuestion(currentTrip,currentDraft,answer,values.questionId) : applyReceiptTranscription(currentTrip, currentDraft, transcription!, undefined, {
+          readingLanguage, readPurchaseDetails: values.readPurchaseDetails, attemptId: started.attemptId,
+          processedAt: new Date().toISOString(), processor: connection.provider === 'api' ? 'native-api' : 'native-siwc',
+          imageIds: values.receiptId ? [values.receiptId] : [],
+        });
+        currentTrip.drafts[currentTrip.drafts.findIndex(value => value.id === proposal.id)] = proposal;
+        try {
+          const saved = await writeLedger(profile.id, { trips: [currentTrip] }, latest.revision, { source: 'web', tripSnapshot });
+          const savedDraft = saved.data.trips.find(value => value.id === trip.id)?.drafts.find(value => value.id === draft.id);
+          logOperation('native-proposal-stored', started, {
+            status: savedDraft?.receiptScan?.status, lineCount: savedDraft?.items.length ?? 0, revision: saved.revision });
+          return Response.json({ ...saved, draft: savedDraft }, { headers: { 'Cache-Control': 'private, no-store' } });
+        } catch (error) {
+          if (!(error instanceof Error) || error.message !== 'CONFLICT') throw error;
+        }
       }
-      if(imageData && values.receiptId) {
-        const currentImage = await bucket().head(receiptKey(imageData.owner, values.receiptId));
-        if (!currentImage || currentImage.version !== imageData.version || currentImage.size !== imageData.size
-          || currentImage.httpMetadata?.contentType !== imageData.mimeType) throw new RequestError('This receipt image changed during processing. Refresh before trying again.', 409);
-      }
-      const tripSnapshot = structuredClone(currentTrip);
-      const proposal = answer && values.questionId ? applyReceiptQuestion(currentTrip,currentDraft,answer,values.questionId) : applyReceiptTranscription(currentTrip, currentDraft, transcription!, undefined, {
-        readingLanguage, readPurchaseDetails: values.readPurchaseDetails, attemptId: operation.attemptId,
-        processedAt: new Date().toISOString(), processor: connection.provider === 'api' ? 'native-api' : 'native-siwc',
-        imageIds: values.receiptId ? [values.receiptId] : [],
-      });
-      currentTrip.drafts[currentTrip.drafts.findIndex(value => value.id === proposal.id)] = proposal;
-      try {
-        const saved = await writeLedger(profile.id, { trips: [currentTrip] }, latest.revision, { source: 'web', tripSnapshot });
-        const savedDraft = saved.data.trips.find(value => value.id === trip.id)?.drafts.find(value => value.id === draft.id);
-        logOperation('native-proposal-stored', operation, {
-          status: savedDraft?.receiptScan?.status, lineCount: savedDraft?.items.length ?? 0, revision: saved.revision });
-        return Response.json({ ...saved, draft: savedDraft }, { headers: { 'Cache-Control': 'private, no-store' } });
-      } catch (error) {
-        if (!(error instanceof Error) || error.message !== 'CONFLICT') throw error;
-      }
-    }
-    throw new RequestError('Your ledger kept changing during processing. Refresh before trying again.', 409);
+      throw new RequestError('Your ledger kept changing during processing. Refresh before trying again.', 409);
+    })();
+    // Keep the reading alive after the client disconnects; errors still reach a connected client.
+    try { waitUntil(work.then(() => undefined, error => { logOperation('native-processing-failed', started, { category: 'detached' }); void error; })); } catch { /* Not running in a Worker (tests). */ }
+    return await work;
   } catch (error) {
     if (operation) logOperation('native-processing-failed', operation, {
       category: error instanceof ReceiptAIError || error instanceof ReceiptAIAccessError ? error.code

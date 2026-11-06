@@ -8,7 +8,7 @@ import { createSourceFile, isFunctionDeclaration, isJsxElement, isJsxAttribute, 
 import * as ts from 'typescript';
 import { equalFinancialValue, equalSavedValue } from '../lib/client-ledger';
 import { buildReceiptPrompt } from '../lib/receipt-chatgpt';
-import { isBlankReceipt, isUnchangedInitialReceipt, matchingReceiptProposal, mayFillInitialReceipt, receiptEditableValue, receiptProposalEditor, receiptEditorTotal, type ReceiptEditor } from '../lib/receipt-processing';
+import { isBlankApartFromPersonalDetails, isBlankReceipt, isUnchangedInitialReceipt, matchingReceiptProposal, mayFillInitialReceipt, receiptEditableValue, receiptProposalEditor, receiptEditorTotal, type ReceiptEditor } from '../lib/receipt-processing';
 import { acknowledgeReceiptReview, receiptScanSaveError } from '../lib/receipt-scan';
 import { expenseSaveBlockers, visibleExpenseBlockers } from '../lib/expense-readiness';
 import { isBill, CURRENT_CALCULATION_RULE, stampCalculationRules, tripMemberWeights, defaultParticipants, itemSchema, draftItemSchema, expenseSchema, itemSplitError, ledgerSchema, receiptSplitError, total, validateLedger, type Draft, type Expense, type ReceiptMessage, type Trip } from '../lib/model';
@@ -50,7 +50,7 @@ const controllerSource = `return function createController(initial, boundary) {
   const receiptAIStatusRequest={current:0},receiptAIStatusInFlight={current:null};
   const updates = [], editorBaseline = {current:null};
   const latestSnapshot = {current:{data:{trips:[trip]},revision:0}};
-  const {isBill,firstBillExpense,isFirstBillReceipt,CURRENT_CALCULATION_RULE,stampCalculationRules,tripMemberWeights,defaultParticipants,canonicalJson,sha256Hex,itemSchema,draftItemSchema,expenseSchema,acknowledgeReceiptReview,expenseSaveBlockers,visibleExpenseBlockers,receiptScanSaveError,receiptEditorTotal,itemSplitError,receiptSplitError,total,equalFinancialValue,equalSavedValue,buildReceiptPrompt,isBlankReceipt,isUnchangedInitialReceipt,matchingReceiptProposal,mayFillInitialReceipt,receiptEditableValue,receiptProposalEditor} = boundary;
+  const {isBlankApartFromPersonalDetails,isBill,firstBillExpense,isFirstBillReceipt,CURRENT_CALCULATION_RULE,stampCalculationRules,tripMemberWeights,defaultParticipants,canonicalJson,sha256Hex,itemSchema,draftItemSchema,expenseSchema,acknowledgeReceiptReview,expenseSaveBlockers,visibleExpenseBlockers,receiptScanSaveError,receiptEditorTotal,itemSplitError,receiptSplitError,total,equalFinancialValue,equalSavedValue,buildReceiptPrompt,isBlankReceipt,isUnchangedInitialReceipt,matchingReceiptProposal,mayFillInitialReceipt,receiptEditableValue,receiptProposalEditor} = boundary;
   const uid = boundary.uid, today = () => '2026-10-04', localTime = () => '12:00';
   const money = (amount, currency) => currency+' '+amount/100;
   const previewTotal = entry => total(entry);
@@ -79,7 +79,7 @@ const controllerSource = `return function createController(initial, boundary) {
   const setView = next => {view=next}, setHelp = next => {help=next}, prepareReceiptImage = async file => file;
   const setReceiptHistoryOpen = next => {receiptHistoryOpen=next};
   const setRestoration = next => {restoration=next};
-  const setEditorConflict = next => {editorConflict=next};
+  const setEditorConflict = next => {editorConflict=next}, setScanFirst = () => {};
   const setReferenceRate = next => {referenceRate=next};
   const setPaste = next => {paste=next};
   const setFxError = next => {fxError=next};
@@ -129,7 +129,7 @@ type Controller = {
   restoring(): void; restoration: unknown;
 };
 const createController = new Function(compiled)() as (initial: Trip, boundary: object) => Controller;
-const controller = (trip: Trip) => createController(trip, { isBill, firstBillExpense, isFirstBillReceipt, canonicalJson, sha256Hex, uid: randomUUID, ledgerSchema, CURRENT_CALCULATION_RULE, stampCalculationRules, tripMemberWeights, defaultParticipants, itemSchema, draftItemSchema, expenseSchema, acknowledgeReceiptReview, expenseSaveBlockers, visibleExpenseBlockers, itemSplitError, receiptSplitError, total, validateLedger, equalFinancialValue, equalSavedValue, buildReceiptPrompt, isBlankReceipt, isUnchangedInitialReceipt, matchingReceiptProposal, mayFillInitialReceipt, receiptEditableValue, receiptProposalEditor, receiptEditorTotal, receiptScanSaveError });
+const controller = (trip: Trip) => createController(trip, { isBlankApartFromPersonalDetails, isBill, firstBillExpense, isFirstBillReceipt, canonicalJson, sha256Hex, uid: randomUUID, ledgerSchema, CURRENT_CALCULATION_RULE, stampCalculationRules, tripMemberWeights, defaultParticipants, itemSchema, draftItemSchema, expenseSchema, acknowledgeReceiptReview, expenseSaveBlockers, visibleExpenseBlockers, itemSplitError, receiptSplitError, total, validateLedger, equalFinancialValue, equalSavedValue, buildReceiptPrompt, isBlankReceipt, isUnchangedInitialReceipt, matchingReceiptProposal, mayFillInitialReceipt, receiptEditableValue, receiptProposalEditor, receiptEditorTotal, receiptScanSaveError });
 const stamp = '2026-10-04T12:00:00Z';
 const question: ReceiptMessage = { id: 'question', role: 'user', text: 'Check the replacement image', createdAt: stamp };
 const reply: ReceiptMessage = { id: 'reply', role: 'assistant', replyTo: question.id, text: 'Reviewed replacement image', createdAt: stamp };
@@ -464,6 +464,29 @@ test('typing while native reading is pending preserves local values and offers t
   release(response({data:{trips:[itemizedTrip(editor.trip)]},revision:2}));await captured;editor.reconcileEditorReceipt(editor.trip);
   assert.equal(editor.editing!.title,'My local correction');assert.equal(editor.editing!.items[0].amount,4500);
   assert.equal(editor.editing!.payer,'b');assert(editor.processed);assert.equal(editor.processing,false);assert.equal(editor.trip.expenses.length,0);
+});
+
+test('F-07: a name typed while reading is kept and the items still fill in without a review step', async () => {
+  for (const when of ['before', 'during'] as const) {
+    const editor=controller(blankTrip());editor.newExpense();editor.aiConnected();
+    let release!:(value:unknown)=>void, started!:()=>void;
+    const pendingResponse=new Promise(resolve=>{release=resolve}),processingStarted=new Promise<void>(resolve=>{started=resolve});
+    editor.network(async url=>{
+      if(url.startsWith('/api/receipt?'))return response({receiptId:'new-photo'});
+      started();return pendingResponse;
+    });
+    // As userReceiptField does in the name field: provenance merges.
+    const typed = () => ({ title: 'Snacks for the train', fieldSources: { ...editor.editing!.fieldSources, title: 'user' as const } });
+    if (when === 'before') editor.edit(typed());
+    const captured=editor.captureEditorReceipt(receiptFile());await processingStarted;
+    if (when === 'during') editor.edit(typed());
+    release(response({data:{trips:[itemizedTrip(editor.trip)]},revision:2}));await captured;editor.reconcileEditorReceipt(editor.trip);
+    // The fill is confirmed on the next pass, after its values render.
+    editor.reconcileEditorReceipt(editor.trip);
+    assert.equal(editor.editing!.title,'Snacks for the train',`${when}: the typed name wins over the merchant`);
+    assert.deepEqual(editor.editing!.items.map(item=>item.name),['Dinner from image'],`${when}: items fill in`);
+    assert.equal(editor.processed,null,`${when}: no Review processed receipt step`);
+  }
 });
 
 test('a reading response from a previous account cannot apply its proposal', async () => {

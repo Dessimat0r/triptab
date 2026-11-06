@@ -63,9 +63,12 @@ async function fixtures(page: Page, options: { draft?: Draft; scan?: Partial<Dra
 }
 const clicks = (page: Page) => page.evaluate(() => (window as unknown as { __expenseClicks: string[] }).__expenseClicks);
 async function openDraft(page: Page) { await page.goto('/expenses?receiptDraft=confirm-draft&receiptTrip=confirm-trip'); await expect(page.locator('.editor')).toBeVisible(); }
-async function scan(page: Page) {
-  const chooser = page.waitForEvent('filechooser');
+// F-07: Scan receipt opens the editor at its camera button; the photo is one more tap.
+async function scan(page: Page, name?: string) {
   await page.getByRole('button', { name: 'Scan receipt', exact: true }).click();
+  if (name) await page.getByRole('textbox', { name: 'Expense name', exact: true }).fill(name);
+  const chooser = page.waitForEvent('filechooser');
+  await page.locator('.editor .receipt-capture-action').filter({ hasText: 'Scan receipt' }).click();
   await (await chooser).setFiles(photo);
 }
 const save = (page: Page) => page.locator('.editor-footer').getByRole('button', { name: /^(Confirm & save expense|Save expense)$/ });
@@ -96,7 +99,8 @@ test('Scan receipt starts reading and a clean scan needs only allocation and the
   await page.getByRole('button', { name: 'Share the remaining item equally', exact: true }).click();
   await expect(page.locator('.editor button[type=submit], .editor-footer .primary')).toHaveCount(1);
   await save(page).click(); await expect(page.locator('.editor')).toHaveCount(0);
-  expect(await clicks(page)).toEqual(['Scan receipt', 'Share the remaining item equally', 'Save expense']);
+  // F-07: Scan receipt first offers an optional name, then the camera button: one deliberate extra tap.
+  expect(await clicks(page)).toEqual(['Scan receipt', 'Scan receipt', 'Share the remaining item equally', 'Save expense']);
   expect(state.uploads).toBe(1); expect(state.scans).toBe(1); expect(state.posts).toBe(1);
 });
 
@@ -289,4 +293,28 @@ test('offline is explanatory text and a Save press leaves focus at Save', async 
   await save(page).evaluate(button=>{(button as HTMLButtonElement).focus();(button as HTMLButtonElement).click();});
   await expect(save(page)).toBeFocused(); await expect(page.locator('.expense-save-announcement')).toContainText('You’re offline');
   expect(state.posts).toBe(0); await page.context().setOffline(false);
+});
+
+test('F-07: a name typed before the photo survives reading, items fill in without a review tap, and the keyboard stays down', async ({ page }) => {
+  const state = await fixtures(page);
+  await page.goto('/expenses');
+  await page.getByRole('button', { name: 'Scan receipt', exact: true }).click();
+  const name = page.getByRole('textbox', { name: 'Expense name', exact: true });
+  await expect(name).toHaveAttribute('placeholder', 'Name (optional)');
+  await expect(name).not.toBeFocused();
+  await scan(page, 'Snacks for the train');
+  await expect.poll(() => state.scans).toBe(1);
+  await expect(page.locator('.receipt-scan-totals')).toContainText('€42.10');
+  await expect(name).toHaveValue('Snacks for the train');
+  await expect(name).not.toBeFocused();
+  await expect(page.getByRole('button', { name: 'Review processed receipt', exact: true })).toHaveCount(0);
+  await expect(page.locator('.editor')).not.toContainText('Add an expense name');
+});
+
+test('F-07: with no typed name the merchant fills it in', async ({ page }) => {
+  const state = await fixtures(page);
+  await page.goto('/expenses');
+  await scan(page);
+  await expect.poll(() => state.scans).toBe(1);
+  await expect(page.getByRole('textbox', { name: 'Expense name', exact: true })).toHaveValue('Coffee and cake');
 });

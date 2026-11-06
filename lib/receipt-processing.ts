@@ -32,12 +32,43 @@ export function matchingReceiptProposal(trip: Trip, editor: ReceiptEditor) {
     && draft.receiptId === editor.receiptId && draft.expenseId === editor.expenseId) || null;
 }
 
+/**
+ * Descriptive details a person may type before or while a receipt is read
+ * (F-07). They stay theirs: receiptProposalEditor keeps every user-sourced
+ * value, so typing them does not stop the receipt filling in.
+ */
+const PERSONAL_DETAILS = ['title', 'date', 'time', 'timezone', 'payer', 'location'] as const;
+function withoutPersonalDetails(value: ReturnType<typeof receiptEditableValue>, editor: ReceiptEditor) {
+  const typed = PERSONAL_DETAILS.filter(field => editor.fieldSources?.[field] === 'user');
+  if (!typed.length) return value;
+  const sources = { ...value.fieldSources };
+  for (const field of typed) delete sources[field];
+  return { ...value, ...Object.fromEntries(typed.map(field => [field, undefined])), fieldSources: Object.keys(sources).length ? sources : undefined };
+}
+
+/** A new expense's first line follows a typed name; that copy is not receipt content. */
+export function withoutTypedName<T extends ReceiptEditor>(entry: T): T {
+  if (entry.fieldSources?.title !== 'user') return entry;
+  return { ...entry, title: '', items: entry.items.map((item, index) => {
+    if (index || item.name !== entry.title || item.fieldSources?.name !== 'user') return item;
+    const sources = { ...item.fieldSources }; delete sources.name;
+    const { fieldSources: dropped, ...rest } = item; void dropped;
+    return { ...rest, name: '', ...(Object.keys(sources).length ? { fieldSources: sources } : {}) };
+  }) };
+}
+
+/** A receipt is still blank when the only changes are personal details typed before the photo (F-07). */
+export function isBlankApartFromPersonalDetails(entry: ReceiptEditor, blank?: ReturnType<typeof receiptEditableValue>) {
+  const plain = withoutTypedName(entry);
+  return isBlankReceipt(plain) && (!blank || equalSavedValue(withoutPersonalDetails(blank, entry), withoutPersonalDetails(receiptEditableValue(plain), entry)));
+}
+
 export function isUnchangedInitialReceipt(initial: InitialReceiptReview | null, accountId: string, trip: Trip, editor: ReceiptEditor, draft: Draft) {
   return !!initial && initial.accountId === accountId && initial.tripId === trip.id
     && initial.editorId === editor.id && initial.draftId === draft.id && initial.receiptId === draft.receiptId
     && editor.draftId === draft.id && editor.receiptId === draft.receiptId
     && !editor.expenseId && !draft.expenseId && !trip.expenses.some(expense => expense.id === editor.id)
-    && equalSavedValue(initial.financial, receiptEditableValue(editor));
+    && equalSavedValue(withoutPersonalDetails(initial.financial, editor), withoutPersonalDetails(receiptEditableValue(editor), editor));
 }
 
 export function mayFillInitialReceipt(initial: InitialReceiptReview | null, accountId: string, trip: Trip, editor: ReceiptEditor, draft: Draft) {
