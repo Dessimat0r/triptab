@@ -2054,6 +2054,11 @@ export default function Home({ children }: { children: ReactNode }) {
         typeof record.bankAmount === "number" && trip ? uiText("bank charge {value0}", { value0: money(record.bankAmount, trip.currency) }) : ""].filter(Boolean).join(" · ");
     }
     if (conflict.key === "split-mode") return Object.entries(record).map(([member, percent]) => `${name(member)} ${percent}%`).join(", ");
+    // R10: line order, shown by line names.
+    if (conflict.key === "item-order" && Array.isArray(value)) return value.map((id, index) => {
+      const line = [...(editing?.items ?? []), ...(editorConflict?.latest?.items ?? [])].find(item => item.id === id);
+      return line?.name || uiText("Line {value0}", { value0: index + 1 });
+    }).join(" → ");
     if (/^item:[^:]+:name$/.test(conflict.key)) return String(record.name ?? "");
     if (conflict.key.startsWith("item:")) {
       const shares = record.percentages ? Object.entries(record.percentages as Record<string, number>).map(([member, percent]) => `${name(member)} ${percent}%`).join(", ") : people(record.members);

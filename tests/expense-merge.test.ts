@@ -153,3 +153,62 @@ test('property: independent edits never conflict and never lose the other person
     assert.equal(shares.reduce((sum, share) => sum + share, 0), total(result.merged));
   }
 });
+
+// R10: a one-sided reorder [i1,i2] → [i2,i1] was discarded when the other person
+// changed only the title. Order decides who gets a tied penny, so it is money.
+const tied = () => dinner({ items: [{ id: 'i1', name: 'Bread', amount: 1, members: ['gary', 'sam'] }, { id: 'i2', name: 'Olives', amount: 2, members: ['sam', 'gary'] }] });
+const reorder = (entry: Expense, ids: string[]) => ({ ...entry, items: ids.map(id => entry.items.find(item => item.id === id)!) });
+
+test('R10: my reorder survives the other person\'s title change, with the shares it implies', () => {
+  const base = tied();
+  const mine = reorder(base, ['i2', 'i1']);
+  const theirs = { ...base, title: 'Tapas' };
+  const result = mergeExpenseEdits(base, mine, theirs);
+  assert.deepEqual(result.conflicts, []);
+  assert.deepEqual(result.merged.items.map(item => item.id), ['i2', 'i1']);
+  assert.equal(result.merged.title, 'Tapas');
+  // The order changes who receives the tied penny, so dropping it would have moved money.
+  const saved = validateLedger({ trips: [holiday(result.merged)] }).trips[0].expenses[0];
+  assert.deepEqual(expenseShares(saved, members, 'GBP'), expenseShares({ ...mine, title: 'Tapas' }, members, 'GBP'));
+  assert.notDeepEqual(expenseShares(saved, members, 'GBP'), expenseShares(base, members, 'GBP'));
+  // The other direction: their reorder survives my title change.
+  const flipped = mergeExpenseEdits(base, { ...base, title: 'Tapas' }, mine);
+  assert.deepEqual(flipped.merged.items.map(item => item.id), ['i2', 'i1']);
+  assert.deepEqual(flipped.applied.map(change => change.key), ['item-order']);
+});
+
+test('R10: the same reorder on both sides is fine; different reorders are a conflict a person resolves', () => {
+  const base = dinner({ items: ['a', 'b', 'c'].map((id, index) => ({ id, name: id, amount: 100 + index, members: ['gary'] })) });
+  const same = mergeExpenseEdits(base, reorder(base, ['c', 'b', 'a']), { ...reorder(base, ['c', 'b', 'a']), title: 'x' });
+  assert.deepEqual(same.conflicts, []);
+  assert.deepEqual(same.merged.items.map(item => item.id), ['c', 'b', 'a']);
+  const mine = reorder(base, ['b', 'a', 'c']), theirs = reorder(base, ['a', 'c', 'b']);
+  const clash = mergeExpenseEdits(base, mine, theirs);
+  assert.deepEqual(clash.conflicts.map(conflict => conflict.key), ['item-order']);
+  assert.deepEqual(clash.conflicts[0].mine, ['b', 'a', 'c']);
+  assert.deepEqual(mergeExpenseEdits(base, mine, theirs, { 'item-order': 'mine' }).merged.items.map(item => item.id), ['b', 'a', 'c']);
+  assert.deepEqual(mergeExpenseEdits(base, mine, theirs, { 'item-order': 'theirs' }).merged.items.map(item => item.id), ['a', 'c', 'b']);
+});
+
+test('R10: additions and removals keep their place around a kept reorder', () => {
+  const base = dinner({ items: ['a', 'b', 'c'].map((id, index) => ({ id, name: id, amount: 100 + index, members: ['gary'] })) });
+  const mine = reorder(base, ['c', 'a', 'b']);
+  // They add d after a and remove an unchanged b.
+  const theirs = { ...base, items: [base.items[0], { id: 'd', name: 'd', amount: 50, members: ['sam'] }, base.items[2]] };
+  const result = mergeExpenseEdits(base, mine, theirs);
+  assert.deepEqual(result.conflicts, []);
+  assert.deepEqual(result.merged.items.map(item => item.id), ['c', 'a', 'd']);
+  // Lines only I add still follow the saved order when nobody reordered.
+  const added = mergeExpenseEdits(base, { ...base, items: [...base.items, { id: 'e', name: 'e', amount: 1, members: ['gary'] }] }, theirs);
+  assert.deepEqual(added.merged.items.map(item => item.id), ['a', 'd', 'c', 'e']);
+});
+
+test('R10: a scoped discount still applies to the same lines after a merged reorder', () => {
+  const base = { ...tied(), adjustmentAllocation: 'scoped-adjustments' as const, items: [...tied().items, { id: 'i3', name: 'Wine', amount: 900, members: ['gary'] }],
+    adjustments: [{ id: 'off', kind: 'discount' as const, amount: 300, scope: { type: 'items' as const, itemIds: ['i3'] } }] };
+  const result = mergeExpenseEdits(base, reorder(base, ['i3', 'i2', 'i1']), { ...base, title: 'Tapas' });
+  const saved = validateLedger({ trips: [holiday(result.merged)] }).trips[0].expenses[0];
+  assert.deepEqual(saved.items.map(item => item.id), ['i3', 'i2', 'i1']);
+  assert.equal(total(saved), 603);
+  assert.equal(expenseShares(saved, members, 'GBP').reduce((sum, share) => sum + share, 0), 603);
+});

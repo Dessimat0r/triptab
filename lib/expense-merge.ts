@@ -83,6 +83,42 @@ function threeWay<V>(base: V, mine: V, theirs: V): Outcome<V> {
   return { conflict: true };
 }
 
+/**
+ * Line order is financial: receipt-total rounding gives tied pennies in the
+ * order people first appear on the lines. Merge the relative order of lines
+ * both sides kept as one three-way value (R10): a reorder by one side is kept,
+ * the same reorder by both is fine, and two different reorders are a conflict
+ * a person resolves. Lines only I added follow the saved order; when my
+ * reorder is kept, lines only the other person added keep their place after
+ * the line that preceded them.
+ */
+function mergeOrder(base: string[], mine: string[], theirs: string[], kept: Set<string>, choices: Record<string, MergeChoice>,
+  applied: MergeChange[], conflicts: MergeConflict[]): string[] {
+  const common = new Set(base.filter(id => kept.has(id) && mine.includes(id) && theirs.includes(id)));
+  const relative = (list: string[]) => list.filter(id => common.has(id));
+  const outcome = threeWay(relative(base), relative(mine), relative(theirs));
+  let primary: MergeChoice;
+  if ('conflict' in outcome) {
+    if (choices['item-order']) primary = choices['item-order'];
+    else { conflicts.push({ key: 'item-order', label: 'Order of lines', mine: relative(mine), theirs: relative(theirs) }); primary = 'theirs'; }
+  } else {
+    primary = outcome.changedBy === 'mine' || outcome.changedBy === 'both-same' ? 'mine' : 'theirs';
+    if (outcome.changedBy === 'theirs') applied.push({ key: 'item-order', label: 'Order of lines' });
+  }
+  const order = (primary === 'mine' ? mine : theirs).filter(id => kept.has(id));
+  const other = primary === 'mine' ? theirs : mine;
+  other.forEach((id, index) => {
+    if (!kept.has(id) || order.includes(id)) return;
+    // The saved order stays first and my new lines follow it (as before);
+    // when my reorder wins, the other person's new lines keep their place.
+    if (primary === 'theirs') { order.push(id); return; }
+    const before = other.slice(0, index).reverse().find(value => order.includes(value));
+    order.splice(before === undefined ? 0 : order.indexOf(before) + 1, 0, id);
+  });
+  for (const id of kept) if (!order.includes(id)) order.push(id);
+  return order;
+}
+
 function mergeItems(base: Item[], mine: Item[], theirs: Item[], choices: Record<string, MergeChoice>,
   applied: MergeChange[], conflicts: MergeConflict[]) {
   const byId = (list: Item[]) => new Map(list.map(item => [item.id, item]));
@@ -160,7 +196,10 @@ function mergeItems(base: Item[], mine: Item[], theirs: Item[], choices: Record<
     if (messages.length) next.conversation = messages;
     result.push(next);
   }
-  return result;
+  const ids = (list: Item[]) => list.map(item => item.id);
+  const finalOrder = mergeOrder(ids(base), ids(mine), ids(theirs), new Set(ids(result)), choices, applied, conflicts);
+  const merged = new Map(result.map(item => [item.id, item]));
+  return finalOrder.map(id => merged.get(id)!);
 }
 
 /**
