@@ -46,6 +46,8 @@ const GROUPS: { key: string; label: string; fields: string[] }[] = [
 const LABELS: Record<string, string> = {
   title: 'Name', payer: 'Paid by', tax: 'Added tax', tip: 'Tip / service', discount: 'Discount',
   receiptId: 'Receipt photo', notes: 'Notes', icon: 'Icon', place: 'Place', receiptLanguage: 'Receipt language',
+  // Discount records (F-02) merge as one list: they reference item IDs and must stay consistent.
+  adjustments: 'Discounts and charges',
 };
 /** Item fields that only describe a line; everything else about an item is financial. */
 const ITEM_DESCRIPTIVE = new Set(['name', 'nameLanguage', 'translations', 'scanSource']);

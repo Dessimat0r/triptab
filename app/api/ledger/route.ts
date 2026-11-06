@@ -1,4 +1,4 @@
-import { db, readLedgerSnapshot, writeLedger, sameOrigin, failure, readBoundedBody, ensureProfile } from '@/lib/store';
+import { db, readLedgerSnapshot, writeLedger, writeTrips, sameOrigin, failure, readBoundedBody, ensureProfile } from '@/lib/store';
 import { ledgerEtagForSnapshot, ledgerTagMatches, readLedgerFreshness } from '@/lib/ledger-freshness';
 
 export const dynamic = 'force-dynamic';
@@ -14,9 +14,9 @@ export async function GET(r: Request) {
     }
     // A changed conditional request takes a new complete snapshot: never attach
     // an earlier metadata tag to data that another writer changed in between.
-    const { data, revision, freshness } = await readLedgerSnapshot(profile.id);
+    const { data, revision, revisions, freshness } = await readLedgerSnapshot(profile.id);
     const tag = await ledgerEtagForSnapshot(freshness);
-    return Response.json({ data, revision }, { headers: { 'Cache-Control': 'private, no-store', ETag: tag, 'X-Ledger-Revision': String(revision), 'X-TripTab-Account': profile.id } });
+    return Response.json({ data, revision, revisions }, { headers: { 'Cache-Control': 'private, no-store', ETag: tag, 'X-Ledger-Revision': String(revision), 'X-TripTab-Account': profile.id } });
   } catch (e) {
     return failure(e);
   }
@@ -44,9 +44,13 @@ export async function POST(r: Request) {
     const fields = body as Record<string, unknown>;
     // Use the write's one coherent response snapshot: a later independent tag
     // read could label this body with another participant's newer changes.
-    const { data, revision, freshness } = await writeLedger(profile.id, fields.data, fields.revision, { includeFreshness: true });
+    // F-16: a save that names its trips' revisions conflicts only on those trips.
+    // Older clients still send the whole ledger against the global revision.
+    const { data, revision, revisions, freshness } = fields.tripRevisions !== undefined
+      ? await writeTrips(profile.id, fields.data, fields.tripRevisions)
+      : await writeLedger(profile.id, fields.data, fields.revision, { includeFreshness: true });
     const etag = await ledgerEtagForSnapshot(freshness);
-    return Response.json({ data, revision }, { headers: { 'Cache-Control': 'private, no-store', ETag: etag,
+    return Response.json({ data, revision, revisions }, { headers: { 'Cache-Control': 'private, no-store', ETag: etag,
       'X-Ledger-Revision': String(revision), 'X-TripTab-Account': profile.id } });
   } catch (e) {
     return failure(e);
