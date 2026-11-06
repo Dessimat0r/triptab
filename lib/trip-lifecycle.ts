@@ -13,6 +13,9 @@ type Actor = { id: string; displayName: string };
 export const OPEN_TRIP_IDS = `SELECT id FROM trips WHERE owner = ? UNION SELECT trip_id FROM memberships WHERE user_id = ?
   EXCEPT SELECT trip_id FROM trip_archives WHERE user_id = ?`;
 export const openTripBindings = (user: string) => [user, user, user];
+/** Holidays and bills this account can still open but has archived for itself (F-05). */
+const ARCHIVED_TRIP_IDS = `SELECT id FROM trips WHERE owner = ? UNION SELECT trip_id FROM memberships WHERE user_id = ?
+  INTERSECT SELECT trip_id FROM trip_archives WHERE user_id = ?`;
 
 const access = '(t.owner = ? OR EXISTS (SELECT 1 FROM memberships m WHERE m.trip_id = t.id AND m.user_id = ?))';
 // A provider identity linked to a different account must never act as itself.
@@ -44,6 +47,32 @@ export async function listArchivedTrips(database: D1Database, user: string): Pro
   return rows.results.map(row => ({ id: row.id, name: String(row.name ?? ''), currency: String(row.currency ?? ''),
     ...(row.kind ? { kind: row.kind } : {}), ...(row.start_date ? { startDate: row.start_date } : {}), ...(row.end_date ? { endDate: row.end_date } : {}),
     travellers: Number(row.travellers) || 0, archivedAt: row.archived_at, owner: row.owner === user }));
+}
+
+/**
+ * Read-only copies of the account's archived holidays and bills, for the
+ * Activity and People views (F-05). Only trips the account can still open
+ * (owned or joined) and has archived for itself. Account links come from
+ * memberships, as in the ledger; emails are never included.
+ */
+export async function listArchivedTripData(database: D1Database, user: string, limit = 200): Promise<Trip[]> {
+  const [trips, links] = await database.batch([
+    database.prepare(`SELECT t.id, t.owner, t.data FROM trips t WHERE t.id IN (${ARCHIVED_TRIP_IDS}) ORDER BY t.id LIMIT ?`).bind(user, user, user, limit),
+    database.prepare(`SELECT m.trip_id, m.user_id, m.member_id FROM memberships m WHERE m.trip_id IN (${ARCHIVED_TRIP_IDS})`).bind(user, user, user),
+  ]);
+  const linked = new Map((links.results as { trip_id: string; user_id: string; member_id: string }[]).map(row => [`${row.trip_id}\u0000${row.member_id}`, row.user_id]));
+  return (trips.results as { id: string; owner: string; data: string }[]).map(row => {
+    const trip = { ...JSON.parse(row.data), ownerId: row.owner } as Trip;
+    trip.members = trip.members.map(member => {
+      const next = { ...member };
+      delete next.email;
+      const account = linked.get(`${row.id}\u0000${member.id}`);
+      if (account) next.userId = account; else if (next.userId !== row.owner) delete next.userId;
+      return next;
+    });
+    for (const entry of [...trip.expenses, ...trip.drafts]) delete (entry as { conversation?: unknown }).conversation;
+    return trip;
+  });
 }
 
 /** Personal: other travellers keep seeing the holiday and notifications continue. */

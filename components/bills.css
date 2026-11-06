@@ -39,3 +39,11 @@
 .people-currency small { color: var(--muted); }
 .people-currency .action-row { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 .people-currency .action-row button { min-height: 44px; }
+/* Archived entries are read-only in Activity; restore the trip to open them. */
+.activity-row:disabled { opacity: 1; cursor: default; background: var(--surface-muted, transparent); color: inherit; }
+.personal-activity .checklabel { display: flex; align-items: center; gap: var(--space-2); min-height: 44px; }
+/* F-04: add someone on TripTab to an existing bill. */
+.bill-people-connected { display: grid; gap: var(--space-2); }
+.bill-people-connected .bill-suggestions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.bill-people-connected button { min-height: 44px; }
+.bill-people-connected button small { color: var(--muted); font-weight: 400; }

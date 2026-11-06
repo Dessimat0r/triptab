@@ -1,7 +1,7 @@
 import { bucket, db, ensureProfile, failure, readBoundedBody, RequestError, sameOrigin } from '@/lib/store';
 import { notifyMember, notifyMembers } from '@/lib/notifications';
 import { purgeDeletedTripReceipts } from '@/lib/receipt-lifecycle';
-import { addConnectedMember, discardEmptyBill, deleteTrip, leaveTrip, listArchivedTrips, listConnections, setTripArchived, transferTripOwnership } from '@/lib/trip-lifecycle';
+import { addConnectedMember, discardEmptyBill, deleteTrip, leaveTrip, listArchivedTripData, listArchivedTrips, listConnections, setTripArchived, transferTripOwnership } from '@/lib/trip-lifecycle';
 
 export const dynamic = 'force-dynamic';
 const PRIVATE_HEADERS = { 'Cache-Control': 'private, no-store' };
@@ -13,6 +13,8 @@ export async function GET(request: Request) {
     if (![...params.keys()].every(key => key === 'mode') || [...params.keys()].length !== 1) throw new RequestError('Choose a valid holiday list.');
     // F-04: people the account already shares a holiday or bill with (names only).
     if (params.get('mode') === 'connections') return Response.json({ people: await listConnections(db(), profile.id) }, { headers: PRIVATE_HEADERS });
+    // F-05: read-only archived holidays and bills for Activity and People.
+    if (params.get('mode') === 'archived-data') return Response.json({ trips: await listArchivedTripData(db(), profile.id) }, { headers: PRIVATE_HEADERS });
     if (params.get('mode') !== 'archived') throw new RequestError('Choose a valid holiday list.');
     return Response.json({ trips: await listArchivedTrips(db(), profile.id) }, { headers: PRIVATE_HEADERS });
   } catch (error) {
