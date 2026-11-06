@@ -141,3 +141,8 @@ test('F-16: readiness requires migration 0014 (trip revision column and its main
     const response = await GET(); assert.equal(response.status, 503); assert.deepEqual(await response.json(), { status: 'unavailable' });
   });
 });
+test('R11: a database at 0014 without the membership no-op guard cannot report ready', async () => {
+  sqlite = new DatabaseSync(':memory:'); receiptBinding = true;
+  for (const name of (await readdir(new URL('../drizzle/', import.meta.url))).filter(name => name.endsWith('.sql') && Number(name.slice(0, 4)) <= 14).sort()) sqlite.exec(await readFile(new URL('../drizzle/' + name, import.meta.url), 'utf8'));
+  const response = await GET(); assert.equal(response.status, 503); assert.deepEqual(await response.json(), { status: 'unavailable' });
+});

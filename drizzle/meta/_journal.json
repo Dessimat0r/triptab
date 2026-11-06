@@ -106,6 +106,13 @@
       "when": 1793990000000,
       "tag": "0014_trip_revisions",
       "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "6",
+      "when": 1794470400000,
+      "tag": "0015_membership_revision_noop",
+      "breakpoints": true
     }
   ]
 }
