@@ -26,7 +26,7 @@ async function fixtures(page: Page, initial: Trip) {
       : pathname === '/api/profile' ? { id: 'owner', displayName: 'Gary', email: 'gary@example.invalid', authMethod: 'password' }
       : pathname === '/api/receipt/ai-status' ? { configured: false, connected: false, provider: 'api', eligible: false, manageable: false, siwcAvailable: false }
       : pathname === '/api/trip-language' ? { accountId: 'owner', tripId: initial.id, revision: 1, preferences: { readingLanguage: 'en', primaryVersion: 'reading', itemVersions: {} } }
-      : { events: [], notifications: [], items: [] };
+      : { events: [], notifications: [], items: [], invitations: [] };
     return route.fulfill({ json, headers: pathname === '/api/ledger' ? { 'X-TripTab-Account': 'owner' } : {} });
   });
   return { get trip() { return current; }, posts };
@@ -118,4 +118,26 @@ test('F-14/F-15: Undo stays visible over an open form; payments are labelled Del
   await page.goto('/balances');
   await expect(page.getByRole('button', { name: 'Delete payment' })).toHaveCount(1);
   await expect(page.getByRole('button', { name: 'Undo recorded payment' })).toHaveCount(0);
+});
+
+test('F-06: Delete bill after the plain confirmation sends the name the server still requires', async ({ page }) => {
+  await fixtures(page, bill());
+  const actions: Record<string, string>[] = [];
+  await page.route('**/api/trip', route => {
+    if (route.request().method() !== 'POST') return route.fallback();
+    const body = route.request().postDataJSON() as Record<string, string>;
+    actions.push(body);
+    // As lib/trip-lifecycle deleteTrip: a bill with entries needs its exact name.
+    return body.action === 'delete' && body.confirmName !== 'Coffee'
+      ? route.fulfill({ status: 400, json: { error: 'Type the bill name exactly to confirm deleting it.' } })
+      : route.fulfill({ json: { deleted: true } });
+  });
+  await page.goto('/expenses');
+  await page.getByRole('button', { name: 'Bill options', exact: true }).click();
+  await page.getByText('Delete bill', { exact: true }).first().click();
+  await page.locator('.trip-controls').getByRole('button', { name: 'Delete bill' }).click();
+  await page.getByRole('dialog', { name: 'Delete this bill?' }).getByRole('button', { name: 'Delete bill' }).click();
+  await expect.poll(() => actions).toEqual([{ action: 'delete', tripId: 'rows-bill', memberId: '', confirmName: 'Coffee' }]);
+  // Accepted: Bill options closes instead of showing the server's refusal.
+  await expect(page.getByRole('dialog', { name: 'Bill options' })).toHaveCount(0);
 });
