@@ -559,6 +559,8 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
     const stored = existing.get(trip.id);
     const links = linkedRows.results.filter(row => row.trip_id === trip.id);
     if (stored) {
+      // A stale copy of a bill deleted on another device must not overwrite it.
+      if (stored.owner.startsWith('deleted:')) throw new RequestError(`“${trip.name}” was deleted. Refresh to continue.`, 409);
       if (stored.owner !== id && !links.some(link => link.user_id === id)) throw new RequestError('You do not have access to this trip.', 403);
       // The receipt worker captured readLedger's visible raw representation.
       // Its snapshot must be compared in that same representation, before Zod
