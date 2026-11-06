@@ -72,7 +72,10 @@ export default function TripControls({
     setSaving(true);
     setMessage('');
     try {
-      await change(value === 'delete' && isBill(trip) && !trip.expenses.length && !trip.payments.length && !trip.drafts.length && !trip.members.some(member => member.userId && member.userId !== accountId) ? 'discard' : value, trip.id, { memberId: owner, confirmName });
+      await change(value === 'delete' && isBill(trip) && !trip.expenses.length && !trip.payments.length && !trip.drafts.length && !trip.members.some(member => member.userId && member.userId !== accountId) ? 'discard' : value, trip.id, { memberId: owner,
+        // The plain confirmation above stands in for typing a bill's name; the
+        // server still checks the name, so a bill is never deleted by accident.
+        confirmName: value === 'delete' && isBill(trip) ? trip.name : confirmName });
       await onChanged();
       setMessage(
         value === 'transfer' ? 'Ownership transferred.' : isBill(trip) ? 'Bill updated.' : 'Holiday updated.',
