@@ -1,5 +1,6 @@
 import { canonicalJson as canonical } from './data-utils';
 import { z } from 'zod';
+import { applyAdjustments, type Adjustment } from './adjustments';
 
 const amount = z.number().int().min(0).max(100000000);
 const identifier = z.string().min(1).max(100);
@@ -13,7 +14,7 @@ export const scanSourceSchema = z.object({
 export const sourceLineSchema = scanSourceSchema.extend({
   kind: z.enum(['item', 'tax-summary', 'adjustment', 'subtotal', 'total', 'other']).optional(),
   amount: z.number().int().min(-100000000).max(100000000).nullable().optional(),
-  mappedTo: z.enum(['discount', 'tax', 'tip', 'included', 'unmapped']).optional(),
+  mappedTo: z.enum(['discount', 'tax', 'tip', 'included', 'adjustment', 'unmapped']).optional(),
 }).strict();
 export const itemFieldSourcesSchema = z.object({
   name: source.optional(), amount: source.optional(), quantity: source.optional(),
@@ -124,6 +125,7 @@ export type ScannableReceipt = {
   }[];
   tax: number; tip: number; discount: number;
   percentages?: Record<string, number>;
+  adjustments?: Adjustment[];
   fieldSources?: FieldSources;
   receiptScan?: ReceiptScan;
 };
@@ -204,7 +206,10 @@ export function reconcileReceiptScan(entry: ScannableReceipt): ReceiptScan | und
     const resolved = scan.warnings.find(warning => warningKey(warning) === warningKey(candidate) && warning.resolved);
     add(resolved || candidate);
   }
-  const calculatedTotal = calculatedSubtotal + entry.tax + entry.tip - entry.discount;
+  // Discount and charge records (F-02) count once each against the printed total.
+  const adjusted = applyAdjustments(entry.items, entry.adjustments);
+  const adjustmentEffect = adjusted.net.reduce<number>((sum, value, index) => sum + (value ?? 0) - (entry.items[index].amount ?? 0), 0) + adjusted.receiptDelta;
+  const calculatedTotal = calculatedSubtotal + adjustmentEffect + entry.tax + entry.tip - entry.discount;
   if (![entry.tax, entry.tip, entry.discount].every(value => Number.isSafeInteger(value) && value >= 0 && value <= 100000000)
     || ![calculatedSubtotal, calculatedTotal].every(Number.isSafeInteger)) {
     throw new Error('Receipt amounts must be integer hundredths');
@@ -225,9 +230,11 @@ export function reconcileReceiptScan(entry: ScannableReceipt): ReceiptScan | und
   if (scan.printedSubtotal !== undefined && scan.printedSubtotal !== null && calculatedSubtotal !== scan.printedSubtotal) {
     add({ code: 'subtotal-mismatch', difference: calculatedSubtotal - scan.printedSubtotal });
   }
+  const appliedLines = new Set((entry.adjustments ?? []).flatMap(adjustment => adjustment.sourceLineIndex === undefined ? [] : [adjustment.sourceLineIndex]));
   for (const line of scan.sourceLines || []) {
     if ((line.kind !== 'adjustment' && !(typeof line.amount === 'number' && line.amount < 0))
-      || (line.mappedTo && line.mappedTo !== 'unmapped')) continue;
+      || (line.mappedTo && line.mappedTo !== 'unmapped')
+      || (line.lineIndex !== undefined && appliedLines.has(line.lineIndex))) continue;
     const candidate: ReceiptScanWarning = { code: 'unmapped-adjustment',
       ...(line.lineIndex === undefined ? {} : { lineIndex: line.lineIndex }),
       ...(line.observedText === undefined ? {} : { observedText: line.observedText }),
@@ -293,6 +300,7 @@ export function receiptScanFingerprint(entry: ScannableReceipt): string {
     .filter(([field]) => ['currency', 'tax', 'tip', 'discount'].includes(field)));
   return `scan-v1:${sha256(canonical({ currency: entry.currency, items: entry.items.map(item=>Object.fromEntries(Object.entries(item).filter(([key])=>key!=="translations"&&key!=="nameLanguage"))),
     tax: entry.tax, tip: entry.tip, discount: entry.discount, percentages: entry.percentages,
+    ...(entry.adjustments?.length ? { adjustments: entry.adjustments } : {}),
     fieldSources: Object.keys(financialSources).length ? financialSources : undefined,
     receiptScan: scan && { version: scan.version, printedCurrency: scan.printedCurrency, printedSubtotal: scan.printedSubtotal,
       printedTotal: scan.printedTotal, sourceLines: scan.sourceLines, fieldSources: scan.fieldSources,

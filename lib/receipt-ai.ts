@@ -2,6 +2,7 @@ import { sha256Hex } from './data-utils';
 import { languageSchema, RECEIPT_LANGUAGES, mergeScannedNames, receiptLanguageHint, type ReceiptLanguage } from './receipt-languages';
 import { DEFAULT_RECEIPT_MODEL } from './receipt-ai-config';
 import { z } from 'zod';
+import { adjustmentSchema, applyAdjustments, type Adjustment } from './adjustments';
 import { CURRENCIES, MAX_AMOUNT, MAX_UNITS, draftSchema, receiptQuantitySchema, total, type Currency, type Draft, type Trip } from './model';
 import { blankReceiptItem, mayRecognizeUnknownProvenance, mergeReceiptSourceLines, reconcileReceiptScan, type ReceiptScanWarning } from './receipt-scan';
 import { receiptChangesSchema, receiptChangesJsonSchema, applyReceiptChanges, receiptExpenseIconSchema, receiptExpenseIconJsonSchema, nextSuggestedIcon } from './receipt-proposals';
@@ -36,7 +37,18 @@ const transcriptionWarningSchema = z.object({
 const transcriptionSourceLineSchema = transcriptionSourceSchema.extend({
   kind: z.enum(['item', 'tax-summary', 'adjustment', 'subtotal', 'total', 'other']),
   amount: z.number().int().min(-MAX_AMOUNT).max(MAX_AMOUNT).nullable(),
-  mappedTo: z.enum(['discount', 'tax', 'tip', 'included', 'unmapped']).nullable(),
+  mappedTo: z.enum(['discount', 'tax', 'tip', 'included', 'adjustment', 'unmapped']).nullable(),
+}).strict();
+/** A promotion or charge read from the receipt (F-10). Item scope names transcribed lines by index. */
+const transcriptionAdjustmentSchema = z.object({
+  kind: z.enum(['discount', 'charge']),
+  label: z.string().trim().min(1).max(80).nullable(),
+  amount: z.number().int().positive().max(MAX_AMOUNT).nullable(),
+  percent: z.number().positive().max(100).nullable(),
+  scope: z.enum(['receipt', 'items']),
+  itemIndexes: z.array(z.number().int().min(0).max(199)).max(200),
+  sourceLineIndex: z.number().int().min(0).max(999).nullable(),
+  confidence: z.enum(['high', 'medium', 'low']).nullable(),
 }).strict();
 export const receiptTranscriptionSchema = z.object({
   expenseIcon: receiptExpenseIconSchema.optional(),
@@ -60,6 +72,8 @@ export const receiptTranscriptionSchema = z.object({
   printedTotal: amount.nullable(),
   warnings: z.array(transcriptionWarningSchema).max(200).optional(),
   sourceLines: z.array(transcriptionSourceLineSchema).max(200).optional(),
+  // Optional for responses from before promotion extraction existed.
+  adjustments: z.array(transcriptionAdjustmentSchema).max(20).optional(),
   date: draftSchema.shape.date.unwrap().nullable(),
   time: draftSchema.shape.time.unwrap().nullable(),
   summary: z.string().trim().min(1).max(3500),
@@ -111,13 +125,24 @@ const transcriptionJsonSchema = {
       type: 'object', additionalProperties: false,
       properties: { ...sourceProperties, kind: { type: 'string', enum: ['item', 'tax-summary', 'adjustment', 'subtotal', 'total', 'other'] },
         amount: { type: ['integer', 'null'], minimum: -MAX_AMOUNT, maximum: MAX_AMOUNT },
-        mappedTo: { type: ['string', 'null'], enum: ['discount', 'tax', 'tip', 'included', 'unmapped', null] } },
+        mappedTo: { type: ['string', 'null'], enum: ['discount', 'tax', 'tip', 'included', 'adjustment', 'unmapped', null] } },
       required: ['lineIndex', 'observedText', 'confidence', 'kind', 'amount', 'mappedTo'],
+    } },
+    adjustments: { type: 'array', maxItems: 20, items: {
+      type: 'object', additionalProperties: false,
+      properties: {
+        kind: { type: 'string', enum: ['discount', 'charge'] }, label: nullableText(),
+        amount: nullableMoney, percent: { type: ['number', 'null'], minimum: 0, maximum: 100 },
+        scope: { type: 'string', enum: ['receipt', 'items'] },
+        itemIndexes: { type: 'array', maxItems: 200, items: { type: 'integer', minimum: 0, maximum: 199 } },
+        sourceLineIndex: sourceProperties.lineIndex, confidence: sourceProperties.confidence,
+      },
+      required: ['kind', 'label', 'amount', 'percent', 'scope', 'itemIndexes', 'sourceLineIndex', 'confidence'],
     } },
     date: nullableText(), time: nullableText(),
     summary: { type: 'string' },
   },
-  required: ['expenseIcon', 'location', 'locationSource', 'changes', 'title', 'currency', 'detectedLanguage', 'items', 'tax', 'tip', 'discount', 'printedSubtotal', 'printedTotal', 'warnings', 'sourceLines', 'date', 'time', 'summary'],
+  required: ['expenseIcon', 'location', 'locationSource', 'changes', 'title', 'currency', 'detectedLanguage', 'items', 'tax', 'tip', 'discount', 'printedSubtotal', 'printedTotal', 'warnings', 'sourceLines', 'adjustments', 'date', 'time', 'summary'],
 };
 
 const INSTRUCTIONS = `Read the attached receipt image natively and return a receipt transcription for human review.
@@ -134,7 +159,8 @@ Read printedSubtotal and printedTotal independently from observed receipt text, 
 Do not invent unreadable values, use zero for unreadable prices or add balancing lines. Retain each visible purchased line with a null name or amount when unreadable and flag uncertain-description or unreadable-amount; an unreadable receipt may have no items.
 For each item retain a top-to-bottom lineIndex and concise observedText when legible, with coarse high/medium/low confidence or null. Low-confidence material values need a low-confidence warning. Identical products on different lines are separate purchases. Only warn possible-duplicate when the same physical source line may have been read twice; never silently collapse lines.
 Tax, tip and discount only describe additional adjustments to the line amounts. Do not add VAT or other tax already included in printed line prices.
-Retain tax summaries, negative/refund lines and coupons in sourceLines with observed text and a signed amount when readable. Included tax maps to included and adds no tax. A clearly global coupon can map to discount. Item-specific discounts, refunds and unsupported negative lines map to unmapped with an unmapped-adjustment warning; never silently discard them or turn an item-specific reduction into a global discount. If tax inclusion or service/tip treatment is ambiguous, flag included-tax-ambiguous or unmapped-adjustment. An unreadable adjustment must be null and flagged rather than guessed. Use sourceLines only for material evidence, avoiding repetition of ordinary item rows.
+Retain tax summaries, negative/refund lines and coupons in sourceLines with observed text and a signed amount when readable. Included tax maps to included and adds no tax.
+Promotional reductions (BOGOF, buy-one-get-one, multibuy such as 2 for 3.00, coupons, loyalty or member savings, percentage savings) go in adjustments, never in item amounts and never in the discount field (leave discount 0). Use kind discount, the printed saving as a positive amount (or percent when only a percentage is printed), label with the printed wording, and sourceLineIndex of its line; map that sourceLine to adjustment. Use scope items with itemIndexes of the qualifying transcribed items only when the receipt makes them clear (the promotion line names the product or directly follows it); use scope receipt only for an explicitly receipt-wide saving. When the qualifying items are unclear, do not create an adjustment: map the line to unmapped with an unmapped-adjustment warning for a person to apply. Each printed line yields at most one adjustment. Refunds, returns, deposits, bottle returns, voids, cash-back and other non-promotional negative lines are never adjustments: map them to unmapped with an unmapped-adjustment warning. Printed service charges that are not item lines may be adjustments of kind charge with scope receipt. Retain every negative line as evidence; never silently discard it or turn an item-specific reduction into a receipt-wide one. If tax inclusion or service/tip treatment is ambiguous, flag included-tax-ambiguous or unmapped-adjustment. An unreadable adjustment must be null and flagged rather than guessed. Use sourceLines only for material evidence, avoiding repetition of ordinary item rows.
 Flag cropped or missing receipt sections as image-may-be-incomplete and uncertain currency as ambiguous-currency. Warnings are evidence for human review, never permission to override or acknowledge them. Return empty warning/sourceLines arrays when none apply.
 If the printed total disagrees with the extracted lines, explain the mismatch; do not silently change a visible price to make it fit.
 Use the saved memory and conversation as context. A saved item's question defaults to that item, and 'I' refers to its trusted human author, not the assistant or current caller. Clarify ambiguous names/aliases rather than guessing.
@@ -487,8 +513,26 @@ export function applyReceiptTranscription(_trip: Trip, draft: Draft, transcripti
   if (value.items.some(item => item.name === null)) {
     for (const [index, item] of value.items.entries()) if (item.name === null) warnings.push({ code: 'uncertain-description', itemId: updates[index].id });
   }
-  for (const source of value.sourceLines ?? []) if (source.mappedTo === 'unmapped' || (source.kind === 'adjustment' && source.mappedTo === null)
-    || (source.amount !== null && source.amount < 0 && source.mappedTo !== 'discount' && source.mappedTo !== 'included')) {
+  // Promotions become discount records only with clear, valid qualifying lines
+  // (F-10). A person's own records survive a rescan; earlier receipt-read ones
+  // are replaced. Anything unclear stays an unmapped line for a person.
+  const proposedAdjustments: Adjustment[] = (draft.adjustments ?? []).filter(adjustment => adjustment.source !== 'receipt');
+  const appliedLines = new Set(proposedAdjustments.flatMap(adjustment => adjustment.sourceLineIndex === undefined ? [] : [adjustment.sourceLineIndex]));
+  for (const candidate of value.adjustments ?? []) {
+    if (candidate.sourceLineIndex !== null && appliedLines.has(candidate.sourceLineIndex)) continue;
+    const itemIds = candidate.itemIndexes.map(index => updates[index]?.id);
+    if (candidate.scope === 'items' && (!itemIds.length || itemIds.some(itemId => !itemId))) continue;
+    const parsed = adjustmentSchema.safeParse({ id: crypto.randomUUID(), kind: candidate.kind,
+      ...(candidate.label !== null ? { label: candidate.label } : {}),
+      ...(candidate.amount !== null ? { amount: candidate.amount } : {}), ...(candidate.percent !== null ? { percent: candidate.percent } : {}),
+      scope: candidate.scope === 'receipt' ? { type: 'receipt' } : { type: 'items', itemIds },
+      ...(candidate.sourceLineIndex !== null ? { sourceLineIndex: candidate.sourceLineIndex } : {}), source: 'receipt' });
+    if (!parsed.success || applyAdjustments(items, [...proposedAdjustments, parsed.data]).errors.length) continue;
+    proposedAdjustments.push(parsed.data);
+    if (candidate.sourceLineIndex !== null) appliedLines.add(candidate.sourceLineIndex);
+  }
+  for (const source of value.sourceLines ?? []) if ((source.lineIndex === null || !appliedLines.has(source.lineIndex)) && (source.mappedTo === 'unmapped' || source.mappedTo === 'adjustment' || (source.kind === 'adjustment' && source.mappedTo === null)
+    || (source.amount !== null && source.amount < 0 && source.mappedTo !== 'discount' && source.mappedTo !== 'included'))) {
     warnings.push({ code: 'unmapped-adjustment', ...(source.lineIndex !== null ? { lineIndex: source.lineIndex } : {}),
       ...(source.observedText !== null ? { observedText: source.observedText } : {}) });
   }
@@ -530,7 +574,9 @@ export function applyReceiptTranscription(_trip: Trip, draft: Draft, transcripti
     ...(source.lineIndex !== null ? { lineIndex: source.lineIndex } : {}),
     ...(source.observedText !== null ? { observedText: source.observedText } : {}),
     ...(source.confidence !== null ? { confidence: source.confidence } : {}),
-    kind: source.kind, amount: source.amount, ...(source.mappedTo !== null ? { mappedTo: source.mappedTo } : {}),
+    kind: source.kind, amount: source.amount,
+    ...(source.mappedTo === 'adjustment' ? { mappedTo: source.lineIndex !== null && appliedLines.has(source.lineIndex) ? 'adjustment' as const : 'unmapped' as const }
+      : source.mappedTo !== null ? { mappedTo: source.mappedTo } : {}),
   }));
   const sourceLines = mergeReceiptSourceLines(draft.receiptScan?.sourceLines, incomingSourceLines);
   const warningKeys = new Set<string>();
@@ -544,6 +590,7 @@ export function applyReceiptTranscription(_trip: Trip, draft: Draft, transcripti
   if (sourceLines.length > 1000 || uniqueWarnings.length > 1000) throw new ReceiptAIError('This receipt has reached its scan evidence limit. Your saved evidence is unchanged; review it before rescanning.', 422);
   let proposal = draftSchema.parse({
     ...draft, title, currency, date, time, items, ...adjustments, fieldSources,
+    ...(proposedAdjustments.length || draft.adjustments ? { adjustments: proposedAdjustments } : {}),
     suggestedIcon: nextSuggestedIcon(value.expenseIcon, draft.suggestedIcon),
     ...(value.detectedLanguage?{detectedLanguage:value.detectedLanguage}:{}),
     ...(value.location && draft.fieldSources?.location !== 'user' && (!draft.location || draft.location.source === 'receipt')

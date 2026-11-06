@@ -3,6 +3,18 @@ import { reconcileReceiptScan, RECEIPT_SCAN_WARNING_CODES } from './receipt-scan
 
 const money = z.number().int().min(0).max(100_000_000);
 const adjustmentsSchema = z.object({ tax: money, tip: money, discount: money }).strict();
+/** A discount or charge record, with item scope named by printed line index (F-10). */
+const scopedAdjustmentSchema = z.object({
+  kind: z.enum(['discount', 'charge']),
+  amount: z.number().int().positive().max(100_000_000).optional(),
+  percent: z.number().positive().max(100).optional(),
+  scope: z.enum(['receipt', 'items']),
+  itemLineIndexes: z.array(z.number().int().min(0).max(1000)).max(200),
+  sourceLineIndex: z.number().int().min(0).max(1000).optional(),
+}).strict();
+type ScopedAdjustment = z.infer<typeof scopedAdjustmentSchema>;
+const scopedKey = (values: ScopedAdjustment[] = []) => JSON.stringify(values.map(value => ({ ...value, itemLineIndexes: [...value.itemLineIndexes].sort((a, b) => a - b) }))
+  .sort((a, b) => (a.sourceLineIndex ?? -1) - (b.sourceLineIndex ?? -1)));
 const itemSchema = z.object({
   lineIndex: z.number().int().min(0).max(1000),
   name: z.string().trim().min(1).max(200),
@@ -19,6 +31,7 @@ export const receiptEvaluationResultsSchema = z.object({
     printedSubtotal: money.nullable(),
     printedTotal: money.nullable(),
     adjustments: adjustmentsSchema,
+    scopedAdjustments: z.array(scopedAdjustmentSchema).max(20).optional(),
     warningCodes: z.array(z.enum(RECEIPT_SCAN_WARNING_CODES)).max(200),
     unreadableFields: z.array(z.string().max(200)).max(200),
   }).strict()).max(200),
@@ -34,6 +47,7 @@ export type ReceiptGoldenFixture = {
     printedSubtotal: number | null;
     printedTotal: number | null;
     adjustments: { tax: number; tip: number; discount: number };
+    scopedAdjustments?: ScopedAdjustment[];
     warningCodes: string[];
     unreadableFields: string[];
     reconciliationStatus: 'matched' | 'needs-review' | 'incomplete';
@@ -64,9 +78,15 @@ export function evaluateReceiptResults(fixtures: ReceiptGoldenFixture[], supplie
     }
     const readable = expected.items.filter(item => item.amount !== null);
     const quantityLines = expected.items.filter(item => item.quantity);
+    const evaluationItems = result.items.map((row, index) => ({ ...row, id: `evaluation-${index}`, members: [], scanSource: { lineIndex: row.lineIndex } }));
     const scan = reconcileReceiptScan({ currency: result.currency,
-      items: result.items.map((row, index) => ({ ...row, id: `evaluation-${index}`, members: [], scanSource: { lineIndex: row.lineIndex } })),
+      items: evaluationItems,
       ...result.adjustments,
+      adjustments: (result.scopedAdjustments ?? []).map((value, index) => ({ id: `evaluation-adjustment-${index}`, kind: value.kind,
+        ...(value.amount !== undefined ? { amount: value.amount } : {}), ...(value.percent !== undefined ? { percent: value.percent } : {}),
+        scope: value.scope === 'receipt' ? { type: 'receipt' as const }
+          : { type: 'items' as const, itemIds: value.itemLineIndexes.map(lineIndex => evaluationItems.find(item => item.lineIndex === lineIndex)?.id ?? `missing-${lineIndex}`) },
+        ...(value.sourceLineIndex !== undefined ? { sourceLineIndex: value.sourceLineIndex } : {}) })),
       receiptScan: { version: 1, status: 'matched', printedSubtotal: result.printedSubtotal, printedTotal: result.printedTotal,
         warnings: result.warningCodes.map(code => ({ code })) },
     })!;
@@ -86,7 +106,8 @@ export function evaluateReceiptResults(fixtures: ReceiptGoldenFixture[], supplie
     const printedSubtotalCorrect = result.printedSubtotal === expected.printedSubtotal;
     const printedTotalCorrect = result.printedTotal === expected.printedTotal;
     const sourceOrderCorrect = result.items.map(item => item.lineIndex).join(',') === expected.sourceOrder.join(',');
-    const adjustmentsCorrect = (['tax', 'tip', 'discount'] as const).every(field => result.adjustments[field] === expected.adjustments[field]);
+    const adjustmentsCorrect = (['tax', 'tip', 'discount'] as const).every(field => result.adjustments[field] === expected.adjustments[field])
+      && scopedKey(result.scopedAdjustments) === scopedKey(expected.scopedAdjustments);
     // Balancing two invented values is arithmetic success, not source fidelity.
     const sourceAccurate = aligned.size === expected.lineCount && hallucinatedLines === 0 &&
       exactPriceAccuracy.correct === exactPriceAccuracy.evaluated && purchaseQuantityAccuracy.correct === purchaseQuantityAccuracy.evaluated &&

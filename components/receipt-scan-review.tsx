@@ -98,8 +98,12 @@ const isDifference = (code: string) => code === "total-mismatch" || code === "su
  * evidence on submit. A printed-total difference is never part of that
  * confirmation: it is reconciled, or saved only with a written exception.
  */
-export function ReceiptReviewSummary({ entry, fxWarning, onChange, onAdjustment }: {
-  entry: ReceiptEditor; fxWarning?: string; onChange?: (entry: ReceiptEditor) => void; onAdjustment?: (kind: "discount" | "charge") => void;
+export function ReceiptReviewSummary({ entry, fxWarning, onChange, onAdjustment, onApplyLine }: {
+  entry: ReceiptEditor; fxWarning?: string; onChange?: (entry: ReceiptEditor) => void;
+  /** Open the discount form, prefilled with the unexplained difference. */
+  onAdjustment?: (kind: "discount" | "charge", amount?: number) => void;
+  /** Turn an unmapped printed discount line into a discount record. */
+  onApplyLine?: (line: { lineIndex: number; observedText?: string; amount?: number }) => void;
 }) {
   const [reason, setReason] = useState("");
   const scan = entry.receiptScan && reconcileReceiptScan(entry);
@@ -118,7 +122,7 @@ export function ReceiptReviewSummary({ entry, fxWarning, onChange, onAdjustment 
     else if (resolvable.has(warning.code)) message = warning.code === "unmapped-adjustment" ? warningNames[warning.code] : receiptWarningLabel(warning.code);
     else return [];
     const names = ids.map(id => entry.items.find(item => item.id === id)?.name).filter(Boolean).join(', ');
-    return [{ key: `${warning.code}:${index}`, message: `${message}${names ? `: ${names}` : ''}`, ids, observedText: warning.observedText, lineIndex: warning.lineIndex }];
+    return [{ key: `${warning.code}:${index}`, code: warning.code, message: `${message}${names ? `: ${names}` : ''}`, ids, observedText: warning.observedText, lineIndex: warning.lineIndex }];
   });
   if (!points.length && !fxWarning && !mismatch) return null;
   return <>{mismatch && <div className="receipt-difference" id="expense-receipt-difference" role="status">
@@ -126,7 +130,7 @@ export function ReceiptReviewSummary({ entry, fxWarning, onChange, onAdjustment 
     <p>{uiText(mismatch.code === "total-mismatch" ? "The itemised total differs from the printed total. Saving is blocked until you reconcile the difference or record an exception." : "The item prices differ from the printed subtotal. Saving is blocked until you reconcile the difference or record an exception.")}</p>
     <div className="action-row">
       <button type="button" className="quiet" onClick={() => focusExpenseTarget("expense-items")}>{uiText("Review extracted items")}</button>
-      {onAdjustment && <><button type="button" className="quiet" onClick={() => onAdjustment("discount")}>{uiText("Add or correct a discount")}</button><button type="button" className="quiet" onClick={() => onAdjustment("charge")}>{uiText("Add a missing charge")}</button></>}
+      {onAdjustment && <><button type="button" className="quiet" onClick={() => onAdjustment("discount", (mismatch.difference ?? 0) > 0 ? mismatch.difference : undefined)}>{uiText("Add or correct a discount")}</button><button type="button" className="quiet" onClick={() => onAdjustment("charge", (mismatch.difference ?? 0) < 0 ? -mismatch.difference! : undefined)}>{uiText("Add a missing charge")}</button></>}
     </div>
     {accepted ? <p>{uiText("Exception recorded for saving. This receipt remains unreconciled. Reason: ")}{scan!.acknowledgement!.reason}</p> : onChange && <details>
       <summary>{uiText("Save anyway with a written reason")}</summary>
@@ -143,6 +147,9 @@ export function ReceiptReviewSummary({ entry, fxWarning, onChange, onAdjustment 
       {point.observedText && <small>{uiText("Printed: ")}{point.observedText}</small>}
       {point.ids.map(id => <button key={id} type="button" className="quiet" onClick={() => focusExpenseTarget(`expense-item-${id}`, "input[required]")}>{uiText("Check ")}{entry.items.find(item => item.id === id)?.name || uiText('item')}</button>)}
       {point.lineIndex !== undefined && <small>{uiText("Receipt line ")}{point.lineIndex + 1}</small>}
+      {onApplyLine && point.code === "unmapped-adjustment" && point.lineIndex !== undefined && <button type="button" className="quiet"
+        onClick={() => onApplyLine({ lineIndex: point.lineIndex!, observedText: point.observedText, amount: scan?.sourceLines?.find(line => line.lineIndex === point.lineIndex)?.amount ?? undefined })}>
+        {uiText("Apply as discount")}</button>}
     </li>)}{fxWarning && <li><span>{fxWarning}</span><button type="button" className="quiet" onClick={() => focusExpenseTarget("expense-fx-panel", "input[type=number]")}>{uiText("Check rate")}</button></li>}</ul>
   </section>}</>;
 }

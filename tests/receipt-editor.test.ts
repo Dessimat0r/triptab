@@ -79,7 +79,7 @@ const controllerSource = `return function createController(initial, boundary) {
   const setView = next => {view=next}, setHelp = next => {help=next}, prepareReceiptImage = async file => file;
   const setReceiptHistoryOpen = next => {receiptHistoryOpen=next};
   const setRestoration = next => {restoration=next};
-  const setEditorConflict = next => {editorConflict=next};
+  const setEditorConflict = next => {editorConflict=next}, setAdjustmentDraft = () => {};
   const setReferenceRate = next => {referenceRate=next};
   const setPaste = next => {paste=next};
   const setFxError = next => {fxError=next};
