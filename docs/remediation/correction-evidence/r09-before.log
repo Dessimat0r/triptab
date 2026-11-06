@@ -1,0 +1,167 @@
+
+Running 6 tests using 2 workers
+
+[1/6] [chromium] › tests/browser/audit-review.spec.ts:53:1 › R09: Restore and review is explicit, then opens the receipt for editing
+[2/6] [chromium] › tests/browser/audit-review.spec.ts:38:1 › R09: an audit link to an archived receipt opens it read-only and does not unarchive it
+  1) [chromium] › tests/browser/audit-review.spec.ts:38:1 › R09: an audit link to an archived receipt opens it read-only and does not unarchive it 
+
+    Error: expect(locator).toContainText(expected) failed
+
+    Locator: getByRole('dialog', { name: 'Harbour dinner' })
+    Expected substring: "Lisbon 2026 is archived, so this receipt is read-only."
+    Timeout: 5000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toContainText" with timeout 5000ms
+      - waiting for getByRole('dialog', { name: 'Harbour dinner' })
+
+
+      40 |   await page.goto(link('lisbon', 'dinner'));
+      41 |   const review = page.getByRole('dialog', { name: 'Harbour dinner' });
+    > 42 |   await expect(review).toContainText('Lisbon 2026 is archived, so this receipt is read-only.');
+         |                        ^
+      43 |   await expect(review).toContainText('Grilled fish');
+      44 |   await expect(review).toContainText('Saved total: £42.00');
+      45 |   await expect(review).toContainText('Printed total: £39.00');
+        at /home/user/triptab/tests/browser/audit-review.spec.ts:42:24
+
+    Error Context: test-results/audit-review-R09-an-audit--af292-y-and-does-not-unarchive-it-chromium/error-context.md
+
+
+[3/6] [chromium] › tests/browser/audit-review.spec.ts:66:13 › R09: a revoked or deleted archived holiday says the receipt isn’t available and reveals nothing
+  2) [chromium] › tests/browser/audit-review.spec.ts:66:13 › R09: a revoked or deleted archived holiday says the receipt isn’t available and reveals nothing 
+
+    Error: expect(locator).toBeVisible() failed
+
+    Locator: getByRole('alert').filter({ hasText: 'This receipt isn’t available.' })
+    Expected: visible
+    Timeout: 5000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeVisible" with timeout 5000ms
+      - waiting for getByRole('alert').filter({ hasText: 'This receipt isn’t available.' })
+
+
+      67 |   const state = await fixtures(page, { archive: archive as Trip[] | undefined });
+      68 |   await page.goto(link(target[0], target[1]));
+    > 69 |   await expect(page.getByRole('alert').filter({ hasText: 'This receipt isn’t available.' })).toBeVisible();
+         |                                                                                              ^
+      70 |   await expect(page.getByRole('dialog').last()).not.toContainText('Grilled fish');
+      71 |   await expect(page.getByRole('button', { name: 'Restore and review' })).toHaveCount(0);
+      72 |   expect(state.restores).toEqual([]);
+        at /home/user/triptab/tests/browser/audit-review.spec.ts:69:94
+
+    Error Context: test-results/audit-review-R09-a-revoked-e8333-ailable-and-reveals-nothing-chromium/error-context.md
+
+
+[4/6] [chromium] › tests/browser/audit-review.spec.ts:66:13 › R09: a guessed trip ID says the receipt isn’t available and reveals nothing
+  3) [chromium] › tests/browser/audit-review.spec.ts:66:13 › R09: a guessed trip ID says the receipt isn’t available and reveals nothing 
+
+    Error: expect(locator).toBeVisible() failed
+
+    Locator: getByRole('alert').filter({ hasText: 'This receipt isn’t available.' })
+    Expected: visible
+    Timeout: 5000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeVisible" with timeout 5000ms
+      - waiting for getByRole('alert').filter({ hasText: 'This receipt isn’t available.' })
+
+
+      67 |   const state = await fixtures(page, { archive: archive as Trip[] | undefined });
+      68 |   await page.goto(link(target[0], target[1]));
+    > 69 |   await expect(page.getByRole('alert').filter({ hasText: 'This receipt isn’t available.' })).toBeVisible();
+         |                                                                                              ^
+      70 |   await expect(page.getByRole('dialog').last()).not.toContainText('Grilled fish');
+      71 |   await expect(page.getByRole('button', { name: 'Restore and review' })).toHaveCount(0);
+      72 |   expect(state.restores).toEqual([]);
+        at /home/user/triptab/tests/browser/audit-review.spec.ts:69:94
+
+    Error Context: test-results/audit-review-R09-a-guessed-f6db8-ailable-and-reveals-nothing-chromium/error-context.md
+
+
+[5/6] [chromium] › tests/browser/audit-review.spec.ts:66:13 › R09: a guessed receipt ID in an archived holiday says the receipt isn’t available and reveals nothing
+  4) [chromium] › tests/browser/audit-review.spec.ts:66:13 › R09: a guessed receipt ID in an archived holiday says the receipt isn’t available and reveals nothing 
+
+    Error: expect(locator).toBeVisible() failed
+
+    Locator: getByRole('alert').filter({ hasText: 'This receipt isn’t available.' })
+    Expected: visible
+    Timeout: 5000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeVisible" with timeout 5000ms
+      - waiting for getByRole('alert').filter({ hasText: 'This receipt isn’t available.' })
+
+
+      67 |   const state = await fixtures(page, { archive: archive as Trip[] | undefined });
+      68 |   await page.goto(link(target[0], target[1]));
+    > 69 |   await expect(page.getByRole('alert').filter({ hasText: 'This receipt isn’t available.' })).toBeVisible();
+         |                                                                                              ^
+      70 |   await expect(page.getByRole('dialog').last()).not.toContainText('Grilled fish');
+      71 |   await expect(page.getByRole('button', { name: 'Restore and review' })).toHaveCount(0);
+      72 |   expect(state.restores).toEqual([]);
+        at /home/user/triptab/tests/browser/audit-review.spec.ts:69:94
+
+    Error Context: test-results/audit-review-R09-a-guessed-cbb96-ailable-and-reveals-nothing-chromium/error-context.md
+
+
+[6/6] [chromium] › tests/browser/audit-review.spec.ts:66:13 › R09: a deleted receipt in an open holiday says the receipt isn’t available and reveals nothing
+  5) [chromium] › tests/browser/audit-review.spec.ts:66:13 › R09: a deleted receipt in an open holiday says the receipt isn’t available and reveals nothing 
+
+    Error: expect(locator).toBeVisible() failed
+
+    Locator: getByRole('alert').filter({ hasText: 'This receipt isn’t available.' })
+    Expected: visible
+    Timeout: 5000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeVisible" with timeout 5000ms
+      - waiting for getByRole('alert').filter({ hasText: 'This receipt isn’t available.' })
+
+
+      67 |   const state = await fixtures(page, { archive: archive as Trip[] | undefined });
+      68 |   await page.goto(link(target[0], target[1]));
+    > 69 |   await expect(page.getByRole('alert').filter({ hasText: 'This receipt isn’t available.' })).toBeVisible();
+         |                                                                                              ^
+      70 |   await expect(page.getByRole('dialog').last()).not.toContainText('Grilled fish');
+      71 |   await expect(page.getByRole('button', { name: 'Restore and review' })).toHaveCount(0);
+      72 |   expect(state.restores).toEqual([]);
+        at /home/user/triptab/tests/browser/audit-review.spec.ts:69:94
+
+    Error Context: test-results/audit-review-R09-a-deleted-9f193-ailable-and-reveals-nothing-chromium/error-context.md
+
+
+  6) [chromium] › tests/browser/audit-review.spec.ts:53:1 › R09: Restore and review is explicit, then opens the receipt for editing 
+
+    Test timeout of 30000ms exceeded.
+
+    Error: locator.click: Test timeout of 30000ms exceeded.
+    Call log:
+      - waiting for getByRole('dialog', { name: 'Harbour dinner' }).getByRole('button', { name: 'Restore and review' })
+
+
+      54 |   const state = await fixtures(page);
+      55 |   await page.goto(link('lisbon', 'dinner'));
+    > 56 |   await page.getByRole('dialog', { name: 'Harbour dinner' }).getByRole('button', { name: 'Restore and review' }).click();
+         |                                                                                                                  ^
+      57 |   await expect(page.locator('.editor')).toBeVisible();
+      58 |   expect(state.restores).toEqual(['restore:lisbon']);
+      59 | });
+        at /home/user/triptab/tests/browser/audit-review.spec.ts:56:114
+
+    Error Context: test-results/audit-review-R09-Restore-a-3b75d-ens-the-receipt-for-editing-chromium/error-context.md
+
+
+  6 failed
+    [chromium] › tests/browser/audit-review.spec.ts:38:1 › R09: an audit link to an archived receipt opens it read-only and does not unarchive it 
+    [chromium] › tests/browser/audit-review.spec.ts:53:1 › R09: Restore and review is explicit, then opens the receipt for editing 
+    [chromium] › tests/browser/audit-review.spec.ts:66:13 › R09: a revoked or deleted archived holiday says the receipt isn’t available and reveals nothing 
+    [chromium] › tests/browser/audit-review.spec.ts:66:13 › R09: a guessed trip ID says the receipt isn’t available and reveals nothing 
+    [chromium] › tests/browser/audit-review.spec.ts:66:13 › R09: a guessed receipt ID in an archived holiday says the receipt isn’t available and reveals nothing 
+    [chromium] › tests/browser/audit-review.spec.ts:66:13 › R09: a deleted receipt in an open holiday says the receipt isn’t available and reveals nothing 

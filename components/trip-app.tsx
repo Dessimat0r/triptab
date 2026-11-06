@@ -48,6 +48,7 @@ import ItemReceiptConversation from "@/components/item-receipt-conversation";
 import PaymentEditor from "@/components/payment-editor";
 import ActivityPanel from "@/components/activity-panel";
 import ReceiptAuditPanel from "@/components/receipt-audit-panel";
+import ArchivedReceiptReview from "@/components/archived-receipt-review";
 import RestorationNotice, { type RestorationInfo } from "@/components/restoration-notice";
 import "@/components/receipt-history-view.css";
 import "@/components/expense-editor.css";
@@ -326,6 +327,7 @@ export default function Home({ children }: { children: ReactNode }) {
     [savedNotice, setSavedNotice] = useState<{ title: string; at: number } | null>(null),
     [undoNotice, setUndoNotice] = useState<UndoNotice | null>(null),
     [deletedBill, setDeletedBill] = useState<{ tripId: string; name: string; at: number; accountId: string } | null>(null),
+    [archivedReview, setArchivedReview] = useState<{ tripId: string; expenseId: string; accountId: string } | null>(null),
     [summaryOpen, setSummaryOpen] = useState(false),
     [repeatOpen, setRepeatOpen] = useState(""),
     [referenceRate, setReferenceRate] = useState<{ rate: number; currency: Currency; date: string; time: string; timezone: string } | null>(null);
@@ -574,6 +576,35 @@ export default function Home({ children }: { children: ReactNode }) {
     // Resume a persisted receipt once after a complete account/status snapshot.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entryQuery, ledger, loading, profile?.id, receiptAI, trip?.id]);
+  // R09: an audit link to a receipt whose holiday or bill is not open here
+  // (archived, deleted, revoked or guessed) opens a read-only review checked
+  // against this account's own archive, instead of doing nothing.
+  useEffect(() => {
+    if (!profile?.id || loading || !lastRefreshed) return;
+    const params = new URLSearchParams(entryQuery), expenseId = params.get("receiptExpense"), tripId = params.get("receiptTrip");
+    if (!expenseId || !tripId || params.get("receiptDraft")
+      || ledger.trips.find(value => value.id === tripId)?.expenses.some(value => value.id === expenseId)) return;
+    const accountId = profile.id;
+    void Promise.resolve().then(() => {
+      setArchivedReview({ tripId, expenseId, accountId });
+      params.delete("receiptExpense"); params.delete("receiptTrip");
+      const search = params.toString();
+      replaceEntryUrl(location.pathname + (search ? "?" + search : ""));
+    });
+  }, [entryQuery, ledger, loading, lastRefreshed, profile?.id, replaceEntryUrl]);
+  async function restoreAndReview(tripId: string, expenseId: string) {
+    setError("");
+    const response = await fetch("/api/trip", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "restore", tripId }) }).catch(() => null);
+    if (!response?.ok) {
+      const body = await response?.json().catch(() => null) as { error?: string } | null;
+      setError(body?.error || "This holiday couldn’t be restored. Try again from Archived holidays.");
+      return false;
+    }
+    await load({ fresh: true });
+    // The ordinary review link now finds the open holiday and opens the receipt.
+    replaceEntryUrl(`/expenses?receiptTrip=${encodeURIComponent(tripId)}&receiptExpense=${encodeURIComponent(expenseId)}`);
+    return true;
+  }
   useEffect(() => {
     Promise.resolve().then(() => {
       load();
@@ -2965,6 +2996,8 @@ export default function Home({ children }: { children: ReactNode }) {
         onClose={() => setRepeatOpen("")} onRepeat={copies => updateTrip({ ...trip, expenses: [...trip.expenses, ...copies] })} />}
       {billOptions && trip && isBill(trip) && <ModalA11y className="overlay" onClose={() => setBillOptions(false)}><section className="modal bill-options" role="dialog" aria-modal="true" aria-label={uiText("Bill options")}><div className="modalheading"><h2>{uiText("Bill options")}</h2><button type="button" className="iconbutton" aria-label={uiText("Close")} onClick={() => setBillOptions(false)}>×</button></div><button type="button" className="quiet" onClick={() => { setBillOptions(false); setBillPeople(true); }}>{uiText("People")}</button><TripDetails trip={trip} showPeople={false} busy={saving || loading} accountId={profile?.id} paging={page("names", 20)} onSave={updateTrip} /><TripSharing key={`${trip.id}:${profile?.id || "anonymous"}`} trip={trip} profile={profile} onChanged={() => load({ background: true })} /><TripControls trip={trip} accountId={profile?.id} busy={saving || loading} onBillDeleted={bill => setDeletedBill({ tripId: bill.id, name: bill.name, at: Date.now(), accountId: profile?.id || "" })} onChanged={async () => { setBillOptions(false); await load({ fresh: true }); }} /></section></ModalA11y>}
       {billPeople && trip && isBill(trip) && <BillPeople trip={trip} accountId={profile?.id} busy={saving || loading} onSave={updateTrip} onClose={() => setBillPeople(false)} confirm={confirm} onLinked={() => load({ fresh: true })} />}
+      {archivedReview && profile && archivedReview.accountId === profile.id && <ArchivedReceiptReview key={`${profile.id}:${archivedReview.tripId}:${archivedReview.expenseId}`}
+        accountId={profile.id} tripId={archivedReview.tripId} expenseId={archivedReview.expenseId} onClose={() => setArchivedReview(null)} onRestore={restoreAndReview} />}
       {personalView && profile && <PersonalActivity key={profile.id} ledger={ledger} accountId={profile.id} refreshKey={activityRefreshKey} onClose={() => setPersonalView(false)} onOpen={(tripId, entryId) => {
         // F-05: open the entry in its own bill or holiday; settlement stays per trip.
         setPersonalView(false); setSelected(tripId); setView("expenses");
