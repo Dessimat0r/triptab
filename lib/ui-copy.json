@@ -4000,5 +4000,41 @@
     "La lectura no terminó · ábrelo para volver a leerlo",
     "La lecture n’a pas abouti · ouvrez-le pour relancer la lecture",
     "Lesen nicht abgeschlossen · öffne ihn, um ihn erneut zu lesen"
+  ],
+  [
+    "Recently deleted",
+    "Eliminados recientemente",
+    "Supprimés récemment",
+    "Kürzlich gelöscht"
+  ],
+  [
+    "Deleted bills can be restored with their receipt photos for 30 days.",
+    "Las cuentas eliminadas se pueden restaurar con sus fotos de recibos durante 30 días.",
+    "Les notes supprimées peuvent être restaurées avec leurs photos de reçus pendant 30 jours.",
+    "Gelöschte Rechnungen können 30 Tage lang mit ihren Belegfotos wiederhergestellt werden."
+  ],
+  [
+    "Deleted {value0} · can be restored until {value1}",
+    "Eliminada el {value0} · se puede restaurar hasta el {value1}",
+    "Supprimée le {value0} · restaurable jusqu’au {value1}",
+    "Gelöscht am {value0} · wiederherstellbar bis {value1}"
+  ],
+  [
+    "Delete for good",
+    "Eliminar definitivamente",
+    "Supprimer définitivement",
+    "Endgültig löschen"
+  ],
+  [
+    "Deleted the bill “{value0}”. You can restore it for 30 days from Archived holidays.",
+    "Se eliminó la cuenta «{value0}». Puedes restaurarla durante 30 días desde Viajes archivados.",
+    "La note « {value0} » a été supprimée. Vous pouvez la restaurer pendant 30 jours depuis Voyages archivés.",
+    "Die Rechnung „{value0}“ wurde gelöscht. Du kannst sie 30 Tage lang unter Archivierte Reisen wiederherstellen."
+  ],
+  [
+    "You can restore a deleted bill and its receipt photos for 30 days; after that it is removed for good. Bills another account can open must be archived instead.",
+    "Puedes restaurar una cuenta eliminada y sus fotos de recibos durante 30 días; después se elimina definitivamente. Las cuentas que otra cuenta de usuario puede abrir deben archivarse.",
+    "Vous pouvez restaurer une note supprimée et ses photos de reçus pendant 30 jours ; ensuite, elle est supprimée définitivement. Les notes qu’un autre compte peut ouvrir doivent être archivées.",
+    "Du kannst eine gelöschte Rechnung und ihre Belegfotos 30 Tage lang wiederherstellen; danach wird sie endgültig entfernt. Rechnungen, die ein anderes Konto öffnen kann, müssen stattdessen archiviert werden."
   ]
 ]

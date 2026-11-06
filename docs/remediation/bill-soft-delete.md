@@ -1,6 +1,6 @@
 # Bill soft delete: options for an owner decision
 
-Status: **investigated, not built.** This note is from the leftover F-14 item "server soft-delete for bills".
+Status: **option A chosen by the owner (6 November 2026) and built.** See "As built" at the end. The options below are kept for the record.
 
 ## Today
 
@@ -55,3 +55,34 @@ Option A, if photos must survive. It needs a review of the reader list above and
 Option B is smaller to build, but only if indefinite retention of deleted bills' contents is acceptable under the privacy policy.
 
 Either way, the decision is the owner's: it sets what "deleted" means for other people's data.
+
+## As built (option A)
+
+**What changes for people:**
+- Deleting a bill with entries keeps it for 30 days. For about 30 seconds afterwards, an **Undo** banner is shown.
+- Archived holidays has a **Recently deleted** section, with **Restore bill** and **Delete for good**.
+- Scheduled maintenance removes expired bills and queues their photos for deletion.
+- Holidays and empty bills are still deleted straight away, as before.
+
+**How it is hidden without changing every reader:**
+- A bill can only be deleted when no other account can open it, so its owner is the only person with access.
+- Deleting it sets `trips.owner` to `deleted:<owner id>` and stores `$.deletion` (time, owner, the owner's membership row) in the trip data.
+- It also removes the owner's membership, archive row, pending invitations and digests.
+- Every owner-or-member check then fails for the bill without being changed. That covers the ledger, history, receipt access and upload, invites, reminders, exports, language settings, MCP, the archive list, and the archived Activity data (#72).
+- Receipt rows stay, and the trip data still references them, so the photo sweeps keep them.
+
+**Code that does change:**
+- `lib/trip-lifecycle.ts`: `deleteTrip` (bills), plus `listDeletedBills`, `restoreDeletedBill`, `purgeDeletedBill` and `purgeExpiredDeletedBills`.
+- `app/api/trip`: `mode=deleted`, `restore-deleted` and `purge-deleted`.
+- `build/sites-worker.ts`: the scheduled purge.
+- `lib/store.ts`: a stale ledger copy of a deleted bill is refused with "… was deleted. Refresh to continue."
+- **Account checks:**
+  - `lib/account-security.ts`: account deletion asks you to remove recently deleted bills first.
+  - `lib/auth.ts`: the "empty account" checks count them.
+
+**Restore:**
+- Owner only, within 30 days, and only while the open list has room.
+- It re-inserts the owner's membership, removes the tombstone, and records a `create` event marked `restored`.
+- The bill's data is exactly what was deleted.
+
+**No schema change.** The F-16 migration is separate.
