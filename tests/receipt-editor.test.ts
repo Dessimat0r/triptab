@@ -73,6 +73,8 @@ const controllerSource = `return function createController(initial, boundary) {
   const setReceiptHandoffError = next => {receiptHandoffError=next};
   const setReceiptHandoffOpened = next => {receiptHandoffOpened=next};
   const setReceiptProcessing = next => {receiptProcessing=next};
+  // Per-draft reading status lives in browser storage; covered by tests/reading-status.test.ts.
+  const markReading = () => {}, clearReading = () => {}, setReadingTick = () => {};
   const setReceiptItemized = next => {receiptItemized=next};
   const setUploading = next => {uploading=next};
   const setReceiptAIConnecting = next => {receiptAIConnecting=next};

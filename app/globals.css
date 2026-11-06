@@ -2712,3 +2712,6 @@ footer {
 
 .heading-with-order h2 { line-height: 1.2; }
 .heading-with-order > .muted { display: block; }
+/* F-11: reading status on a receipt-draft row. */
+.draft small.reading { color: var(--primary); }
+.draft small.warning { color: #8a5a00; }
