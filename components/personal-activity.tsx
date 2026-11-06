@@ -5,6 +5,7 @@ import { X } from "lucide-react";
 import ModalA11y from "./modal-accessibility";
 import { formatMoney } from "@/lib/money-format";
 import { formatCalendarDate } from "@/lib/dates";
+import { financialFormatHeaders } from "@/lib/financial-format";
 import { peopleSummary, personalActivity, personNames } from "@/lib/personal-activity";
 import type { Ledger, Trip } from "@/lib/model";
 
@@ -24,7 +25,7 @@ export default function PersonalActivity({ ledger, accountId, onClose, onOpen }:
   const [archived, setArchived] = useState<Trip[] | null>(null), [withArchived, setWithArchived] = useState(true);
   useEffect(() => {
     const controller = new AbortController();
-    void fetch("/api/trip?mode=archived-data", { signal: controller.signal, cache: "no-store" })
+    void fetch("/api/trip?mode=archived-data", { signal: controller.signal, cache: "no-store", headers: financialFormatHeaders() })
       .then(async response => response.ok ? (await response.json() as { trips?: Trip[] }).trips ?? [] : [])
       .then(value => { if (!controller.signal.aborted) setArchived(value); })
       .catch(() => { if (!controller.signal.aborted) setArchived([]); });

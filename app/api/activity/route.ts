@@ -1,8 +1,12 @@
 import { ensureProfile, failure, readActivity, RequestError } from '@/lib/store';
+import { financialFormatRefusal } from '@/lib/financial-format';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: Request) {
+  // R01: history snapshots carry discount records an older bundle cannot read.
+  const refused = financialFormatRefusal(request);
+  if (refused) return refused;
   try {
     const profile = await ensureProfile(request);
     const params = new URL(request.url).searchParams;

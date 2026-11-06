@@ -1,3 +1,4 @@
+import * as financialFormat from '../lib/financial-format';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
@@ -103,6 +104,7 @@ function controller(trip: model.Trip, fetcher?: typeof fetch) {
     if (name === '@/lib/duplicates') return duplicates;
     if (name === '@/lib/calculation-health') return calculationHealthModule;
     if (name === '@/lib/money-format') return moneyFormat;
+    if (name === '@/lib/financial-format') return financialFormat;
     if (name === '@/lib/receipt-processing') return receiptProcessing;
     if (name === '@/lib/receipt-scan') return receiptScan;
     if (name === '@/lib/expense-fx-review') return expenseFxReview;

@@ -9,6 +9,7 @@ import { useLiveRefresh } from "./use-live-refresh";
 import type { Currency, Trip } from "@/lib/model";
 import type { ActivityEvent } from "@/lib/store";
 import { formatMoney } from "@/lib/money-format";
+import { financialFormatHeaders } from "@/lib/financial-format";
 import { receiptWarningLabel } from "@/lib/receipt-scan";
 import { expenseIconSchema, iconLabel } from "@/lib/expense-icons";
 import { paymentDetailsSummary, payToSchema } from "@/lib/payment-links";
@@ -44,7 +45,7 @@ async function activityPage<T extends SequencedEvent>(endpoint: string, signal: 
   const url = new URL(endpoint, location.origin);
   url.searchParams.set("limit", "20");
   if (before !== undefined) url.searchParams.set("before", String(before));
-  const response = await fetch(url.pathname + url.search, { cache: "no-store", credentials: "same-origin", signal });
+  const response = await fetch(url.pathname + url.search, { cache: "no-store", credentials: "same-origin", signal, headers: financialFormatHeaders() });
   const body = await response.json() as Page<T> & { error?: string };
   if (!response.ok) throw new ActivityError(body.error || "Unable to load activity. Please try again.", response.status);
   if (!Array.isArray(body.events) || body.events.length > 50 ||

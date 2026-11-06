@@ -6,6 +6,7 @@ import { getReceiptAIAccess, ReceiptAIAccessError, type ReceiptAIEnvironment } f
 import { applyReceiptTranscription, consumeReceiptProcessBudget, processReceiptImage, ReceiptAIError } from '@/lib/receipt-ai';
 import { readTripLanguagePreferences } from '@/lib/trip-language-preferences';
 import { processReceiptQuestion, applyReceiptQuestion } from '@/lib/receipt-assistant';
+import { financialFormatRefusal } from '@/lib/financial-format';
 
 export const dynamic = 'force-dynamic';
 const id = z.string().min(1).max(100);
@@ -23,6 +24,10 @@ function logOperation(event: string, operation: Operation, details: Record<strin
 }
 
 export async function POST(request: Request) {
+  // R01: refuse a bundle that would drop the proposal's discounts before any
+  // paid inference runs for it.
+  const refused = financialFormatRefusal(request);
+  if (refused) return refused;
   let operation: Operation | undefined;
   try {
     sameOrigin(request);

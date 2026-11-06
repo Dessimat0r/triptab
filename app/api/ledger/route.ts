@@ -1,9 +1,13 @@
 import { db, readLedgerSnapshot, writeLedger, writeTrips, sameOrigin, failure, readBoundedBody, ensureProfile } from '@/lib/store';
 import { ledgerEtagForSnapshot, ledgerTagMatches, readLedgerFreshness } from '@/lib/ledger-freshness';
+import { financialFormatRefusal } from '@/lib/financial-format';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(r: Request) {
+  // R01: a bundle that cannot read scoped discounts never receives the ledger.
+  const refused = financialFormatRefusal(r);
+  if (refused) return refused;
   try {
     const profile = await ensureProfile(r);
     const condition = r.headers.get('if-none-match');
@@ -23,6 +27,8 @@ export async function GET(r: Request) {
 }
 
 export async function HEAD(request: Request) {
+  const refused = financialFormatRefusal(request);
+  if (refused) return refused;
   try {
     const profile = await ensureProfile(request);
     const current = await readLedgerFreshness(db(), profile.id);
@@ -35,6 +41,9 @@ export async function HEAD(request: Request) {
 }
 
 export async function POST(r: Request) {
+  // R01: nor can it write, so a gross-price suggestion is never committed.
+  const refused = financialFormatRefusal(r);
+  if (refused) return refused;
   try {
     sameOrigin(r);
     const profile = await ensureProfile(r);

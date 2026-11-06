@@ -1,6 +1,7 @@
 import { bucket, db, ensureProfile, failure, readBoundedBody, RequestError, sameOrigin } from '@/lib/store';
 import { notifyMember, notifyMembers } from '@/lib/notifications';
 import { purgeDeletedTripReceipts } from '@/lib/receipt-lifecycle';
+import { financialFormatRefusal } from '@/lib/financial-format';
 import { addConnectedMember, discardEmptyBill, deleteTrip, leaveTrip, listArchivedTripData, listArchivedTrips, listConnections, listDeletedBills, purgeDeletedBill, restoreDeletedBill, setTripArchived, transferTripOwnership } from '@/lib/trip-lifecycle';
 
 export const dynamic = 'force-dynamic';
@@ -14,7 +15,7 @@ export async function GET(request: Request) {
     // F-04: people the account already shares a holiday or bill with (names only).
     if (params.get('mode') === 'connections') return Response.json({ people: await listConnections(db(), profile.id) }, { headers: PRIVATE_HEADERS });
     // F-05: read-only archived holidays and bills for Activity and People.
-    if (params.get('mode') === 'archived-data') return Response.json({ trips: await listArchivedTripData(db(), profile.id) }, { headers: PRIVATE_HEADERS });
+    if (params.get('mode') === 'archived-data') return financialFormatRefusal(request) ?? Response.json({ trips: await listArchivedTripData(db(), profile.id) }, { headers: PRIVATE_HEADERS });
     // F-14: the account's own deleted bills that can still be restored.
     if (params.get('mode') === 'deleted') return Response.json({ bills: await listDeletedBills(db(), profile.id) }, { headers: PRIVATE_HEADERS });
     if (params.get('mode') !== 'archived') throw new RequestError('Choose a valid holiday list.');
