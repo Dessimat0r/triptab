@@ -521,6 +521,11 @@ export function validateLedger(data: unknown, options: { previous?: Ledger; sour
         // saved new/modified record adopts the current calculation rule and
         // the traveller weights in force now.
         const old = [...(prior?.expenses || []), ...(prior?.drafts || [])].find(value => value.id === expense.id);
+        const scannedSource = old ?? prior?.drafts.find(value => value.id === ('sourceDraftId' in expense ? expense.sourceDraftId : undefined))
+          ?? (expense.receiptId ? [...(prior?.expenses ?? []), ...(prior?.drafts ?? [])].find(value => value.receiptId === expense.receiptId) : undefined);
+        if (scannedSource?.receiptScan && !expense.receiptScan) {
+          throw new LedgerValidationError('Keep the saved receipt evidence when editing or posting a scanned receipt.');
+        }
         if (old && sameStoredValue(financialValue(expense),financialValue(old))) {
           // Chats, translations and other descriptive changes cannot resplit
           // an approved receipt or adopt today's family weights.

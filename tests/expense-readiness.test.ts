@@ -3,7 +3,7 @@ import test from 'node:test';
 import { assignUnassignedItems, EXPENSE_TARGETS, expenseSaveBlockers, hasReceiptDiscussion, unassignedItemIds, visibleExpenseBlockers } from '../lib/expense-readiness';
 import { expenseSchema } from '../lib/model';
 import type { ReceiptEditor } from '../lib/receipt-processing';
-import { acknowledgeReceiptReview, carryReviewAcknowledgements, pendingReviewActions, receiptScanFingerprint, receiptScanSaveError } from '../lib/receipt-scan';
+import { acknowledgeReceiptDifference, acknowledgeReceiptReview, carryReviewAcknowledgements, pendingReviewActions, receiptScanFingerprint, receiptScanSaveError } from '../lib/receipt-scan';
 
 const trip = { currency: 'EUR' as const };
 function receipt(overrides: Partial<ReceiptEditor> = {}): ReceiptEditor {
@@ -41,7 +41,7 @@ test('a whole-receipt percentage split has no unassigned lines to choose for', (
 
 test('a reviewed difference stays acknowledged when only people are assigned, not when a price changes', () => {
   const mismatch = receipt({ receiptScan: { version: 1, printedTotal: 2301, printedCurrency: 'EUR', status: 'matched', warnings: [] } });
-  const acknowledged = acknowledgeReceiptReview(mismatch);
+  const acknowledged = acknowledgeReceiptDifference(mismatch, 'Verified receipt rounding.');
   assert.equal(receiptScanSaveError(acknowledged), null);
   const assigned = assignUnassignedItems(acknowledged, ['alice']);
   assert.equal(receiptScanSaveError(assigned), null, 'assignment carries the acknowledgement');
@@ -59,18 +59,19 @@ test('a stale acknowledgement is never refreshed by an allocation change', () =>
   assert.match(receiptScanSaveError(next)!, /do not match/);
 });
 
-test('one review action confirms every checkable warning, a difference and a missing printed total together', () => {
+test('bulk review confirms checkable warnings and missing evidence but never a difference', () => {
   const entry = receipt({
     items: receipt().items.map(item => ({ ...item, members: ['alice'], scanSource: { confidence: 'low' as const } })),
     receiptScan: { version: 1, printedTotal: null, printedSubtotal: 2200, printedCurrency: 'EUR', status: 'incomplete', warnings: [
       { code: 'possible-duplicate', itemIds: ['soup', 'pizza'] }, { code: 'image-may-be-incomplete' },
     ] },
   });
-  assert.equal(pendingReviewActions(entry), 3 + 1 + 1 + 1 + 1, 'three low-confidence lines, image, subtotal difference and missing total');
+  assert.equal(pendingReviewActions(entry), 3 + 1 + 1 + 1, 'three low-confidence lines, duplicate, image and missing total');
   assert(receiptScanSaveError(entry));
   const reviewed = acknowledgeReceiptReview(entry);
   assert.equal(pendingReviewActions(reviewed), 0);
-  assert.equal(receiptScanSaveError(reviewed), null);
+  assert.match(receiptScanSaveError(reviewed)!, /written reason/);
+  assert.equal(receiptScanSaveError(acknowledgeReceiptDifference(reviewed, 'Subtotal includes a printed deposit.')), null);
   assert.equal(reviewed.receiptScan!.printedTotal, null, 'no printed evidence is invented');
 });
 

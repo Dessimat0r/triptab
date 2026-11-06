@@ -1,6 +1,6 @@
 import { expenseSchema, itemSplitError, receiptSplitError, total, type ReceiptMessage, type Trip } from './model';
 import type { ReceiptEditor } from './receipt-processing';
-import { acknowledgeReceiptReview, carryReviewAcknowledgements, reconcileReceiptScan, receiptScanSaveError } from './receipt-scan';
+import { acknowledgeReceiptReview, carryReviewAcknowledgements, RECEIPT_DIFFERENCE_ERROR, reconcileReceiptScan, receiptScanSaveError } from './receipt-scan';
 
 /** Stable element IDs the save checklist can move focus to. */
 export const EXPENSE_TARGETS = {
@@ -8,6 +8,7 @@ export const EXPENSE_TARGETS = {
   details: 'expense-purchase-details',
   currency: 'expense-currency-field',
   review: 'expense-receipt-review',
+  difference: 'expense-receipt-difference',
   items: 'expense-items',
   split: 'expense-split-method',
   fx: 'expense-fx-panel',
@@ -97,7 +98,7 @@ export function expenseSaveBlockers(entry: ReceiptEditor, trip: Pick<Trip, 'curr
   if (!entry.items.length) add('items', 'Add at least one item', EXPENSE_TARGETS.items);
   if (!blockers.length) {
     const scanError = receiptScanSaveError(acknowledgeReceiptReview(entry), { allowAcknowledgement: true });
-    if (scanError) add('scan', scanError, EXPENSE_TARGETS.review);
+    if (scanError) add('scan', scanError, scanError === RECEIPT_DIFFERENCE_ERROR ? EXPENSE_TARGETS.difference : EXPENSE_TARGETS.review);
   }
   if (!blockers.length && !expenseSchema.safeParse(entry).success) add('values', 'Complete the purchase details and valid amounts before saving', EXPENSE_TARGETS.details);
   return blockers;

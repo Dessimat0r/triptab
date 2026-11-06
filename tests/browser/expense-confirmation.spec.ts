@@ -132,6 +132,10 @@ for (const edits of [false, true]) test(`one confirmation covers ambiguous curre
     await page.getByRole('textbox', { name: 'Amount', exact: true }).fill('43.10');
     await page.getByText('Check or correct printed totals', { exact: true }).click();
     await page.getByRole('textbox', { name: 'Printed subtotal (optional)', exact: true }).fill('43.11');
+    await save(page).click(); expect(state.posts).toBe(0);
+    await page.getByText('Save anyway with a written reason', { exact: true }).click();
+    await page.getByRole('textbox', { name: 'Reason for the receipt difference', exact: true }).fill('Printed subtotal contains a rounding difference.');
+    await page.getByRole('button', { name: 'Accept this difference with my reason', exact: true }).click();
   }
   await expect(save(page)).toHaveText('Confirm & save expense');
   await save(page).click(); await expect(page.locator('.editor')).toHaveCount(0);
@@ -139,6 +143,28 @@ for (const edits of [false, true]) test(`one confirmation covers ambiguous curre
   expect(expense.receiptScan?.missingTotalAcknowledgement?.fingerprint).toBe(receiptScanFingerprint(expense));
   expect(expense.fieldSources?.currency).toBe('user'); expect(expense.receiptScan?.printedTotal).toBeNull();
   if (!edits) expect(await clicks(page)).toEqual(['Confirm & save expense']);
+});
+
+test('F-01 a 750 versus 450 receipt blocks ordinary Save and requires a written, auditable exception', async ({ page }) => {
+  const draft = proposal({ items: [{ id: 'p1', name: 'Pringles', amount: 300, members: ['gary'] }, { id: 'p2', name: 'Pringles', amount: 300, members: ['gary'] }, { id: 'milk', name: 'Milk', amount: 150, members: ['gary', 'sam'] }],
+    receiptScan: { version: 1, printedCurrency: 'EUR', printedTotal: 450, status: 'matched', warnings: [],
+      sourceLines: [{ lineIndex: 3, observedText: 'BOGOF -3.00', amount: -300, kind: 'adjustment', mappedTo: 'unmapped' }] } });
+  const state = await fixtures(page, { draft }); await openDraft(page);
+  const banner = page.locator('.receipt-difference');
+  await expect(banner).toContainText('€3.00');
+  await expect(page.locator('.receipt-scan-totals')).toContainText('€4.50');
+  await expect(page.locator('.receipt-scan-totals')).toContainText('€7.50');
+  await save(page).click(); expect(state.posts).toBe(0);
+  await banner.getByText('Save anyway with a written reason', { exact: true }).click();
+  const accept = banner.getByRole('button', { name: 'Accept this difference with my reason', exact: true });
+  await expect(accept).toBeDisabled();
+  await page.getByRole('textbox', { name: 'Reason for the receipt difference', exact: true }).fill('Qualifying promotion is being disputed with the shop.');
+  await accept.click(); await expect(banner).toContainText('remains unreconciled');
+  await save(page).click(); await expect(page.locator('.editor')).toHaveCount(0);
+  expect(state.posts).toBe(1);
+  expect(state.trip.expenses[0].receiptScan?.calculatedTotal).toBe(750);
+  expect(state.trip.expenses[0].receiptScan?.status).toBe('needs-review');
+  expect(state.trip.expenses[0].receiptScan?.acknowledgement?.reason).toBe('Qualifying promotion is being disputed with the shop.');
 });
 
 test('processing names only the ongoing read and cannot post incomplete incoming values', async ({ page }) => {
