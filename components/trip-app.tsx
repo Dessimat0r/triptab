@@ -62,6 +62,7 @@ import { dispatchLiveRefresh, useLiveRefresh } from "@/components/use-live-refre
 import { sampleTrip } from "@/lib/sample-trip";
 import { localDate, localTime, formatCalendarDate, formatClockTime } from "@/lib/dates";
 import { equalFinancialValue, equalSavedValue, hasNewMatchingPayment, rebaseLedger } from "@/lib/client-ledger";
+import { mergeExpenseEdits, type MergeChoice, type MergeConflict } from "@/lib/expense-merge";
 import { buildReceiptPrompt, chatgptReceiptUrl } from "@/lib/receipt-chatgpt";
 import { isBlankReceipt, isUnchangedInitialReceipt, matchingReceiptProposal, mayFillInitialReceipt, receiptEditableValue, receiptProposalEditor, receiptEditorTotal, userReceiptField, type ReceiptEditor, type InitialReceiptReview } from "@/lib/receipt-processing";
 import { collapseToQuick, hasItemSplitDetail, isManualSingleLine, quickEligible, singleReceiptLineEligible, withQuickName } from "@/lib/quick-expense";
@@ -304,6 +305,8 @@ export default function Home({ children }: { children: ReactNode }) {
     [offline, setOffline] = useState(false),
     [lastRefreshed, setLastRefreshed] = useState<Date | null>(null),
     [editorConflict, setEditorConflict] = useState<{ latest: Expense | null } | null>(null),
+    [mergeChoices, setMergeChoices] = useState<Record<string, MergeChoice>>({}),
+    [mergeNotice, setMergeNotice] = useState<string[] | null>(null),
     [paymentEditor, setPaymentEditor] = useState<{ entry: Payment; original?: Payment; tripId: string; key: string; restoredFrom?: RestorationInfo } | null>(null),
     [restoration, setRestoration] = useState<RestorationInfo | null>(null),
     [receiptHistoryOpen, setReceiptHistoryOpen] = useState(false),
@@ -449,7 +452,7 @@ export default function Home({ children }: { children: ReactNode }) {
         const baseline = editorBaseline.current;
         if (baseline?.expense) {
           const current = b.data.trips.find(value => value.id === baseline.tripId)?.expenses.find(value => value.id === baseline.expense?.id);
-          if (!equalFinancialValue(baseline.expense, current)) setEditorConflict({ latest: current || null });
+          if (!equalFinancialValue(baseline.expense, current)) reportEditorConflict(current || null);
         }
         return b;
       } catch (e) {
@@ -666,7 +669,9 @@ export default function Home({ children }: { children: ReactNode }) {
         const rebased = rebaseLedger(ledger, data, currentSnapshot.data);
         if (rebased.conflicts.length) {
           const baseline = editorBaseline.current;
-          if (baseline?.expense) setEditorConflict({ latest: currentSnapshot.data.trips.find(t => t.id === baseline.tripId)?.expenses.find(e => e.id === baseline.expense?.id) || null });
+          if (baseline?.expense && reportEditorConflict(currentSnapshot.data.trips.find(t => t.id === baseline.tripId)?.expenses.find(e => e.id === baseline.expense?.id) || null)) {
+            throw Error("Another traveller changed this expense. Their changes were added to your edits; check them and press Save again.");
+          }
           throw Error("Another traveller changed the same entry. Your edits are still here; review the latest saved version before continuing.");
         }
         proposed = rebased.data; token = currentSnapshot.revision;
@@ -777,8 +782,9 @@ export default function Home({ children }: { children: ReactNode }) {
     }
     const latest = current?.expenses.find(value => value.id === baseline.expense?.id);
     if (!equalFinancialValue(baseline.expense, latest)) {
-      setEditorConflict({ latest: latest || null });
-      setError("This expense changed while you were editing. Compare the versions below before saving.");
+      setError(reportEditorConflict(latest || null)
+        ? "Another traveller changed this expense. Their changes were added to your edits; check them and press Save again."
+        : "This expense changed while you were editing. Compare the versions below before saving.");
       return false;
     }
     return true;
@@ -794,28 +800,57 @@ export default function Home({ children }: { children: ReactNode }) {
       return;
     }
     editorBaseline.current = { tripId: trip.id, expense: structuredClone(expense) };
-    setEditorConflict(null); setReferenceRate(null); resetReceiptReview();
+    setEditorConflict(null); setMergeNotice(null); setMergeChoices({}); setReferenceRate(null); resetReceiptReview();
     if (pending) editorDraftBinding.current = { draftId: pending.id, receiptId: pending.receiptId, expenseId: pending.expenseId };
     setEditing(structuredClone({ ...expense, adjustmentAllocation: CURRENT_CALCULATION_RULE, expenseId: expense.id,
       draftId: pending?.id, conversation: mergeReceiptConversation(expense.conversation, pending?.conversation),
       memory: pending?.memory ?? expense.memory,
     }));
   }
-  function keepExpenseEdits() {
-    if (!editing || !editorConflict || !trip) return;
-    if (editorBaseline.current?.tripId !== trip.id) { setError(isBill(trip) ? "This bill is no longer available." : "This holiday is no longer available."); return; }
+  /**
+   * A newer saved version arrived while editing. Changes only the other
+   * person made are merged into the form at once; fields we both changed
+   * open the comparison for an explicit choice. Returns true when merged.
+   */
+  function reportEditorConflict(latest: Expense | null) {
+    const baseline = editorBaseline.current, current = activeReceiptEditor.current;
+    if (latest && baseline?.expense && current) {
+      const result = mergeExpenseEdits(baseline.expense, current, latest);
+      if (!result.conflicts.length) {
+        editorBaseline.current = { tripId: baseline.tripId, expense: structuredClone(latest) };
+        activeReceiptEditor.current = result.merged;
+        setEditing(result.merged);
+        setMergeNotice(result.applied.map(change => change.label));
+        setEditorConflict(null); setMergeChoices({});
+        return true;
+      }
+    }
+    setEditorConflict({ latest }); setMergeChoices({});
+    return false;
+  }
+  /**
+   * Combine my edits with the latest saved version (F-08): changes only the
+   * other person made are kept, and fields we both changed use `choices`.
+   * Returns false while a clash still needs a choice.
+   */
+  function keepExpenseEdits(choices: Record<string, MergeChoice> = {}) {
+    if (!editing || !editorConflict || !trip) return false;
+    if (editorBaseline.current?.tripId !== trip.id) { setError(isBill(trip) ? "This bill is no longer available." : "This holiday is no longer available."); return false; }
     const latest = editorConflict.latest;
     if (latest) {
+      const base = editorBaseline.current.expense;
+      const result = base ? mergeExpenseEdits(base, editing, latest, choices) : null;
+      if (!result || result.conflicts.length) return false;
       editorBaseline.current = { tripId: trip.id, expense: structuredClone(latest) };
-      const messages = [...latest.conversation || []];
-      for (const message of editing.conversation || []) if (!messages.some(value => value.id === message.id)) messages.push(message);
-      setEditing({ ...editing, conversation: messages });
+      setEditing(result.merged);
+      setMergeNotice(result.applied.map(change => change.label));
     } else {
       editorBaseline.current = { tripId: trip.id };
       resetReceiptReview(); setRestoration(null);
       setEditing({ ...editing, id: uid(), expenseId: undefined, draftId: undefined, sourceDraftId: undefined });
     }
-    setEditorConflict(null); setError("");
+    setEditorConflict(null); setMergeChoices({}); setError("");
+    return true;
   }
   function newExpense(event?: MouseEvent<HTMLElement>, current = trip) {
     // Safari does not focus tapped buttons; capture a useful modal return target.
@@ -828,7 +863,7 @@ export default function Home({ children }: { children: ReactNode }) {
     setPaste("");
     setFxError("");
     editorBaseline.current = { tripId: current.id };
-    setEditorConflict(null); setReferenceRate(null);
+    setEditorConflict(null); setMergeNotice(null); setMergeChoices({}); setReferenceRate(null);
     // Expenses are usually entered where the previous one was bought, even
     // when catching up later from a phone set to the home time zone. The
     // default date and time are "now" in that same zone, so all three
@@ -872,7 +907,7 @@ export default function Home({ children }: { children: ReactNode }) {
     const existing = trip.expenses.find(value => value.id === d.expenseId);
     const draft = structuredClone(d);
     editorBaseline.current = { tripId: trip.id, expense: structuredClone(existing) };
-    setEditorConflict(null); setReferenceRate(null);
+    setEditorConflict(null); setMergeNotice(null); setMergeChoices({}); setReferenceRate(null);
     const entry: ReceiptEditor = {
       ...draft,
       languageViewId: draft.languageViewId || existing?.languageViewId || draft.expenseId || draft.id,
@@ -1548,7 +1583,7 @@ export default function Home({ children }: { children: ReactNode }) {
       } catch (cause) { setError(cause instanceof Error ? cause.message : "Unable to check the saved receipt."); return; }
     }
     editorBaseline.current = { tripId: current.id };
-    setEditorConflict(null); setReferenceRate(null); resetReceiptReview(); setError("");
+    setEditorConflict(null); setMergeNotice(null); setMergeChoices({}); setReferenceRate(null); resetReceiptReview(); setError("");
     if (expense.percentages === undefined && expense.adjustmentAllocation === undefined && expense.items.every(item => item.amount === 0) && expense.tax + expense.tip > expense.discount && current.members.some(member => !expense.items.some(item => item.members.includes(member.id)))) {
       adjustments.push("This earlier receipt shared tax and tip across all travellers. Restoring it uses the current rule: share these adjustments between the people selected on receipt items. Review those shares before saving.");
     }
@@ -1735,6 +1770,34 @@ export default function Home({ children }: { children: ReactNode }) {
   ])), [editing?.timezone]);
   const name = (id: string) =>
     trip?.members.find((m) => m.id === id)?.name || "Unknown";
+  // Every field both people changed, and how many still need a choice.
+  const pendingMerge = editing && editorConflict?.latest && editorBaseline.current?.expense ? (() => {
+    const clashes = mergeExpenseEdits(editorBaseline.current.expense, editing, editorConflict.latest).conflicts;
+    const chosen = mergeExpenseEdits(editorBaseline.current.expense, editing, editorConflict.latest, mergeChoices);
+    return { clashes, applied: chosen.applied, unresolved: chosen.conflicts.length };
+  })() : null;
+  function describeMergeValue(conflict: MergeConflict, value: unknown): string {
+    const currency = editing?.currency;
+    const amount = (cents: unknown) => typeof cents === "number" ? receiptMoney(cents, currency) : uiText("Unreadable");
+    const people = (ids: unknown) => Array.isArray(ids) && ids.length ? ids.map(id => name(String(id))).join(", ") : uiText("nobody");
+    if (value === null || value === undefined) return conflict.key.startsWith("item:") ? uiText("Line removed") : uiText("Not set");
+    if (conflict.key === "payer") return name(String(value));
+    if (["tax", "tip", "discount"].includes(conflict.key)) return amount(value);
+    const record = value as Record<string, unknown>;
+    if (conflict.key === "when") return `${record.date ?? ""} ${record.time ?? ""} ${record.timezone ?? ""}`.trim();
+    if (conflict.key === "currency") {
+      const fx = record.fx as { rate?: number } | undefined;
+      return [String(record.currency ?? ""), fx?.rate ? uiText("rate {value0}", { value0: fx.rate }) : "",
+        typeof record.bankAmount === "number" && trip ? uiText("bank charge {value0}", { value0: money(record.bankAmount, trip.currency) }) : ""].filter(Boolean).join(" · ");
+    }
+    if (conflict.key === "split-mode") return Object.entries(record).map(([member, percent]) => `${name(member)} ${percent}%`).join(", ");
+    if (/^item:[^:]+:name$/.test(conflict.key)) return String(record.name ?? "");
+    if (conflict.key.startsWith("item:")) {
+      const shares = record.percentages ? Object.entries(record.percentages as Record<string, number>).map(([member, percent]) => `${name(member)} ${percent}%`).join(", ") : people(record.members);
+      return [record.name ? String(record.name) : "", amount(record.amount), shares].filter(Boolean).join(" · ");
+    }
+    return typeof value === "string" || typeof value === "number" ? String(value) : JSON.stringify(value);
+  }
   const balanceRow = (m: Trip["members"][number], i: number) => (
                       <div className="balance-row" key={m.id} data-entry-id={m.id} tabIndex={-1}>
                         <span className={"avatar color" + (i % 5)}>
@@ -3183,12 +3246,25 @@ export default function Home({ children }: { children: ReactNode }) {
                     </div>;
                   })}
                 </div>
+                {pendingMerge && <fieldset className="conflict-choices">
+                  <legend>{uiText("You both changed these. Choose which to keep:")}</legend>
+                  {pendingMerge.clashes.map(conflict => <div key={conflict.key} className="conflict-choice" role="radiogroup" aria-label={uiText(conflict.label)}>
+                    <strong>{uiText(conflict.label)}</strong>
+                    {(["mine", "theirs"] as const).map(side => <label key={side}>
+                      <input type="radio" name={`merge-${conflict.key}`} checked={mergeChoices[conflict.key] === side}
+                        onChange={() => setMergeChoices(previous => ({ ...previous, [conflict.key]: side }))} />
+                      {side === "mine" ? uiText("Mine: ") : uiText("Theirs: ")}{describeMergeValue(conflict, side === "mine" ? conflict.mine : conflict.theirs)}
+                    </label>)}
+                  </div>)}
+                  {!!pendingMerge.applied.length && <p className="footnote">{uiText("Their other changes will be kept: ")}{pendingMerge.applied.map(change => uiText(change.label)).join(", ")}</p>}
+                </fieldset>}
                 <div className="conflict-actions">
-                  <button type="button" className="quiet" onClick={() => { if (editorConflict.latest) openExpense(editorConflict.latest, false); else { closeReceiptEditor(); void discardNewBill(); } setError(""); }}>{editorConflict.latest ? uiText("Use latest saved") : uiText("Discard my edits")}</button>
-                  <button type="button" className="primary" onClick={keepExpenseEdits}>{editorConflict.latest ? uiText("Continue with my edits") : uiText("Save as a new expense")}</button>
+                  <button type="button" className="quiet" onClick={() => { if (editorConflict.latest) openExpense(editorConflict.latest, false); else { closeReceiptEditor(); void discardNewBill(); } setError(""); }}>{editorConflict.latest ? uiText("Keep their version") : uiText("Discard my edits")}</button>
+                  <button type="button" className="primary" disabled={!!pendingMerge && pendingMerge.unresolved > 0} onClick={() => keepExpenseEdits(mergeChoices)}>{editorConflict.latest ? uiText("Merge my changes") : uiText("Save as a new expense")}</button>
                 </div>
                 <p className="footnote">{uiText("Review your split and press Save expense to commit your choice.")}</p>
               </section>}
+              {!editorConflict && !!mergeNotice?.length && <p className="notification-status merge-notice" role="status">{uiText("Another traveller changed this expense while you were editing. Their changes were added to your edits: ")}{mergeNotice.map(label => uiText(label)).join(", ")}</p>}
               <div className="editor-footer" ref={editorFooterRef}>
                 <div className="expense-save-announcement sr-only" role="alert" aria-atomic="true">{saveAnnouncement && <span key={saveAnnouncement.id}>{saveAnnouncement.message}</span>}</div>
                 <SaveChecklist key={editing.id} blockers={visibleBlockers} attempted={saveAttempted}

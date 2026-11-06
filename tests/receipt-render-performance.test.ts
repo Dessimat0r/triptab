@@ -6,6 +6,7 @@ import * as runtime from 'react/jsx-runtime';
 import * as model from '../lib/model';
 import * as dates from '../lib/dates';
 import * as clientLedger from '../lib/client-ledger';
+import * as expenseMerge from '../lib/expense-merge';
 import * as moneyFormat from '../lib/money-format';
 import * as receiptScan from '../lib/receipt-scan';
 import * as receiptProcessing from '../lib/receipt-processing';
@@ -94,6 +95,7 @@ function controller(trip: model.Trip, fetcher?: typeof fetch) {
     if (name === '@/lib/model') return models;
     if (name === '@/lib/dates') return dates;
     if (name === '@/lib/client-ledger') return clientLedger;
+    if (name === '@/lib/expense-merge') return expenseMerge;
     if (name === '@/lib/money-format') return moneyFormat;
     if (name === '@/lib/receipt-processing') return receiptProcessing;
     if (name === '@/lib/receipt-scan') return receiptScan;
