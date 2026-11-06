@@ -63,7 +63,7 @@ import { sampleTrip } from "@/lib/sample-trip";
 import { localDate, localTime, formatCalendarDate, formatClockTime } from "@/lib/dates";
 import { equalFinancialValue, equalSavedValue, hasNewMatchingPayment, rebaseLedger } from "@/lib/client-ledger";
 import { buildReceiptPrompt, chatgptReceiptUrl } from "@/lib/receipt-chatgpt";
-import { isBlankApartFromPersonalDetails, isBlankReceipt, isUnchangedInitialReceipt, matchingReceiptProposal, mayFillInitialReceipt, receiptEditableValue, receiptProposalEditor, receiptEditorTotal, userReceiptField, type ReceiptEditor, type InitialReceiptReview } from "@/lib/receipt-processing";
+import { isBlankApartFromPersonalDetails, isUnchangedInitialReceipt, matchingReceiptProposal, mayFillInitialReceipt, receiptEditableValue, receiptProposalEditor, receiptEditorTotal, userReceiptField, type ReceiptEditor, type InitialReceiptReview } from "@/lib/receipt-processing";
 import { collapseToQuick, hasItemSplitDetail, isManualSingleLine, quickEligible, singleReceiptLineEligible, withQuickName } from "@/lib/quick-expense";
 import type { ActivityEvent } from "@/lib/store";
 import {
