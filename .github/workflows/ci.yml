@@ -57,6 +57,14 @@ jobs:
 
   browser:
     runs-on: ubuntu-24.04
+    # Playwright's image already holds every browser and OS library for the
+    # locked Playwright version, so no packages come from the Ubuntu mirror,
+    # whose speed varies per runner. Keep the tag equal to the locked
+    # @playwright/test version; a mismatch fails with a missing executable.
+    container:
+      image: mcr.microsoft.com/playwright:v1.62.1-noble@sha256:dcc5531e97840b9b5e794f2814476b21571c5124a3fca2267d73041f56e7580e
+      # Chromium needs more shared memory than Docker's 64 MB default.
+      options: --ipc=host
     timeout-minutes: 15
     strategy:
       # A failing engine must not cancel the other engine's coverage.
@@ -77,18 +85,6 @@ jobs:
         run: npm run install:ci
       - name: Build
         run: npm run build
-      - name: Cache layout-test browser
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
-        with:
-          path: ~/.cache/ms-playwright
-          # Browser revisions and OS libraries must match; no fallback keys.
-          key: playwright-${{ runner.os }}-${{ runner.arch }}-ubuntu-24.04-${{ matrix.browser }}-${{ hashFiles('node_modules/playwright-core/browsers.json') }}
-      - name: Install layout-test browsers
-        # The Ubuntu mirror can be slow; WebKit needs ~114 MB of OS packages.
-        timeout-minutes: 10
-        # Check/install OS dependencies even on a browser-cache hit. Chromium
-        # uses the headless shell, so its unused full-browser download is omitted.
-        run: npx --no-install playwright install --with-deps --only-shell ${{ matrix.browser }}
       - name: Check production browser layouts
         # Retain the measured two-worker default for each complete engine suite.
         run: npm run test:layout -- --project=${{ matrix.browser }}
