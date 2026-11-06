@@ -1,0 +1,62 @@
+
+Running 2 tests using 2 workers
+
+[1/2] [chromium] › tests/browser/people-incomplete.spec.ts:44:1 › R08: a mixed open and archived ledger keeps valid totals but labels them incomplete
+[2/2] [chromium] › tests/browser/people-incomplete.spec.ts:36:1 › R08: an invalid-only ledger names the bill and draws no debt-free conclusion
+  1) [chromium] › tests/browser/people-incomplete.spec.ts:44:1 › R08: a mixed open and archived ledger keeps valid totals but labels them incomplete 
+
+    Error: expect(locator).toContainText(expected) failed
+
+    Locator: getByRole('dialog', { name: 'Activity and people' }).getByRole('alert')
+    Expected substring: "Paris (archived)"
+    Timeout: 5000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toContainText" with timeout 5000ms
+      - waiting for getByRole('dialog', { name: 'Activity and people' }).getByRole('alert')
+
+
+      46 |   const view = await people(page);
+      47 |   await expect(view).toContainText('Owes you £15.00');
+    > 48 |   await expect(view.getByRole('alert')).toContainText('Paris (archived)');
+         |                                         ^
+      49 |   await expect(view.getByRole('alert')).toContainText('The amounts below are incomplete.');
+      50 |   await expect(view).not.toContainText('Nobody owes you');
+      51 | });
+        at /home/user/triptab/tests/browser/people-incomplete.spec.ts:48:41
+
+    Error Context: test-results/people-incomplete-R08-a-mi-65c59--but-labels-them-incomplete-chromium/error-context.md
+
+
+  2) [chromium] › tests/browser/people-incomplete.spec.ts:36:1 › R08: an invalid-only ledger names the bill and draws no debt-free conclusion 
+
+    Error: expect(locator).toContainText(expected) failed
+
+    Locator: getByRole('dialog', { name: 'Activity and people' }).getByRole('alert')
+    Expected substring: "Paris"
+    Timeout: 5000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toContainText" with timeout 5000ms
+      - waiting for getByRole('dialog', { name: 'Activity and people' }).getByRole('alert')
+
+
+      37 |   await fixtures(page, [paris]);
+      38 |   const view = await people(page);
+    > 39 |   await expect(view.getByRole('alert')).toContainText('Paris');
+         |                                         ^
+      40 |   await expect(view.getByRole('alert')).toContainText('No balance can be shown until they are fixed.');
+      41 |   await expect(view).not.toContainText('Nobody owes you');
+      42 | });
+        at /home/user/triptab/tests/browser/people-incomplete.spec.ts:39:41
+
+    Error Context: test-results/people-incomplete-R08-an-i-7b198-aws-no-debt-free-conclusion-chromium/error-context.md
+
+
+  2 failed
+    [chromium] › tests/browser/people-incomplete.spec.ts:36:1 › R08: an invalid-only ledger names the bill and draws no debt-free conclusion 
+    [chromium] › tests/browser/people-incomplete.spec.ts:44:1 › R08: a mixed open and archived ledger keeps valid totals but labels them incomplete 
+--- page snapshot (invalid-only case) ---
+  - paragraph: Nobody owes you, and you owe nobody.

@@ -33,7 +33,7 @@ export default function PersonalActivity({ ledger, accountId, refreshKey, onClos
     ? { trips: [...ledger.trips, ...archived.filter(trip => !ledger.trips.some(open => open.id === trip.id))] } : ledger, [ledger, archived, withArchived]);
   const entries = useMemo(() => personalActivity(all, accountId), [all, accountId]);
   const names = useMemo(() => personNames(all), [all]);
-  const people = useMemo(() => peopleSummary(all, accountId), [all, accountId]);
+  const { people, incomplete } = useMemo(() => peopleSummary(all, accountId, archivedIds), [all, accountId, archivedIds]);
   const trips = new Map(all.trips.map(trip => [trip.id, trip]));
   const isArchived = (tripId: string) => archivedIds.has(tripId) && !ledger.trips.some(trip => trip.id === tripId);
   const peopleInEntries = [...new Set(entries.flatMap(entry => entry.people))].sort((a, b) => (names.get(a) ?? "").localeCompare(names.get(b) ?? ""));
@@ -72,7 +72,14 @@ export default function PersonalActivity({ ledger, accountId, refreshKey, onClos
             </button></li>)}</ul>}
       </> : <>
         <p className="footnote">{uiText("Amounts follow each bill's or holiday's suggested settlement. They are shown separately and never combined across bills; settle each one in its own bill.")}</p>
-        {!people.length ? <p className="footnote">{uiText("Nobody owes you, and you owe nobody.")}</p> : <ul className="people-list">{people.map(entry => <li key={entry.key}>
+        {/* R08: a trip that cannot be calculated is named, and no total is presented as complete while it is left out. */}
+        {!!incomplete.length && <div className="error calculation-health" role="alert">
+          <p>{incomplete.length === 1 ? uiText("One holiday or bill can’t be calculated, so it is left out of these amounts:") : uiText("Some holidays or bills can’t be calculated, so they are left out of these amounts:")}</p>
+          <ul>{incomplete.map(entry => <li key={entry.tripId}><span><b>{entry.tripName}</b>{entry.archived ? uiText(" (archived)") : ""}{" · "}{uiText(entry.message)}</span>
+            {!entry.archived && <button type="button" className="quiet" onClick={() => onOpen(entry.tripId)}>{uiText("Open")}</button>}</li>)}</ul>
+          <p>{people.length ? uiText("The amounts below are incomplete. Fix these first before settling up.") : uiText("No balance can be shown until they are fixed.")}</p>
+        </div>}
+        {!people.length ? !incomplete.length && <p className="footnote">{uiText("Nobody owes you, and you owe nobody.")}</p> : <ul className="people-list">{people.map(entry => <li key={entry.key}>
           <h3>{entry.name}{entry.linked ? <small>{uiText(" · on TripTab")}</small> : null}</h3>
           {entry.byCurrency.map(line => <div key={line.currency} className="people-currency">
             {line.owesMe > 0 && <p>{uiText("Owes you {value0}", { value0: formatMoney(line.owesMe, line.currency) })}<small>{" · "}{line.owesMeTrips.map(tripId => trips.get(tripId)?.name).join(", ")}</small></p>}

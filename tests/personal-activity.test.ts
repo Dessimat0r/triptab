@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { peopleSummary, personalActivity, personKey } from '../lib/personal-activity';
-import { settlements, validateLedger, type Expense, type Ledger, type Trip } from '../lib/model';
+import { balances, parseLedgerStructure, settlements, travellerFinancialPreview, validateLedger, type Expense, type Ledger, type Trip } from '../lib/model';
 
 const spend = (id: string, payer: string, amount: number, members: string[], date = '2026-11-06'): Expense => ({ id, title: id, date, time: '12:00', timezone: 'Europe/London',
   currency: 'GBP', payer, tax: 0, tip: 0, discount: 0, items: [{ id: `${id}-i`, name: id, amount, members }] });
@@ -28,7 +28,8 @@ test('F-05 Activity lists my expenses and payments across holidays and bills, ne
 });
 
 test('F-05 People: per person and currency, owed and owing kept apart, matched by account only', () => {
-  const people = peopleSummary(ledger, 'gary');
+  const { people, incomplete } = peopleSummary(ledger, 'gary');
+  assert.deepEqual(incomplete, []);
   const sam = people.find(person => person.key === 'account:sam')!;
   assert.deepEqual(sam.byCurrency.find(line => line.currency === 'GBP'), { currency: 'GBP', owesMe: 1500, iOwe: 600, owesMeTrips: ['taxi'], iOweTrips: ['pizza'] },
     'Taxi (Sam owes £15) and Pizza (I owe £6 after a £4 payment) are not netted');
@@ -41,5 +42,45 @@ test('F-05 People: per person and currency, owed and owing kept apart, matched b
     const other = transfer.from === trip.members[0].id ? transfer.to : transfer.from;
     const line = people.find(person => person.key === personKey(trip, other))!.byCurrency.find(value => value.currency === trip.currency)!;
     assert(line.owesMeTrips.includes(trip.id) || line.iOweTrips.includes(trip.id));
+  }
+});
+
+// R08: a trip whose settlement cannot be calculated used to be skipped, so
+// the People view could say "Nobody owes you" or show a partial total as if
+// it were complete.
+// A historical EUR expense on a GBP bill with no conversion, as stored before
+// conversion was required, read through the stored-data parser.
+const unconverted: Trip = parseLedgerStructure({ trips: [{ id: 'paris', kind: 'bill', name: 'Paris', currency: 'GBP',
+  members: [{ id: 'xg', name: 'Gary', userId: 'gary' }, { id: 'xs', name: 'Sam', userId: 'sam' }],
+  expenses: [{ ...spend('Museum', 'xs', 4000, ['xg', 'xs']), currency: 'EUR' }], payments: [], drafts: [] }] }).trips[0];
+
+test('R08: an invalid-only ledger names the trip and never concludes that nobody owes anybody', () => {
+  const summary = peopleSummary({ trips: [unconverted] }, 'gary');
+  assert.deepEqual(summary.people, []);
+  assert.equal(summary.incomplete.length, 1);
+  assert.equal(summary.incomplete[0].tripId, 'paris');
+  assert.match(summary.incomplete[0].message, /exchange rate|bank charge/);
+  const archived = peopleSummary({ trips: [unconverted] }, 'gary', new Set(['paris']));
+  assert.equal(archived.incomplete[0].archived, true);
+});
+
+test('R08: mixed valid and invalid trips keep the valid totals, separated by currency, and report the invalid one', () => {
+  const summary = peopleSummary({ trips: [...ledger.trips, unconverted] }, 'gary');
+  assert.deepEqual(summary.incomplete.map(entry => entry.tripId), ['paris']);
+  const sam = summary.people.find(person => person.key === 'account:sam')!;
+  assert.deepEqual(sam.byCurrency.map(line => line.currency).sort(), ['EUR', 'GBP']);
+  assert(!sam.byCurrency.some(line => [...line.owesMeTrips, ...line.iOweTrips].includes('paris')), 'the invalid trip adds nothing');
+  assert.deepEqual(sam.byCurrency.find(line => line.currency === 'GBP'), { currency: 'GBP', owesMe: 1500, iOwe: 600, owesMeTrips: ['taxi'], iOweTrips: ['pizza'] });
+});
+
+test('R08: an invalid stored payment makes the trip incomplete in every reader, not counted in one and dropped in another', () => {
+  for (const bad of [{ amount: 0 }, { amount: -500 }, { amount: 12.5 }, { to: 'pg' }, { to: 'gone' }]) {
+    const trip: Trip = { ...structuredClone(pizza), payments: [{ id: 'bad', from: 'pg', to: 'ps', amount: 400, date: '2026-11-08', ...bad }] };
+    const summary = peopleSummary({ trips: [trip] }, 'gary');
+    assert.deepEqual(summary.people, [], JSON.stringify(bad));
+    assert.deepEqual(summary.incomplete.map(entry => [entry.tripId, entry.message]), [['pizza', 'Review an invalid recorded payment']]);
+    assert.throws(() => balances(trip), /invalid recorded payment/);
+    assert.equal(travellerFinancialPreview(trip, 'pg').available, false);
+    assert.equal(personalActivity({ trips: [trip] }, 'gary').find(entry => entry.id === 'bad')?.amount, null, 'shown as needing review');
   }
 });

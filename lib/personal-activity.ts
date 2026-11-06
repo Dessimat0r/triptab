@@ -1,4 +1,4 @@
-import { expenseShares, expenseTotal, isBill, settlements, type Currency, type Ledger, type Trip } from './model';
+import { expenseShares, expenseTotal, isBill, paymentError, settlements, type Currency, type Ledger, type Trip } from './model';
 
 /**
  * A person's financial activity across their open holidays and bills (F-05,
@@ -56,7 +56,7 @@ export function personalActivity(ledger: Ledger, accountId: string): ActivityEnt
       if (payment.from !== mine && payment.to !== mine) continue;
       const other = payment.from === mine ? payment.to : payment.from;
       entries.push({ ...base, type: 'payment', id: payment.id, title: payment.from === mine ? 'You paid' : 'You were paid', date: payment.date, time: payment.time,
-        amount: payment.amount, paidByMe: payment.from === mine, people: [personKey(trip, other)], direction: 'none' });
+        amount: paymentError(payment, trip.members) ? null : payment.amount, paidByMe: payment.from === mine, people: [personKey(trip, other)], direction: 'none' });
     }
   }
   return entries.sort((a, b) => `${b.date} ${b.time ?? ''}`.localeCompare(`${a.date} ${a.time ?? ''}`));
@@ -72,19 +72,34 @@ export function personNames(ledger: Ledger): Map<string, string> {
   return names;
 }
 
+/** A holiday or bill whose balances cannot be calculated, so it is left out of every total (R08). */
+export type IncompleteTrip = { tripId: string; tripName: string; currency: Currency; archived?: boolean; message: string };
+export type PeopleSummary = { people: PersonTotals[]; incomplete: IncompleteTrip[] };
+
 /**
  * Per person and currency: what they owe me and what I owe them, each from
  * the trips' own suggested settlements. The two are shown separately and
  * never netted, so separate bills stay separate (D04).
+ *
+ * A trip whose settlement cannot be calculated (an expense without a
+ * conversion, an invalid payment, a newer format) is never skipped silently
+ * (R08): it is returned in `incomplete`, and callers must not present the
+ * people totals as complete, or "nobody owes anybody", while it is there.
  */
-export function peopleSummary(ledger: Ledger, accountId: string): PersonTotals[] {
+export function peopleSummary(ledger: Ledger, accountId: string, archived: ReadonlySet<string> = new Set()): PeopleSummary {
   const names = personNames(ledger);
   const people = new Map<string, PersonTotals>();
+  const incomplete: IncompleteTrip[] = [];
   for (const trip of ledger.trips) {
     const mine = me(trip, accountId);
     if (!mine) continue;
     let transfers: ReturnType<typeof settlements>;
-    try { transfers = settlements(trip); } catch { continue; }
+    try { transfers = settlements(trip); }
+    catch (cause) {
+      incomplete.push({ tripId: trip.id, tripName: trip.name, currency: trip.currency, ...(archived.has(trip.id) ? { archived: true } : {}),
+        message: cause instanceof Error && cause.message ? cause.message : 'Review this holiday’s saved amounts.' });
+      continue;
+    }
     for (const transfer of transfers) {
       if (transfer.from !== mine && transfer.to !== mine) continue;
       const other = transfer.from === mine ? transfer.to : transfer.from;
@@ -97,5 +112,5 @@ export function peopleSummary(ledger: Ledger, accountId: string): PersonTotals[]
       people.set(key, person);
     }
   }
-  return [...people.values()].sort((a, b) => a.name.localeCompare(b.name));
+  return { people: [...people.values()].sort((a, b) => a.name.localeCompare(b.name)), incomplete };
 }
