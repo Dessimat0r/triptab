@@ -3916,5 +3916,65 @@
     "No se puede cambiar este viaje.",
     "Impossible de modifier ce voyage.",
     "Diese Reise kann nicht geändert werden."
+  ],
+  [
+    "Is {value0} the same person?",
+    "¿Es {value0} la misma persona?",
+    "{value0} est-il la même personne ?",
+    "Ist {value0} dieselbe Person?"
+  ],
+  [
+    "“{value0}” is already on this bill. Link them to {value1}’s TripTab account? They will see this bill only, and be told they were added.",
+    "«{value0}» ya está en esta cuenta. ¿Vincularlo a la cuenta de TripTab de {value1}? Solo verá esta cuenta y se le avisará de que se le ha añadido.",
+    "« {value0} » figure déjà sur cette note. Le lier au compte TripTab de {value1} ? Cette personne verra uniquement cette note et sera prévenue de son ajout.",
+    "„{value0}“ ist bereits auf dieser Rechnung. Mit dem TripTab-Konto von {value1} verknüpfen? Die Person sieht nur diese Rechnung und wird über das Hinzufügen informiert."
+  ],
+  [
+    "Link {value0}",
+    "Vincular a {value0}",
+    "Lier {value0}",
+    "{value0} verknüpfen"
+  ],
+  [
+    "{value0} was added and can now see this bill.",
+    "Se ha añadido a {value0}, que ya puede ver esta cuenta.",
+    "{value0} a été ajouté et peut maintenant voir cette note.",
+    "{value0} wurde hinzugefügt und kann diese Rechnung jetzt sehen."
+  ],
+  [
+    "Add someone on TripTab",
+    "Añadir a alguien de TripTab",
+    "Ajouter une personne sur TripTab",
+    "Jemanden auf TripTab hinzufügen"
+  ],
+  [
+    "People you already share a holiday or bill with. They can see this bill only, and can leave it.",
+    "Personas con las que ya compartes un viaje o una cuenta. Solo pueden ver esta cuenta y pueden salir de ella.",
+    "Personnes avec qui vous partagez déjà un voyage ou une note. Elles ne voient que cette note et peuvent la quitter.",
+    "Personen, mit denen du bereits eine Reise oder Rechnung teilst. Sie sehen nur diese Rechnung und können sie verlassen."
+  ],
+  [
+    " (archived)",
+    " (archivado)",
+    " (archivé)",
+    " (archiviert)"
+  ],
+  [
+    " · Archived",
+    " · Archivado",
+    " · Archivé",
+    " · Archiviert"
+  ],
+  [
+    "{value0} is archived. Restore it to settle up.",
+    "{value0} está archivado. Restáuralo para liquidar.",
+    "{value0} est archivé. Restaurez-le pour régler.",
+    "{value0} ist archiviert. Stelle es wieder her, um abzurechnen."
+  ],
+  [
+    "Include archived holidays and bills",
+    "Incluir viajes y cuentas archivados",
+    "Inclure les voyages et notes archivés",
+    "Archivierte Reisen und Rechnungen einbeziehen"
   ]
 ]
