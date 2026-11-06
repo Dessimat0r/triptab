@@ -328,6 +328,21 @@ export async function tripAccess(user: string, tripId: string): Promise<boolean>
   return !!row;
 }
 
+/** Read-only, paged source for discrepancy inspection, including archived trips.
+ * SQL restricts every row before its financial JSON is decoded. */
+export async function readReceiptAuditTrips(user: string, options: { after?: string; tripId?: string; limit?: number } = {}) {
+  const limit = options.limit ?? 25;
+  if (!Number.isInteger(limit) || limit < 1 || limit > 50 || [options.after, options.tripId].some(value => value !== undefined && (!value || value.length > 100))) throw new RequestError('Choose a valid receipt audit page.');
+  if (options.tripId && !await tripAccess(user, options.tripId)) throw new RequestError('Receipt audit not found.', 404);
+  const result = await db().prepare(`SELECT t.id, t.data FROM trips t WHERE t.id > ?
+    AND (t.owner = ? OR EXISTS (SELECT 1 FROM memberships m WHERE m.trip_id = t.id AND m.user_id = ?))
+    AND (? IS NULL OR t.id = ?) ORDER BY t.id LIMIT ?`)
+    .bind(options.after ?? '', user, user, options.tripId ?? null, options.tripId ?? null, limit + 1).all<{ id: string; data: string }>();
+  const rows = result.results.slice(0, limit);
+  return { trips: rows.map(row => parseStoredTrip(JSON.parse(row.data))),
+    nextCursor: result.results.length > limit ? rows.at(-1)!.id : null };
+}
+
 export async function receiptAccess(user: string, id: string): Promise<{ owner: string; tripId: string } | null> {
   const row = await db().prepare("SELECT r.owner, r.trip_id FROM receipts r JOIN trips t ON t.id = r.trip_id WHERE r.id = ? AND r.state = 'active' AND (t.owner = ? OR EXISTS (SELECT 1 FROM memberships m WHERE m.trip_id = t.id AND m.user_id = ?))").bind(id, user, user).first<{ owner: string; trip_id: string }>();
   return row ? { owner: row.owner, tripId: row.trip_id } : null;

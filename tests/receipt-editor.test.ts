@@ -9,7 +9,7 @@ import * as ts from 'typescript';
 import { equalFinancialValue, equalSavedValue } from '../lib/client-ledger';
 import { buildReceiptPrompt } from '../lib/receipt-chatgpt';
 import { isBlankReceipt, isUnchangedInitialReceipt, matchingReceiptProposal, mayFillInitialReceipt, receiptEditableValue, receiptProposalEditor, receiptEditorTotal, type ReceiptEditor } from '../lib/receipt-processing';
-import { acknowledgeReceiptReview, receiptScanSaveError } from '../lib/receipt-scan';
+import { acknowledgeReceiptDifference, acknowledgeReceiptReview, RECEIPT_DIFFERENCE_ERROR, receiptScanSaveError } from '../lib/receipt-scan';
 import { expenseSaveBlockers, visibleExpenseBlockers } from '../lib/expense-readiness';
 import { isBill, CURRENT_CALCULATION_RULE, stampCalculationRules, tripMemberWeights, defaultParticipants, itemSchema, draftItemSchema, expenseSchema, itemSplitError, ledgerSchema, receiptSplitError, total, validateLedger, type Draft, type Expense, type ReceiptMessage, type Trip } from '../lib/model';
 
@@ -638,10 +638,16 @@ test('Save checks independent totals and explicit reviewed differences before po
   draft.receiptScan = {version: 1, printedTotal: 1201, printedCurrency: 'GBP', status: 'matched', warnings: []};
   const initial = fixture(draft); initial.expenses = [];
   const editor = controller(initial); editor.openDraft(draft);
+  // F-01: ordinary Save cannot accept a one-penny difference.
+  assert(editor.blockers.some(blocker => blocker.key === 'scan' && blocker.message === RECEIPT_DIFFERENCE_ERROR && blocker.target === 'expense-receipt-difference'));
+  await submit(editor); assert.equal(editor.trip.expenses.length, 0); assert.equal(editor.updates.length, 0);
+  editor.edit(acknowledgeReceiptDifference(editor.editing!, 'Printed total includes a one-penny rounding.'));
+  assert.equal(editor.blockers.length, 0);
   await submit(editor); assert.equal(editor.error, ''); assert.equal(editor.trip.expenses.length, 1);
   assert.equal(editor.updates.length, 1);
   assert.equal(editor.trip.expenses[0].items[0].amount, 1200);
   assert.equal(editor.trip.expenses[0].receiptScan?.printedTotal, 1201);
+  assert.equal(editor.trip.expenses[0].receiptScan?.acknowledgement?.reason, 'Printed total includes a one-penny rounding.');
 });
 
 test('receipt proposals replace defaults while preserving user-confirmed fields and clearing obsolete currency conversion', () => {
