@@ -1,3 +1,4 @@
+import { declaredRequest } from './helpers/financial-request';
 import { transpileWithSharedImports } from './helpers/transpile';
 import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
@@ -137,7 +138,7 @@ async function ledgerRoute() {
   return import('data:text/javascript;base64,' + Buffer.from(routeCompiled).toString('base64')) as Promise<{ GET(request: Request): Promise<Response>; HEAD(request: Request): Promise<Response>; POST(request: Request): Promise<Response> }>;
 }
 function saveRequest(data: unknown, revision: number) {
-  return new Request('https://triptab.test/api/ledger', {
+  return declaredRequest('https://triptab.test/api/ledger', {
     method: 'POST',
     headers: { 'oai-authenticated-user-id': actor, 'oai-authenticated-user-email': 'owner@example.com', 'oai-authenticated-user-full-name': 'Original%20Owner', origin: 'https://triptab.test', 'content-type': 'application/json' },
     body: JSON.stringify({ data, revision }),
@@ -868,14 +869,14 @@ test('activity endpoint requires auth/membership and validates bounded, unambigu
   const routeCompiled = transpileWithSharedImports(routeSource, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText.replace("'@/lib/store'", JSON.stringify(storeUrl));
   const route = await import('data:text/javascript;base64,' + Buffer.from(routeCompiled).toString('base64')) as { GET(request: Request): Promise<Response> };
   const headers = { 'oai-authenticated-user-id': actor, 'oai-authenticated-user-email': 'owner@example.com', 'oai-authenticated-user-full-name': 'Original%20Owner' };
-  const request = (query: string, authenticated = true) => new Request(`https://triptab.test/api/activity?${query}`, { headers: authenticated ? headers : {} });
+  const request = (query: string, authenticated = true) => declaredRequest(`https://triptab.test/api/activity?${query}`, { headers: authenticated ? headers : {} });
   assert.equal((await route.GET(request('tripId=trip-1', false))).status, 401);
   const response = await route.GET(request('tripId=trip-1&limit=2'));
   assert.equal(response.status, 200);
   assert.equal(response.headers.get('cache-control'), 'private, no-store');
   assert.equal((await response.json() as { events: unknown[] }).events.length, 2);
   for (const query of ['tripId=trip-1&limit=51', 'tripId=trip-1&limit=0', 'tripId=trip-1&before=1.5', 'tripId=trip-1&before=1&before=2', 'tripId=trip-1&tripId=other', 'tripId=trip-1&limit=1e2', '']) assert.equal((await route.GET(request(query))).status, 400, query);
-  const outsider = new Request('https://triptab.test/api/activity?tripId=trip-1', { headers: { ...headers, 'oai-authenticated-user-id': 'outsider' } });
+  const outsider = declaredRequest('https://triptab.test/api/activity?tripId=trip-1', { headers: { ...headers, 'oai-authenticated-user-id': 'outsider' } });
   assert.equal((await route.GET(outsider)).status, 403);
 });
 
@@ -889,7 +890,7 @@ test('ledger HTTP saves log trusted actors and reject unauthenticated, cross-ori
   const route = await import('data:text/javascript;base64,' + Buffer.from(routeCompiled).toString('base64')) as { POST(request: Request): Promise<Response> };
   const headers = { 'oai-authenticated-user-id': actor, 'oai-authenticated-user-email': 'owner@example.com', 'oai-authenticated-user-full-name': 'Original%20Owner' };
   const body = JSON.stringify({ data: { trips: [trip()] }, revision: 0, actorId: 'forged', actorName: 'Forged', source: 'chatgpt' });
-  const request = (authenticated = true, origin = 'https://triptab.test') => new Request('https://triptab.test/api/ledger', { method: 'POST', headers: { ...(authenticated ? headers : {}), origin, 'content-type': 'application/json' }, body });
+  const request = (authenticated = true, origin = 'https://triptab.test') => declaredRequest('https://triptab.test/api/ledger', { method: 'POST', headers: { ...(authenticated ? headers : {}), origin, 'content-type': 'application/json' }, body });
   assert.equal((await route.POST(request(false))).status, 401);
   assert.ok((await route.POST(request(true, 'https://evil.test'))).status >= 400);
   assert.equal(count(database), 0);
@@ -1744,7 +1745,7 @@ test('message registry insertion and failed audit projections roll back with the
 });
 
 function ledgerReadRequest(condition?: string, user = actor) {
-  return new Request('https://triptab.test/api/ledger', { headers: {
+  return declaredRequest('https://triptab.test/api/ledger', { headers: {
     'oai-authenticated-user-id': user,
     'oai-authenticated-user-email': user === actor ? 'owner@example.com' : 'member@example.com',
     'oai-authenticated-user-full-name': user === actor ? 'Original%20Owner' : 'Bob',
@@ -1974,7 +1975,7 @@ test('native conditional GET follows silent trip normalization without fabricati
 
 test('successful ledger POST returns the ETag of its exact response snapshot for conditional refresh', async () => {
   const database = await storage(); const initial = await create(database);
-  const request = new Request('https://triptab.test/api/ledger', {method:'POST', headers:{'origin':'https://triptab.test','content-type':'application/json','oai-authenticated-user-id':actor,'oai-authenticated-user-email':'owner@example.com','oai-authenticated-user-full-name':'Original%20Owner'}, body:JSON.stringify(initial)});
+  const request = declaredRequest('https://triptab.test/api/ledger', {method:'POST', headers:{'origin':'https://triptab.test','content-type':'application/json','oai-authenticated-user-id':actor,'oai-authenticated-user-email':'owner@example.com','oai-authenticated-user-full-name':'Original%20Owner'}, body:JSON.stringify(initial)});
   const route = await ledgerRoute(); const response = await route.POST(request);
   assert.equal(response.status, 200);
   const body = await response.json() as typeof initial;

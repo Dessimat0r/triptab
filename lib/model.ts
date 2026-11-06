@@ -298,6 +298,18 @@ export type CalculationRule = z.infer<typeof calculationRuleSchema>;
 export const CURRENT_CALCULATION_RULE: CalculationRule = 'native-minor-units';
 /** Rule for a new or changed entry with discount or charge records. */
 export const SCOPED_ADJUSTMENTS_RULE: CalculationRule = 'scoped-adjustments';
+/**
+ * A reader must refuse to calculate an entry whose rule it does not know: a
+ * later money format would otherwise fall through to the oldest rule and show
+ * gross prices as settled amounts (R01). Callers report the entry as needing
+ * attention and suppress totals and settlements that depend on it.
+ */
+const knownCalculationRules: ReadonlySet<unknown> = new Set(calculationRuleSchema.options);
+export const NEWER_FORMAT_MESSAGE = 'This entry was saved by a newer version of TripTab. Reload TripTab to see its amounts.';
+function assertReadableEntry(entry: { adjustmentAllocation?: unknown; adjustments?: unknown }) {
+  if (entry.adjustmentAllocation !== undefined && !knownCalculationRules.has(entry.adjustmentAllocation)) throw new LedgerValidationError(NEWER_FORMAT_MESSAGE);
+  if (entry.adjustments !== undefined && !Array.isArray(entry.adjustments)) throw new LedgerValidationError(NEWER_FORMAT_MESSAGE);
+}
 /** Rules that round on the receipt total in native minor units with rotating ties. */
 const nativeMinorRule = (rule: CalculationRule | undefined) => rule === 'native-minor-units' || rule === 'scoped-adjustments';
 export type { Adjustment };
@@ -662,6 +674,7 @@ function addAmount(left: number, right: number): number {
 }
 
 export function total(expense: OriginalAmounts): number {
+  assertReadableEntry(expense);
   const adjusted = applyAdjustments(expense.items, expense.adjustments);
   const subtotal = adjusted.net.reduce<number>((sum, amount) => amount === null ? sum : addAmount(sum, amount), 0);
   return addAmount(addAmount(addAmount(addAmount(subtotal, adjusted.receiptDelta), expense.tax), expense.tip), -expense.discount);
@@ -673,6 +686,7 @@ export function total(expense: OriginalAmounts): number {
  * an item discount only reduces the weights of people on that item.
  */
 function netAdjusted<Entry extends AllocatedAmounts>(expense: Entry): Entry {
+  assertReadableEntry(expense);
   if (!expense.adjustments?.length) return expense;
   const adjusted = applyAdjustments(expense.items, expense.adjustments);
   if (adjusted.errors.length) throw new LedgerValidationError(adjusted.errors[0]);

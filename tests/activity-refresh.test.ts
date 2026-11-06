@@ -5,12 +5,13 @@ import test from 'node:test';
 import { createSourceFile, isCallExpression, isFunctionDeclaration, isIdentifier, isJsxAttribute, isJsxSelfClosingElement, isVariableStatement, ModuleKind, ScriptKind, ScriptTarget, transpileModule } from 'typescript';
 import { ledgerEtag } from '../lib/ledger-freshness';
 import type { Ledger } from '../lib/model';
+import { FINANCIAL_FORMAT, FINANCIAL_FORMAT_HEADER, FINANCIAL_FORMAT_REFUSAL, FINANCIAL_FORMAT_STATUS } from '../lib/financial-format';
 
 const source = await readFile(new URL('../components/trip-app.tsx', import.meta.url), 'utf8');
 const syntax = createSourceFile('page.tsx', source, ScriptTarget.Latest, true, ScriptKind.TSX);
 const home = syntax.statements.find(statement => isFunctionDeclaration(statement) && statement.name?.text === 'Home');
 assert(home && isFunctionDeclaration(home) && home.body);
-const callbacks = ['applySnapshot', 'load'].map(name => {
+const callbacks = ['applySnapshot', 'refuseFinancialFormat', 'load'].map(name => {
   const statement = home.body!.statements.find(statement => isVariableStatement(statement) && statement.declarationList.declarations.some(declaration => isIdentifier(declaration.name) && declaration.name.text === name));
   assert(statement && isVariableStatement(statement));
   const declaration = statement.declarationList.declarations.find(declaration => isIdentifier(declaration.name) && declaration.name.text === name)!;
@@ -41,6 +42,10 @@ const controllerSource = `return function controller(fetch) {
   const setLedger = next => {ledger = next}, setRevision = next => {revision = next}, setActivityRefreshKey = next => {activityRefreshKey = next};
   const setLoading = next => {loading = next}, setError = next => {error = next}, setRefreshError = next => {refreshError = next};
   const setLastRefreshed = () => {}, setAuth = next => {auth = next}, setProfile = next => {profile = next;activeProfile.current=next;receiptSessionScope.current.accountId=next?.id||''}, setEditorConflict = () => {};
+  const tripRevisions = {current: new WeakMap()}, setFormatRefused = () => {};
+  const FINANCIAL_FORMAT_REFUSAL = ${JSON.stringify(FINANCIAL_FORMAT_REFUSAL)};
+  const financialFormatHeaders = (headers = {}) => ({...headers, ${JSON.stringify(FINANCIAL_FORMAT_HEADER)}: ${JSON.stringify(String(FINANCIAL_FORMAT))}});
+  const refusedFinancialFormat = response => response.status === ${FINANCIAL_FORMAT_STATUS};
   const resetReceiptReview = () => {receiptResets++}, setEditing = next => {editing=next}, setReceiptAI = next => {receiptAI=next};
   ${callbacks}
   ${accountAuthenticated.getText(syntax)}

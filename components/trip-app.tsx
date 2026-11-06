@@ -129,6 +129,7 @@ import {
   type Item,
 } from "@/lib/model";
 import { formatMoney as money } from "@/lib/money-format";
+import { FINANCIAL_FORMAT_REFUSAL, financialFormatHeaders, refusedFinancialFormat } from "@/lib/financial-format";
 const uid = () => crypto.randomUUID();
 const today = (timezone?: string) => localDate(new Date(), timezone);
 const expenseDate = formatCalendarDate;
@@ -364,6 +365,21 @@ export default function Home({ children }: { children: ReactNode }) {
     if (invalidateRefresh) { loadRequest.current++; setLoading(false); }
     return true;
   }, []);
+  const [formatRefused, setFormatRefused] = useState(false);
+  // R01: drop every loaded amount when the server refuses this bundle's money
+  // format, so no row, total, balance or suggested payment can be shown or
+  // recorded from data this bundle may misread. A reload fetches the bundle
+  // that can read it.
+  const refuseFinancialFormat = useCallback(() => {
+    loadRequest.current++;
+    latestSnapshot.current = { data: { trips: [] }, revision: 0 };
+    savedEtag.current = "";
+    tripRevisions.current = new WeakMap();
+    setLedger({ trips: [] }); setRevision(0); setActivityRefreshKey(0);
+    setRefreshError(""); setLoading(false);
+    setFormatRefused(true);
+    setError(FINANCIAL_FORMAT_REFUSAL);
+  }, []);
   const trip = ledger.trips.find((t) => t.id === selected) || ledger.trips[0];
   useEffect(()=>subscribeUiLanguage(setLanguage),[]);
   useEffect(()=>{document.documentElement.lang=uiLanguage;},[uiLanguage]);
@@ -417,7 +433,7 @@ export default function Home({ children }: { children: ReactNode }) {
     if (!options?.background) setLoading(true);
     const promise = (async () => {
       try {
-        const r = await fetch("/api/ledger", { cache: "no-store", headers: requestedEtag ? { "If-None-Match": requestedEtag } : {} });
+        const r = await fetch("/api/ledger", { cache: "no-store", headers: financialFormatHeaders(requestedEtag ? { "If-None-Match": requestedEtag } : {}) });
         if (requestId !== loadRequest.current) return latestSnapshot.current;
         const responseAccountId = r.headers.get("X-TripTab-Account");
         const expectedAccountId = activeProfile.current?.id || accountId;
@@ -441,6 +457,12 @@ export default function Home({ children }: { children: ReactNode }) {
           setRefreshError("");
           if (accountId === receiptSessionScope.current.accountId) dispatchLiveRefresh(accountId);
           return latestSnapshot.current;
+        }
+        if (refusedFinancialFormat(r)) {
+          // R01: the server stores money in a format this bundle cannot read.
+          // Fail closed: show no amounts, suggestions or editable entries.
+          refuseFinancialFormat();
+          return;
         }
         if (r.status === 401) {
           profileReadRequest.current++;
@@ -482,7 +504,7 @@ export default function Home({ children }: { children: ReactNode }) {
       if (inFlightLoad.current?.requestId === requestId) inFlightLoad.current = null;
     });
     return promise;
-  }, [applySnapshot]);
+  }, [applySnapshot, refuseFinancialFormat]);
   useLiveRefresh(() => refreshProfile(profile?.id || ""), { accountId: profile?.id, enabled: !auth });
   useLiveRefresh(() => profile?.id ? refreshReceiptAIStatus(profile.id) : undefined, { accountId: profile?.id, enabled: !auth });
   useEffect(() => {
@@ -680,15 +702,17 @@ export default function Home({ children }: { children: ReactNode }) {
     try {
       let proposed = data, token = revision, base = ledger;
       for (let attempt = 0; attempt < 2; attempt++) {
-        const response = await fetch("/api/ledger", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(ledgerSaveBody(proposed, base, token)) });
+        const response = await fetch("/api/ledger", { method: "POST", headers: financialFormatHeaders({ "Content-Type": "application/json" }), body: JSON.stringify(ledgerSaveBody(proposed, base, token)) });
         const body = await response.json() as { data: Ledger; revision: number; revisions?: Record<string, number>; error?: string };
         if (response.ok) {
           applySnapshot(body, response.headers.get("etag") || "", true);
           return true;
         }
+        if (refusedFinancialFormat(response)) { refuseFinancialFormat(); return false; }
         if (response.status !== 409) throw Error(body.error || "Unable to save this change.");
-        const freshResponse = await fetch("/api/ledger", { cache: "no-store" });
+        const freshResponse = await fetch("/api/ledger", { cache: "no-store", headers: financialFormatHeaders() });
         const fresh = await freshResponse.json() as { data: Ledger; revision: number; revisions?: Record<string, number>; error?: string };
+        if (refusedFinancialFormat(freshResponse)) { refuseFinancialFormat(); return false; }
         if (!freshResponse.ok) throw Error(fresh.error || "Unable to refresh your ledger. Your edits are still here.");
         applySnapshot(fresh, freshResponse.headers.get("etag") || "", true);
         const currentSnapshot = latestSnapshot.current;
@@ -1331,7 +1355,7 @@ export default function Home({ children }: { children: ReactNode }) {
     if (!questionId) { markReading(accountId, tripId, draft); setReadingTick(value => value + 1); }
     let keepReading = false;
     try {
-      const response = await fetch("/api/receipt/process", { method: "POST", headers: { "Content-Type": "application/json" },
+      const response = await fetch("/api/receipt/process", { method: "POST", headers: financialFormatHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ tripId, draftId: draft.id, receiptId: draft.receiptId, draftHash: await sha256Hex(canonicalJson(draft)), readPurchaseDetails, ...(questionId ? { questionId } : {}) }) });
       const snapshot = await response.json() as { data: Ledger; revision: number; error?: string };
       if (requestId !== receiptProcessRequest.current || !isReceiptSessionCurrent(session, tripId, accountId)) return false;
@@ -2797,7 +2821,9 @@ export default function Home({ children }: { children: ReactNode }) {
               {auth && (
                 <button className="textbutton" onClick={requestAccount}>{uiText("Sign in to TripTab")}</button>
               )}
-              {!auth && (
+              {formatRefused ? (
+                <button className="textbutton" onClick={() => location.reload()}>{uiText("Reload TripTab")}</button>
+              ) : !auth && (
                 <button className="textbutton" onClick={() => void load({ background: true, fresh: true })} disabled={saving}>{uiText("Retry updates")}</button>
               )}
             </div>

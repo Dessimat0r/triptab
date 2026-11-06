@@ -1,3 +1,4 @@
+import { declaredRequest } from './helpers/financial-request';
 import { canonicalJson, sha256Hex } from '../lib/data-utils';
 import { transpileWithSharedImports } from './helpers/transpile';
 import assert from 'node:assert/strict';
@@ -1085,7 +1086,7 @@ async function http(body: unknown = requestBody, headers: Record<string, string>
     state.providerBodies.push(JSON.parse(init!.body as string)); state.providerCalls++; state.duringModel?.();
     return streamResponse([completed(state.invalidOutput ? { ...transcription, payer: 'forged' } : state.output ?? transcription)]);
   };
-  try { return await route.POST(new Request('https://triptab.test/api/receipt/process', {
+  try { return await route.POST(declaredRequest('https://triptab.test/api/receipt/process', {
     method: 'POST', headers: { origin: 'https://triptab.test', 'content-type': 'application/json', ...headers }, body: JSON.stringify(body), signal,
   })); } finally { globalThis.fetch = originalFetch; }
 }
@@ -1154,6 +1155,19 @@ test('native operational logs retain safe attempt categories without imported ac
   assert.match(logged, /native-proposal-stored/);
   assert.match(logged, /attemptId/);
   assert.doesNotMatch(logged, /private\.user|private imported|test-api-key|Café|Coffee|Pastry|Shared context|private@example/);
+});
+
+test('R01: a cached bundle that cannot read discounts is refused before any key lookup, inference or write', async () => {
+  reset(); const before = structuredClone(state.data);
+  const body = { ...requestBody, draftHash: await sha256Hex(canonicalJson(state.data.trips[0].drafts[0])) };
+  for (const headers of [{}, { 'X-TripTab-Financial-Format': '1' }] as Record<string, string>[]) {
+    const response = await route.POST(new Request('https://triptab.test/api/receipt/process', { method: 'POST',
+      headers: { origin: 'https://triptab.test', 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) }));
+    assert.equal(response.status, 426);
+    assert.match((await response.json() as { error: string }).error, /Reload this page/);
+  }
+  assert.equal(state.accessCalls, 0); assert.equal(state.providerCalls, 0); assert.equal(state.writes, 0);
+  assert.deepEqual(state.data, before);
 });
 
 test('HTTP refuses wrong account/trip/draft/image and foreign or malformed requests before a model or key lookup', async () => {

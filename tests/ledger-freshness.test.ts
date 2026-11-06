@@ -1,3 +1,4 @@
+import { declaredRequest } from './helpers/financial-request';
 import { transpileWithSharedImports } from './helpers/transpile';
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -109,7 +110,7 @@ test('unchanged conditional GET skips the ledger body and returns the latest glo
   const tag = await ledgerEtag(database,'bob');
   sqlite.prepare('UPDATE sync_state SET revision=19').run();
   const calls = snapshotCalls; queries.length = 0;
-  const response = await GET(new Request('https://triptab.test/api/ledger',{headers:{'If-None-Match':tag}}));
+  const response = await GET(declaredRequest('https://triptab.test/api/ledger',{headers:{'If-None-Match':tag}}));
   assert.equal(response.status,304); assert.equal(response.body,null); assert.equal(snapshotCalls,calls);
   assert.equal(response.headers.get('etag'),tag); assert.equal(response.headers.get('x-ledger-revision'),'19');
   assert.equal(response.headers.get('cache-control'),'private, no-store');
@@ -118,7 +119,7 @@ test('unchanged conditional GET skips the ledger body and returns the latest glo
 test('full GET uses its body snapshot tag and preserves the public ledger shape', async () => {
   authenticated = true;
   const calls = snapshotCalls; queries.length = 0;
-  const response = await GET(new Request('https://triptab.test/api/ledger'));
+  const response = await GET(declaredRequest('https://triptab.test/api/ledger'));
   assert.equal(response.status,200); assert.equal(snapshotCalls,calls+1); assert.equal(queries.length,0);
   assert.deepEqual(await response.json(),{data:{trips:[]},revision:19});
   assert.equal(response.headers.get('etag'),await ledgerEtag(database,'bob'));
@@ -127,24 +128,24 @@ test('full GET uses its body snapshot tag and preserves the public ledger shape'
 test('a save response retains a coherent conditional-refresh tag without a second metadata or body read', async () => {
   authenticated = true;
   const calls = snapshotCalls; queries.length = 0;
-  const response = await POST(new Request('https://triptab.test/api/ledger', { method: 'POST' }));
+  const response = await POST(declaredRequest('https://triptab.test/api/ledger', { method: 'POST' }));
   assert.equal(response.status, 200); assert.equal(snapshotCalls, calls + 1);
   assert.equal(queries.length, 0, 'no separate freshness read after the response snapshot');
   assert.deepEqual(await response.json(), { data: { trips: [] }, revision: 19 }, 'internal freshness stays out of the API body');
   const tag = response.headers.get('etag'); assert.equal(tag, await ledgerEtag(database, 'bob'));
   assert.equal(response.headers.get('x-ledger-revision'), '19');
-  const conditional = await GET(new Request('https://triptab.test/api/ledger', { headers: { 'If-None-Match': tag! } }));
+  const conditional = await GET(declaredRequest('https://triptab.test/api/ledger', { headers: { 'If-None-Match': tag! } }));
   assert.equal(conditional.status, 304); assert.equal(snapshotCalls, calls + 1);
   assert.equal(response.headers.get('cache-control'), 'private, no-store');
 });
 test('authenticated conditional HEAD returns no ledger body and private caching', async () => {
   authenticated = true;
   const tag = await ledgerEtag(database, 'bob');
-  const response = await HEAD(new Request('https://triptab.test/api/ledger', { method: 'HEAD', headers: { 'If-None-Match': tag } }));
+  const response = await HEAD(declaredRequest('https://triptab.test/api/ledger', { method: 'HEAD', headers: { 'If-None-Match': tag } }));
   assert.equal(response.status, 304); assert.equal(response.body, null);
   assert.equal(response.headers.get('etag'), tag); assert.equal(response.headers.get('cache-control'), 'private, no-store');
   assert.equal(response.headers.get('x-ledger-revision'),'19');
-  const changed = await HEAD(new Request('https://triptab.test/api/ledger', { method: 'HEAD', headers: { 'If-None-Match': 'old' } }));
+  const changed = await HEAD(declaredRequest('https://triptab.test/api/ledger', { method: 'HEAD', headers: { 'If-None-Match': 'old' } }));
   assert.equal(changed.status, 200); assert.equal(changed.body, null);
 });
 test('every successful ledger response identifies its authenticated account independently of request headers', async () => {
@@ -160,7 +161,7 @@ test('every successful ledger response identifies its authenticated account inde
   for (const { handler, method, expected, conditional } of cases) {
     const headers: Record<string, string> = { 'X-TripTab-Account': 'client-forged-account' };
     if (conditional) headers['If-None-Match'] = etag;
-    const response = await handler(new Request('https://triptab.test/api/ledger', { method, headers }));
+    const response = await handler(declaredRequest('https://triptab.test/api/ledger', { method, headers }));
     assert.equal(response.status, expected, `${method} ${expected}`);
     assert.equal(response.headers.get('x-triptab-account'), 'bob', `${method} ${expected} must use the authenticated profile`);
     assert.equal(response.headers.get('cache-control'), 'private, no-store');
@@ -170,7 +171,7 @@ test('anonymous GET, HEAD and POST reveal no freshness or account metadata', asy
   authenticated = false;
   for(const handler of [GET,HEAD,POST]) {
     const method = handler === HEAD ? 'HEAD' : handler === POST ? 'POST' : 'GET';
-    const response = await handler(new Request('https://triptab.test/api/ledger', { method }));
+    const response = await handler(declaredRequest('https://triptab.test/api/ledger', { method }));
     assert.equal(response.status,401); assert.equal(response.headers.get('etag'),null); assert.equal(response.headers.get('x-ledger-revision'),null);
     assert.equal(response.headers.get('x-triptab-account'), null);
     if(handler===HEAD) assert.equal(response.body,null);
