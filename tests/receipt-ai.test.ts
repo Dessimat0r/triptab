@@ -1067,7 +1067,7 @@ const storeUrl = dataUrl(`const store=globalThis[Symbol.for('triptab.receipt-ai-
 const accessUrl = dataUrl(`const access=globalThis[Symbol.for('triptab.receipt-ai-route-access')];\n${Object.keys(credentialAccess).map(name => `export const ${name}=access.${name};`).join('\n')}`);
 const routeSource = await readFile(new URL('../app/api/receipt/process/route.ts', import.meta.url), 'utf8');
 const routeCode = transpileWithSharedImports(routeSource, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
-  .replace("'cloudflare:workers'", JSON.stringify(dataUrl('export const env={};')))
+  .replace("'cloudflare:workers'", JSON.stringify(dataUrl("export const env={}; export const waitUntil=promise=>{(globalThis[Symbol.for('triptab.wait-until')]??=[]).push(promise);};")))
   .replace("'@/lib/store'", JSON.stringify(storeUrl)).replace("'@/lib/receipt-ai-access'", JSON.stringify(accessUrl))
   .replace("'@/lib/receipt-ai'", JSON.stringify(new URL('../lib/receipt-ai.ts', import.meta.url).href))
   .replace("'@/lib/receipt-assistant'", JSON.stringify(new URL('../lib/receipt-assistant.ts', import.meta.url).href))
@@ -1075,7 +1075,7 @@ const routeCode = transpileWithSharedImports(routeSource, { compilerOptions: { m
   .replace("'zod'", JSON.stringify(import.meta.resolve('zod')));
 const route = await import(dataUrl(routeCode)) as { POST(request: Request): Promise<Response> };
 const requestBody = { tripId: trip.id, draftId: draft.id, receiptId: 'photo' };
-async function http(body: unknown = requestBody, headers: Record<string, string> = {}) {
+async function http(body: unknown = requestBody, headers: Record<string, string> = {}, signal?: AbortSignal) {
   if (body && typeof body === 'object' && !Array.isArray(body) && !Object.hasOwn(body, 'draftHash')) {
     // Simulate the current client fencing the saved receipt it has displayed.
     body = { ...body, draftHash: await sha256Hex(canonicalJson(state.data.trips[0]?.drafts[0] ?? draft)) };
@@ -1086,7 +1086,7 @@ async function http(body: unknown = requestBody, headers: Record<string, string>
     return streamResponse([completed(state.invalidOutput ? { ...transcription, payer: 'forged' } : state.output ?? transcription)]);
   };
   try { return await route.POST(new Request('https://triptab.test/api/receipt/process', {
-    method: 'POST', headers: { origin: 'https://triptab.test', 'content-type': 'application/json', ...headers }, body: JSON.stringify(body),
+    method: 'POST', headers: { origin: 'https://triptab.test', 'content-type': 'application/json', ...headers }, body: JSON.stringify(body), signal,
   })); } finally { globalThis.fetch = originalFetch; }
 }
 
@@ -1426,4 +1426,25 @@ test('receipt reading stores a display suggestion without touching the user icon
     assert.equal(applyReceiptTranscription(trip,{...draft,suggestedIcon:previous},{...transcription,expenseIcon}).suggestedIcon,undefined,'an explicit unclear reading clears a stale suggestion');
   }
   assert.throws(()=>applyReceiptTranscription(trip,draft,{...transcription,expenseIcon:{symbol:'MadeUp',confidence:'high'}} as unknown as ReceiptTranscription),ReceiptAIError);
+});
+
+test('F-11: a client that disconnects while the receipt is read still gets the proposal stored once, kept alive by waitUntil', async () => {
+  reset();
+  const pending: Promise<unknown>[] = ((globalThis as Record<symbol, Promise<unknown>[]>)[Symbol.for('triptab.wait-until')] ??= []);
+  pending.length = 0;
+  const controller = new AbortController();
+  // The phone locks while the model is reading.
+  state.duringModel = () => controller.abort();
+  const response = await http(requestBody, {}, controller.signal);
+  assert.equal(response.status, 200, 'the reading is not cancelled by the dropped request');
+  assert.equal(pending.length, 1, 'the work is registered to outlive the request');
+  await Promise.all(pending);
+  assert.equal(state.providerCalls, 1, 'one model call');
+  const stored = state.data.trips[0].drafts[0];
+  assert.equal(stored.status, 'review');
+  assert.equal(stored.items.length, 2);
+  // A retry from the reconnected phone with the old fingerprint does not read or apply it again.
+  const retry = await http({ ...requestBody, draftHash: await sha256Hex(canonicalJson(draft)) });
+  assert.equal(retry.status, 409);
+  assert.equal(state.providerCalls, 1);
 });

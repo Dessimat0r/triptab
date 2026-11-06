@@ -169,12 +169,14 @@ test('[P4] explicit name and settlement currency survive the first foreign-curre
   await sheet.getByRole('textbox', { name: 'Name', exact: true }).fill('Birthday dinner');
   await sheet.getByRole('combobox', { name: 'Currency', exact: true }).selectOption('GBP');
   const chooser = page.waitForEvent('filechooser'); await sheet.getByRole('button', { name: 'Scan receipt', exact: true }).click(); await (await chooser).setFiles(pathPhoto);
-  await expect(page.getByRole('textbox', { name: 'Expense name', exact: true })).toHaveValue('Scanned euro dinner');
+  // F-07 (audit acceptance 6): the name typed for the bill is the receipt's name; the merchant never replaces it.
+  await expect(page.getByRole('textbox', { name: 'Expense name', exact: true })).toHaveValue('Birthday dinner');
   await expect(page.getByText(/1 EUR = 0\.85 GBP · Daily reference rate/)).toBeVisible();
   await page.getByRole('button', { name: /^(Confirm & save expense|Save expense)$/ }).click();
   await expect(page.locator('.editor')).toHaveCount(0);
   const created = state.ledger().trips.find(trip => trip.name === 'Birthday dinner')!;
   expect(created.currency).toBe('GBP'); expect(created.expenses[0].currency).toBe('EUR'); expect(created.expenses[0].fx?.rate).toBe(0.85);
+  expect(created.expenses[0].title).toBe('Birthday dinner'); expect(created.expenses[0].fieldSources?.title).toBe('user');
 });
 
 test('[P4] a saved receipt draft prevents empty-bill discard', async ({ page }) => {
