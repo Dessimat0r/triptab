@@ -134,3 +134,46 @@ test('R03: editing the first of two discounts previews, saves and stores the sam
   expect(expense.adjustmentAllocation).toBe('scoped-adjustments');
   expect(expenseShares(expense, members, 'GBP').reduce((sum, share) => sum + share, 0)).toBe(400);
 });
+
+test('R04: a change to discounts alone is unsaved work on Close, Escape and unload', async ({ page }) => {
+  const coupon = { id: 'coupon', kind: 'discount' as const, label: 'Coupon', amount: 100, scope: { type: 'receipt' as const }, source: 'user' as const };
+  const draft: Draft = { id: 'r4-draft', title: 'Lunch', date: '2026-11-06', time: '12:00', timezone: 'Europe/London', currency: 'GBP', payer: 'bob',
+    status: 'review', tax: 0, tip: 0, discount: 0, adjustments: [coupon],
+    items: [{ id: 'a', name: 'Soup', amount: 500, members: ['alice'] }, { id: 'b', name: 'Salad', amount: 500, members: ['bob'] }] };
+  const state = await fixtures(page, { ...structuredClone(base), drafts: [draft] });
+  await page.goto('/expenses?receiptDraft=r4-draft&receiptTrip=r1-trip');
+  await expect(page.locator('.editor')).toBeVisible();
+  const discard = page.getByRole('dialog').filter({ hasText: 'Discard unsaved changes?' });
+  // Opening alone is not a change.
+  await page.getByRole('button', { name: 'Close editor' }).click();
+  await expect(page.locator('.editor')).toHaveCount(0);
+  await page.goto('/expenses?receiptDraft=r4-draft&receiptTrip=r1-trip');
+  for (const change of ['edit', 'remove', 'add'] as const) {
+    if (change === 'edit') {
+      await discounts(page).getByRole('button', { name: 'Edit Coupon' }).click();
+      await discounts(page).locator('.adjustment-form').getByRole('textbox', { name: 'Discount amount' }).fill('2.00');
+      await discounts(page).locator('.adjustment-form').getByRole('button', { name: 'Save changes' }).click();
+    } else if (change === 'remove') {
+      await discounts(page).getByRole('button', { name: 'Remove Coupon' }).click();
+    } else {
+      await discounts(page).getByRole('button', { name: 'Add discount' }).click();
+      const form = discounts(page).locator('.adjustment-form');
+      await form.getByRole('radio', { name: 'Whole receipt' }).check();
+      await form.getByRole('textbox', { name: 'Discount amount' }).fill('1.00');
+      await form.getByRole('button', { name: 'Add', exact: true }).click();
+    }
+    await page.getByRole('button', { name: 'Close editor' }).click();
+    await expect(discard).toBeVisible();
+    await discard.getByRole('button', { name: 'Keep editing' }).click();
+    await page.keyboard.press('Escape');
+    await expect(discard).toBeVisible();
+    await discard.getByRole('button', { name: 'Keep editing' }).click();
+    await expect(page.locator('.editor')).toBeVisible();
+  }
+  // Leaving the page asks first, and nothing was saved behind the person's back.
+  let unloadPrompt = '';
+  page.on('dialog', dialog => { unloadPrompt = dialog.type(); void dialog.dismiss(); });
+  await page.close({ runBeforeUnload: true });
+  await expect.poll(() => unloadPrompt).toBe('beforeunload');
+  expect(state.posts).toBe(0);
+});

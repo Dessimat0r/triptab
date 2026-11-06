@@ -231,12 +231,14 @@ function Amount({
  * changes" checks: values, the attached photo (removing it applies on Save),
  * printed receipt evidence and review acknowledgements, and confirmed field
  * sources. An automatically looked-up reference rate is not their work; a
- * manual rate is.
+ * manual rate is. Discount and charge records, including their order and
+ * manual allocations, are their work too (R04).
  */
-type EditorWork = Pick<ReceiptEditor, "title" | "payer" | "currency" | "items" | "tax" | "tip" | "discount" | "percentages" | "bankAmount" | "fx" | "date" | "time" | "timezone" | "location" | "icon" | "receiptId" | "receiptScan" | "fieldSources">;
+type EditorWork = Pick<ReceiptEditor, "title" | "payer" | "currency" | "items" | "tax" | "tip" | "discount" | "adjustments" | "percentages" | "bankAmount" | "fx" | "date" | "time" | "timezone" | "location" | "icon" | "receiptId" | "receiptScan" | "fieldSources">;
 function editorWorkValue(entry: EditorWork) {
   const { title, payer, currency, items, tax, tip, discount, percentages, bankAmount, fx, date, time, timezone, location, icon, receiptId, receiptScan, fieldSources } = entry;
-  return canonicalJson({ title, payer, currency, items, tax, tip, discount, percentages, bankAmount, fx: fx?.source === "manual" ? fx : undefined, date, time, timezone, location, icon, receiptId, receiptScan, fieldSources });
+  const adjustments = entry.adjustments?.length ? entry.adjustments : undefined;
+  return canonicalJson({ title, payer, currency, items, tax, tip, discount, adjustments, percentages, bankAmount, fx: fx?.source === "manual" ? fx : undefined, date, time, timezone, location, icon, receiptId, receiptScan, fieldSources });
 }
 function mergeReceiptConversation(stored?: ReceiptMessage[], local?: ReceiptMessage[]) {
   const messages = [...stored || []];
@@ -1777,7 +1779,7 @@ export default function Home({ children }: { children: ReactNode }) {
   // already have a saved draft; existing expenses are on the server.
   useEffect(() => {
     if (!editing || !trip || !profile?.id || editing.receiptId || editing.draftId || editing.receiptScan || trip.expenses.some(value => value.id === editing.id)) return;
-    if (!editing.title.trim() && editing.items.every(item => !item.amount)) return;
+    if (!editing.title.trim() && editing.items.every(item => !item.amount) && !editing.adjustments?.length) return;
     const timer = setTimeout(() => writeUnsavedEntry(safeStorage(), profile.id, trip.id, editing), 400);
     return () => clearTimeout(timer);
   }, [editing, trip, profile?.id]);

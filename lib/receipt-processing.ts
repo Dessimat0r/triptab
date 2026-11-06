@@ -16,13 +16,17 @@ export type InitialReceiptReview = {
 // Compare what the traveller can edit, independently of conversation, memory
 // and draft bookkeeping. Cosmetic icon choices are merged separately so they
 // do not prevent initial itemisation. An incoming proposal must not erase them.
+// Discount and charge records are money the person can edit (R04): an edit
+// to them alone must stop an automatic fill and lose a late-proposal race.
+// No records and an empty list are the same work.
 export function receiptEditableValue(entry: ReceiptEditor) {
   const { title, date, time, timezone, currency, payer, items, tax, tip, discount, percentages, fx, bankAmount, receiptScan, fieldSources, receiptLanguage, detectedLanguage, location, locationHint } = entry;
-  return { title, date, time, timezone, currency, payer, items, tax, tip, discount, percentages, fx, bankAmount, receiptScan, fieldSources, receiptLanguage, detectedLanguage, location, locationHint };
+  const adjustments = entry.adjustments?.length ? entry.adjustments : undefined;
+  return { title, date, time, timezone, currency, payer, items, tax, tip, discount, adjustments, percentages, fx, bankAmount, receiptScan, fieldSources, receiptLanguage, detectedLanguage, location, locationHint };
 }
 
 export function isBlankReceipt(entry: ReceiptEditor) {
-  return !entry.expenseId && !entry.title.trim() && !entry.tax && !entry.tip && !entry.discount
+  return !entry.expenseId && !entry.title.trim() && !entry.tax && !entry.tip && !entry.discount && !entry.adjustments?.length
     && entry.percentages === undefined && entry.fx === undefined && entry.bankAmount === undefined
     && entry.items.every(item => !item.name.trim() && !Object.values(item.translations ?? {}).some(value=>value?.text.trim()) && !item.amount && item.quantity === undefined && item.units === undefined && item.percentages === undefined);
 }
