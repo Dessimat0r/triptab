@@ -45,6 +45,10 @@ const worker = {
         const { flushNotificationDigests } = await import('../lib/notifications');
         await flushNotificationDigests(bindings.DB, controller.scheduledTime);
         const result = await maintainSystemReceipts(bindings.DB, bindings.RECEIPTS, { now: controller.scheduledTime });
+        // F-14: bills deleted more than 30 days ago are removed for good; their
+        // photos join the purge queue handled on the next line.
+        const { purgeExpiredDeletedBills } = await import('../lib/trip-lifecycle');
+        await purgeExpiredDeletedBills(bindings.DB, { now: controller.scheduledTime });
         const purged = await purgeDeletedTripReceipts(bindings.DB, bindings.RECEIPTS, { now: controller.scheduledTime });
         if (result.failed || purged.failed) throw new Error('Receipt cleanup needs a retry.');
       } catch {

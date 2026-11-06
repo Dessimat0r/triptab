@@ -121,6 +121,16 @@ export async function deleteAccount(
     throw new AuthError(
       'Transfer or delete your owned holidays before deleting your account.',
     );
+  // F-14: a deleted bill is kept for 30 days in case it is restored.
+  if (
+    await database
+      .prepare('SELECT 1 FROM trips WHERE owner=? LIMIT 1')
+      .bind(`deleted:${actor.id}`)
+      .first()
+  )
+    throw new AuthError(
+      'Remove your recently deleted bills for good (Archived holidays → Recently deleted) before deleting your account.',
+    );
   if (
     await database
       .prepare('SELECT 1 FROM receipt_ai_settings WHERE user_id=?')
@@ -155,7 +165,7 @@ export async function deleteAccount(
       .prepare(
         `UPDATE sync_state SET revision=revision+1,last_write=? WHERE id=1 AND revision=?
       AND EXISTS(SELECT 1 FROM profiles WHERE id=? AND email=? AND deleted_at='')
-      AND NOT EXISTS(SELECT 1 FROM trips WHERE owner=?) AND NOT EXISTS(SELECT 1 FROM receipt_ai_settings WHERE user_id=?)
+      AND NOT EXISTS(SELECT 1 FROM trips WHERE owner=?) AND NOT EXISTS(SELECT 1 FROM trips WHERE owner='deleted:'||?) AND NOT EXISTS(SELECT 1 FROM receipt_ai_settings WHERE user_id=?)
       AND NOT EXISTS(SELECT 1 FROM auth_links WHERE oai_user_id=? AND user_id<>?)
       ${credential ? 'AND EXISTS(SELECT 1 FROM auth_credentials WHERE user_id=? AND password_hash=?)' : ''}`,
       )
@@ -165,6 +175,7 @@ export async function deleteAccount(
         actor.id,
         actor.email,
         actor.id,
+        actor.id, // deleted bills ('deleted:' || id)
         actor.id,
         actor.id,
         actor.id,

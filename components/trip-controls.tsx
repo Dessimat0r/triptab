@@ -7,7 +7,7 @@ import ModalA11y from './modal-accessibility';
 import PagedList, { useListPaging } from './paged-list';
 import { balances, isBill, type Trip } from '@/lib/model';
 import { formatMoney } from '@/lib/money-format';
-import type { ArchivedTrip } from '@/lib/trip-lifecycle';
+import type { ArchivedTrip, DeletedBill } from '@/lib/trip-lifecycle';
 import './trip-controls.css';
 
 async function change(
@@ -68,7 +68,7 @@ export async function runTripAction(trip: Trip, accountId: string | undefined, v
   // F-06: a bill is deleted after one plain confirmation; typing the name is kept for holidays with entries.
   if (value === 'delete' && isBill(trip) && (trip.expenses.length || trip.payments.length || trip.drafts.length) && !(await confirm({
     title: 'Delete this bill?',
-    message: `Delete “${trip.name}” with ${trip.expenses.length} ${trip.expenses.length === 1 ? 'expense' : 'expenses'} and ${trip.payments.length} ${trip.payments.length === 1 ? 'payment' : 'payments'}? Its receipt photos are removed; History keeps the record. To keep it but hide it, use Remove from my list.`,
+    message: `Delete “${trip.name}” with ${trip.expenses.length} ${trip.expenses.length === 1 ? 'expense' : 'expenses'} and ${trip.payments.length} ${trip.payments.length === 1 ? 'payment' : 'payments'}? You can restore it with its receipt photos for 30 days from Archived holidays → Recently deleted; after that it is removed for good. To keep it but hide it, use Remove from my list.`,
     confirmLabel: 'Delete bill', destructive: true,
   }))) return false;
   await change(value === 'delete' && isBill(trip) && !trip.expenses.length && !trip.payments.length && !trip.drafts.length && !trip.members.some(member => member.userId && member.userId !== accountId) ? 'discard' : value, trip.id, { memberId: extra.memberId || '',
@@ -83,11 +83,14 @@ export default function TripControls({
   accountId,
   busy,
   onChanged,
+  onBillDeleted,
 }: {
   trip: Trip;
   accountId?: string;
   busy: boolean;
   onChanged: () => Promise<void>;
+  /** F-14: a bill with entries was deleted and can be restored; offer Undo. */
+  onBillDeleted?: (trip: Trip) => void;
 }) {
   const [owner, setOwner] = useState(''),
     [confirmName, setConfirmName] = useState(''),
@@ -100,7 +103,9 @@ export default function TripControls({
     setSaving(true);
     setMessage('');
     try {
+      const restorable = value === 'delete' && isBill(trip) && !!(trip.expenses.length || trip.payments.length || trip.drafts.length);
       if (!await runTripAction(trip, accountId, value, confirm, { memberId: owner, confirmName })) return;
+      if (restorable) onBillDeleted?.(trip);
       await onChanged();
       setMessage(
         value === 'transfer' ? 'Ownership transferred.' : isBill(trip) ? 'Bill updated.' : 'Holiday updated.',
@@ -119,7 +124,7 @@ export default function TripControls({
     return <section className="panel trip-controls"><h3>{uiText('Manage this bill')}</h3><p className="footnote">{uiText('Archive removes this bill from your open list. You can restore it from the archive.')}</p><button type="button" className="quiet" disabled={busy || saving} onClick={() => void action('archive')}>{uiText('Remove from my list')}</button>
       {own && <details><summary>{uiText('Transfer ownership')}</summary><label>{uiText('New owner')}<select value={owner} disabled={busy || saving} onChange={event => setOwner(event.target.value)}><option value="">{uiText('Choose a connected person')}</option>{trip.members.filter(member => member.userId && member.userId !== accountId).map(member => <option key={member.id} value={member.id}>{member.name}</option>)}</select></label><button type="button" className="quiet" disabled={busy || saving || !owner} onClick={() => void action('transfer')}>{uiText('Transfer ownership')}</button></details>}
       {!own && <button type="button" className="danger quiet" disabled={busy || saving} onClick={() => void action('leave')}>{uiText('Leave bill')}</button>}
-      {own && <details><summary>{uiText('Delete bill')}</summary><p className="footnote">{uiText('Deletion removes the bill and receipt photos. Shared history is retained. Bills another account can open must be archived instead.')}</p><button type="button" className="danger quiet" disabled={busy || saving} onClick={() => void action('delete')}>{uiText('Delete bill')}</button></details>}
+      {own && <details><summary>{uiText('Delete bill')}</summary><p className="footnote">{uiText('You can restore a deleted bill and its receipt photos for 30 days; after that it is removed for good. Bills another account can open must be archived instead.')}</p><button type="button" className="danger quiet" disabled={busy || saving} onClick={() => void action('delete')}>{uiText('Delete bill')}</button></details>}
       {message && <p className="footnote" role="status">{uiText(message)}</p>}{dialog}</section>;
   }
   return (
@@ -233,6 +238,29 @@ export function ArchivedHolidays({
     [loading, setLoading] = useState(true),
     [busy, setBusy] = useState(false),
     [error, setError] = useState('');
+  // F-14: bills deleted in the last 30 days, which can still be restored.
+  const [deleted, setDeleted] = useState<DeletedBill[]>([]);
+  const { confirm, dialog } = useConfirmation(`deleted:${accountId}`);
+  useEffect(() => {
+    let active = true;
+    fetch('/api/trip?mode=deleted', { cache: 'no-store' })
+      .then(async response => response.ok ? ((await response.json()) as { bills?: DeletedBill[] }).bills ?? [] : [])
+      .then(bills => { if (active) setDeleted(bills); }).catch(() => {});
+    return () => { active = false; };
+  }, [accountId]);
+  async function deletedAction(bill: DeletedBill, action: 'restore-deleted' | 'purge-deleted') {
+    if (busy) return;
+    if (action === 'purge-deleted' && !await confirm({ title: 'Delete this bill for good?', message: `“${bill.name}” and its receipt photos will be removed now. This can’t be undone.`,
+      confirmLabel: 'Delete for good', destructive: true })) return;
+    setBusy(true); setError('');
+    try {
+      await change(action, bill.id);
+      setDeleted(current => current.filter(value => value.id !== bill.id));
+      await onChanged();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Unable to change this bill.');
+    } finally { setBusy(false); }
+  }
   useEffect(() => {
     let active = true;
     fetch('/api/trip?mode=archived', { cache: 'no-store' })
@@ -337,11 +365,24 @@ export function ArchivedHolidays({
         ) : (
           <p>{uiText('No archived holidays.')}</p>
         )}
+        {deleted.length > 0 && <section className="recently-deleted" aria-labelledby={`${id}-deleted`}>
+          <h3 id={`${id}-deleted`}>{uiText('Recently deleted')}</h3>
+          <p className="footnote">{uiText('Deleted bills can be restored with their receipt photos for 30 days.')}</p>
+          {deleted.map(bill => <article key={bill.id} className="archived-holiday" data-entry-id={bill.id}>
+            <h3>{bill.name}</h3><span className="mini-tag">{uiText('Bill')}</span>
+            <p className="footnote">{uiText('Deleted {value0} · can be restored until {value1}', { value0: bill.deletedAt.slice(0, 10), value1: bill.restoreUntil.slice(0, 10) })}</p>
+            <div className="button-row">
+              <button type="button" className="quiet" disabled={busy} onClick={() => void deletedAction(bill, 'restore-deleted')}>{uiText('Restore bill')}</button>
+              <button type="button" className="quiet danger" disabled={busy} onClick={() => void deletedAction(bill, 'purge-deleted')}>{uiText('Delete for good')}</button>
+            </div>
+          </article>)}
+        </section>}
         {error && (
           <p className="error" role="alert">
             {uiText(error)}
           </p>
         )}
+        {dialog}
       </section>
     </ModalA11y>
   );
