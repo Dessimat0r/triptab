@@ -33,6 +33,7 @@ import { parseAmountText } from "@/lib/amount-text";
 import AdjustmentEditor, { type AdjustmentDraft } from "@/components/adjustment-editor";
 import { RowActionsMenu, SwipeRow } from "@/components/row-actions";
 import { describeSettlementImpact, settlementImpact } from "@/lib/settlement-impact";
+import PersonalActivity from "@/components/personal-activity";
 import ReceiptScanReview, { ReceiptReviewSummary, receiptMoney } from "@/components/receipt-scan-review";
 import { acknowledgeReceiptReview, carryReviewAcknowledgements, pendingReviewActions, receiptScanSaveError, receiptWarningLabel, reconcileReceiptScan } from "@/lib/receipt-scan";
 import { manualFxReview } from "@/lib/expense-fx-review";
@@ -268,6 +269,7 @@ export default function Home({ children }: { children: ReactNode }) {
     [allBills, setAllBills] = useState(false),
     [billStart, setBillStart] = useState(false),
     [billScan, setBillScan] = useState<File | null>(null),
+    [personalView, setPersonalView] = useState(false),
     [help, setHelp] = useState(false),
     [editing, setEditing] = useState<ReceiptEditor | null>(
       null,
@@ -683,7 +685,22 @@ export default function Home({ children }: { children: ReactNode }) {
     const bill: Trip = { id: uid(), kind: "bill", name: values.name || uiText("Bill · {value0}", { value0: formatCalendarDate(today()) }), currency: values.currency,
       members: values.names.map(name => ({ id: uid(), name })), expenses: [], drafts: [], payments: [] };
     if (!await save({ trips: [...ledger.trips, bill] })) return;
-    const saved = latestSnapshot.current.data.trips.find(value => value.id === bill.id)!;
+    let saved = latestSnapshot.current.data.trips.find(value => value.id === bill.id)!;
+    // F-04 / D03: people picked as verified TripTab connections are added to
+    // this bill directly; the server re-checks the relationship. Anyone else
+    // stays a name and can be invited from the bill.
+    const links = (values.accounts ?? []).flatMap((accountId, index) => accountId && bill.members[index] ? [{ accountId, memberId: bill.members[index].id }] : []);
+    if (links.length) {
+      const failed: string[] = [];
+      for (const link of links) {
+        const response = await fetch("/api/trip", { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "add-connected", tripId: bill.id, memberId: link.memberId, accountId: link.accountId }) }).catch(() => null);
+        if (!response?.ok) failed.push(bill.members.find(member => member.id === link.memberId)?.name || "someone");
+      }
+      const refreshed = await load({ fresh: true });
+      saved = refreshed?.data.trips.find(value => value.id === bill.id) ?? saved;
+      if (failed.length) setError(`The bill is ready, but ${failed.join(", ")} couldn’t be added to it directly. Invite them from the bill’s options.`);
+    }
     billDefaults.current = { tripId: bill.id, name: !values.name, currency: values.currencyDefault, previousTripId };
     setSelected(bill.id); setView("expenses"); setBillStart(false); newExpense(undefined, saved);
     // F-07: a name typed for the bill is the receipt's name too; the merchant never replaces it.
@@ -2492,6 +2509,7 @@ export default function Home({ children }: { children: ReactNode }) {
         })}</div>{!allBills && ledger.trips.filter(isBill).length > 5 && <button type="button" className="textbutton" onClick={() => setAllBills(true)}>{uiText("Show all bills")}</button>}</>}
         <div className="holiday-actions"><button className="newtrip" onClick={()=>{setCreate(true);setMenu(false);}} disabled={loading||auth||saving}><Plus size={17}/>{uiText("New holiday")}</button>
           <button className="newtrip" disabled={loading || auth || saving} onClick={() => { setBillStart(true); setMenu(false); }}><Receipt size={17}/>{uiText("Split a bill")}</button>
+          {!auth && ledger.trips.length > 0 && <button className="newtrip" disabled={loading} onClick={() => { setPersonalView(true); setMenu(false); }}><Users size={17}/>{uiText("Activity and people")}</button>}
           <button className="iconbutton" aria-label={uiText("More holiday options")} onClick={()=>{setHolidayToolsOpen(true);setMenu(false);}}>•••</button></div>
         <div className="side-bottom">
           {chatgptConnected ? (
@@ -2728,6 +2746,11 @@ export default function Home({ children }: { children: ReactNode }) {
         onClose={() => setRepeatOpen("")} onRepeat={copies => updateTrip({ ...trip, expenses: [...trip.expenses, ...copies] })} />}
       {billOptions && trip && isBill(trip) && <ModalA11y className="overlay" onClose={() => setBillOptions(false)}><section className="modal bill-options" role="dialog" aria-modal="true" aria-label={uiText("Bill options")}><div className="modalheading"><h2>{uiText("Bill options")}</h2><button type="button" className="iconbutton" aria-label={uiText("Close")} onClick={() => setBillOptions(false)}>×</button></div><button type="button" className="quiet" onClick={() => { setBillOptions(false); setBillPeople(true); }}>{uiText("People")}</button><TripDetails trip={trip} showPeople={false} busy={saving || loading} accountId={profile?.id} paging={page("names", 20)} onSave={updateTrip} /><TripSharing key={`${trip.id}:${profile?.id || "anonymous"}`} trip={trip} profile={profile} onChanged={() => load({ background: true })} /><TripControls trip={trip} accountId={profile?.id} busy={saving || loading} onChanged={async () => { setBillOptions(false); await load({ fresh: true }); }} /></section></ModalA11y>}
       {billPeople && trip && isBill(trip) && <BillPeople trip={trip} accountId={profile?.id} busy={saving || loading} onSave={updateTrip} onClose={() => setBillPeople(false)} confirm={confirm} />}
+      {personalView && profile && <PersonalActivity ledger={ledger} accountId={profile.id} onClose={() => setPersonalView(false)} onOpen={(tripId, entryId) => {
+        // F-05: open the entry in its own bill or holiday; settlement stays per trip.
+        setPersonalView(false); setSelected(tripId); setView("expenses");
+        if (entryId) setTimeout(() => document.querySelector<HTMLElement>(`[data-entry-id="${CSS.escape(entryId)}"]`)?.scrollIntoView({ block: "center" }), 300);
+      }} />}
       {billStart && profile && <BillStart ledger={ledger} displayName={profile.displayName.slice(0, 50)} busy={saving} onClose={() => setBillStart(false)} onStart={startBill} />}
       {create && (
         <ModalA11y className="overlay" onClose={() => setCreate(false)}>

@@ -482,6 +482,12 @@ export async function notifyMembers(tripId: string, actor: string, title: string
   try { waitUntil(delivery); } catch { await delivery; }
 }
 
+/** One linked person on a trip (e.g. someone just added to a bill). No amounts are included. */
+export async function notifyMember(tripId: string, actor: string, memberId: string, title: string, body: string) {
+  const delivery = deliverNotifications(tripId, actor, title, body, memberId);
+  try { waitUntil(delivery); } catch { await delivery; }
+}
+
 /** Names identify the saved question; the actual reply text stays in the app. */
 export async function notifyReceiptReply(tripId: string, caller: string, authorMemberId?: string, scope: 'receipt' | 'item' = 'receipt', context: NotificationContext = {}) {
   const hasContext = context.tripName || context.receiptName || context.itemName;
