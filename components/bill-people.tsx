@@ -1,5 +1,6 @@
 'use client';
-import { useEffect, useId, useState } from 'react';
+import { useId, useState } from 'react';
+import { useAccountResource } from './use-account-resource';
 import ModalA11y from './modal-accessibility';
 import { TravellerName } from './trip-details';
 import PaymentDetailsPanel from './payment-details';
@@ -27,14 +28,9 @@ export default function BillPeople({ trip, accountId, busy, onSave, onClose, con
   const locked = busy || submitting;
   async function persist(next: Trip) { setSubmitting(true); try { return await onSave(next); } finally { setSubmitting(false); } }
   // F-04 / D03: people this account already shares a holiday or bill with.
-  const [connections, setConnections] = useState<Connection[]>([]);
-  useEffect(() => {
-    const controller = new AbortController();
-    void fetch('/api/trip?mode=connections', { signal: controller.signal, cache: 'no-store' })
-      .then(async response => response.ok ? (await response.json() as { people?: Connection[] }).people ?? [] : [])
-      .then(people => { if (!controller.signal.aborted) setConnections(people); }).catch(() => {});
-    return () => controller.abort();
-  }, []);
+  // R02: bound to the signed-in account; another account's people never show.
+  const connections = useAccountResource<Connection[]>(accountId, '/api/trip?mode=connections',
+    body => (body as { people?: Connection[] } | null)?.people ?? []) ?? [];
   const choices = connections.filter(person => !trip.members.some(member => member.userId === person.id)).slice(0, 8);
   async function addConnected(person: Connection) {
     if (locked) return;

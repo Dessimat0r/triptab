@@ -246,7 +246,9 @@ function mergeReceiptConversation(stored?: ReceiptMessage[], local?: ReceiptMess
   return messages.length ? messages : undefined;
 }
 type UndoNotice = {
-  id: number; tripId: string; message: string;
+  // R02: the account that deleted the entries. A notice is shown and acted on
+  // only while that account is signed in.
+  id: number; tripId: string; accountId: string; message: string;
   expenses: { entry: Expense; index: number }[]; payments: { entry: Payment; index: number }[]; drafts: { entry: Draft; index: number }[];
 };
 function hasPendingReceiptQuestions(messages?: ReceiptMessage[]) {
@@ -323,7 +325,7 @@ export default function Home({ children }: { children: ReactNode }) {
     [statement, setStatement] = useState(""),
     [savedNotice, setSavedNotice] = useState<{ title: string; at: number } | null>(null),
     [undoNotice, setUndoNotice] = useState<UndoNotice | null>(null),
-    [deletedBill, setDeletedBill] = useState<{ tripId: string; name: string; at: number } | null>(null),
+    [deletedBill, setDeletedBill] = useState<{ tripId: string; name: string; at: number; accountId: string } | null>(null),
     [summaryOpen, setSummaryOpen] = useState(false),
     [repeatOpen, setRepeatOpen] = useState(""),
     [referenceRate, setReferenceRate] = useState<{ rate: number; currency: Currency; date: string; time: string; timezone: string } | null>(null);
@@ -801,14 +803,15 @@ export default function Home({ children }: { children: ReactNode }) {
     });
   }
   /** Delete entries, then offer Undo for a few seconds (F-12). */
-  async function deleteWithUndo(current: Trip, removal: Omit<UndoNotice, "id" | "tripId">) {
+  async function deleteWithUndo(current: Trip, removal: Omit<UndoNotice, "id" | "tripId" | "accountId">) {
+    const accountId = profile?.id || "";
     const removed = { expenses: new Set(removal.expenses.map(entry => entry.entry.id)), payments: new Set(removal.payments.map(entry => entry.entry.id)), drafts: new Set(removal.drafts.map(entry => entry.entry.id)) };
     const ok = await updateTrip({ ...current,
       expenses: current.expenses.filter(entry => !removed.expenses.has(entry.id)),
       payments: current.payments.filter(entry => !removed.payments.has(entry.id)),
       drafts: current.drafts.filter(entry => !removed.drafts.has(entry.id)),
     });
-    if (ok) setUndoNotice({ ...removal, id: Date.now(), tripId: current.id });
+    if (ok && accountId && activeProfile.current?.id === accountId) setUndoNotice({ ...removal, id: Date.now(), tripId: current.id, accountId });
     return ok;
   }
   /**
@@ -841,8 +844,9 @@ export default function Home({ children }: { children: ReactNode }) {
       fieldSources: { title: "user", payer: "user", currency: "user" } });
   }
   /** F-14: put a just-deleted bill back, with its photos (owner decision A). */
-  async function undoBillDeletion(notice: { tripId: string; name: string }) {
+  async function undoBillDeletion(notice: { tripId: string; name: string; accountId: string }) {
     setDeletedBill(null); setError("");
+    if (notice.accountId !== activeProfile.current?.id) return;
     const response = await fetch("/api/trip", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "restore-deleted", tripId: notice.tripId }) }).catch(() => null);
     if (!response?.ok) {
@@ -855,6 +859,7 @@ export default function Home({ children }: { children: ReactNode }) {
   }
   async function undoDeletion(notice: UndoNotice) {
     setUndoNotice(null);
+    if (notice.accountId !== activeProfile.current?.id) return;
     const current = latestSnapshot.current.data.trips.find(value => value.id === notice.tripId);
     if (!current) { setError("This holiday is no longer available, so the deletion can’t be undone."); return; }
     if ([...notice.expenses, ...notice.payments, ...notice.drafts].some(({ entry }) => [...current.expenses, ...current.payments, ...current.drafts].some(value => value.id === entry.id))) {
@@ -1894,6 +1899,8 @@ export default function Home({ children }: { children: ReactNode }) {
     // load is stable for this purpose; the tick re-arms the timer.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [readingDrafts, readingTick]);
+  // R02: Undo notices name what one account deleted; another account never sees them.
+  useEffect(() => { setUndoNotice(null); setDeletedBill(null); }, [profile?.id]);
   useEffect(() => {
     if (!deletedBill) return;
     const timer = setTimeout(() => setDeletedBill(current => current === deletedBill ? null : current), 30_000);
@@ -2091,7 +2098,7 @@ export default function Home({ children }: { children: ReactNode }) {
     try {
       if (!await runTripAction(t, profile?.id, value, confirm)) return;
       // F-14: a deleted bill with entries can be restored; offer Undo here too.
-      if (value === "delete" && isBill(t) && (t.expenses.length || t.payments.length || t.drafts.length)) setDeletedBill({ tripId: t.id, name: t.name, at: Date.now() });
+      if (value === "delete" && isBill(t) && (t.expenses.length || t.payments.length || t.drafts.length)) setDeletedBill({ tripId: t.id, name: t.name, at: Date.now(), accountId: profile?.id || "" });
       setMenu(false);
       await load({ fresh: true });
     } catch (cause) {
@@ -2770,8 +2777,8 @@ export default function Home({ children }: { children: ReactNode }) {
             <button type="button" className="quiet" onClick={() => { const stored = unsavedEntry.entry; newExpense(undefined, trip); setEditing({ ...stored }); }}>{uiText("Resume")}</button>
             <button type="button" className="quiet" onClick={() => { clearUnsavedEntry(safeStorage(), profile?.id, trip.id); setUnsavedVersion(value => value + 1); }}>{uiText("Discard")}</button>
           </p>}
-          {undoNotice && undoNotice.tripId === trip?.id && !editing && undoBanner(undoNotice)}
-          {deletedBill && <p className="saved-banner" role="status">
+          {undoNotice && undoNotice.tripId === trip?.id && undoNotice.accountId === profile?.id && !editing && undoBanner(undoNotice)}
+          {deletedBill && deletedBill.accountId === profile?.id && <p className="saved-banner" role="status">
             <span>{uiText("Deleted the bill “{value0}”. You can restore it for 30 days from Archived holidays.", { value0: deletedBill.name })}</span>
             <button type="button" className="quiet" disabled={saving || loading} onClick={() => void undoBillDeletion(deletedBill)}><Undo2 size={16} aria-hidden="true" />{uiText(" Undo")}</button>
           </p>}
@@ -2947,9 +2954,9 @@ export default function Home({ children }: { children: ReactNode }) {
       {summaryOpen && trip && <TripSummary trip={trip} onClose={() => setSummaryOpen(false)} />}
       {repeatOpen && trip && trip.expenses.some(expense => expense.id === repeatOpen) && <RepeatExpenseDialog trip={trip} expense={trip.expenses.find(expense => expense.id === repeatOpen)!} busy={saving}
         onClose={() => setRepeatOpen("")} onRepeat={copies => updateTrip({ ...trip, expenses: [...trip.expenses, ...copies] })} />}
-      {billOptions && trip && isBill(trip) && <ModalA11y className="overlay" onClose={() => setBillOptions(false)}><section className="modal bill-options" role="dialog" aria-modal="true" aria-label={uiText("Bill options")}><div className="modalheading"><h2>{uiText("Bill options")}</h2><button type="button" className="iconbutton" aria-label={uiText("Close")} onClick={() => setBillOptions(false)}>×</button></div><button type="button" className="quiet" onClick={() => { setBillOptions(false); setBillPeople(true); }}>{uiText("People")}</button><TripDetails trip={trip} showPeople={false} busy={saving || loading} accountId={profile?.id} paging={page("names", 20)} onSave={updateTrip} /><TripSharing key={`${trip.id}:${profile?.id || "anonymous"}`} trip={trip} profile={profile} onChanged={() => load({ background: true })} /><TripControls trip={trip} accountId={profile?.id} busy={saving || loading} onBillDeleted={bill => setDeletedBill({ tripId: bill.id, name: bill.name, at: Date.now() })} onChanged={async () => { setBillOptions(false); await load({ fresh: true }); }} /></section></ModalA11y>}
+      {billOptions && trip && isBill(trip) && <ModalA11y className="overlay" onClose={() => setBillOptions(false)}><section className="modal bill-options" role="dialog" aria-modal="true" aria-label={uiText("Bill options")}><div className="modalheading"><h2>{uiText("Bill options")}</h2><button type="button" className="iconbutton" aria-label={uiText("Close")} onClick={() => setBillOptions(false)}>×</button></div><button type="button" className="quiet" onClick={() => { setBillOptions(false); setBillPeople(true); }}>{uiText("People")}</button><TripDetails trip={trip} showPeople={false} busy={saving || loading} accountId={profile?.id} paging={page("names", 20)} onSave={updateTrip} /><TripSharing key={`${trip.id}:${profile?.id || "anonymous"}`} trip={trip} profile={profile} onChanged={() => load({ background: true })} /><TripControls trip={trip} accountId={profile?.id} busy={saving || loading} onBillDeleted={bill => setDeletedBill({ tripId: bill.id, name: bill.name, at: Date.now(), accountId: profile?.id || "" })} onChanged={async () => { setBillOptions(false); await load({ fresh: true }); }} /></section></ModalA11y>}
       {billPeople && trip && isBill(trip) && <BillPeople trip={trip} accountId={profile?.id} busy={saving || loading} onSave={updateTrip} onClose={() => setBillPeople(false)} confirm={confirm} onLinked={() => load({ fresh: true })} />}
-      {personalView && profile && <PersonalActivity ledger={ledger} accountId={profile.id} onClose={() => setPersonalView(false)} onOpen={(tripId, entryId) => {
+      {personalView && profile && <PersonalActivity key={profile.id} ledger={ledger} accountId={profile.id} refreshKey={activityRefreshKey} onClose={() => setPersonalView(false)} onOpen={(tripId, entryId) => {
         // F-05: open the entry in its own bill or holiday; settlement stays per trip.
         setPersonalView(false); setSelected(tripId); setView("expenses");
         if (entryId) setTimeout(() => document.querySelector<HTMLElement>(`[data-entry-id="${CSS.escape(entryId)}"]`)?.scrollIntoView({ block: "center" }), 300);
@@ -3559,7 +3566,7 @@ export default function Home({ children }: { children: ReactNode }) {
                 <p className="footnote">{uiText("Review your split and press Save expense to commit your choice.")}</p>
               </section>}
               {!editorConflict && !!mergeNotice?.length && <p className="notification-status merge-notice" role="status">{uiText("Another traveller changed this expense while you were editing. Their changes were added to your edits: ")}{mergeNotice.map(label => uiText(label)).join(", ")}</p>}
-              {undoNotice && undoNotice.tripId === trip.id && undoBanner(undoNotice)}
+              {undoNotice && undoNotice.tripId === trip.id && undoNotice.accountId === profile?.id && undoBanner(undoNotice)}
               <div className="editor-footer" ref={editorFooterRef}>
                 <div className="expense-save-announcement sr-only" role="alert" aria-atomic="true">{saveAnnouncement && <span key={saveAnnouncement.id}>{saveAnnouncement.message}</span>}</div>
                 <SaveChecklist key={editing.id} blockers={visibleBlockers} attempted={saveAttempted}
