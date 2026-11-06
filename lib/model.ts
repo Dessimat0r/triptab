@@ -886,6 +886,18 @@ export function expenseShares(entry: Expense | Draft, members: { id: string }[],
   return allocate(convertedTotal, originalShares.some(Boolean) ? originalShares : members.map(() => 1));
 }
 
+/**
+ * Why a stored payment cannot be counted, or null (R08). Every reader that
+ * settles a trip uses this one rule, so an invalid payment makes the trip's
+ * balances unavailable instead of being counted in one view and not another.
+ */
+export function paymentError(payment: Payment, members: readonly { id: string }[]): string | null {
+  if (!Number.isSafeInteger(payment.amount) || payment.amount <= 0 || payment.amount > MAX_AMOUNT
+    || payment.from === payment.to || !members.some(member => member.id === payment.from)
+    || !members.some(member => member.id === payment.to)) return 'Review an invalid recorded payment';
+  return null;
+}
+
 export function balances(trip: Trip): number[] {
   const result = trip.members.map(() => 0);
   for (const expense of trip.expenses) {
@@ -896,9 +908,10 @@ export function balances(trip: Trip): number[] {
     result[payerIndex] = addAmount(result[payerIndex], expenseTotal(expense, trip.currency));
   }
   for (const payment of trip.payments) {
+    const invalid = paymentError(payment, trip.members);
+    if (invalid) throw new LedgerValidationError(invalid);
     const fromIndex = trip.members.findIndex(member => member.id === payment.from);
     const toIndex = trip.members.findIndex(member => member.id === payment.to);
-    if (fromIndex < 0 || toIndex < 0) throw new Error('Unknown payment member');
     result[fromIndex] = addAmount(result[fromIndex], payment.amount);
     result[toIndex] = addAmount(result[toIndex], -payment.amount);
   }
@@ -942,9 +955,8 @@ export function travellerFinancialPreview(trip: Trip, memberId: string): Travell
       if (expense.payer === memberId) paidUpfront = addAmount(paidUpfront, expenseTotal(expense, trip.currency));
     }
     for (const payment of trip.payments) {
-      if (!Number.isSafeInteger(payment.amount) || payment.amount <= 0 || payment.amount > MAX_AMOUNT
-        || payment.from === payment.to || !trip.members.some(member => member.id === payment.from)
-        || !trip.members.some(member => member.id === payment.to)) throw new Error('Review an invalid recorded payment');
+      const invalid = paymentError(payment, trip.members);
+      if (invalid) throw new Error(invalid);
       if (payment.from === memberId) paymentsSent = addAmount(paymentsSent, payment.amount);
       if (payment.to === memberId) paymentsReceived = addAmount(paymentsReceived, payment.amount);
     }
