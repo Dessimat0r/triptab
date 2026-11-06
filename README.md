@@ -31,7 +31,7 @@ React 19 and TypeScript, using [Vinext](https://github.com/cloudflare/vinext) wi
 
 ## Local development
 
-Use Node.js **24 LTS** (the version used by CI) and npm. Node.js 22.13.0 or newer is supported. From the repository checkout, replace the example email below with the intended verified receipt AI owner's email:
+Use Node.js **24 LTS** (the version used by CI) and npm. From the repository checkout, replace the example email below with the intended verified receipt AI owner's email:
 
 ```sh
 npm run install:ci
@@ -83,7 +83,7 @@ Ledger saves allow 1,500,000 UTF-8 bytes of editable content and reserve space f
 
 The Worker implements bounded receipt cleanup with a 15-minute UTC Cron declaration. Confirm that Sites installs and runs this timer when deploying; a declaration in the generated Wrangler configuration does not establish an active production schedule. Historical images with unknown upload dates receive a 24-hour grace period from migration `0006`; referenced images and pending uploads remain protected.
 
-`npm test` runs `tests/*.test.ts` with the directly declared `tsx` dependency. It deliberately excludes the historical reproductions under `docs/audit/evidence-*`; those files describe the state reviewed in the original audit. GitHub Actions runs a clean locked install, regression tests, type checks, lint and a production build on pull requests and pushes to `main`, with read-only repository permissions. CI does not contact production or publish the app.
+`npm test` runs `tests/*.test.ts` with the directly declared `tsx` dependency. The backup tests also require Python 3; set `PYTHON` to the interpreter path if it is not on `PATH` (on PowerShell, `$env:PYTHON = "C:\path\to\python.exe"`). The operator backup and restore tools require POSIX file ownership and private modes and reject native Windows; the five full client scenarios run in Linux CI, while the Windows test checks this rejection. It deliberately excludes the historical reproductions under `docs/audit/evidence-*`; those files describe the state reviewed in the original audit. GitHub Actions runs a clean locked install, regression tests, type checks, lint and a production build on pull requests and pushes to `main`, with read-only repository permissions. CI does not contact production or publish the app.
 
 For browser layout checks, run `npx --no-install playwright install --with-deps chromium webkit` once, build with the local `RECEIPT_AI_OWNER_EMAIL` setting above, then run `npm run test:layout`. The suite starts the built Worker on loopback and supplies synthetic account, ledger and image responses; it does not use a real account or database. It checks 320px phones, 844px landscape touch devices, tablets and desktops, long names, receipt images, split modes, enlarged text, amount-field contents and payment controls without hiding overflow. CI runs these checks against the production build inside Playwright's official container image, pinned by digest in `.github/workflows/ci.yml`, so no browser libraries are downloaded from the runner's package mirror. When upgrading `@playwright/test`, update that image's tag and digest too; CI fails early with that instruction if they differ. Browser emulation verifies layout and font sizes; real-device Safari focus zoom and swipe-back behavior still need a manual check.
 
