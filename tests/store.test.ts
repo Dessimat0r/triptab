@@ -2195,3 +2195,31 @@ test('first approved bill scan may adopt currency only while consuming its sole 
   state.data.trips[0].expenses = [{ ...dinner(), currency: 'EUR', sourceDraftId: 'scan' }]; state.data.trips[0].drafts = [];
   assert.equal((await store.writeLedger(actor, state.data, state.revision)).data.trips[0].currency, 'EUR');
 });
+
+test('F-08 two accounts: a stale name edit cannot overwrite a newer amount, and the merged save keeps both', async () => {
+  const database = await storage();
+  const holiday = trip(); holiday.expenses = [{ ...dinner(), items: [{ id: 'food', name: 'Dinner', amount: 2000, members: ['a', 'b'] }] }];
+  await create(database, holiday);
+  database.sqlite.prepare('INSERT INTO memberships (trip_id,user_id,member_id) VALUES (?,?,?)').run('trip-1', member, 'b');
+  // Both open the same £20 dinner.
+  const gary = await store.readLedger(actor), sam = await store.readLedger(member);
+  const base = structuredClone(sam.data.trips[0].expenses[0]);
+  gary.data.trips[0].expenses[0].items[0].amount = 3000;
+  await store.writeLedger(actor, gary.data, gary.revision);
+  const samEdit = { ...structuredClone(base), title: "Dinner at Rosa's" };
+  sam.data.trips[0].expenses[0] = samEdit;
+  // The server refuses the stale whole-ledger write rather than reverting £30.
+  await assert.rejects(store.writeLedger(member, sam.data, sam.revision), /CONFLICT/);
+  const fresh = await store.readLedger(member);
+  assert.equal(fresh.data.trips[0].expenses[0].items[0].amount, 3000);
+  const { mergeExpenseEdits } = await import('../lib/expense-merge');
+  const merge = mergeExpenseEdits(base, samEdit, fresh.data.trips[0].expenses[0]);
+  assert.deepEqual(merge.conflicts, []);
+  fresh.data.trips[0].expenses[0] = merge.merged;
+  const saved = await store.writeLedger(member, fresh.data, fresh.revision);
+  assert.equal(saved.data.trips[0].expenses[0].title, "Dinner at Rosa's");
+  assert.equal(saved.data.trips[0].expenses[0].items[0].amount, 3000);
+  const ownerView = await store.readLedger(actor);
+  assert.equal(ownerView.data.trips[0].expenses[0].items[0].amount, 3000);
+  assert.equal(ownerView.data.trips[0].expenses[0].title, "Dinner at Rosa's");
+});
