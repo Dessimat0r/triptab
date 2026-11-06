@@ -29,6 +29,9 @@ import ReceiptUploadDialog, { type ReceiptUploadContext } from "@/components/rec
 import ReceiptLocationFields, { type ReceiptPlace } from "@/components/receipt-location-fields";
 import ReceiptPhotoViewer from "@/components/receipt-photo-viewer";
 import ExpenseIconPicker from "@/components/expense-icon";
+import { findLikelyDuplicates } from "@/lib/duplicates";
+import { calculationHealth } from "@/lib/calculation-health";
+import { clearUnsavedEntry, readUnsavedEntry, writeUnsavedEntry } from "@/lib/unsaved-entry";
 import ReceiptScanReview, { ReceiptReviewSummary, receiptMoney } from "@/components/receipt-scan-review";
 import { acknowledgeReceiptReview, carryReviewAcknowledgements, pendingReviewActions, receiptScanSaveError, receiptWarningLabel, reconcileReceiptScan } from "@/lib/receipt-scan";
 import { manualFxReview } from "@/lib/expense-fx-review";
@@ -121,6 +124,10 @@ import { formatMoney as money } from "@/lib/money-format";
 const uid = () => crypto.randomUUID();
 const today = (timezone?: string) => localDate(new Date(), timezone);
 const expenseDate = formatCalendarDate;
+/** Browser storage when available; private windows and blocked storage give undefined (F-18). */
+function safeStorage(): Storage | undefined {
+  try { return typeof window !== "undefined" ? window.localStorage : undefined; } catch { return undefined; }
+}
 /** Saved entries keep their own rule; an open editor previews what saving will stamp. */
 function previewShares(e: ReceiptEditor, t: Trip, saved = false) {
   const parsed = expenseSchema.safeParse(e);
@@ -276,6 +283,7 @@ export default function Home({ children }: { children: ReactNode }) {
     [allBills, setAllBills] = useState(false),
     [billStart, setBillStart] = useState(false),
     [billScan, setBillScan] = useState<File | null>(null),
+    [unsavedVersion, setUnsavedVersion] = useState(0),
     [help, setHelp] = useState(false),
     [editing, setEditing] = useState<ReceiptEditor | null>(
       null,
@@ -932,6 +940,8 @@ export default function Home({ children }: { children: ReactNode }) {
   }
   function closeReceiptEditor() {
     setCaptureNotes("");
+    // F-18: an explicit close (saved or discarded) ends recovery for this entry.
+    if (trip) clearUnsavedEntry(safeStorage(), profile?.id, trip.id);
     // A rate lookup belongs to the editor that asked for it; never let a
     // pending one keep the next expense busy.
     fxRequest.current++; setFxLoading(false);
@@ -1376,6 +1386,19 @@ export default function Home({ children }: { children: ReactNode }) {
     expense.conversation = mergeReceiptConversation(mergeReceiptConversation(trip.expenses.find(value => value.id === expense.id)?.conversation, latestDraft?.conversation), expense.conversation);
     expense.memory = latestDraft?.memory ?? trip.expenses.find(value => value.id === expense.id)?.memory ?? expense.memory;
     const exists = trip.expenses.some((x) => x.id === expense.id);
+    // F-09: a likely duplicate (same day, amount within 1%, matching name or
+    // printed total) is shown before saving; it never blocks saving.
+    if (!exists) {
+      const [match] = findLikelyDuplicates(trip, expense, draftId ? [draftId] : []);
+      if (match && !await confirm({ title: "Possible duplicate",
+        message: `${match.draft ? "A receipt draft" : "An expense"} “${match.title}” for ${money(match.amount, match.currency as Currency)} on ${expenseDate(match.date)}, paid by ${name(match.payer)}, is already saved. Save this one too only if it is a separate purchase.`,
+        confirmLabel: "Save anyway", cancelLabel: "Open existing" })) {
+        const existing = trip.expenses.find(value => value.id === match.id), draft = trip.drafts.find(value => value.id === match.id);
+        if (!editing.receiptId && !editing.draftId) clearUnsavedEntry(safeStorage(), profile?.id, trip.id);
+        if (existing) openExpense(existing); else if (draft) openDraft(draft);
+        return false;
+      }
+    }
     if (editing.expenseId && !exists) {
       setError("This expense was removed. It cannot be updated from this receipt draft.");
       return;
@@ -1556,6 +1579,21 @@ export default function Home({ children }: { children: ReactNode }) {
     setCaptureNotes("");
     setEditing({ ...expense, adjustmentAllocation: CURRENT_CALCULATION_RULE, expenseId: undefined });
   }
+  // F-18: keep a new manual expense in this browser until it is saved or
+  // closed, so a killed app or tab can offer to resume it. Receipt entries
+  // already have a saved draft; existing expenses are on the server.
+  useEffect(() => {
+    if (!editing || !trip || !profile?.id || editing.receiptId || editing.draftId || editing.receiptScan || trip.expenses.some(value => value.id === editing.id)) return;
+    if (!editing.title.trim() && editing.items.every(item => !item.amount)) return;
+    const timer = setTimeout(() => writeUnsavedEntry(safeStorage(), profile.id, trip.id, editing), 400);
+    return () => clearTimeout(timer);
+  }, [editing, trip, profile?.id]);
+  const unsavedEntry = useMemo(() => {
+    void unsavedVersion;
+    if (editing || !trip || !profile?.id) return null;
+    const stored = readUnsavedEntry<ReceiptEditor>(safeStorage(), profile.id, trip.id);
+    return stored && !trip.expenses.some(value => value.id === stored.entry.id) ? stored : null;
+  }, [editing, trip, profile?.id, unsavedVersion]);
   // Saved balances do not depend on form keystrokes or which panel is open.
   const { balance, due, spent, calculationError } = useMemo(() => {
     let balance: number[] = [], due: ReturnType<typeof settlements> = [], spent = 0, calculationError = "";
@@ -1570,6 +1608,8 @@ export default function Home({ children }: { children: ReactNode }) {
     }
     return { balance, due, spent, calculationError };
   }, [trip]);
+  // F-20: name each expense that cannot be calculated; other totals are partial.
+  const health = useMemo(() => trip && calculationError ? calculationHealth(trip) : null, [trip, calculationError]);
   const currentMemberIndex = trip?.members.findIndex(member => member.userId === profile?.id) ?? -1;
   const chatgptIdentity = !!(profile?.chatgptConnected || profile?.authMethod === "chatgpt");
   const chatgptConnected = chatgptIdentity
@@ -2435,6 +2475,11 @@ export default function Home({ children }: { children: ReactNode }) {
           </p>}
           {profile && <OfflineCapture key={profile.id} accountId={profile.id} name={profile.displayName} ledger={ledger} showControls={view === "settings"} onReview={id => { setSelected(id); setView("expenses"); }} onSynced={async () => { await load({fresh:true}); }} />}
           <SharedPhoto trips={ledger.trips} selected={trip?.id} accountId={profile?.id} busy={loading || saving || uploading} onSelect={setSelected} onReceive={file => upload(file)} />
+          {unsavedEntry && trip && <p className="saved-banner unsaved-entry" role="status">
+            <span>{uiText("Unsaved expense “{value0}” from {value1}.", { value0: unsavedEntry.entry.title || uiText("Untitled"), value1: formatClockTime(new Date(unsavedEntry.savedAt)) })}</span>
+            <button type="button" className="quiet" onClick={() => { const stored = unsavedEntry.entry; newExpense(undefined, trip); setEditing({ ...stored }); }}>{uiText("Resume")}</button>
+            <button type="button" className="quiet" onClick={() => { clearUnsavedEntry(safeStorage(), profile?.id, trip.id); setUnsavedVersion(value => value + 1); }}>{uiText("Discard")}</button>
+          </p>}
           {undoNotice && undoNotice.tripId === trip?.id && !editing && <p className="saved-banner" role="status">
             <Trash2 size={18} aria-hidden="true" />
             <span>{uiText(undoNotice.message)}</span>
@@ -2532,7 +2577,12 @@ export default function Home({ children }: { children: ReactNode }) {
             </div>
           ) : (
             <>
-              {calculationError && <p className="error" role="alert">{uiText("Balances are unavailable until the flagged receipt is corrected. ")}{calculationError}{uiText(" Your saved receipt details have been kept.")}</p>}
+              {calculationError && <div className="error calculation-health" role="alert">
+                <p>{health?.failing.length === 1 ? uiText("One expense can’t be calculated, so balances and settlement suggestions are hidden until it is fixed:") : uiText("Some expenses can’t be calculated, so balances and settlement suggestions are hidden until they are fixed:")}</p>
+                {health?.failing.length ? <ul>{health.failing.map(entry => <li key={entry.id}><span><b>{entry.title}</b>{" · "}{uiText(entry.message)}</span>
+                  <button type="button" className="quiet" onClick={() => { const expense = trip.expenses.find(value => value.id === entry.id); if (expense) openExpense(expense); }}>{uiText("Open")}</button></li>)}</ul> : <p>{calculationError}</p>}
+                {health && <p>{uiText("Total of the other expenses: {value0} (incomplete). Your saved details have been kept.", { value0: money(health.partialSpent, trip.currency) })}</p>}
+              </div>}
               {!isBill(trip) && <div className="stats">
                 <div className="stat">
                   <span>{uiText("Total trip spend ")}<Receipt size={17} />
