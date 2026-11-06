@@ -42,6 +42,9 @@ export async function GET() {
     const triggers = await db().prepare(`SELECT name FROM sqlite_master WHERE type = 'trigger' AND name IN (${receiptLinkTriggers.map(() => '?').join(',')})`)
       .bind(...receiptLinkTriggers).all<{ name: string }>();
     if (triggers.results.length !== receiptLinkTriggers.length) throw Error('Missing receipt link maintenance');
+    // R11 (0015): the membership trigger ignores updates that change nothing.
+    const membershipTrigger = await db().prepare(`SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'memberships_revision_update'`).all<{ sql: string }>();
+    if (!membershipTrigger.results[0]?.sql.includes('OLD.member_id IS NOT NEW.member_id')) throw Error('Missing membership revision guard');
     const receiptMessageTriggers = ['activity_events_no_replace', 'account_activity_events_no_update',
       'account_activity_events_no_delete', 'account_activity_events_no_replace',
       'receipt_messages_from_activity', 'receipt_messages_no_update', 'receipt_messages_no_delete', 'receipt_messages_no_replace'];

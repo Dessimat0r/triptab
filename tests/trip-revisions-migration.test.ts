@@ -9,8 +9,8 @@ import { DatabaseSync } from 'node:sqlite';
 test('0014 upgrades existing data without changing it, then tracks every change', async () => {
   const sqlite = new DatabaseSync(':memory:');
   const files = (await readdir(new URL('../drizzle/', import.meta.url))).filter(name => name.endsWith('.sql')).sort();
-  assert.equal(files.at(-1), '0014_trip_revisions.sql');
-  for (const file of files.slice(0, -1)) sqlite.exec(await readFile(new URL(`../drizzle/${file}`, import.meta.url), 'utf8'));
+  // Later migrations (0015 onwards) are applied by their own tests.
+  for (const file of files.slice(0, files.indexOf('0014_trip_revisions.sql'))) sqlite.exec(await readFile(new URL(`../drizzle/${file}`, import.meta.url), 'utf8'));
   const data = JSON.stringify({ id: 'lisbon', name: 'Lisbon', currency: 'GBP', members: [{ id: 'a', name: 'Alex' }], expenses: [{ id: 'e1', receiptId: 'r1', items: [] }], payments: [], drafts: [] });
   sqlite.prepare("INSERT INTO profiles (id,email,display_name,created_at) VALUES ('alex','alex@example.test','Alex','2026-11-06')").run();
   sqlite.prepare("INSERT INTO trips (id, owner, data) VALUES ('lisbon', 'alex', ?)").run(data);
