@@ -58,12 +58,12 @@ Statuses: Unresolved, Already fixed and verified, In progress, Implemented and t
 | 2 | #60 F-21 Node 24 | `391adb5` | main | Green | — |
 | 3 | #61 F-01 gate and historical audit | `d8a5439` | main | Green | — |
 | 4 | #64 F-02/F-10 discounts | `ed984f6` | #61 | Green | #61; retarget to main after #61 merges |
-| 5 | #63 F-08 merge | `118d6b0` | main | Green at `6865da3`; re-running | — |
-| 6 | #65 F-07/F-11 scan | `0585199` | main | Green at `aafca06`; re-running | — |
+| 5 | #63 F-08 merge | `118d6b0` | main | Green | — |
+| 6 | #65 F-07/F-11 scan | `0585199` | main | Green | — |
 | 7 | #66 F-06/F-13/F-14/F-15 actions | `281d4e0` | main | Green | — |
 | 8 | #67 F-04/F-05 bills | `f15eaaf` | main | Green | — |
-| 9 | #68 F-09/F-17/F-18/F-20 resilience | `6a969e3` | main | Running | — |
-| — | #69 integration check (do not merge) | `c5266a3` | main | Running | All of the above |
+| 9 | #68 F-09/F-17/F-18/F-20 resilience | `6a969e3` | main | Green | — |
+| — | #69 integration check (do not merge) | `c5266a3` | main | Green | All of the above |
 
 - **Conflicts:** each later PR conflicts textually with earlier ones in `components/trip-app.tsx` and the editor test harness. #69 merges all of them in this order. Its merge commits hold the resolutions (unions of both sides), and it passes:
   - unit tests: 1,376/1,381 under Node 22 (the other 5 are the Node 22-only failures)
