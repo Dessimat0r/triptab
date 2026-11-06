@@ -4,6 +4,10 @@ Owner brief and evidence baseline: **TripTab Functionality, Usability and Financ
 
 This record describes implementation evidence. It is not approval to release. No merge, deployment or production migration is authorised. Status updated 6 November 2026 (follow-ups #71 to #74 added).
 
+## Independent release review corrections (R01 to R11)
+
+The independent release review found one P0, seven P1 and three P2 defects in the combined stack. Corrections and their evidence are in [`CORRECTIONS.md`](CORRECTIONS.md) (branch `claude/new-session-kf3m0k`, draft PR #77). That file's closure matrix and status changes supersede the rows below where they differ. The stack is still **not approved for release**; the gates listed there remain open.
+
 ## Owner decisions, 6 November 2026 (after the follow-ups)
 
 - **Bill undo:** option A from `docs/remediation/bill-soft-delete.md` (#73). Deleting a bill hides it, it can be restored for 30 days, and then it is removed. Every reader of `trips` must skip a pending-deleted bill.
