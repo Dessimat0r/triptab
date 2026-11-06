@@ -3988,5 +3988,17 @@
     "Este borrador del recibo ya se ha restaurado. Ábrelo desde Recibos.",
     "Ce brouillon de reçu est déjà restauré. Ouvrez-le depuis Reçus.",
     "Dieser Belegentwurf ist bereits wiederhergestellt. Öffne ihn unter Belege."
+  ],
+  [
+    "Reading receipt…",
+    "Leyendo el recibo…",
+    "Lecture du reçu…",
+    "Beleg wird gelesen …"
+  ],
+  [
+    "Reading didn’t finish · open it to read again",
+    "La lectura no terminó · ábrelo para volver a leerlo",
+    "La lecture n’a pas abouti · ouvrez-le pour relancer la lecture",
+    "Lesen nicht abgeschlossen · öffne ihn, um ihn erneut zu lesen"
   ]
 ]

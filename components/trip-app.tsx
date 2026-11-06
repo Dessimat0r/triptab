@@ -37,6 +37,7 @@ import PersonalActivity from "@/components/personal-activity";
 import { findLikelyDuplicates } from "@/lib/duplicates";
 import { calculationHealth } from "@/lib/calculation-health";
 import { clearUnsavedEntry, readUnsavedEntry, writeUnsavedEntry } from "@/lib/unsaved-entry";
+import { clearReading, markReading, readingState } from "@/lib/reading-status";
 import ReceiptScanReview, { ReceiptReviewSummary, receiptMoney } from "@/components/receipt-scan-review";
 import { acknowledgeReceiptReview, carryReviewAcknowledgements, pendingReviewActions, receiptScanSaveError, receiptWarningLabel, reconcileReceiptScan } from "@/lib/receipt-scan";
 import { manualFxReview } from "@/lib/expense-fx-review";
@@ -73,7 +74,7 @@ import { localDate, localTime, formatCalendarDate, formatClockTime } from "@/lib
 import { equalFinancialValue, equalSavedValue, hasNewMatchingPayment, rebaseLedger } from "@/lib/client-ledger";
 import { mergeExpenseEdits, type MergeChoice, type MergeConflict } from "@/lib/expense-merge";
 import { buildReceiptPrompt, chatgptReceiptUrl } from "@/lib/receipt-chatgpt";
-import { isBlankApartFromPersonalDetails, isBlankReceipt, isUnchangedInitialReceipt, matchingReceiptProposal, mayFillInitialReceipt, receiptEditableValue, receiptProposalEditor, receiptEditorTotal, userReceiptField, type ReceiptEditor, type InitialReceiptReview } from "@/lib/receipt-processing";
+import { isBlankApartFromPersonalDetails, isUnchangedInitialReceipt, matchingReceiptProposal, mayFillInitialReceipt, receiptEditableValue, receiptProposalEditor, receiptEditorTotal, userReceiptField, type ReceiptEditor, type InitialReceiptReview } from "@/lib/receipt-processing";
 import { collapseToQuick, hasItemSplitDetail, isManualSingleLine, quickEligible, singleReceiptLineEligible, withQuickName } from "@/lib/quick-expense";
 import type { ActivityEvent } from "@/lib/store";
 import {
@@ -279,6 +280,7 @@ export default function Home({ children }: { children: ReactNode }) {
     [billScan, setBillScan] = useState<File | null>(null),
     [personalView, setPersonalView] = useState(false),
     [unsavedVersion, setUnsavedVersion] = useState(0),
+    [readingTick, setReadingTick] = useState(0),
     [help, setHelp] = useState(false),
     [editing, setEditing] = useState<ReceiptEditor | null>(
       null,
@@ -1291,6 +1293,10 @@ export default function Home({ children }: { children: ReactNode }) {
     // come from the canonical save; compare the latest editable values.
     const readPurchaseDetails = !questionId && !!active && isUnchangedInitialReceipt(initialReceiptReview.current, accountId, trip,
       { ...active, draftId: draft.id, receiptId: draft.receiptId }, draft);
+    // F-11: remember this reading per draft, so a reload or a locked phone
+    // still shows it as reading until the stored proposal arrives.
+    if (!questionId) { markReading(accountId, tripId, draft); setReadingTick(value => value + 1); }
+    let keepReading = false;
     try {
       const response = await fetch("/api/receipt/process", { method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ tripId, draftId: draft.id, receiptId: draft.receiptId, draftHash: await sha256Hex(canonicalJson(draft)), readPurchaseDetails, ...(questionId ? { questionId } : {}) }) });
@@ -1307,12 +1313,14 @@ export default function Home({ children }: { children: ReactNode }) {
       const disconnected = cause instanceof TypeError || (typeof document !== "undefined" && document.visibilityState === "hidden");
       if (requestId === receiptProcessRequest.current && isReceiptSessionCurrent(session, tripId, accountId)) {
         if (disconnected && !questionId) {
+          keepReading = true;
           setReceiptHandoffError("The connection dropped while reading. TripTab keeps reading this receipt; the items appear here automatically, or tap Read receipt to check again.");
           setTimeout(() => { void load({ background: true, fresh: true }); }, 5000);
         } else setReceiptHandoffError(cause instanceof Error ? cause.message : "ChatGPT could not read this receipt. Try again.");
       }
       return false;
     } finally {
+      if (!questionId && !keepReading) clearReading(accountId, draft.id);
       if (requestId === receiptProcessRequest.current) { receiptProcessInFlight.current = false; setReceiptProcessing(false); }
     }
   }
@@ -1817,6 +1825,16 @@ export default function Home({ children }: { children: ReactNode }) {
   else if (editing && editorMode && !editorMode.itemised && editing.items.length > 1) setEditorMode({ ...editorMode, itemised: true });
   else if (!editing && editorMode) setEditorMode(null);
   // The saved confirmation belongs to the list view; opening a form retires it.
+  // F-11: while a draft is still being read on the server (after a reload or
+  // a locked phone), refresh until its proposal arrives or the time limit passes.
+  const readingDrafts = !!profile && !!trip && trip.drafts.some(draft => readingState(profile.id, trip.id, draft) === "reading");
+  useEffect(() => {
+    if (!readingDrafts) return;
+    const timer = setTimeout(() => { setReadingTick(value => value + 1); void load({ background: true, fresh: true }); }, 8000);
+    return () => clearTimeout(timer);
+    // load is stable for this purpose; the tick re-arms the timer.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [readingDrafts, readingTick]);
   if (editing && savedNotice) setSavedNotice(null);
   const itemised = !!editing && editorMode?.id === editing.id && editorMode.itemised;
   // A manual line takes the expense name; a receipt line keeps the name it was read with.
@@ -2090,6 +2108,7 @@ export default function Home({ children }: { children: ReactNode }) {
     // A draft has no financial effect: remove it at once with Undo (F-06).
     const removeDraft = (draft: Draft) => void deleteWithUndo(trip, { message: `Removed the receipt draft “${draft.title || "Untitled"}”.`, expenses: [], payments: [],
       drafts: [{ entry: draft, index: trip.drafts.findIndex(x => x.id === draft.id) }] });
+    const reading = readingState(profile?.id, trip.id, d);
     return (
                             <SwipeRow key={d.id} deleteLabel="Remove draft" disabled={saving} onDelete={() => removeDraft(d)}>
                             <div className="draft" data-entry-id={d.id} tabIndex={-1}>
@@ -2108,10 +2127,12 @@ export default function Home({ children }: { children: ReactNode }) {
                                 <b>{d.title}</b>
                                 <small
                                   className={
-                                    d.status === "review" ? "ready" : "muted"
+                                    reading === "reading" ? "reading" : reading === "stalled" ? "warning" : d.status === "review" ? "ready" : "muted"
                                   }
                                 >
-                                  {d.status === "review"
+                                  {reading === "reading" ? uiText("Reading receipt…")
+                                    : reading === "stalled" ? uiText("Reading didn’t finish · open it to read again")
+                                    : d.status === "review"
                                     ? uiText("Ready to review")
                                     : hasPendingReceiptQuestions(d.conversation) ? uiText("Question saved · external processing needed") : uiText("Not processed yet")}{" "}
                                   · {d.items.length}{uiText(" items · ")}{d.currency}
