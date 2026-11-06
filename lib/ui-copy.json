@@ -3856,5 +3856,23 @@
     "Otra persona se unió o la cuenta cambió. Actualiza e inténtalo de nuevo.",
     "Une autre personne a rejoint la note ou celle-ci a changé. Actualisez et réessayez.",
     "Ein weiterer Teilnehmer ist beigetreten oder die Rechnung wurde geändert. Lade sie neu und versuche es erneut."
+  ],
+  [
+    "· on TripTab",
+    "· en TripTab",
+    "· sur TripTab",
+    "· bei TripTab"
+  ],
+  [
+    "People on TripTab you share a holiday or bill with",
+    "Personas en TripTab con las que compartes un viaje o una cuenta",
+    "Personnes sur TripTab avec qui vous partagez un voyage ou une note",
+    "Personen bei TripTab, mit denen du einen Urlaub oder eine Rechnung teilst"
+  ],
+  [
+    "Add {value0} (on TripTab)",
+    "Añadir a {value0} (en TripTab)",
+    "Ajouter {value0} (sur TripTab)",
+    "{value0} hinzufügen (bei TripTab)"
   ]
 ]
