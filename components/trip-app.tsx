@@ -336,7 +336,10 @@ export default function Home({ children }: { children: ReactNode }) {
   const fxRequest = useRef(0);
   useLayoutEffect(() => { activeReceiptEditor.current = editing; }, [editing]);
   const savedEtag = useRef("");
-  const latestSnapshot = useRef<{ data: Ledger; revision: number }>({ data: { trips: [] }, revision: 0 });
+  const latestSnapshot = useRef<{ data: Ledger; revision: number; revisions?: Record<string, number> }>({ data: { trips: [] }, revision: 0 });
+  // F-16: each loaded ledger's per-trip revisions, keyed by the ledger object a
+  // change was made from, so a save names exactly the versions it edited.
+  const tripRevisions = useRef(new WeakMap<Ledger, Record<string, number>>());
   const loadRequest = useRef(0);
   const inFlightLoad = useRef<{ requestId: number; background: boolean; promise: Promise<{ data: Ledger; revision: number } | undefined> } | null>(null);
   const profileReadRequest = useRef(0);
@@ -344,9 +347,10 @@ export default function Home({ children }: { children: ReactNode }) {
   const activeProfile = useRef(profile);
   const initialProfileRead = useRef(refreshProfile);
   useLayoutEffect(() => { activeProfile.current = profile; }, [profile]);
-  const applySnapshot = useCallback((snapshot: { data: Ledger; revision: number }, etag = "", invalidateRefresh = false) => {
+  const applySnapshot = useCallback((snapshot: { data: Ledger; revision: number; revisions?: Record<string, number> }, etag = "", invalidateRefresh = false) => {
     if (snapshot.revision < latestSnapshot.current.revision) return false;
     latestSnapshot.current = snapshot;
+    if (snapshot.revisions) tripRevisions.current.set(snapshot.data, snapshot.revisions);
     savedEtag.current = etag;
     setActivityRefreshKey(etag || snapshot.revision);
     setLedger(snapshot.data); setRevision(snapshot.revision); setLastRefreshed(new Date()); setRefreshError("");
@@ -647,21 +651,36 @@ export default function Home({ children }: { children: ReactNode }) {
       setLinkBusy(false);
     }
   }
+  /**
+   * F-16: send only the trips this change touched, each with the revision it
+   * was edited from, so other people's saves to other trips don't conflict.
+   * Without known revisions (an older server) the whole ledger is sent.
+   */
+  function ledgerSaveBody(proposed: Ledger, base: Ledger, token: number) {
+    const revisions = tripRevisions.current.get(base);
+    const changed = proposed.trips.filter(value => {
+      const before = base.trips.find(old => old.id === value.id);
+      return !before || JSON.stringify(before) !== JSON.stringify(value);
+    });
+    if (!revisions || !changed.length || changed.some(value => base.trips.some(old => old.id === value.id) && revisions[value.id] === undefined)) return { data: proposed, revision: token };
+    return { data: { trips: changed }, revision: token,
+      tripRevisions: Object.fromEntries(changed.flatMap(value => revisions[value.id] === undefined ? [] : [[value.id, revisions[value.id]]])) };
+  }
   async function save(data: Ledger) {
     setSaving(true);
     setError("");
     try {
-      let proposed = data, token = revision;
+      let proposed = data, token = revision, base = ledger;
       for (let attempt = 0; attempt < 2; attempt++) {
-        const response = await fetch("/api/ledger", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ data: proposed, revision: token }) });
-        const body = await response.json() as { data: Ledger; revision: number; error?: string };
+        const response = await fetch("/api/ledger", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(ledgerSaveBody(proposed, base, token)) });
+        const body = await response.json() as { data: Ledger; revision: number; revisions?: Record<string, number>; error?: string };
         if (response.ok) {
           applySnapshot(body, response.headers.get("etag") || "", true);
           return true;
         }
         if (response.status !== 409) throw Error(body.error || "Unable to save this change.");
         const freshResponse = await fetch("/api/ledger", { cache: "no-store" });
-        const fresh = await freshResponse.json() as { data: Ledger; revision: number; error?: string };
+        const fresh = await freshResponse.json() as { data: Ledger; revision: number; revisions?: Record<string, number>; error?: string };
         if (!freshResponse.ok) throw Error(fresh.error || "Unable to refresh your ledger. Your edits are still here.");
         applySnapshot(fresh, freshResponse.headers.get("etag") || "", true);
         const currentSnapshot = latestSnapshot.current;
@@ -674,7 +693,7 @@ export default function Home({ children }: { children: ReactNode }) {
           }
           throw Error("Another traveller changed the same entry. Your edits are still here; review the latest saved version before continuing.");
         }
-        proposed = rebased.data; token = currentSnapshot.revision;
+        proposed = rebased.data; token = currentSnapshot.revision; base = currentSnapshot.data;
       }
       throw Error("Your ledger changed again. Your entry is still here—press Save to try again.");
     } catch (e) {

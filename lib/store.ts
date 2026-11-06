@@ -275,7 +275,7 @@ export async function ensureProfile(request: Request, options: { allowSession?: 
     emailVerified: state.emailVerified,uiLanguage:profile.uiLanguage };
 }
 
-type LedgerSnapshot = { data: Ledger; revision: number; freshness: LedgerFreshness };
+type LedgerSnapshot = { data: Ledger; revision: number; revisions: Record<string, number>; freshness: LedgerFreshness };
 /** The exact visible snapshot, without parsing or rewriting historical data. */
 function visibleStoredTrip(row: StoredTrip, links?: ReadonlyMap<string, MembershipRow>): Trip {
   const trip = { ...JSON.parse(row.data), ownerId: row.owner } as Trip;
@@ -289,14 +289,14 @@ function visibleStoredTrip(row: StoredTrip, links?: ReadonlyMap<string, Membersh
 
 /** Body, revision and optional freshness metadata from the same D1 transaction. */
 export async function readLedgerSnapshot(id: string): Promise<LedgerSnapshot>;
-export async function readLedgerSnapshot(id: string, options: { includeFreshness: false }): Promise<{ data: Ledger; revision: number }>;
+export async function readLedgerSnapshot(id: string, options: { includeFreshness: false }): Promise<{ data: Ledger; revision: number; revisions: Record<string, number> }>;
 export async function readLedgerSnapshot(id: string, options: { includeFreshness?: boolean } = {}) {
   // Drive these reads from the indexed owner/member ID sets rather than scanning
   // every trip (or every membership) in the database. Archived holidays stay
   // accessible but are not part of the editable ledger or its 50-holiday limit.
   const visibleIds = OPEN_TRIP_IDS;
   const results = await db().batch([
-    db().prepare(`SELECT t.id, t.owner, t.data${options.includeFreshness === false ? '' : `, t.receipt_link_version AS dataVersion,
+    db().prepare(`SELECT t.id, t.owner, t.data, t.revision AS tripRevision${options.includeFreshness === false ? '' : `, t.receipt_link_version AS dataVersion,
       COALESCE((SELECT e.sequence FROM activity_events e WHERE e.trip_id = t.id ORDER BY e.sequence DESC LIMIT 1), 0) AS latest`}
       FROM trips t WHERE t.id IN (${visibleIds}) ORDER BY t.id`).bind(...openTripBindings(id)),
     db().prepare('SELECT COALESCE((SELECT revision FROM sync_state WHERE id = 1), 0) AS revision'),
@@ -310,17 +310,20 @@ export async function readLedgerSnapshot(id: string, options: { includeFreshness
     const members = linksByTrip.get(link.trip_id) || new Map<string, MembershipRow>();
     members.set(link.member_id, link); linksByTrip.set(link.trip_id, members);
   }
-  const rows = results[0].results as (StoredTrip & { latest: number; dataVersion: number })[];
+  const rows = results[0].results as (StoredTrip & { latest: number; dataVersion: number; tripRevision: number })[];
   const trips = rows.map(row => visibleStoredTrip(row, linksByTrip.get(row.id)));
   const revision = (results[1].results as { revision: number }[])[0]?.revision || 0;
-  const result = { data: { trips }, revision };
+  // F-16: each trip's own revision, so a client can save one trip without
+  // conflicting with other people's changes to other trips.
+  const revisions = Object.fromEntries(rows.map(row => [row.id, Number(row.tripRevision) || 0]));
+  const result = { data: { trips }, revision, revisions };
   return options.includeFreshness === false ? result : { ...result,
     freshness: { versions: rows.map(row => ({ id: row.id, latest: row.latest, dataVersion: row.dataVersion })), links } };
 }
 
-export async function readLedger(id: string): Promise<{ data: Ledger; revision: number }> {
-  const { data, revision } = await readLedgerSnapshot(id, { includeFreshness: false });
-  return { data, revision };
+export async function readLedger(id: string): Promise<{ data: Ledger; revision: number; revisions: Record<string, number> }> {
+  const { data, revision, revisions } = await readLedgerSnapshot(id, { includeFreshness: false });
+  return { data, revision, revisions };
 }
 
 export async function tripAccess(user: string, tripId: string): Promise<boolean> {
@@ -514,9 +517,9 @@ async function validateTripReceiptMemory(trip: Trip, previous: Trip | undefined,
   return changed;
 }
 
-export async function writeLedger(id: string, data: unknown, revision: unknown, options: { source?: ActivitySource; includeFreshness: true; tripSnapshot?: Trip; preserveCalculationRules?: boolean; ownerMemberIds?: Record<string,string> }): Promise<LedgerSnapshot>;
-export async function writeLedger(id: string, data: unknown, revision: unknown, options?: { source?: ActivitySource; includeFreshness?: false; tripSnapshot?: Trip; preserveCalculationRules?: boolean; ownerMemberIds?: Record<string,string> }): Promise<{ data: Ledger; revision: number }>;
-export async function writeLedger(id: string, data: unknown, revision: unknown, options: { source?: ActivitySource; includeFreshness?: boolean; tripSnapshot?: Trip; preserveCalculationRules?: boolean; ownerMemberIds?: Record<string,string> } = {}) {
+export async function writeLedger(id: string, data: unknown, revision: unknown, options: { source?: ActivitySource; includeFreshness: true; tripSnapshot?: Trip; preserveCalculationRules?: boolean; ownerMemberIds?: Record<string,string>; tripRevisions?: Record<string, number> }): Promise<LedgerSnapshot>;
+export async function writeLedger(id: string, data: unknown, revision: unknown, options?: { source?: ActivitySource; includeFreshness?: false; tripSnapshot?: Trip; preserveCalculationRules?: boolean; ownerMemberIds?: Record<string,string>; tripRevisions?: Record<string, number> }): Promise<{ data: Ledger; revision: number; revisions: Record<string, number> }>;
+export async function writeLedger(id: string, data: unknown, revision: unknown, options: { source?: ActivitySource; includeFreshness?: boolean; tripSnapshot?: Trip; preserveCalculationRules?: boolean; ownerMemberIds?: Record<string,string>; tripRevisions?: Record<string, number> } = {}) {
   // Parse bounded structure first. New financial rules are applied after access
   // checks, with trusted stored snapshots allowing unchanged legacy entries to
   // remain available until their owner explicitly repairs them.
@@ -698,11 +701,13 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
           WHERE (json_extract(prior.value, '$.owner') IS NULL AND t.id IS NOT NULL)
             OR (json_extract(prior.value, '$.owner') IS NOT NULL
               AND (t.id IS NULL OR t.owner IS NOT json_extract(prior.value, '$.owner'))))
+        AND NOT EXISTS (SELECT 1 FROM json_each(?) expected JOIN trips t ON t.id = expected.key
+          WHERE t.revision <> expected.value)
     `).bind(marker, ...scopeBindings, id, id, tripIdsJson, id, id, JSON.stringify(receiptReferences), JSON.stringify(conversationAuthors), id,
-      JSON.stringify(preimages)),
+      JSON.stringify(preimages), JSON.stringify(options.tripRevisions ?? {})),
   ];
   for (const trip of ledger.trips) {
-    statements.push(db().prepare('INSERT INTO trips (id, owner, data) SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND last_write = ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data WHERE EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND last_write = ?) AND (trips.owner = ? OR EXISTS (SELECT 1 FROM memberships m WHERE m.trip_id = trips.id AND m.user_id = ?))').bind(trip.id, trip.ownerId!, JSON.stringify(trip), marker, marker, id, id));
+    statements.push(db().prepare('INSERT INTO trips (id, owner, data) SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND last_write = ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data WHERE trips.data <> excluded.data AND EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND last_write = ?) AND (trips.owner = ? OR EXISTS (SELECT 1 FROM memberships m WHERE m.trip_id = trips.id AND m.user_id = ?))').bind(trip.id, trip.ownerId!, JSON.stringify(trip), marker, marker, id, id));
   }
   for (const trip of newTrips) {
     statements.push(db().prepare('INSERT INTO memberships (trip_id, user_id, member_id) SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND last_write = ?)').bind(trip.id, id, ownerMembers.get(trip.id)!, marker));
@@ -731,6 +736,40 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
   }
   // Omitted trips remain available: ledger saves never delete shared records.
   return options.includeFreshness ? readLedgerSnapshot(id) : readLedger(id);
+}
+
+/**
+ * F-16: save only the trips a person changed, checked against each trip's own
+ * revision. Other people's saves to other trips no longer make this one
+ * conflict: the server takes the latest copy of every untouched trip and runs
+ * the same whole-ledger validation, history and notifications as writeLedger.
+ * A real conflict (the same trip changed) still returns CONFLICT, which the
+ * client resolves with its three-way merge (#63).
+ */
+export async function writeTrips(id: string, data: unknown, tripRevisions: unknown, options: { source?: ActivitySource } = {}): Promise<LedgerSnapshot> {
+  const posted = parseLedgerStructure(data).trips;
+  if (!tripRevisions || typeof tripRevisions !== 'object' || Array.isArray(tripRevisions)) throw new RequestError('Send each trip’s revision.');
+  const expected = tripRevisions as Record<string, unknown>;
+  if (Object.keys(expected).length > posted.length || Object.values(expected).some(value => typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0)
+    || Object.keys(expected).some(tripId => !posted.some(trip => trip.id === tripId))) throw new RequestError('Send each trip’s revision.');
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const current = await readLedgerSnapshot(id, { includeFreshness: false });
+    const byId = new Map(posted.map(trip => [trip.id, trip]));
+    for (const trip of posted) {
+      const open = current.data.trips.some(value => value.id === trip.id);
+      if (open && expected[trip.id] === undefined) throw new RequestError('Send each trip’s revision.');
+      if (open && current.revisions[trip.id] !== expected[trip.id]) throw new Error('CONFLICT');
+    }
+    const merged = { trips: [...current.data.trips.map(trip => byId.get(trip.id) ?? trip), ...posted.filter(trip => !current.data.trips.some(value => value.id === trip.id))] };
+    const gate = Object.fromEntries(posted.flatMap(trip => expected[trip.id] === undefined ? [] : [[trip.id, expected[trip.id] as number]]));
+    try {
+      return await writeLedger(id, merged, current.revision, { source: options.source, includeFreshness: true, tripRevisions: gate });
+    } catch (error) {
+      // Another trip changed between the read and the commit: take its new copy and try again.
+      if (!(error instanceof Error) || error.message !== 'CONFLICT') throw error;
+    }
+  }
+  throw new Error('CONFLICT');
 }
 
 export function failure(e: unknown) {
