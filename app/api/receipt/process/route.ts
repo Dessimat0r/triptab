@@ -7,6 +7,7 @@ import { applyReceiptTranscription, consumeReceiptProcessBudget, processReceiptI
 import { readTripLanguagePreferences } from '@/lib/trip-language-preferences';
 import { processReceiptQuestion, applyReceiptQuestion } from '@/lib/receipt-assistant';
 import { financialFormatRefusal } from '@/lib/financial-format';
+import { claimOperation, finishOperation, holdsOperation, type Claim } from '@/lib/receipt-operations';
 
 export const dynamic = 'force-dynamic';
 const id = z.string().min(1).max(100);
@@ -16,6 +17,8 @@ const requestSchema = z.object({ tripId: id, draftId: id, receiptId: id.regex(/^
   revision: z.number().int().min(0).optional(), draftHash: z.string().regex(/^[a-f0-9]{64}$/),
   questionId: id.optional(), readPurchaseDetails: z.boolean().optional() }).strict();
 type Operation = { attemptId: string; tripId: string; draftId: string; receiptId?: string };
+const errorCategory = (error: unknown) => error instanceof ReceiptAIError || error instanceof ReceiptAIAccessError ? error.code
+  : error instanceof RequestError && error.status === 409 ? 'ledger-changed' : error instanceof RequestError && error.status === 408 ? 'timed-out' : 'processing-failed';
 function logOperation(event: string, operation: Operation, details: Record<string, string | number | undefined> = {}) {
   // Legacy/imported IDs can contain user text. Keep operational tokens only;
   // receipt contents, account emails and provider secrets never enter logs.
@@ -29,6 +32,7 @@ export async function POST(request: Request) {
   const refused = financialFormatRefusal(request);
   if (refused) return refused;
   let operation: Operation | undefined;
+  let claim: Extract<Claim, { owned: true }> | undefined;
   try {
     sameOrigin(request);
     if (request.headers.get('sec-fetch-site') === 'cross-site') throw new RequestError('Open TripTab to process this receipt.', 403);
@@ -63,19 +67,36 @@ export async function POST(request: Request) {
       if (!bytes.length || bytes.byteLength > 5 * 1024 * 1024) throw new RequestError('Use a receipt image no larger than 5 MB.', 413);
       imageData={bytes,mimeType,owner:access.owner,version:object.version,size:object.size};
     }
+    const database = db();
+    // R06: claim this operation before any budget, key lookup or provider
+    // call. Identical requests, on any Worker instance, share one claim; only
+    // its holder spends. The key is the authorized source just checked.
+    const attempt = await claimOperation(database, { tripId: trip.id, draftId: draft.id, draftHash: values.draftHash, receiptId: values.receiptId,
+      imageVersion: imageData?.version, questionId: values.questionId, readPurchaseDetails: values.readPurchaseDetails }, profile.id);
+    if (!attempt.owned) {
+      // Already running: the app keeps showing it as reading and picks up the
+      // stored proposal on refresh. Already stored: return what was saved.
+      const latest = await readLedger(profile.id);
+      const latestDraft = latest.data.trips.find(value => value.id === trip.id)?.drafts.find(value => value.id === draft.id);
+      return Response.json({ ...latest, draft: latestDraft, reading: attempt.status === 'running' },
+        { status: attempt.status === 'running' ? 202 : 200, headers: { 'Cache-Control': 'private, no-store' } });
+    }
+    claim = attempt;
     // F-11: a phone that locks or leaves the app drops this request. The paid
     // reading continues on the server until its own time limit and stores the
     // proposal, which the app picks up on its next refresh. The draft
     // fingerprint above and the unchanged-draft check below keep it idempotent.
+    // R07: if the platform ends the work before it finishes (its grace period
+    // after a disconnect is shorter than this limit), the claim's lease runs
+    // out and the next request for the same receipt takes it over.
     const signal = AbortSignal.timeout(90_000);
-    const database = db();
     const {preferences:{readingLanguage}} = await readTripLanguagePreferences(database,profile.id,trip.id);
     const connection = await getReceiptAIAccess(request, profile, database, env as unknown as ReceiptAIEnvironment);
     await consumeReceiptProcessBudget(database, profile.id, { provider: connection.provider });
-    operation = { attemptId: crypto.randomUUID(), tripId: trip.id, draftId: draft.id, receiptId: values.receiptId };
+    operation = { attemptId: claim.attemptId, tripId: trip.id, draftId: draft.id, receiptId: values.receiptId };
     logOperation('native-processing-started', operation, { provider: connection.provider });
     const context={...connection,trip,draft,readingLanguage,callerMemberId:trip.members.find(member=>member.userId===profile.id)?.id??null};
-    const started = operation;
+    const started = operation, held = claim;
     const work = (async (): Promise<Response> => {
       const answer = values.questionId ? await processReceiptQuestion({...context,questionId:values.questionId},{signal}) : undefined;
       const transcription = imageData ? await processReceiptImage({...context,image:imageData},{signal}) : undefined;
@@ -107,9 +128,13 @@ export async function POST(request: Request) {
           imageIds: values.receiptId ? [values.receiptId] : [],
         });
         currentTrip.drafts[currentTrip.drafts.findIndex(value => value.id === proposal.id)] = proposal;
+        // R06: a superseded attempt (its claim was taken over after its lease
+        // ran out) never commits; the newer attempt owns the result.
+        if (!await holdsOperation(database, held.key, held.attemptId)) throw new RequestError('Another reading of this receipt took over. Refresh to see its result.', 409);
         try {
           const saved = await writeLedger(profile.id, { trips: [currentTrip] }, latest.revision, { source: 'web', tripSnapshot, processing: true });
           const savedDraft = saved.data.trips.find(value => value.id === trip.id)?.drafts.find(value => value.id === draft.id);
+          await finishOperation(database, held.key, held.attemptId, 'stored');
           logOperation('native-proposal-stored', started, {
             status: savedDraft?.receiptScan?.status, lineCount: savedDraft?.items.length ?? 0, revision: saved.revision });
           return Response.json({ ...saved, draft: savedDraft }, { headers: { 'Cache-Control': 'private, no-store' } });
@@ -120,12 +145,15 @@ export async function POST(request: Request) {
       throw new RequestError('Your ledger kept changing during processing. Refresh before trying again.', 409);
     })();
     // Keep the reading alive after the client disconnects; errors still reach a connected client.
-    try { waitUntil(work.then(() => undefined, error => { logOperation('native-processing-failed', started, { category: 'detached' }); void error; })); } catch { /* Not running in a Worker (tests). */ }
-    return await work;
+    // A failure records the outcome on the claim, so a later request may retry.
+    const settled = work.catch(async error => { await finishOperation(database, held.key, held.attemptId, 'failed', { errorCode: errorCategory(error) }).catch(() => {}); throw error; });
+    try { waitUntil(settled.then(() => undefined, error => { logOperation('native-processing-failed', started, { category: 'detached' }); void error; })); } catch { /* Not running in a Worker (tests). */ }
+    claim = undefined;
+    return await settled;
   } catch (error) {
-    if (operation) logOperation('native-processing-failed', operation, {
-      category: error instanceof ReceiptAIError || error instanceof ReceiptAIAccessError ? error.code
-        : error instanceof RequestError && error.status === 409 ? 'ledger-changed' : 'processing-failed' });
+    // A failure before the work started (key, budget, preferences) also ends the claim.
+    if (claim) await finishOperation(db(), claim.key, claim.attemptId, 'failed', { errorCode: errorCategory(error) }).catch(() => {});
+    if (operation) logOperation('native-processing-failed', operation, { category: errorCategory(error) });
     if (error instanceof ReceiptAIError || error instanceof ReceiptAIAccessError) {
       return Response.json({ error: error.message, code: error.code }, { status: error.status, headers: { 'Cache-Control': 'private, no-store' } });
     }

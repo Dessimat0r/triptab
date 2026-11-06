@@ -1370,6 +1370,15 @@ export default function Home({ children }: { children: ReactNode }) {
       if (!current || current.receiptId !== draft.receiptId || current.expenseId !== draft.expenseId) return false;
       if (!response.ok) throw Error(snapshot.error || (questionId ? "The assistant could not answer. Your saved question and edits are still here." : "ChatGPT could not read this receipt. Your saved photo and edits are still here."));
       applySnapshot(snapshot, "", true);
+      if (response.status === 202) {
+        // R06: another request (this person on another device, or someone
+        // else on the trip) is already reading this receipt. Nothing was
+        // spent here; its proposal arrives with a refresh.
+        if (!questionId) keepReading = true;
+        setReceiptHandoffError(questionId ? "This question is already being answered. The reply appears here automatically." : "This receipt is already being read. The items appear here automatically.");
+        setTimeout(() => { void load({ background: true, fresh: true }); }, 5000);
+        return false;
+      }
       return true;
     } catch (cause) {
       // F-11: a dropped connection (phone locked, app left) does not stop the

@@ -265,6 +265,8 @@ export async function deleteAccount(
     'notifications',
     'memberships',
     'account_activity_events',
+    // R06: the account's receipt-processing claims (identifiers only).
+    'receipt_operations',
   ])
     statements.push(
       database

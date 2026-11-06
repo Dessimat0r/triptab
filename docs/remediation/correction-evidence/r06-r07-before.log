@@ -1,0 +1,284 @@
+TripTab receipt operation {
+  event: 'native-processing-started',
+  attemptId: 'c4ed2e75-a5b4-4b4f-939d-346b9c639a82',
+  tripId: 'holiday',
+  draftId: 'draft',
+  receiptId: 'photo',
+  provider: 'api'
+}
+TripTab receipt operation {
+  event: 'native-processing-started',
+  attemptId: 'cf6adbbc-abc9-41b0-9b95-3fc6cbe3ae58',
+  tripId: 'holiday',
+  draftId: 'draft',
+  receiptId: 'photo',
+  provider: 'api'
+}
+TripTab receipt operation {
+  event: 'native-proposal-stored',
+  attemptId: 'cf6adbbc-abc9-41b0-9b95-3fc6cbe3ae58',
+  tripId: 'holiday',
+  draftId: 'draft',
+  receiptId: 'photo',
+  status: 'matched',
+  lineCount: 2,
+  revision: 8
+}
+✖ R06: simultaneous identical requests make one provider call and store one proposal; the second is told it is already reading (69.049163ms)
+TripTab receipt operation {
+  event: 'native-processing-started',
+  attemptId: '2f352ff1-cb34-45dc-a6ef-58961ee73871',
+  tripId: 'holiday',
+  draftId: 'draft',
+  receiptId: 'photo',
+  provider: 'api'
+}
+TripTab receipt operation {
+  event: 'native-processing-started',
+  attemptId: '184b6dc8-6275-4111-a63e-f43ad66fd353',
+  tripId: 'holiday',
+  draftId: 'draft',
+  receiptId: 'photo',
+  provider: 'api'
+}
+TripTab receipt operation {
+  event: 'native-proposal-stored',
+  attemptId: '184b6dc8-6275-4111-a63e-f43ad66fd353',
+  tripId: 'holiday',
+  draftId: 'draft',
+  receiptId: 'photo',
+  status: 'matched',
+  lineCount: 2,
+  revision: 8
+}
+✖ R06: repeated requests while one is reading (reconnects, other members) neither spend, consume budget nor write (10.645703ms)
+TripTab receipt operation {
+  event: 'native-processing-started',
+  attemptId: '865316f7-dc3e-4f42-999a-1e05c0652f46',
+  tripId: 'holiday',
+  draftId: 'draft',
+  receiptId: 'photo',
+  provider: 'api'
+}
+TripTab receipt operation {
+  event: 'native-proposal-stored',
+  attemptId: '865316f7-dc3e-4f42-999a-1e05c0652f46',
+  tripId: 'holiday',
+  draftId: 'draft',
+  receiptId: 'photo',
+  status: 'matched',
+  lineCount: 2,
+  revision: 8
+}
+✖ R07: a cut-off attempt (lease expired after the provider accepted) is taken over once by the next request, which stores one proposal (15.127872ms)
+TripTab receipt operation {
+  event: 'native-processing-started',
+  attemptId: 'c3ea72be-dd36-42d9-90fc-e70cdea9b487',
+  tripId: 'holiday',
+  draftId: 'draft',
+  receiptId: 'photo',
+  provider: 'api'
+}
+TripTab receipt operation {
+  event: 'native-processing-failed',
+  attemptId: 'c3ea72be-dd36-42d9-90fc-e70cdea9b487',
+  tripId: 'holiday',
+  draftId: 'draft',
+  receiptId: 'photo',
+  category: 'detached'
+}
+TripTab receipt operation {
+  event: 'native-processing-failed',
+  attemptId: 'c3ea72be-dd36-42d9-90fc-e70cdea9b487',
+  tripId: 'holiday',
+  draftId: 'draft',
+  receiptId: 'photo',
+  category: 'receipt_processing_failed'
+}
+✖ R07: failure before persistence is recorded and a retry may claim again; failure after persistence cannot rerun (5.573932ms)
+TripTab receipt operation {
+  event: 'native-processing-started',
+  attemptId: 'e5c698ae-5614-405f-8c26-89bf1d648e3f',
+  tripId: 'holiday',
+  draftId: 'draft',
+  receiptId: 'photo',
+  provider: 'api'
+}
+TripTab receipt operation {
+  event: 'native-processing-started',
+  attemptId: '321859f5-d0bb-47f4-8241-7c25e92ae180',
+  tripId: 'holiday',
+  draftId: 'draft',
+  receiptId: 'photo',
+  provider: 'api'
+}
+TripTab receipt operation {
+  event: 'native-proposal-stored',
+  attemptId: '321859f5-d0bb-47f4-8241-7c25e92ae180',
+  tripId: 'holiday',
+  draftId: 'draft',
+  receiptId: 'photo',
+  status: 'matched',
+  lineCount: 2,
+  revision: 8
+}
+TripTab receipt operation {
+  event: 'native-processing-failed',
+  attemptId: 'e5c698ae-5614-405f-8c26-89bf1d648e3f',
+  tripId: 'holiday',
+  draftId: 'draft',
+  receiptId: 'photo',
+  category: 'detached'
+}
+TripTab receipt operation {
+  event: 'native-processing-failed',
+  attemptId: 'e5c698ae-5614-405f-8c26-89bf1d648e3f',
+  tripId: 'holiday',
+  draftId: 'draft',
+  receiptId: 'photo',
+  category: 'ledger-changed'
+}
+✖ R07: a slow attempt superseded after its lease ran out cannot commit a second proposal (8.979951ms)
+TripTab receipt operation {
+  event: 'native-processing-started',
+  attemptId: '970b12ae-b102-4e47-8cfa-6454eb6530a7',
+  tripId: 'holiday',
+  draftId: 'draft',
+  receiptId: 'photo',
+  provider: 'api'
+}
+TripTab receipt operation {
+  event: 'native-processing-failed',
+  attemptId: '970b12ae-b102-4e47-8cfa-6454eb6530a7',
+  tripId: 'holiday',
+  draftId: 'draft',
+  receiptId: 'photo',
+  category: 'detached'
+}
+TripTab receipt operation {
+  event: 'native-processing-failed',
+  attemptId: '970b12ae-b102-4e47-8cfa-6454eb6530a7',
+  tripId: 'holiday',
+  draftId: 'draft',
+  receiptId: 'photo',
+  category: 'ledger-changed'
+}
+✖ R06/R07: changed draft, photo or membership during reading leaves the claim failed and no proposal (4.354119ms)
+ℹ tests 6
+ℹ suites 0
+ℹ pass 0
+ℹ fail 6
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1393.278138
+
+✖ failing tests:
+
+test at tests/receipt-ai.test.ts:3:23485
+✖ R06: simultaneous identical requests make one provider call and store one proposal; the second is told it is already reading (69.049163ms)
+  AssertionError [ERR_ASSERTION]: not 409, and no second provider call
+  
+  200 !== 202
+  
+      at TestContext.<anonymous> (/tmp/claude-0/-home-user-triptab/515433d0-bb30-53e4-accf-82f10631ed55/scratchpad/prefix/tests/receipt-ai.test.ts:1494:10)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 200,
+    expected: 202,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/receipt-ai.test.ts:3:24178
+✖ R06: repeated requests while one is reading (reconnects, other members) neither spend, consume budget nor write (10.645703ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  200 !== 202
+  
+      at TestContext.<anonymous> (/tmp/claude-0/-home-user-triptab/515433d0-bb30-53e4-accf-82f10631ed55/scratchpad/prefix/tests/receipt-ai.test.ts:1512:50)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 200,
+    expected: 202,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/receipt-ai.test.ts:3:24827
+✖ R07: a cut-off attempt (lease expired after the provider accepted) is taken over once by the next request, which stores one proposal (15.127872ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+    [
+      [
+  +     'running',
+  +     1
+  -     'stored',
+  -     2
+      ]
+    ]
+  
+      at TestContext.<anonymous> (/tmp/claude-0/-home-user-triptab/515433d0-bb30-53e4-accf-82f10631ed55/scratchpad/prefix/tests/receipt-ai.test.ts:1534:10)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [ [ 'running', 1 ] ],
+    expected: [ [ 'stored', 2 ] ],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at tests/receipt-ai.test.ts:3:25951
+✖ R07: failure before persistence is recorded and a retry may claim again; failure after persistence cannot rerun (5.573932ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+  + []
+  - [
+  -   'failed'
+  - ]
+  
+      at TestContext.<anonymous> (/tmp/claude-0/-home-user-triptab/515433d0-bb30-53e4-accf-82f10631ed55/scratchpad/prefix/tests/receipt-ai.test.ts:1542:10)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [],
+    expected: [ 'failed' ],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at tests/receipt-ai.test.ts:3:26733
+✖ R07: a slow attempt superseded after its lease ran out cannot commit a second proposal (8.979951ms)
+  TypeError [Error]: Cannot read properties of undefined (reading 'status')
+      at TestContext.<anonymous> (/tmp/claude-0/-home-user-triptab/515433d0-bb30-53e4-accf-82f10631ed55/scratchpad/prefix/tests/receipt-ai.test.ts:1571:25)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+
+test at tests/receipt-ai.test.ts:3:27491
+✖ R06/R07: changed draft, photo or membership during reading leaves the claim failed and no proposal (4.354119ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+  + []
+  - [
+  -   'failed'
+  - ]
+  
+      at TestContext.<anonymous> (/tmp/claude-0/-home-user-triptab/515433d0-bb30-53e4-accf-82f10631ed55/scratchpad/prefix/tests/receipt-ai.test.ts:1583:12)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [],
+    expected: [ 'failed' ],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
