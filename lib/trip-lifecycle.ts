@@ -191,3 +191,62 @@ async function deleteTripRecord(database: D1Database, actor: Actor, rawTripId: u
   if (!results[0].meta.changes) throw new TripLifecycleError(discard ? discardError : tripMessage(trip, 'Another traveller joined or the holiday changed. Refresh and try again.'), 409);
   return { tripName: trip.name };
 }
+
+/** Trips the account can open: owned or joined. */
+const reachable = `SELECT id FROM trips WHERE owner = ? UNION SELECT trip_id FROM memberships WHERE user_id = ?`;
+
+/**
+ * Accounts that already share at least one holiday or bill with this account
+ * (D03). Only display names are returned: no emails or contact details. The
+ * relationship comes from ownership and memberships, never from names.
+ */
+export async function listConnections(database: D1Database, user: string): Promise<{ id: string; name: string }[]> {
+  const rows = await database.prepare(`SELECT p.id, p.display_name FROM profiles p WHERE p.id <> ? AND p.id IN (
+      SELECT m.user_id FROM memberships m WHERE m.trip_id IN (${reachable})
+      UNION SELECT t.owner FROM trips t WHERE t.id IN (${reachable})
+    ) ORDER BY p.display_name COLLATE NOCASE, p.id LIMIT 200`).bind(user, user, user, user, user).all<{ id: string; display_name: string }>();
+  return (rows.results ?? []).map(row => ({ id: row.id, name: row.display_name.slice(0, 50) }));
+}
+
+/**
+ * Link a connected account to an unlinked person on a bill (F-04, D03): the
+ * bill then appears in their list. The server checks every condition again
+ * in the same compare-and-swap commit: the actor can open the bill, the
+ * person is still unlinked, the account is not already on it, and the two
+ * accounts already share another holiday or bill. Only that one bill becomes
+ * visible to them; nothing else of the actor's is reachable.
+ */
+export async function addConnectedMember(database: D1Database, actor: Actor, rawTripId: unknown, rawMemberId: unknown, rawAccountId: unknown) {
+  const id = tripId(rawTripId);
+  if (typeof rawMemberId !== 'string' || !rawMemberId || rawMemberId.length > 100) throw new TripLifecycleError('Choose a person on this bill.');
+  if (typeof rawAccountId !== 'string' || !rawAccountId || rawAccountId.length > 512) throw new TripLifecycleError('Choose someone you already share a holiday or bill with.');
+  if (rawAccountId === actor.id) throw new TripLifecycleError('You are already on this bill.');
+  const row = await database.prepare(`SELECT t.owner, t.data FROM trips t WHERE t.id = ? AND ${access}`).bind(id, actor.id, actor.id)
+    .first<{ owner: string; data: string }>();
+  if (!row) throw new TripLifecycleError('Bill not found.', 404);
+  const trip = JSON.parse(row.data) as Trip;
+  if (!isBill(trip)) throw new TripLifecycleError('People can be added directly only to bills. Use an invitation for a holiday.');
+  const member = trip.members.find(value => value.id === rawMemberId);
+  if (!member) throw new TripLifecycleError('That person is no longer on this bill. Refresh and try again.', 409);
+  const connected = `EXISTS (SELECT 1 FROM (${reachable}) mine JOIN (${reachable}) theirs ON theirs.id = mine.id WHERE mine.id <> ?)`;
+  const connection = await database.prepare(`SELECT 1 AS ok WHERE ${connected}`).bind(actor.id, actor.id, rawAccountId, rawAccountId, id).first<{ ok: number }>();
+  if (!connection) throw new TripLifecycleError('You can add someone directly only if you already share a holiday or bill with them. Send them an invitation instead.', 403);
+  const profile = await database.prepare('SELECT display_name FROM profiles WHERE id = ?').bind(rawAccountId).first<{ display_name: string }>();
+  if (!profile) throw new TripLifecycleError('That account is no longer available.', 404);
+  const linked = { ...member, userId: rawAccountId };
+  delete linked.email;
+  const next = { ...trip, members: trip.members.map(value => value.id === member.id ? linked : value) };
+  await ensureSyncState(database);
+  const marker = crypto.randomUUID();
+  const results = await database.batch([
+    advanceRevision(database, actor, marker, `EXISTS (SELECT 1 FROM trips t WHERE t.id = ? AND t.data = ? AND ${access})
+      AND NOT EXISTS (SELECT 1 FROM memberships WHERE trip_id = ? AND (user_id = ? OR member_id = ?))
+      AND NOT EXISTS (SELECT 1 FROM trips WHERE id = ? AND owner = ?)
+      AND ${connected}`, [id, row.data, actor.id, actor.id, id, rawAccountId, member.id, id, rawAccountId, actor.id, actor.id, rawAccountId, rawAccountId, id]),
+    database.prepare(`INSERT INTO memberships (trip_id, user_id, member_id) SELECT ?, ?, ? WHERE ${marked}`).bind(id, rawAccountId, member.id, marker),
+    database.prepare(`UPDATE trips SET data = ? WHERE id = ? AND ${marked}`).bind(JSON.stringify(next), id, marker),
+    ...activityStatements(database, [{ tripId: id, entityType: 'member', entityId: member.id, action: 'update', before: { ...member }, after: linked }], actor, marker, 'current'),
+  ]);
+  if (!results[0].meta.changes) throw new TripLifecycleError('This bill or that person changed, or they are already on it. Refresh and try again.', 409);
+  return { tripName: trip.name, memberId: member.id, memberName: member.name, accountName: profile.display_name };
+}

@@ -3844,5 +3844,23 @@
     "Revocada por el propietario de la cuenta",
     "Révoquée par le propriétaire de la note",
     "Vom Rechnungsinhaber widerrufen"
+  ],
+  [
+    "· on TripTab",
+    "· en TripTab",
+    "· sur TripTab",
+    "· bei TripTab"
+  ],
+  [
+    "People on TripTab you share a holiday or bill with",
+    "Personas en TripTab con las que compartes un viaje o una cuenta",
+    "Personnes sur TripTab avec qui vous partagez un voyage ou une note",
+    "Personen bei TripTab, mit denen du einen Urlaub oder eine Rechnung teilst"
+  ],
+  [
+    "Add {value0} (on TripTab)",
+    "Añadir a {value0} (en TripTab)",
+    "Ajouter {value0} (sur TripTab)",
+    "{value0} hinzufügen (bei TripTab)"
   ]
 ]

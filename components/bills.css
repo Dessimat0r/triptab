@@ -20,3 +20,22 @@
 @media (max-width: 700px) { .bill-view .sectionheading { flex-wrap: wrap; gap: var(--space-3); } }
 @media (max-width: 480px) { .bill-people, .bill-options { padding: var(--space-4); } .bill-people .trip-details-panel { padding: var(--space-4); } }
 .holiday-actions { flex-wrap: wrap; }
+/* F-04: verified connections in Split a bill. */
+.bill-connected button small, .bill-name-chips button small { color: var(--muted); font-weight: 400; }
+/* F-05: Activity and people. */
+.personal-activity { display: grid; gap: var(--space-3); }
+.personal-activity .segmented { display: flex; gap: var(--space-2); }
+.personal-activity .segmented button { min-height: 44px; flex: 1; }
+.activity-filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: var(--space-2); }
+.activity-filters label { display: grid; gap: var(--space-1); }
+.activity-list, .people-list { display: grid; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
+.activity-row { display: flex; justify-content: space-between; gap: var(--space-3); width: 100%; min-height: 44px; padding: var(--space-3); text-align: left; border: 1px solid var(--line); border-radius: var(--radius-m); }
+.activity-row > span { display: grid; min-width: 0; overflow-wrap: anywhere; }
+.activity-row small { color: var(--muted); }
+.activity-amount { text-align: right; font-variant-numeric: tabular-nums; }
+.people-list > li { padding: var(--space-3); border: 1px solid var(--line); border-radius: var(--radius-m); }
+.people-list h3 { margin: 0 0 var(--space-2); }
+.people-currency p { margin: 0 0 var(--space-1); font-variant-numeric: tabular-nums; }
+.people-currency small { color: var(--muted); }
+.people-currency .action-row { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.people-currency .action-row button { min-height: 44px; }

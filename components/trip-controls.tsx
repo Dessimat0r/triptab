@@ -5,7 +5,8 @@ import { useEffect, useId, useState } from 'react';
 import { useConfirmation } from './confirmation-dialog';
 import ModalA11y from './modal-accessibility';
 import PagedList, { useListPaging } from './paged-list';
-import { isBill, type Trip } from '@/lib/model';
+import { balances, isBill, type Trip } from '@/lib/model';
+import { formatMoney } from '@/lib/money-format';
 import type { ArchivedTrip } from '@/lib/trip-lifecycle';
 import './trip-controls.css';
 
@@ -40,14 +41,23 @@ export default function TripControls({
     [message, setMessage] = useState('');
   const { confirm, dialog } = useConfirmation(`${trip.id}:${accountId}`);
   const own = trip.ownerId === accountId;
+  // F-04: leaving never erases what someone owes; say what remains.
+  function leaveBalance() {
+    try {
+      const index = trip.members.findIndex(member => member.userId === accountId);
+      if (index < 0) return '';
+      const value = balances(trip)[index];
+      const amount = formatMoney(Math.abs(value), trip.currency);
+      return value < 0 ? `You still owe ${amount} on this ${isBill(trip) ? 'bill' : 'holiday'}. ` : value > 0 ? `You are still owed ${amount}. ` : 'You are settled. ';
+    } catch { return ''; }
+  }
   async function action(value: 'archive' | 'leave' | 'transfer' | 'delete') {
     if (busy || saving) return;
     if (
       value === 'leave' &&
       !(await confirm({
         title: isBill(trip) ? 'Leave this bill?' : 'Leave this holiday?',
-        message:
-          'You will lose access. Your expenses, payments and balance remain in the group’s records.',
+        message: `${leaveBalance()}You will lose access. Your expenses, payments and balance remain in the group’s records; leaving does not settle them.`,
         confirmLabel: isBill(trip) ? 'Leave bill' : 'Leave holiday',
         destructive: true,
       }))
