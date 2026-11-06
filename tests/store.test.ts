@@ -2195,3 +2195,51 @@ test('first approved bill scan may adopt currency only while consuming its sole 
   state.data.trips[0].expenses = [{ ...dinner(), currency: 'EUR', sourceDraftId: 'scan' }]; state.data.trips[0].drafts = [];
   assert.equal((await store.writeLedger(actor, state.data, state.revision)).data.trips[0].currency, 'EUR');
 });
+
+test('F-01 persistence rejects silent BOGOF mismatch and records a reasoned exception without touching payments', async () => {
+  const database = await storage();
+  let state = await create(database);
+  const { acknowledgeReceiptReview, acknowledgeReceiptDifference } = await import('../lib/receipt-scan');
+  const entry = { ...dinner(), items: [{ id: 'p1', name: 'Pringles', amount: 300, members: ['a'] },
+    { id: 'p2', name: 'Pringles', amount: 300, members: ['a'] }, { id: 'milk', name: 'Milk', amount: 150, members: ['a', 'b'] }],
+    receiptScan: { version: 1 as const, printedTotal: 450, printedCurrency: 'GBP', status: 'matched' as const, warnings: [],
+      sourceLines: [{ lineIndex: 3, observedText: 'BOGOF -3.00', amount: -300, kind: 'adjustment' as const, mappedTo: 'unmapped' as const }] } };
+  state.data.trips[0].expenses = [acknowledgeReceiptReview(entry)];
+  const before = database.sqlite.prepare('SELECT data FROM trips').get()?.data;
+  await assert.rejects(store.writeLedger(actor, state.data, state.revision), /written reason/);
+  assert.equal(database.sqlite.prepare('SELECT data FROM trips').get()?.data, before);
+  state.data.trips[0].expenses = [acknowledgeReceiptDifference(entry, 'Owner is reviewing the qualifying promotion.')];
+  state = await store.writeLedger(actor, state.data, state.revision);
+  const saved = state.data.trips[0].expenses[0];
+  assert.equal(saved.receiptScan?.calculatedTotal, 750);
+  assert.equal(saved.receiptScan?.status, 'needs-review');
+  assert.equal(saved.receiptScan?.acknowledgement?.reason, 'Owner is reviewing the qualifying promotion.');
+  const event = lastEntity(await history(), 'expense', entry.id);
+  assert.equal((event.after?.receiptScan as typeof saved.receiptScan)?.acknowledgement?.reason, saved.receiptScan?.acknowledgement?.reason);
+  assert.deepEqual(state.data.trips[0].payments, []);
+});
+
+test('F-01 historical receipt audit includes authorised archived records, excludes unrelated bills and never writes', async () => {
+  const database = await storage();
+  const own = trip('own'); const shared = trip('shared'); const unrelated = trip('unrelated');
+  for (const [value, owner] of [[own, actor], [shared, member], [unrelated, member]] as const) {
+    value.ownerId = owner;
+    value.expenses = [{ ...dinner(), receiptScan: { version: 1, printedTotal: 10000, status: 'needs-review', warnings: [] } }];
+    database.sqlite.prepare('INSERT INTO trips(id,owner,data) VALUES(?,?,?)').run(value.id, owner, JSON.stringify(value));
+  }
+  database.sqlite.prepare('INSERT INTO memberships(trip_id,user_id,member_id) VALUES(?,?,?)').run('shared', actor, 'a');
+  database.sqlite.prepare('INSERT INTO trip_archives(user_id,trip_id,archived_at) VALUES(?,?,?)').run(actor, 'own', '2026-11-06T00:00:00Z');
+  const snapshot = () => JSON.stringify(['trips', 'activity_events', 'memberships', 'trip_archives', 'sync_state'].map(table => database.sqlite.prepare(`SELECT * FROM ${table}`).all()));
+  const before = snapshot();
+  const first = await store.readReceiptAuditTrips(actor, { limit: 1 });
+  assert.deepEqual(first.trips.map(value => value.id), ['own']); assert.equal(first.nextCursor, 'own');
+  const second = await store.readReceiptAuditTrips(actor, { limit: 1, after: first.nextCursor! });
+  assert.deepEqual(second.trips.map(value => value.id), ['shared']); assert.equal(second.nextCursor, null);
+  const { auditHistoricalReceipts } = await import('../lib/historical-receipt-audit');
+  const findings = auditHistoricalReceipts({ trips: [...first.trips, ...second.trips] });
+  assert.equal(findings.length, 2); assert.ok(findings.every(value => value.difference === 2345));
+  await assert.rejects(store.readReceiptAuditTrips(actor, { tripId: 'unrelated' }), /not found/);
+  await assert.rejects(store.readReceiptAuditTrips(actor, { tripId: 'guessed' }), /not found/);
+  await assert.rejects(store.readReceiptAuditTrips(actor, { limit: 1000 }), /valid receipt audit/);
+  assert.equal(snapshot(), before);
+});

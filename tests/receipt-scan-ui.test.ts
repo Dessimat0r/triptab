@@ -89,11 +89,15 @@ test('printed currency is displayed independently and a wrong original currency 
   assert.doesNotMatch(ui.text, /Receipt totals match exactly/);
 });
 
-test('one-cent mismatch appears in the acceptance summary without an editing acknowledgement', () => {
+test('one-cent mismatch is a blocker under Check & save, never an acceptance point', () => {
   const value = entry({receiptScan: {version: 1, printedTotal: 1201, status: 'matched', warnings: []}});
   const ui=render(value);
-  assert.match(ui.text,/Itemised total differs from printed total by €0.01/);
-  assert.match(ui.text,/Confirm & save expense accepts/);
+  assert.match(ui.text,/€0\.01 difference to explain/);
+  assert.match(ui.text,/Saving is blocked until you reconcile the difference or record an exception/);
+  // Each fact is said once: the Purchase evidence and the acceptance summary do not repeat it.
+  assert.doesNotMatch(text(ui.evidence),/difference to explain|differ from the printed total/);
+  assert.doesNotMatch(ui.text,/Confirm & save expense accepts/);
+  assert.equal(ui.elements.filter(element=>element.type==='textarea').length,0,'no exception form without an editor to record it');
   assert.equal(ui.elements.filter(element=>element.type==='input' && element.props.type==='checkbox').length,0);
   assert.equal(ui.changed,undefined);assert(scan.receiptScanSaveError(value));
   // The receipt's thumbnail is the one way to see the photo; the summary links to lines instead.
@@ -102,7 +106,7 @@ test('one-cent mismatch appears in the acceptance summary without an editing ack
 
 test('an unmapped adjustment is named with its printed evidence for the final confirmation', () => {
   const value=entry({receiptScan:{version:1,printedTotal:1200,status:'matched',warnings:[],sourceLines:[{kind:'adjustment',mappedTo:'unmapped',amount:-100,observedText:'Item coupon -1,00',lineIndex:8}]}});
-  const ui=render(value);assert.match(ui.text,/Correct the affected item's full line price and shares/);
+  const ui=render(value);assert.match(ui.text,/Review its scope and add the appropriate adjustment; keep original item prices/);
   assert.match(ui.text,/A discount, refund or charge needs checking/);assert.match(ui.text,/Item coupon -1,00/);assert.match(ui.text,/line 9/);
   assert.equal(ui.elements.filter(element=>element.type==='button').length,0);assert.equal(ui.changed,undefined);
   assert(scan.receiptScanSaveError(value));assert.equal(scan.receiptScanSaveError(scan.acknowledgeReceiptReview(value)),null);
