@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { canonicalJson } from './data-utils';
 
 /**
  * Discounts and charges as separate records (F-02, D01). Item prices stay as
@@ -36,6 +37,12 @@ export const adjustmentSchema = z.object({
   allocation: z.record(id, z.number().int().min(0).max(MAX_AMOUNT)).optional(),
   /** Zero-based receipt line this adjustment came from. One line maps to one adjustment. */
   sourceLineIndex: z.number().int().min(0).max(999).optional(),
+  /**
+   * Who controls the record (R05). 'receipt': a reading's proposal that no
+   * person has changed or confirmed; a later reading may replace it. Absent or
+   * 'user': a person's record, which processing never replaces or rewrites.
+   * The printed line it came from stays in sourceLineIndex either way.
+   */
   source: z.enum(['user', 'receipt']).optional(),
 }).strict().superRefine((value, context) => {
   if ((value.amount === undefined) === (value.percent === undefined)) {
@@ -50,6 +57,29 @@ export const adjustmentSchema = z.object({
 });
 export type Adjustment = z.infer<typeof adjustmentSchema>;
 export const adjustmentsSchema = z.array(adjustmentSchema).max(20);
+
+/** Whether a person controls this record, so processing must keep it exactly (R05). */
+export const personControlled = (adjustment: Pick<Adjustment, 'source'>) => adjustment.source !== 'receipt';
+
+function sameRecord(left: Adjustment, right: Adjustment) {
+  return canonicalJson({ ...left, source: undefined }) === canonicalJson({ ...right, source: undefined });
+}
+
+/**
+ * A person's write that changes a reading's proposal takes control of it
+ * (R05): amount, percentage, scope, allocation or label edited by a person is
+ * theirs, with its printed-line evidence kept, and a record already theirs
+ * stays theirs. Records with no earlier version
+ * are left exactly as sent, so restoring or posting a saved draft is exact.
+ */
+export function claimEditedProposals(adjustments: readonly Adjustment[], earlier: ReadonlyMap<string, Adjustment>): Adjustment[] {
+  return adjustments.map(adjustment => {
+    if (adjustment.source !== 'receipt') return adjustment;
+    const previous = earlier.get(adjustment.id);
+    // A person's record also stays theirs if a stale copy sends it back as a proposal.
+    return previous && (personControlled(previous) || !sameRecord(previous, adjustment)) ? { ...adjustment, source: 'user' as const } : adjustment;
+  });
+}
 
 type Line = { id?: string; amount: number | null };
 export type AppliedAdjustment = { id: string; amount: number; allocation?: Record<string, number> };

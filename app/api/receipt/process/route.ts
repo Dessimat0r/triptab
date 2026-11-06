@@ -108,7 +108,7 @@ export async function POST(request: Request) {
         });
         currentTrip.drafts[currentTrip.drafts.findIndex(value => value.id === proposal.id)] = proposal;
         try {
-          const saved = await writeLedger(profile.id, { trips: [currentTrip] }, latest.revision, { source: 'web', tripSnapshot });
+          const saved = await writeLedger(profile.id, { trips: [currentTrip] }, latest.revision, { source: 'web', tripSnapshot, processing: true });
           const savedDraft = saved.data.trips.find(value => value.id === trip.id)?.drafts.find(value => value.id === draft.id);
           logOperation('native-proposal-stored', started, {
             status: savedDraft?.receiptScan?.status, lineCount: savedDraft?.items.length ?? 0, revision: saved.revision });

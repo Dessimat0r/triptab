@@ -2,7 +2,7 @@ import { sha256Hex } from './data-utils';
 import { languageSchema, RECEIPT_LANGUAGES, mergeScannedNames, receiptLanguageHint, type ReceiptLanguage } from './receipt-languages';
 import { DEFAULT_RECEIPT_MODEL } from './receipt-ai-config';
 import { z } from 'zod';
-import { adjustmentSchema, applyAdjustments, type Adjustment } from './adjustments';
+import { personControlled, adjustmentSchema, applyAdjustments, type Adjustment } from './adjustments';
 import { CURRENCIES, MAX_AMOUNT, MAX_UNITS, draftSchema, receiptQuantitySchema, total, type Currency, type Draft, type Trip } from './model';
 import { blankReceiptItem, mayRecognizeUnknownProvenance, mergeReceiptSourceLines, reconcileReceiptScan, type ReceiptScanWarning } from './receipt-scan';
 import { receiptChangesSchema, receiptChangesJsonSchema, applyReceiptChanges, receiptExpenseIconSchema, receiptExpenseIconJsonSchema, nextSuggestedIcon } from './receipt-proposals';
@@ -514,9 +514,11 @@ export function applyReceiptTranscription(_trip: Trip, draft: Draft, transcripti
     for (const [index, item] of value.items.entries()) if (item.name === null) warnings.push({ code: 'uncertain-description', itemId: updates[index].id });
   }
   // Promotions become discount records only with clear, valid qualifying lines
-  // (F-10). A person's own records survive a rescan; earlier receipt-read ones
-  // are replaced. Anything unclear stays an unmapped line for a person.
-  const proposedAdjustments: Adjustment[] = (draft.adjustments ?? []).filter(adjustment => adjustment.source !== 'receipt');
+  // (F-10). A person's own records, including a reading's proposal they
+  // changed (R05), survive a rescan exactly and keep their printed line;
+  // earlier unchanged proposals are replaced. Anything unclear stays an
+  // unmapped line for a person.
+  const proposedAdjustments: Adjustment[] = (draft.adjustments ?? []).filter(personControlled);
   const appliedLines = new Set(proposedAdjustments.flatMap(adjustment => adjustment.sourceLineIndex === undefined ? [] : [adjustment.sourceLineIndex]));
   for (const candidate of value.adjustments ?? []) {
     if (candidate.sourceLineIndex !== null && appliedLines.has(candidate.sourceLineIndex)) continue;

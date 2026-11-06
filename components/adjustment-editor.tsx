@@ -102,8 +102,10 @@ function AdjustmentForm({ entry, members, draft, onSave, onCancel }: {
     ...(mode === "amount" ? { amount: amount! } : { percent: percent! }),
     scope: scopeType === "receipt" ? { type: "receipt" } : { type: "items", itemIds: chosen },
     ...(allocation ? { allocation } : {}),
+    // R05: whatever a person saves here is theirs, so a later reading never
+    // replaces it; the printed line it came from stays as evidence.
     ...(draft.sourceLineIndex !== undefined ? { sourceLineIndex: draft.sourceLineIndex } : {}),
-    source: draft.source ?? "user",
+    source: "user",
   } : null;
   // R03: one ordered list, with an edited row kept in place, for the
   // preview, its validation and Save. Shares use the rule Save stamps.

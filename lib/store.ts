@@ -532,9 +532,9 @@ async function validateTripReceiptMemory(trip: Trip, previous: Trip | undefined,
   return changed;
 }
 
-export async function writeLedger(id: string, data: unknown, revision: unknown, options: { source?: ActivitySource; includeFreshness: true; tripSnapshot?: Trip; preserveCalculationRules?: boolean; ownerMemberIds?: Record<string,string>; tripRevisions?: Record<string, number> }): Promise<LedgerSnapshot>;
-export async function writeLedger(id: string, data: unknown, revision: unknown, options?: { source?: ActivitySource; includeFreshness?: false; tripSnapshot?: Trip; preserveCalculationRules?: boolean; ownerMemberIds?: Record<string,string>; tripRevisions?: Record<string, number> }): Promise<{ data: Ledger; revision: number; revisions: Record<string, number> }>;
-export async function writeLedger(id: string, data: unknown, revision: unknown, options: { source?: ActivitySource; includeFreshness?: boolean; tripSnapshot?: Trip; preserveCalculationRules?: boolean; ownerMemberIds?: Record<string,string>; tripRevisions?: Record<string, number> } = {}) {
+export async function writeLedger(id: string, data: unknown, revision: unknown, options: { source?: ActivitySource; includeFreshness: true; tripSnapshot?: Trip; preserveCalculationRules?: boolean; processing?: boolean; ownerMemberIds?: Record<string,string>; tripRevisions?: Record<string, number> }): Promise<LedgerSnapshot>;
+export async function writeLedger(id: string, data: unknown, revision: unknown, options?: { source?: ActivitySource; includeFreshness?: false; tripSnapshot?: Trip; preserveCalculationRules?: boolean; processing?: boolean; ownerMemberIds?: Record<string,string>; tripRevisions?: Record<string, number> }): Promise<{ data: Ledger; revision: number; revisions: Record<string, number> }>;
+export async function writeLedger(id: string, data: unknown, revision: unknown, options: { source?: ActivitySource; includeFreshness?: boolean; tripSnapshot?: Trip; preserveCalculationRules?: boolean; processing?: boolean; ownerMemberIds?: Record<string,string>; tripRevisions?: Record<string, number> } = {}) {
   // Parse bounded structure first. New financial rules are applied after access
   // checks, with trusted stored snapshots allowing unchanged legacy entries to
   // remain available until their owner explicitly repairs them.
@@ -672,7 +672,11 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
       }
     }
   }
-  ledger = validateLedger(ledger, { previous: { trips: validationPrevious }, source: !options.source || options.source === 'web' ? 'web' : 'mcp', preserveCalculationRules: options.preserveCalculationRules });
+  // R05: a person's write takes control of a discount proposal they changed;
+  // a reading's own write (processing) and assistant writes never do.
+  const personWrite = (!options.source || options.source === 'web') && !options.processing;
+  ledger = validateLedger(ledger, { previous: { trips: validationPrevious }, source: !options.source || options.source === 'web' ? 'web' : 'mcp',
+    preserveCalculationRules: options.preserveCalculationRules, claimEditedProposals: personWrite });
   checkLedgerSize(ledger);
   // Diff the final validated representation, so accepted normalization of new
   // fields and every explicit legacy repair have accurate history snapshots.

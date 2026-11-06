@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { adjustmentsSchema, applyAdjustments, type Adjustment } from './adjustments';
+import { adjustmentsSchema, applyAdjustments, claimEditedProposals, type Adjustment } from './adjustments';
 import { validCalendarDate } from './dates';
 import { receiptMemorySchema } from './receipt-context';
 import { receiptLocationSchema, receiptLocationHintSchema } from './receipt-location';
@@ -502,7 +502,12 @@ function financialValue(entry:Expense|Draft) {
   return {currency:entry.currency,payer:entry.payer,bankAmount:entry.bankAmount,rate:entry.fx?.rate,percentages:entry.percentages,
     tax:entry.tax,tip:entry.tip,discount:entry.discount,adjustments:entry.adjustments?.length?entry.adjustments:undefined,items:entry.items.map(item=>({id:item.id,amount:item.amount,members:item.members,percentages:item.percentages,units:item.units?{total:item.units.total,allocations:item.units.allocations}:undefined}))};
 }
-export function validateLedger(data: unknown, options: { previous?: Ledger; source?: 'web' | 'mcp'; preserveCalculationRules?: boolean } = {}): Ledger {
+/**
+ * `claimEditedProposals`: this write is a person's (the web ledger route), so a
+ * reading's discount proposal they changed becomes theirs (R05). Processing
+ * writes, imports and MCP never set it.
+ */
+export function validateLedger(data: unknown, options: { previous?: Ledger; source?: 'web' | 'mcp'; preserveCalculationRules?: boolean; claimEditedProposals?: boolean } = {}): Ledger {
   // `previous` is a server-side compatibility boundary, never request input.
   // New records and every changed record still use the strict schemas/rules.
   const previous = options.previous && parseLedgerStructure(options.previous);
@@ -546,6 +551,10 @@ export function validateLedger(data: unknown, options: { previous?: Ledger; sour
     }
     if (!unique(draftTargets)) throw new LedgerValidationError('An expense can only have one pending receipt draft');
     const unchanged = new Set<Expense | Draft>();
+    if (options.claimEditedProposals && prior) {
+      const earlier = new Map([...prior.expenses, ...prior.drafts].flatMap(entry => entry.adjustments ?? []).map(adjustment => [adjustment.id, adjustment]));
+      for (const entry of [...trip.expenses, ...trip.drafts]) if (entry.adjustments?.length) entry.adjustments = claimEditedProposals(entry.adjustments, earlier);
+    }
     if (prior?.currency === trip.currency) {
       for (const entry of trip.expenses) if (sameStoredValue(entry, prior.expenses.find(old => old.id === entry.id))) unchanged.add(entry);
       for (const entry of trip.drafts) if (sameStoredValue(entry, prior.drafts.find(old => old.id === entry.id))) unchanged.add(entry);
