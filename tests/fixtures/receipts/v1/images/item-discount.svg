@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="640" height="300" viewBox="0 0 640 300">
-<title>An item-specific discount remains visible evidence and is not counted twice</title>
+<title>An item-specific coupon is a discount on its own line only, counted once</title>
 <defs><filter id="obscured"><feGaussianBlur stdDeviation="2.5"/></filter></defs>
 <rect width="640" height="300" fill="#fff"/>
 <g fill="#111" font-family="monospace" font-size="22">

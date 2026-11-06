@@ -74,3 +74,9 @@ test('historical report classifies evidence without modifying any financial resu
   assert.deepEqual(original.trips[0].expenses.map(entry => expenseShares(entry, original.trips[0].members, 'GBP')), balancesBefore);
   assert.equal(reconcileReceiptScan(original.trips[0].expenses[0])!.calculatedTotal, 750);
 });
+
+test('historical report treats a promotion applied as a scoped discount as accounted for', () => {
+  const fixed: Expense = { ...receipt(), id: 'fixed', adjustments: [{ id: 'bogof', kind: 'discount', amount: 300, scope: { type: 'items', itemIds: ['p1', 'p2'] }, sourceLineIndex: 3, source: 'user' }] };
+  const report = auditHistoricalReceipts({ trips: [{ ...ledger().trips[0], expenses: [validateLedger(ledger(fixed)).trips[0].expenses[0]] }] });
+  assert.equal(report.length, 0, 'a reconciled, discount-applied receipt is clean');
+});

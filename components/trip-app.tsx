@@ -29,6 +29,8 @@ import ReceiptUploadDialog, { type ReceiptUploadContext } from "@/components/rec
 import ReceiptLocationFields, { type ReceiptPlace } from "@/components/receipt-location-fields";
 import ReceiptPhotoViewer from "@/components/receipt-photo-viewer";
 import ExpenseIconPicker from "@/components/expense-icon";
+import { parseAmountText } from "@/lib/amount-text";
+import AdjustmentEditor, { type AdjustmentDraft } from "@/components/adjustment-editor";
 import ReceiptScanReview, { ReceiptReviewSummary, receiptMoney } from "@/components/receipt-scan-review";
 import { acknowledgeReceiptReview, carryReviewAcknowledgements, pendingReviewActions, receiptScanSaveError, receiptWarningLabel, reconcileReceiptScan } from "@/lib/receipt-scan";
 import { manualFxReview } from "@/lib/expense-fx-review";
@@ -141,20 +143,6 @@ function conversionPreview(e: ReceiptEditor, t: Trip): { amount: number } | { un
 /** Rates are stored exactly; six significant figures are plenty to read. */
 function rateText(rate: number) {
   return String(Number(rate.toPrecision(6)));
-}
-/**
- * Money typed as text, in exact hundredths. One "." or "," is the decimal
- * separator, so "12,50" and "12.50" are both 1250. Anything else (grouping
- * separators, signs, a third decimal) is rejected rather than reinterpreted:
- * "1,234.56" must never silently become another amount. `null` means
- * rejected; "" and a bare separator are unfinished input.
- */
-function parseAmountText(text: string): { text: string; hundredths: number | undefined } | null {
-  const s = text.trim().replace(",", ".");
-  if (!/^\d*(\.\d{0,2})?$/.test(s)) return null;
-  if (!s || s === ".") return { text: s, hundredths: undefined };
-  const n = Math.round(Number(s) * 100);
-  return Number.isSafeInteger(n) && n <= 100000000 ? { text: s, hundredths: n } : null;
 }
 function Amount({
   value,
@@ -305,6 +293,7 @@ export default function Home({ children }: { children: ReactNode }) {
     [offline, setOffline] = useState(false),
     [lastRefreshed, setLastRefreshed] = useState<Date | null>(null),
     [editorConflict, setEditorConflict] = useState<{ latest: Expense | null } | null>(null),
+    [adjustmentDraft, setAdjustmentDraft] = useState<AdjustmentDraft | null>(null),
     [paymentEditor, setPaymentEditor] = useState<{ entry: Payment; original?: Payment; tripId: string; key: string; restoredFrom?: RestorationInfo } | null>(null),
     [restoration, setRestoration] = useState<RestorationInfo | null>(null),
     [receiptHistoryOpen, setReceiptHistoryOpen] = useState(false),
@@ -796,7 +785,7 @@ export default function Home({ children }: { children: ReactNode }) {
       return;
     }
     editorBaseline.current = { tripId: trip.id, expense: structuredClone(expense) };
-    setEditorConflict(null); setReferenceRate(null); resetReceiptReview();
+    setEditorConflict(null); setAdjustmentDraft(null); setReferenceRate(null); resetReceiptReview();
     if (pending) editorDraftBinding.current = { draftId: pending.id, receiptId: pending.receiptId, expenseId: pending.expenseId };
     setEditing(structuredClone({ ...expense, adjustmentAllocation: CURRENT_CALCULATION_RULE, expenseId: expense.id,
       draftId: pending?.id, conversation: mergeReceiptConversation(expense.conversation, pending?.conversation),
@@ -830,7 +819,7 @@ export default function Home({ children }: { children: ReactNode }) {
     setPaste("");
     setFxError("");
     editorBaseline.current = { tripId: current.id };
-    setEditorConflict(null); setReferenceRate(null);
+    setEditorConflict(null); setAdjustmentDraft(null); setReferenceRate(null);
     // Expenses are usually entered where the previous one was bought, even
     // when catching up later from a phone set to the home time zone. The
     // default date and time are "now" in that same zone, so all three
@@ -874,7 +863,7 @@ export default function Home({ children }: { children: ReactNode }) {
     const existing = trip.expenses.find(value => value.id === d.expenseId);
     const draft = structuredClone(d);
     editorBaseline.current = { tripId: trip.id, expense: structuredClone(existing) };
-    setEditorConflict(null); setReferenceRate(null);
+    setEditorConflict(null); setAdjustmentDraft(null); setReferenceRate(null);
     const entry: ReceiptEditor = {
       ...draft,
       languageViewId: draft.languageViewId || existing?.languageViewId || draft.expenseId || draft.id,
@@ -1550,7 +1539,7 @@ export default function Home({ children }: { children: ReactNode }) {
       } catch (cause) { setError(cause instanceof Error ? cause.message : "Unable to check the saved receipt."); return; }
     }
     editorBaseline.current = { tripId: current.id };
-    setEditorConflict(null); setReferenceRate(null); resetReceiptReview(); setError("");
+    setEditorConflict(null); setAdjustmentDraft(null); setReferenceRate(null); resetReceiptReview(); setError("");
     if (expense.percentages === undefined && expense.adjustmentAllocation === undefined && expense.items.every(item => item.amount === 0) && expense.tax + expense.tip > expense.discount && current.members.some(member => !expense.items.some(item => item.members.includes(member.id)))) {
       adjustments.push("This earlier receipt shared tax and tip across all travellers. Restoring it uses the current rule: share these adjustments between the people selected on receipt items. Review those shares before saving.");
     }
@@ -3076,6 +3065,11 @@ export default function Home({ children }: { children: ReactNode }) {
                       {canCollapseToQuick && <button type="button" className="quiet" disabled={isManualSingleLine(editing) && !editing.items[0].members.length} title={!isManualSingleLine(editing) || editing.items[0].members.length ? undefined : uiText("Choose who shares this first")} onClick={stopItemSplitting}><Minus size={16} aria-hidden="true" />{uiText(" Use one amount")}</button>}
                       {!adjustmentsShown && <button type="button" className="quiet" onClick={() => setAdjustmentsFor(editing.id)}><Plus size={16} aria-hidden="true" />{uiText(" Tip, tax or discount")}</button>}
                     </div>
+                    {(!quickMode || editing.receiptId || editing.receiptScan || !!editing.adjustments?.length || adjustmentDraft) && <AdjustmentEditor entry={editing} members={trip.members}
+                      onChange={setEditing} draft={adjustmentDraft} onDraft={draft => {
+                        setAdjustmentDraft(draft);
+                        if (draft) requestAnimationFrame(() => focusExpenseTarget("expense-discounts", ".adjustment-form input[type=radio]:checked"));
+                      }} />}
                     {adjustmentsShown && <>
                     <div className="adjustments" id="expense-adjustments">
                       {(["tax", "tip", "discount"] as const).map((k) => (
@@ -3110,9 +3104,14 @@ export default function Home({ children }: { children: ReactNode }) {
                           ? editing.items[0].members.length === trip.members.length ? uiText("Split equally between everyone") : uiText("Split between {value0}", { value0: editing.items[0].members.length === 1 ? "1 person" : `${editing.items[0].members.length} people` })
                           : uiText("Shares appear once every line has a price and people.")}</span>}
                     </p>
-                    <ReceiptReviewSummary key={`summary:${editing.id}`} entry={editing} fxWarning={manualFxWarning} onChange={setEditing} onAdjustment={kind => {
-                      setAdjustmentsFor(editing.id);
-                      requestAnimationFrame(() => focusExpenseTarget('expense-adjustments', `input[aria-label="${kind === 'discount' ? 'discount' : 'tax'}"]`));
+                    <ReceiptReviewSummary key={`summary:${editing.id}`} entry={editing} fxWarning={manualFxWarning} onChange={setEditing} onAdjustment={(kind, amount) => {
+                      setAdjustmentDraft({ kind, ...(amount ? { amount } : {}), scope: kind === "charge" ? { type: "receipt" } : undefined });
+                      requestAnimationFrame(() => focusExpenseTarget("expense-discounts", ".adjustment-form input[type=radio]:checked"));
+                    }} onApplyLine={line => {
+                      // The qualifying items are a person's choice: the form asks for them (D01).
+                      setAdjustmentDraft({ kind: "discount", sourceLineIndex: line.lineIndex, source: "receipt",
+                        ...(line.amount ? { amount: Math.abs(line.amount) } : {}), ...(line.observedText ? { label: line.observedText.slice(0, 80) } : {}) });
+                      requestAnimationFrame(() => focusExpenseTarget("expense-discounts", ".adjustment-items input[type=checkbox]"));
                     }} />
                     <MoreOptions key={`more:${editing.id}`} defaultOpen={toolsOpen} title={receiptContext ? uiText("Receipt tools") : uiText("More options")}
                       hint={[editing.receiptId && "photo", receiptContext && "language", discussionAvailable && "conversation", "import"].filter(Boolean).join(", ")}>
