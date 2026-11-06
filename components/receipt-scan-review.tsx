@@ -54,17 +54,14 @@ function PrintedAmount({ label, value, onChange }: { label: string; value?: numb
  * Save confirms are listed once, under Check & save; who shares each line is
  * shown by the lines themselves.
  */
-export default function ReceiptScanReview({ entry, onChange, onAdjustment, photo, children }: { entry: ReceiptEditor; onChange: (entry: ReceiptEditor) => void; onAdjustment?: (kind: 'discount' | 'charge') => void; photo?: ReactNode; children?: ReactNode }) {
+export default function ReceiptScanReview({ entry, onChange, photo, children }: { entry: ReceiptEditor; onChange: (entry: ReceiptEditor) => void; photo?: ReactNode; children?: ReactNode }) {
   const titleId = useId();
-  const [reason, setReason] = useState('');
   const scan = useMemo(() => entry.receiptScan && reconcileReceiptScan(entry), [entry]);
   if (!entry.receiptId && !entry.receiptScan) return null;
   const calculated = receiptEditorTotal(entry);
-  const mismatch = scan?.warnings.find(warning => warning.code === 'total-mismatch')
-    ?? scan?.warnings.find(warning => warning.code === 'subtotal-mismatch');
-  const accepted = !!scan?.acknowledgement?.reason && scan.acknowledgement.fingerprint === receiptScanFingerprint(entry);
   const unknown = entry.items.filter(item => item.amount === null).length;
-  const warnings = scan?.warnings.filter(warning => !warning.resolved && warning.code !== "unassigned-item" && !canConfirmReceiptWarning(entry, warning)) || [];
+  // A printed-total difference is explained and resolved once, under Check & save.
+  const warnings = scan?.warnings.filter(warning => !warning.resolved && warning.code !== "unassigned-item" && !isDifference(warning.code) && !canConfirmReceiptWarning(entry, warning)) || [];
   const name = (itemId?: string) => entry.items.find(item => item.id === itemId)?.name || "Item needing review";
   return <section className="receipt-scan-review" aria-labelledby={titleId}>
     {photo}
@@ -76,20 +73,6 @@ export default function ReceiptScanReview({ entry, onChange, onAdjustment, photo
         <div><dt>{uiText("Itemised total")}</dt><dd>{!entry.items.length ? uiText("Not processed") : calculated === null ? uiText("Incomplete prices") : receiptMoney(calculated, entry.currency)}</dd></div>
         {scan?.printedSubtotal !== undefined && scan.printedSubtotal !== null && <div><dt>{uiText("Printed subtotal")}</dt><dd>{receiptMoney(scan.printedSubtotal, scan.printedCurrency || entry.currency)}</dd></div>}
       </dl>
-      {mismatch && <div className="receipt-difference" role="status">
-        <strong>{receiptMoney(Math.abs(mismatch.difference || 0), entry.currency)} {uiText('difference to explain')}</strong>
-        <p>{uiText('Review the extracted items, discounts and missing charges. Ordinary saving is blocked until you reconcile the difference or explicitly record an exception.')}</p>
-        <div className="action-row">
-          <button type="button" className="quiet" onClick={() => focusExpenseTarget('expense-items')}>{uiText('Review extracted items')}</button>
-          {onAdjustment && <><button type="button" className="quiet" onClick={() => onAdjustment('discount')}>{uiText('Add or correct a discount')}</button><button type="button" className="quiet" onClick={() => onAdjustment('charge')}>{uiText('Add a missing charge')}</button></>}
-        </div>
-        {accepted ? <p>{uiText('Exception recorded for saving. This receipt remains unreconciled. Reason: ')}{scan!.acknowledgement!.reason}</p> : <details>
-          <summary>{uiText('Save anyway with a written reason')}</summary>
-          <p>{uiText('The printed and calculated amounts above differ. Your reason and this evidence will be saved in the receipt history; the difference will remain visible.')}</p>
-          <label>{uiText('Reason for the receipt difference')}<textarea aria-label={uiText('Reason for the receipt difference')} maxLength={500} value={reason} onChange={event => setReason(event.target.value)} /></label>
-          <button type="button" className="quiet" disabled={!reason.trim()} onClick={() => onChange(acknowledgeReceiptDifference(entry, reason))}>{uiText('Accept this difference with my reason')}</button>
-        </details>}
-      </div>}
       {(!entry.items.length || unknown > 0 || !entry.currency) && <p className="receipt-review-counts">{entry.items.length} {entry.items.length === 1 ? uiText("line") : uiText("lines")}{unknown ? uiText(" · {value0} missing {value1}", { value0: unknown, value1: unknown === 1 ? "price" : "prices" }) : ""}{!entry.currency ? uiText(" · currency needs review") : ""}</p>}
       {!!warnings.length && <ul className="receipt-scan-warnings">{warnings.map((warning, index) => <li key={`${warning.code}:${warning.itemId || index}`}>
         <strong>{warning.itemId ? `${name(warning.itemId)}: ` : ""}{warningNames[warning.code] || uiText("Check this receipt detail.")}</strong>
@@ -108,9 +91,21 @@ export default function ReceiptScanReview({ entry, onChange, onAdjustment, photo
   </section>;
 }
 
-/** Nothing is acknowledged in the editor. The footer confirms this current evidence on submit. */
-export function ReceiptReviewSummary({ entry, fxWarning }: { entry: ReceiptEditor; fxWarning?: string }) {
+const isDifference = (code: string) => code === "total-mismatch" || code === "subtotal-mismatch";
+
+/**
+ * Nothing is acknowledged in the editor. The footer confirms this current
+ * evidence on submit. A printed-total difference is never part of that
+ * confirmation: it is reconciled, or saved only with a written exception.
+ */
+export function ReceiptReviewSummary({ entry, fxWarning, onChange, onAdjustment }: {
+  entry: ReceiptEditor; fxWarning?: string; onChange?: (entry: ReceiptEditor) => void; onAdjustment?: (kind: "discount" | "charge") => void;
+}) {
+  const [reason, setReason] = useState("");
   const scan = entry.receiptScan && reconcileReceiptScan(entry);
+  const mismatch = scan?.warnings.find(warning => warning.code === "total-mismatch")
+    ?? scan?.warnings.find(warning => warning.code === "subtotal-mismatch");
+  const accepted = !!scan?.acknowledgement?.reason && scan.acknowledgement.fingerprint === receiptScanFingerprint(entry);
   const warnings = scan?.warnings.filter(warning => canConfirmReceiptWarning(entry, warning)) || [];
   const amount = receiptEditorTotal(entry);
   const points = warnings.flatMap((warning, index) => {
@@ -120,14 +115,27 @@ export function ReceiptReviewSummary({ entry, fxWarning }: { entry: ReceiptEdito
     let message: string;
     if (warning.code === 'ambiguous-currency' && entry.currency) message = `Currency read as ${entry.currency}`;
     else if (warning.code === 'missing-printed-total') message = `Printed total not readable — saving the itemised ${amount === null ? 'amount once prices are complete' : receiptMoney(amount, entry.currency)}`;
-    else if (warning.code === 'total-mismatch' || warning.code === 'subtotal-mismatch') message = `${warning.code === 'total-mismatch' ? 'Itemised total differs from printed total' : 'Item prices differ from printed subtotal'} by ${receiptMoney(Math.abs(warning.difference || 0), entry.currency)}`;
     else if (resolvable.has(warning.code)) message = warning.code === "unmapped-adjustment" ? warningNames[warning.code] : receiptWarningLabel(warning.code);
     else return [];
     const names = ids.map(id => entry.items.find(item => item.id === id)?.name).filter(Boolean).join(', ');
     return [{ key: `${warning.code}:${index}`, message: `${message}${names ? `: ${names}` : ''}`, ids, observedText: warning.observedText, lineIndex: warning.lineIndex }];
   });
-  if (!points.length && !fxWarning) return null;
-  return <section className="receipt-review-summary" aria-label={uiText("Confirm when saving")}>
+  if (!points.length && !fxWarning && !mismatch) return null;
+  return <>{mismatch && <div className="receipt-difference" id="expense-receipt-difference" role="status">
+    <strong>{receiptMoney(Math.abs(mismatch.difference || 0), entry.currency)} {uiText("difference to explain")}</strong>
+    <p>{uiText(mismatch.code === "total-mismatch" ? "The itemised total differs from the printed total. Saving is blocked until you reconcile the difference or record an exception." : "The item prices differ from the printed subtotal. Saving is blocked until you reconcile the difference or record an exception.")}</p>
+    <div className="action-row">
+      <button type="button" className="quiet" onClick={() => focusExpenseTarget("expense-items")}>{uiText("Review extracted items")}</button>
+      {onAdjustment && <><button type="button" className="quiet" onClick={() => onAdjustment("discount")}>{uiText("Add or correct a discount")}</button><button type="button" className="quiet" onClick={() => onAdjustment("charge")}>{uiText("Add a missing charge")}</button></>}
+    </div>
+    {accepted ? <p>{uiText("Exception recorded for saving. This receipt remains unreconciled. Reason: ")}{scan!.acknowledgement!.reason}</p> : onChange && <details>
+      <summary>{uiText("Save anyway with a written reason")}</summary>
+      <p>{uiText("Your reason and this evidence will be saved in the receipt history; the difference will remain visible.")}</p>
+      <label>{uiText("Reason for the receipt difference")}<textarea aria-label={uiText("Reason for the receipt difference")} maxLength={500} value={reason} onChange={event => setReason(event.target.value)} /></label>
+      <button type="button" className="quiet" disabled={!reason.trim()} onClick={() => onChange(acknowledgeReceiptDifference(entry, reason))}>{uiText("Accept this difference with my reason")}</button>
+    </details>}
+  </div>}
+  {(!!points.length || !!fxWarning) && <section className="receipt-review-summary" aria-label={uiText("Confirm when saving")}>
     <h4>{uiText("Confirm when saving")}</h4>
     <p>{uiText("Check these details against the receipt. Confirm & save expense accepts the itemised amount and these points.")}</p>
     <ul>{points.map(point => <li key={point.key}>
@@ -136,5 +144,5 @@ export function ReceiptReviewSummary({ entry, fxWarning }: { entry: ReceiptEdito
       {point.ids.map(id => <button key={id} type="button" className="quiet" onClick={() => focusExpenseTarget(`expense-item-${id}`, "input[required]")}>{uiText("Check ")}{entry.items.find(item => item.id === id)?.name || uiText('item')}</button>)}
       {point.lineIndex !== undefined && <small>{uiText("Receipt line ")}{point.lineIndex + 1}</small>}
     </li>)}{fxWarning && <li><span>{fxWarning}</span><button type="button" className="quiet" onClick={() => focusExpenseTarget("expense-fx-panel", "input[type=number]")}>{uiText("Check rate")}</button></li>}</ul>
-  </section>;
+  </section>}</>;
 }

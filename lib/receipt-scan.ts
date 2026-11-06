@@ -301,6 +301,9 @@ export function receiptScanFingerprint(entry: ScannableReceipt): string {
   }))}`;
 }
 
+/** The save error for an unexplained printed-total difference; its correction lives in Check & save. */
+export const RECEIPT_DIFFERENCE_ERROR = 'The itemised amounts do not match the printed receipt. Correct them or use Save anyway with a written reason explaining why you reviewed this difference.';
+
 export function receiptScanSaveError(entry: ScannableReceipt, options: {
   allowAcknowledgement?: boolean; previous?: ScannableReceipt;
 } = {}): string | null {
@@ -327,7 +330,7 @@ export function receiptScanSaveError(entry: ScannableReceipt, options: {
   if (!unresolved.length) return null;
   const acknowledgement = scan.acknowledgement?.fingerprint;
   if (scan.acknowledgement?.reason?.trim() && trustedAcknowledgement(acknowledgement, options.previous?.receiptScan?.acknowledgement?.fingerprint)) return null;
-  return 'The itemised amounts do not match the printed receipt. Correct them or use Save anyway with a written reason explaining why you reviewed this difference.';
+  return RECEIPT_DIFFERENCE_ERROR;
 }
 
 /** An AI client cannot manufacture human review acknowledgement/resolutions. */

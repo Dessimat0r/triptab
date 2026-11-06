@@ -2853,10 +2853,7 @@ export default function Home({ children }: { children: ReactNode }) {
                     <h3 id="expense-step-purchase" className="expense-step-title"><span className="expense-step-number" aria-hidden="true">1</span>{uiText("Purchase")}</h3>
                     {!editing.receiptId && renderReceiptCapture(editing, trip, "compact")}
                     <div id={EXPENSE_TARGETS.review} className="expense-target">
-                      <ReceiptScanReview entry={editing} onChange={setEditing} onAdjustment={kind => {
-                        setAdjustmentsFor(editing.id);
-                        requestAnimationFrame(() => focusExpenseTarget('expense-adjustments', `input[aria-label="${kind === 'discount' ? 'discount' : 'tax'}"]`));
-                      }}
+                      <ReceiptScanReview entry={editing} onChange={setEditing}
                         photo={editing.receiptId ? <ReceiptPhotoViewer receiptId={editing.receiptId} variant="thumbnail" /> : undefined}>
                         {editing.receiptId && renderReceiptCapture(editing, trip, "status")}
                       </ReceiptScanReview>
@@ -3113,7 +3110,10 @@ export default function Home({ children }: { children: ReactNode }) {
                           ? editing.items[0].members.length === trip.members.length ? uiText("Split equally between everyone") : uiText("Split between {value0}", { value0: editing.items[0].members.length === 1 ? "1 person" : `${editing.items[0].members.length} people` })
                           : uiText("Shares appear once every line has a price and people.")}</span>}
                     </p>
-                    <ReceiptReviewSummary entry={editing} fxWarning={manualFxWarning} />
+                    <ReceiptReviewSummary key={`summary:${editing.id}`} entry={editing} fxWarning={manualFxWarning} onChange={setEditing} onAdjustment={kind => {
+                      setAdjustmentsFor(editing.id);
+                      requestAnimationFrame(() => focusExpenseTarget('expense-adjustments', `input[aria-label="${kind === 'discount' ? 'discount' : 'tax'}"]`));
+                    }} />
                     <MoreOptions key={`more:${editing.id}`} defaultOpen={toolsOpen} title={receiptContext ? uiText("Receipt tools") : uiText("More options")}
                       hint={[editing.receiptId && "photo", receiptContext && "language", discussionAvailable && "conversation", "import"].filter(Boolean).join(", ")}>
                       {editing.receiptId && renderReceiptCapture(editing, trip, "tools")}
