@@ -1484,3 +1484,10 @@
 @media (prefers-reduced-motion: reduce) { .swipe-row-content { transition: none; } }
 .swipe-row > .swipe-row-content > .expense { border-bottom: 1px solid #eef0f6; }
 .swipe-row:last-child > .swipe-row-content > .expense { border-bottom: 0; }
+/* F-20: name the expenses that cannot be calculated. */
+.calculation-health { display: grid; gap: var(--space-2); }
+.calculation-health p { margin: 0; }
+.calculation-health ul { display: grid; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
+.calculation-health li { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); overflow-wrap: anywhere; }
+.calculation-health li button { min-height: 44px; flex: none; }
+.saved-banner.unsaved-entry { flex-wrap: wrap; }
