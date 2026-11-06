@@ -3856,5 +3856,17 @@
     "Otra persona se unió o la cuenta cambió. Actualiza e inténtalo de nuevo.",
     "Une autre personne a rejoint la note ou celle-ci a changé. Actualisez et réessayez.",
     "Ein weiterer Teilnehmer ist beigetreten oder die Rechnung wurde geändert. Lade sie neu und versuche es erneut."
+  ],
+  [
+    "Restore receipt draft",
+    "Restaurar borrador del recibo",
+    "Restaurer le brouillon du reçu",
+    "Belegentwurf wiederherstellen"
+  ],
+  [
+    "This receipt draft is already back. Open it from Receipts.",
+    "Este borrador del recibo ya se ha restaurado. Ábrelo desde Recibos.",
+    "Ce brouillon de reçu est déjà restauré. Ouvrez-le depuis Reçus.",
+    "Dieser Belegentwurf ist bereits wiederhergestellt. Öffne ihn unter Belege."
   ]
 ]

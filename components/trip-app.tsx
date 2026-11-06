@@ -1560,6 +1560,34 @@ export default function Home({ children }: { children: ReactNode }) {
     if (saved) setPaymentEditor(null);
     return saved;
   }
+  /**
+   * F-14: a removed receipt draft comes back from History as it was. A draft
+   * has no financial effect, so it is put back at once and opened for review.
+   * The server accepts it only as an exact copy of the deleted snapshot or
+   * validates it as a new draft.
+   */
+  async function restoreDraft(current: Trip, event: ActivityEvent) {
+    if (current.drafts.some(value => value.id === event.entityId) || current.expenses.some(value => value.id === event.entityId)) {
+      setError("This receipt draft is already back. Open it from Receipts."); return;
+    }
+    const draft = structuredClone(event.before) as Draft;
+    let note = "";
+    if (draft.receiptId) {
+      try {
+        const response = await fetch("/api/receipt?id=" + encodeURIComponent(draft.receiptId), { cache: "no-store" });
+        await response.body?.cancel();
+        if (response.status === 404) { delete draft.receiptId; note = "The receipt photo had already been deleted; upload it again if you need it."; }
+        else if (!response.ok) throw Error("The receipt image could not be checked. Refresh and try restoring again.");
+      } catch (cause) { setError(cause instanceof Error ? cause.message : "Unable to check the saved receipt."); return; }
+    }
+    // A draft that edited an expense keeps that link only while the expense
+    // exists and has no other pending draft.
+    if (draft.expenseId !== undefined && (!current.expenses.some(value => value.id === draft.expenseId) || current.drafts.some(value => value.expenseId === draft.expenseId))) delete draft.expenseId;
+    if (!await updateTrip({ ...current, drafts: [...current.drafts, draft] })) return;
+    setError(note);
+    const restored = latestSnapshot.current.data.trips.find(value => value.id === current.id)?.drafts.find(value => value.id === draft.id);
+    if (restored) openDraft(restored);
+  }
   async function reviewRestore(event: ActivityEvent) {
     setReceiptHistoryOpen(false);
     if (!trip || !event.before || event.tripId !== trip.id) return;
@@ -1571,6 +1599,7 @@ export default function Home({ children }: { children: ReactNode }) {
       setPaymentEditor({ entry: structuredClone(event.before) as Payment, tripId: current.id, key: uid(), restoredFrom: { actorName: event.actorName, createdAt: event.createdAt, adjustments: [] } });
       return;
     }
+    if (event.entityType === "draft") return restoreDraft(current, event);
     if (event.entityType !== "expense") return;
     if (current.expenses.some(value => value.id === event.entityId)) { setError("This expense is already recorded. Edit its current version from Expenses."); return; }
     const expense = structuredClone(event.before) as Expense;
