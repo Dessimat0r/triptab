@@ -3976,5 +3976,17 @@
     "Incluir viajes y cuentas archivados",
     "Inclure les voyages et notes archivés",
     "Archivierte Reisen und Rechnungen einbeziehen"
+  ],
+  [
+    "Restore receipt draft",
+    "Restaurar borrador del recibo",
+    "Restaurer le brouillon du reçu",
+    "Belegentwurf wiederherstellen"
+  ],
+  [
+    "This receipt draft is already back. Open it from Receipts.",
+    "Este borrador del recibo ya se ha restaurado. Ábrelo desde Recibos.",
+    "Ce brouillon de reçu est déjà restauré. Ouvrez-le depuis Reçus.",
+    "Dieser Belegentwurf ist bereits wiederhergestellt. Öffne ihn unter Belege."
   ]
 ]
