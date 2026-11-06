@@ -4,6 +4,13 @@ Owner brief and evidence baseline: **TripTab Functionality, Usability and Financ
 
 This record describes implementation evidence. It is not approval to release. No merge, deployment or production migration is authorised. Status updated 6 November 2026 (follow-ups #71 to #74 added).
 
+## Owner decisions, 6 November 2026 (after the follow-ups)
+
+- **Bill undo:** option A from `docs/remediation/bill-soft-delete.md` (#73). Deleting a bill hides it, it can be restored for 30 days, and then it is removed. Every reader of `trips` must skip a pending-deleted bill.
+- **F-16:** the per-trip revision migration is approved, after a D1 backup.
+- **#64 prompt:** ships straight away, with no flag.
+- **Rollback limit:** accepted. After discount records exist, roll forward instead of rolling back.
+
 ## Baseline (6 November 2026)
 
 - **`main`:**
@@ -41,9 +48,9 @@ Statuses: Unresolved, Already fixed and verified, In progress, Implemented and t
 | F-11 durable reading | P1 | 4 | Implemented and tested | #65; [#74](https://github.com/Dessimat0r/triptab/pull/74) `0d3bcd4` | A disconnected request still stores the proposal once, kept alive by `waitUntil`; a retry is idempotent. #74: draft rows show Reading receipt… after a reload, then fill in; Reading didn't finish after the limit | iPhone Safari and PWA lock test |
 | F-12 several payers | Deferred | — | Explicitly deferred | — | D08 | Future programme |
 | F-13 settled-expense warnings | P1 (owner) | 5 | Implemented and tested | #66 | Audit numbers: delete means "Gary pays Sam £10.00", change to £30 means "Sam pays Gary £5.00"; payments unchanged | Review |
-| F-14 Undo | P1/P2 | 5 | Implemented and tested | #66; [#73](https://github.com/Dessimat0r/triptab/pull/73) `db384ff` | 30 seconds, visible over forms, restores the same entry. #73: Restore receipt draft from History | **Owner decision:** soft delete for bills (`docs/remediation/bill-soft-delete.md` on #73) |
+| F-14 Undo | P1/P2 | 5 | In progress | #66; [#73](https://github.com/Dessimat0r/triptab/pull/73) `db384ff` | 30 seconds, visible over forms, restores the same entry. #73: Restore receipt draft from History | Bill soft delete, option A (owner decision): in progress |
 | F-15 wording | P2 | 5 | Implemented and tested | #66 | "Delete payment", "Invite someone", bill lifecycle errors with translations | Review |
-| F-16 global revision | P2, high risk | 7 | Blocked | — | Investigated (`docs/remediation/phase-7-notes.md`) | Needs a migration and every writer changed; owner approval required |
+| F-16 global revision | P2, high risk | 7 | In progress | — | Investigated (`docs/remediation/phase-7-notes.md`) | Migration approved by the owner; implementation in progress |
 | F-17 limits | P2 | 7 | Implemented and tested | #68 | 50 holidays and 100 bills counted separately; friendly messages; restore per kind | Review |
 | F-18 unsaved entry | P2 | 7 | Implemented and tested | #68 | Kept per account and trip; survives a reload; resumed once | Review |
 | F-19 several photos | P2 | 7 | Explicitly deferred | — | Investigated | After #61 and #64; image lifecycle work |
@@ -86,7 +93,7 @@ Owner approval is needed for every merge, deployment and migration. **No migrati
    - It refuses writes from cached older clients that drop records ("Refresh TripTab").
    - #68 raises the ledger size cap from 50 to 200 trips. Older cached clients still enforce 50 locally, which is safe because they refuse to write and a refresh fixes it.
 3. **Deployment sequence:** merge in the order above, then publish with Sites from `main`, as one release or in the PR-sized steps.
-4. **Feature flags:** none. The new behaviours are additive or are corrections. Optionally, the #64 prompt change could wait until the live evaluation passes. That would need a small flag to keep the old prompt; it isn't built, so this is the owner's decision.
+4. **Feature flags:** none. The new behaviours are additive or are corrections. The owner decided the #64 prompt ships straight away.
 5. **Post-deployment smoke tests**, on production with two test accounts:
    - the sidebar with several bills
    - an R1-style receipt: scan, apply the discount, Save; the stored total is 4.50 and settlements are correct
@@ -118,7 +125,7 @@ Owner approval is needed for every merge, deployment and migration. **No migrati
   - The F-10 live evaluation is still open.
   - Independent reviews of #61, #63, #64, #66 and #67 are required.
 - Existing balances are never corrected automatically. The historical inspection is read-only.
-- The rollback limit for the discount format above must be accepted before production approval.
+- The rollback limit for the discount format above: **accepted by the owner** on 6 November 2026.
 - Owner approval is still required for merging, deployment and production migrations.
 
 ## Implementation record
