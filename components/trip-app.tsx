@@ -17,7 +17,7 @@ import { useStickyFooterReveal } from "@/components/editor-footer-reveal";
 import { useConfirmation } from "@/components/confirmation-dialog";
 import AccountPanel, { profileFromAuth, type Profile, type AuthResponse } from "@/components/account-panel";
 import AuthRecovery from "@/components/auth-recovery";
-import TripControls, { ArchivedHolidays } from "@/components/trip-controls";
+import TripControls, { ArchivedHolidays, runTripAction, type TripAction } from "@/components/trip-controls";
 import OfflineCapture from "@/components/offline-capture";
 import SharedPhoto from "@/components/shared-photo";
 import AuthPanel from "@/components/auth-panel";
@@ -29,7 +29,7 @@ import ReceiptUploadDialog, { type ReceiptUploadContext } from "@/components/rec
 import ReceiptLocationFields, { type ReceiptPlace } from "@/components/receipt-location-fields";
 import ReceiptPhotoViewer from "@/components/receipt-photo-viewer";
 import ExpenseIconPicker from "@/components/expense-icon";
-import { RowActionsMenu, SwipeRow } from "@/components/row-actions";
+import { RowActionsMenu, SwipeRow, type RowAction } from "@/components/row-actions";
 import { describeSettlementImpact, settlementImpact } from "@/lib/settlement-impact";
 import ReceiptScanReview, { ReceiptReviewSummary, receiptMoney } from "@/components/receipt-scan-review";
 import { acknowledgeReceiptReview, carryReviewAcknowledgements, pendingReviewActions, receiptScanSaveError, receiptWarningLabel, reconcileReceiptScan } from "@/lib/receipt-scan";
@@ -276,6 +276,7 @@ export default function Home({ children }: { children: ReactNode }) {
     [billOptions, setBillOptions] = useState(false),
     [billPeople, setBillPeople] = useState(false),
     [allBills, setAllBills] = useState(false),
+    [drawerBusy, setDrawerBusy] = useState(false),
     [billStart, setBillStart] = useState(false),
     [billScan, setBillScan] = useState<File | null>(null),
     [help, setHelp] = useState(false),
@@ -1837,6 +1838,41 @@ export default function Home({ children }: { children: ReactNode }) {
                     >{uiText("View settlements")}</button>}</div>
                   </div>
   ) : null;
+  // F-06: holiday and bill rows in the drawer have the same ⋯ menu as list rows.
+  // Lifecycle actions reuse Manage this bill/holiday's confirmations and the
+  // server's rules (a bill others joined still cannot be deleted).
+  const openFromDrawer = (t: Trip, next: "expenses" | "settings" = "expenses") => {
+    closeReceiptEditor(); void discardNewBill(false); setUploadOpen(false); setSelected(t.id);
+    setMenu(false);
+    if (isBill(t) && next === "settings") { setView("expenses"); setBillOptions(true); }
+    else setView(next);
+  };
+  const drawerAction = async (t: Trip, value: TripAction) => {
+    if (drawerBusy) return;
+    setDrawerBusy(true); setError("");
+    try {
+      if (!await runTripAction(t, profile?.id, value, confirm)) return;
+      setMenu(false);
+      await load({ fresh: true });
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : isBill(t) ? "Unable to change this bill." : "Unable to change this holiday.");
+    } finally { setDrawerBusy(false); }
+  };
+  const drawerActions = (t: Trip): RowAction[] => {
+    const own = t.ownerId === profile?.id;
+    if (!isBill(t)) return [
+      { label: "Open", onSelect: () => openFromDrawer(t) },
+      { label: "Holiday settings", onSelect: () => openFromDrawer(t, "settings") },
+      { label: "Archive for me", onSelect: () => void drawerAction(t, "archive") },
+    ];
+    return [
+      { label: "Open", onSelect: () => openFromDrawer(t) },
+      { label: "Bill options", onSelect: () => openFromDrawer(t, "settings") },
+      { label: "Remove from my list", onSelect: () => void drawerAction(t, "archive") },
+      own ? { label: "Delete bill", destructive: true, onSelect: () => void drawerAction(t, "delete") }
+        : { label: "Leave bill", destructive: true, onSelect: () => void drawerAction(t, "leave") },
+    ];
+  };
   const renderExpenseRow = (e: Expense) => {
     if (!trip) return null;
     return (
@@ -1895,8 +1931,12 @@ export default function Home({ children }: { children: ReactNode }) {
   };
   const renderDraftRow = (d: Draft) => {
     if (!trip) return null;
+    // A draft has no financial effect: remove it at once with Undo (F-06).
+    const removeDraft = (draft: Draft) => void deleteWithUndo(trip, { message: `Removed the receipt draft “${draft.title || "Untitled"}”.`, expenses: [], payments: [],
+      drafts: [{ entry: draft, index: trip.drafts.findIndex(x => x.id === draft.id) }] });
     return (
-                            <div className="draft" key={d.id} data-entry-id={d.id} tabIndex={-1}>
+                            <SwipeRow key={d.id} deleteLabel="Remove draft" disabled={saving} onDelete={() => removeDraft(d)}>
+                            <div className="draft" data-entry-id={d.id} tabIndex={-1}>
                               <div className="draft-visual">
                               {d.receiptId && (
                                 <img
@@ -1925,44 +1965,36 @@ export default function Home({ children }: { children: ReactNode }) {
                                 className="quiet"
                                 onClick={() => openDraft(d)}
                               >{uiText("Review")}</button>
-                              <button
-                                className="iconbutton"
-                                aria-label={uiText("Remove draft")}
-                                disabled={saving}
-                                onClick={() => {
-                                  // A draft has no financial effect: remove it at once with Undo (F-06).
-                                  void deleteWithUndo(trip, { message: `Removed the receipt draft “${d.title || "Untitled"}”.`, expenses: [], payments: [],
-                                    drafts: [{ entry: d, index: trip.drafts.findIndex(x => x.id === d.id) }] });
-                                }}
-                              >
-                                <X size={17} />
-                              </button>
+                              <RowActionsMenu label={uiText("Actions for {value0}", { value0: d.title || uiText("untitled receipt") })} disabled={saving} actions={[
+                                { label: "Review", onSelect: () => openDraft(d) },
+                                { label: "Remove draft", destructive: true, onSelect: () => removeDraft(d) },
+                              ]} />
                             </div>
+                            </SwipeRow>
     );
   };
   const renderPaymentRow = (p: Payment) => {
     if (!trip) return null;
+    const removePayment = async (payment: Payment) => {
+      if (!await confirm({ title: "Remove recorded payment?", message: `Remove the recorded payment of ${money(payment.amount, trip.currency)} from ${name(payment.from)} to ${name(payment.to)}? It will remain in activity history.`, confirmLabel: "Remove payment", destructive: true })) return;
+      void deleteWithUndo(trip, { message: `Removed the payment from ${name(payment.from)} to ${name(payment.to)}.`, expenses: [], drafts: [],
+        payments: [{ entry: payment, index: trip.payments.findIndex(x => x.id === payment.id) }] });
+    };
     return (
-                              <div className="payment" key={p.id} data-entry-id={p.id} tabIndex={-1}>
+                              <SwipeRow key={p.id} deleteLabel="Delete payment" disabled={saving || loading} onDelete={() => void removePayment(p)}>
+                              <div className="payment" data-entry-id={p.id} tabIndex={-1}>
                                 <div className="payment-line"><span className="payment-summary">{name(p.from)}{uiText(" paid ")}{name(p.to)}</span>
                                 <b className="payment-amount">{money(p.amount, trip.currency)}</b></div>
                                 <div className="payment-line"><small className="payment-meta">{expenseDate(p.date)}{p.time ? ` · ${p.time}` : ""}{p.method ? ` · ${p.method}` : ""}</small>
                                 <span className="payment-row-actions">
                                 <button className="quiet" disabled={saving || loading} onClick={() => void openPayment(undefined, p)}>{uiText("Edit")}</button>
-                                <button
-                                  aria-label={uiText("Delete payment")}
-                                  className="iconbutton"
-                                  disabled={saving}
-                                  onClick={async () => {
-                                    if (!await confirm({ title: "Remove recorded payment?", message: `Remove the recorded payment of ${money(p.amount, trip.currency)} from ${name(p.from)} to ${name(p.to)}? It will remain in activity history.`, confirmLabel: "Remove payment", destructive: true })) return;
-                                    void deleteWithUndo(trip, { message: `Removed the payment from ${name(p.from)} to ${name(p.to)}.`, expenses: [], drafts: [],
-                                      payments: [{ entry: p, index: trip.payments.findIndex(x => x.id === p.id) }] });
-                                  }}
-                                >
-                                  <Trash2 size={17} />
-                                </button></span></div>
+                                <RowActionsMenu label={uiText("Actions for {value0}", { value0: `${name(p.from)} → ${name(p.to)}` })} disabled={saving || loading} actions={[
+                                  { label: "Edit", onSelect: () => void openPayment(undefined, p) },
+                                  { label: "Delete payment", destructive: true, onSelect: () => void removePayment(p) },
+                                ]} /></span></div>
                                 {p.note && <small className="payment-note">{p.note}</small>}
                               </div>
+                              </SwipeRow>
     );
   };
   function billChip(bill: Trip) {
@@ -2390,14 +2422,10 @@ export default function Home({ children }: { children: ReactNode }) {
         <button className="sidebar-close iconbutton" aria-label={uiText("Close holiday menu")} onClick={()=>setMenu(false)}><X size={20}/></button><div className="side-label">{uiText("YOUR HOLIDAYS")}</div>
         <div className="tripnav">
           {ledger.trips.filter(t => !isBill(t)).map((t) => (
+            <div className="tripnav-row" key={t.id}>
             <button
               className={trip?.id === t.id ? "active" : ""}
-              key={t.id}
-              onClick={() => {
-                closeReceiptEditor(); void discardNewBill(false); setUploadOpen(false); setSelected(t.id);
-                setMenu(false);
-                setView("expenses");
-              }}
+              onClick={() => openFromDrawer(t)}
             >
               <span className="tripicon">
                 <Plane size={17} />
@@ -2409,6 +2437,8 @@ export default function Home({ children }: { children: ReactNode }) {
                 </small>
               </span>
             </button>
+            <RowActionsMenu label={uiText("Actions for {value0}", { value0: t.name })} disabled={loading || saving || drawerBusy} actions={drawerActions(t)} />
+            </div>
           ))}
         </div>
         {ledger.trips.some(isBill) && <><div className="side-label">{uiText("BILLS")}</div><div className="tripnav bill-nav">{ledger.trips.map((value, index) => ({ value, index })).filter(({ value }) => isBill(value)).sort((a, b) => {
@@ -2416,7 +2446,8 @@ export default function Home({ children }: { children: ReactNode }) {
           return date(b.value).localeCompare(date(a.value)) || b.index - a.index;
         }).slice(0, allBills ? undefined : 5).map(({ value: t }) => {
           const chip = billChip(t);
-          return <button type="button" key={t.id} className={trip?.id === t.id ? "active" : ""} onClick={() => { closeReceiptEditor(); void discardNewBill(false); setUploadOpen(false); setSelected(t.id); setMenu(false); setView("expenses"); }}><span className="tripicon"><Receipt size={17} /></span><span>{t.name}<small>{chip}</small></span></button>;
+          return <div className="tripnav-row" key={t.id}><button type="button" className={trip?.id === t.id ? "active" : ""} onClick={() => openFromDrawer(t)}><span className="tripicon"><Receipt size={17} /></span><span>{t.name}<small>{chip}</small></span></button>
+            <RowActionsMenu label={uiText("Actions for {value0}", { value0: t.name })} disabled={loading || saving || drawerBusy} actions={drawerActions(t)} /></div>;
         })}</div>{!allBills && ledger.trips.filter(isBill).length > 5 && <button type="button" className="textbutton" onClick={() => setAllBills(true)}>{uiText("Show all bills")}</button>}</>}
         <div className="holiday-actions"><button className="newtrip" onClick={()=>{setCreate(true);setMenu(false);}} disabled={loading||auth||saving}><Plus size={17}/>{uiText("New holiday")}</button>
           <button className="newtrip" disabled={loading || auth || saving} onClick={() => { setBillStart(true); setMenu(false); }}><Receipt size={17}/>{uiText("Split a bill")}</button>

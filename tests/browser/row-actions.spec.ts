@@ -116,7 +116,8 @@ test('F-14/F-15: Undo stays visible over an open form; payments are labelled Del
   await expect(page.locator('.saved-banner.undo-over-editor')).toBeVisible();
   await page.getByRole('button', { name: 'Close editor', exact: true }).click();
   await page.goto('/balances');
-  await expect(page.getByRole('button', { name: 'Delete payment' })).toHaveCount(1);
+  await page.getByRole('button', { name: 'Actions for Gary → Sam' }).click();
+  await expect(page.getByRole('menuitem', { name: 'Delete payment' })).toHaveCount(1);
   await expect(page.getByRole('button', { name: 'Undo recorded payment' })).toHaveCount(0);
 });
 

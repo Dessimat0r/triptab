@@ -130,9 +130,9 @@ test('pagination preserves tab counts, resets holiday scope and focuses the new 
   await page.getByRole('link', { name: 'Expenses' }).click();
   await expect(page.locator('.expense')).toHaveCount(24);
   await page.getByRole('button', { name: 'Open holidays' }).click();
-  await page.getByRole('button', { name: /Weekend in Porto/ }).click();
+  await page.getByRole('button', { name: /^Weekend in Porto/ }).click();
   await page.getByRole('button', { name: 'Open holidays' }).click();
-  await page.getByRole('button', { name: /A week in Lisbon/ }).click();
+  await page.getByRole('button', { name: /^A week in Lisbon/ }).click();
   await expect(page.locator('.expense')).toHaveCount(20);
 });
 test('drawer traps focus, closes on Escape and restores the opener', async ({ page }) => {
