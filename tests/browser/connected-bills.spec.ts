@@ -35,7 +35,7 @@ async function fixtures(page: Page, options: { trips?: Trip[]; archived?: Trip[]
     }
     if (path === '/api/trip-language') json = { accountId: 'gary', tripId: url.searchParams.get('tripId'), revision: 1, preferences: { readingLanguage: 'en', primaryVersion: 'reading', itemVersions: {} } };
     if (path === '/api/receipt/ai-status') json = { configured: false, connected: false, provider: 'api', eligible: false, manageable: false, siwcAvailable: false };
-    return route.fulfill({ json, headers: path === '/api/ledger' ? { 'X-TripTab-Account': 'gary' } : {} });
+    return route.fulfill({ json, headers: path === '/api/ledger' || path === '/api/trip' ? { 'X-TripTab-Account': 'gary' } : {} });
   });
   return { get data() { return data; }, links };
 }

@@ -1,6 +1,7 @@
 "use client";
 import { t as uiText } from "@/lib/ui-language";
-import { useEffect, useId, useMemo, useState } from "react";
+import { useId, useMemo, useState } from "react";
+import { useAccountResource } from "./use-account-resource";
 import { X } from "lucide-react";
 import ModalA11y from "./modal-accessibility";
 import { formatMoney } from "@/lib/money-format";
@@ -16,21 +17,17 @@ import type { Ledger, Trip } from "@/lib/model";
  * server); nothing is netted across bills. Archived entries are read-only
  * here: restore the holiday or bill to open it.
  */
-export default function PersonalActivity({ ledger, accountId, onClose, onOpen }: {
-  ledger: Ledger; accountId: string; onClose: () => void; onOpen: (tripId: string, entryId?: string) => void;
+export default function PersonalActivity({ ledger, accountId, refreshKey, onClose, onOpen }: {
+  ledger: Ledger; accountId: string; refreshKey?: unknown; onClose: () => void; onOpen: (tripId: string, entryId?: string) => void;
 }) {
   const id = useId();
   const [tab, setTab] = useState<"activity" | "people">("activity");
   const [search, setSearch] = useState(""), [place, setPlace] = useState(""), [person, setPerson] = useState(""), [direction, setDirection] = useState("");
-  const [archived, setArchived] = useState<Trip[] | null>(null), [withArchived, setWithArchived] = useState(true);
-  useEffect(() => {
-    const controller = new AbortController();
-    void fetch("/api/trip?mode=archived-data", { signal: controller.signal, cache: "no-store", headers: financialFormatHeaders() })
-      .then(async response => response.ok ? (await response.json() as { trips?: Trip[] }).trips ?? [] : [])
-      .then(value => { if (!controller.signal.aborted) setArchived(value); })
-      .catch(() => { if (!controller.signal.aborted) setArchived([]); });
-    return () => controller.abort();
-  }, []);
+  const [withArchived, setWithArchived] = useState(true);
+  // R02: this account's own archive only, re-read on every refresh so a lost
+  // membership disappears while the panel is open.
+  const archived = useAccountResource<Trip[]>(accountId, "/api/trip?mode=archived-data",
+    body => (body as { trips?: Trip[] } | null)?.trips ?? [], { init: { headers: financialFormatHeaders() }, refreshKey });
   const archivedIds = useMemo(() => new Set((archived ?? []).map(trip => trip.id)), [archived]);
   const all = useMemo<Ledger>(() => withArchived && archived?.length
     ? { trips: [...ledger.trips, ...archived.filter(trip => !ledger.trips.some(open => open.id === trip.id))] } : ledger, [ledger, archived, withArchived]);

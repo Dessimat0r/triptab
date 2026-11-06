@@ -9,17 +9,22 @@ const PRIVATE_HEADERS = { 'Cache-Control': 'private, no-store' };
 
 export async function GET(request: Request) {
   try {
+    const refused = new URL(request.url).searchParams.get('mode') === 'archived-data' ? financialFormatRefusal(request) : null;
+    if (refused) return refused;
     const profile = await ensureProfile(request);
     const params = new URL(request.url).searchParams;
     if (![...params.keys()].every(key => key === 'mode') || [...params.keys()].length !== 1) throw new RequestError('Choose a valid holiday list.');
+    // R02: name the account each private list was read for, so a client whose
+    // session changed in another tab can discard it.
+    const headers = { ...PRIVATE_HEADERS, 'X-TripTab-Account': profile.id };
     // F-04: people the account already shares a holiday or bill with (names only).
-    if (params.get('mode') === 'connections') return Response.json({ people: await listConnections(db(), profile.id) }, { headers: PRIVATE_HEADERS });
+    if (params.get('mode') === 'connections') return Response.json({ people: await listConnections(db(), profile.id) }, { headers });
     // F-05: read-only archived holidays and bills for Activity and People.
-    if (params.get('mode') === 'archived-data') return financialFormatRefusal(request) ?? Response.json({ trips: await listArchivedTripData(db(), profile.id) }, { headers: PRIVATE_HEADERS });
+    if (params.get('mode') === 'archived-data') return Response.json({ trips: await listArchivedTripData(db(), profile.id) }, { headers });
     // F-14: the account's own deleted bills that can still be restored.
-    if (params.get('mode') === 'deleted') return Response.json({ bills: await listDeletedBills(db(), profile.id) }, { headers: PRIVATE_HEADERS });
+    if (params.get('mode') === 'deleted') return Response.json({ bills: await listDeletedBills(db(), profile.id) }, { headers });
     if (params.get('mode') !== 'archived') throw new RequestError('Choose a valid holiday list.');
-    return Response.json({ trips: await listArchivedTrips(db(), profile.id) }, { headers: PRIVATE_HEADERS });
+    return Response.json({ trips: await listArchivedTrips(db(), profile.id) }, { headers });
   } catch (error) {
     return failure(error);
   }
