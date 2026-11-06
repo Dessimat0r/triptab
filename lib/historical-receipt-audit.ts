@@ -20,8 +20,10 @@ export function auditHistoricalReceipts(ledger: Ledger): ReceiptAuditFinding[] {
     const difference = storedTotal !== null && printedTotal !== null ? storedTotal - printedTotal : null;
     const negativeLines = scan?.sourceLines?.filter(line => typeof line.amount === 'number' && line.amount < 0) ?? [];
     const promotional = negativeLines.filter(line => /bogof|buy\s*one|multibuy|multi.buy|loyalty|coupon|discount|saving|promotion|offer/i.test(line.observedText ?? ''));
-    const unmapped = negativeLines.filter(line => !line.mappedTo || line.mappedTo === 'unmapped');
-    const suspicious = promotional.length > 0 && (unmapped.length > 0 || expense.discount === 0);
+    // A printed line already applied as a discount record (F-02) is accounted for.
+    const covered = new Set((expense.adjustments ?? []).flatMap(adjustment => adjustment.sourceLineIndex === undefined ? [] : [adjustment.sourceLineIndex]));
+    const unmapped = negativeLines.filter(line => (!line.mappedTo || line.mappedTo === 'unmapped') && (line.lineIndex === undefined || !covered.has(line.lineIndex)));
+    const suspicious = promotional.length > 0 && (unmapped.length > 0 || (expense.discount === 0 && !expense.adjustments?.length));
     const acknowledgement = scan?.acknowledgement;
     let currentAcknowledgement = false;
     try { currentAcknowledgement = !!acknowledgement && acknowledgement.fingerprint === receiptScanFingerprint(expense); } catch { /* Insufficient evidence. */ }

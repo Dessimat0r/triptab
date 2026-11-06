@@ -252,6 +252,7 @@ function updateDescription(event: NotificationChange, kind?: Trip['kind']): { ti
     add('tax', 'Receipt tax updated', ['tax']);
     add('the tip', 'Receipt tip updated', ['tip']);
     add('the discount', 'Receipt discount updated', ['discount']);
+    add('discounts and charges', 'Receipt discounts updated', ['adjustments']);
     add('the transaction date', 'Expense date changed', ['date']);
     add('the transaction time', 'Expense time changed', ['time', 'timezone']);
     add('the receipt image', 'Receipt image changed', ['receiptId']);

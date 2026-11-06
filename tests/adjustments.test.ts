@@ -140,3 +140,16 @@ test('acceptance F-01/F-02: a scanned BOGOF line applied as a scoped discount re
   assert.equal(receiptScanSaveError(missing), RECEIPT_DIFFERENCE_ERROR);
   assert.throws(() => saved(missing), /do not match the printed receipt/);
 });
+
+test('a TripTab JSON backup with discount records imports with the same totals and shares', async () => {
+  const { previewImport } = await import('../lib/import-ledger');
+  const original = saved(receipt());
+  const backup = JSON.stringify({ schemaVersion: 1, amountScale: 100, data: { trips: [original] } });
+  const imported = previewImport(backup, 'triptab.json').trips[0];
+  const expense = imported.expenses[0];
+  assert.deepEqual(expense.adjustments, original.expenses[0].adjustments);
+  assert.equal(expense.adjustmentAllocation, 'scoped-adjustments');
+  const people = imported.members;
+  assert.equal(total(expense), 450);
+  assert.deepEqual(expenseShares(expense, people, 'GBP'), expenseShares(original.expenses[0], original.members, 'GBP'));
+});
