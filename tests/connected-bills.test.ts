@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { addConnectedMember, leaveTrip, listConnections, OPEN_TRIP_IDS, openTripBindings } from '../lib/trip-lifecycle';
+import { addConnectedMember, leaveTrip, listArchivedTripData, listConnections, OPEN_TRIP_IDS, openTripBindings, setTripArchived } from '../lib/trip-lifecycle';
 import type { Trip } from '../lib/model';
 import { storage } from './helpers/sqlite-d1';
 
@@ -68,4 +68,27 @@ test('F-04: unconnected accounts, holidays, guessed IDs and repeats are refused 
   // Joining one bill does not make Sam a connection route to Gary's private bill.
   await assert.rejects(addConnectedMember(database.asD1(), sam, 'private', 'p-other', 'sam'), /already on this bill|not found/);
   assert.deepEqual(open(database, 'sam'), ['holiday', 'taxi']);
+});
+
+test('F-05: archived trips for Activity are the account\'s own archive only, with account links and no emails', async () => {
+  const database = await seeded();
+  assert.deepEqual(await listArchivedTripData(database.asD1(), 'gary'), []);
+  await setTripArchived(database.asD1(), gary, 'holiday', true);
+  await setTripArchived(database.asD1(), gary, 'private', true);
+  const garys = await listArchivedTripData(database.asD1(), 'gary');
+  assert.deepEqual(garys.map(trip => trip.id), ['holiday', 'private']);
+  const lisbon = garys.find(trip => trip.id === 'holiday')!;
+  assert.equal(lisbon.ownerId, 'gary');
+  assert.deepEqual(lisbon.members.map(member => member.userId), ['gary', 'sam'], 'links come from ownership and memberships');
+  assert.doesNotMatch(JSON.stringify(garys), /@/);
+  // Sam can open the holiday but has not archived it; Gary's archive is not his.
+  assert.deepEqual(await listArchivedTripData(database.asD1(), 'sam'), []);
+  // Mallory has no access to anything, archived or not.
+  database.sqlite.prepare('INSERT INTO trip_archives (user_id, trip_id, archived_at) VALUES (?,?,?)').run('mallory', 'private', '2026-11-06');
+  assert.deepEqual(await listArchivedTripData(database.asD1(), 'mallory'), [], 'an archive row alone never grants access');
+  // After Sam archives then leaves, the holiday is no longer readable by him.
+  await setTripArchived(database.asD1(), sam, 'holiday', true);
+  assert.deepEqual((await listArchivedTripData(database.asD1(), 'sam')).map(trip => trip.id), ['holiday']);
+  await leaveTrip(database.asD1(), sam, 'holiday');
+  assert.deepEqual(await listArchivedTripData(database.asD1(), 'sam'), []);
 });
