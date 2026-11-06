@@ -1432,3 +1432,55 @@
   margin: 0;
   font-variant-numeric: tabular-nums;
 }
+/* F-14: Undo stays reachable while a form is open. */
+.saved-banner.undo-over-editor {
+  position: fixed;
+  left: var(--space-4);
+  right: var(--space-4);
+  bottom: calc(var(--space-4) + env(safe-area-inset-bottom));
+  z-index: 90;
+  margin: 0 auto;
+  max-width: 560px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.18);
+}
+/* F-06: row actions and swipe-to-reveal Delete. */
+.expense { position: relative; }
+.row-actions { position: relative; align-self: center; }
+.row-actions-trigger { min-width: 44px; min-height: 44px; }
+.row-actions-menu {
+  position: fixed;
+  z-index: 95;
+  display: grid;
+  min-width: 160px;
+  padding: var(--space-1);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-m);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.16);
+}
+.row-actions-menu button {
+  min-height: 44px;
+  padding: 0 var(--space-3);
+  text-align: left;
+  border-radius: 8px;
+}
+.row-actions-menu button:hover,
+.row-actions-menu button:focus-visible { background: var(--surface-muted, rgb(0 0 0 / 0.05)); }
+.swipe-row { position: relative; touch-action: pan-y; }
+/* Clip only while swiping, so the ⋯ menu can extend below the row. */
+.swipe-row--active { overflow: hidden; }
+.swipe-row-content { position: relative; background: var(--surface); transition: transform 0.18s ease; }
+.swipe-row--active .swipe-row-content { z-index: 1; }
+/* An open ⋯ menu paints above the following rows. */
+.swipe-row:has(.row-actions-menu) { z-index: 5; }
+.swipe-row-delete {
+  position: absolute;
+  inset: 0 0 0 auto;
+  width: 88px;
+  min-height: 44px;
+  border-radius: 0;
+}
+.swipe-row:not(.swipe-row--revealed) .swipe-row-delete { visibility: hidden; }
+@media (prefers-reduced-motion: reduce) { .swipe-row-content { transition: none; } }
+.swipe-row > .swipe-row-content > .expense { border-bottom: 1px solid #eef0f6; }
+.swipe-row:last-child > .swipe-row-content > .expense { border-bottom: 0; }
