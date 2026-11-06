@@ -2334,7 +2334,8 @@ export default function Home({ children }: { children: ReactNode }) {
             <Plane size={23} />
           </span>{uiText("TripTab")}<span className="branddot">.</span>
         </Link>
-        <button className="sidebar-close iconbutton" aria-label={uiText("Close holiday menu")} onClick={()=>setMenu(false)}><X size={20}/></button><div className="side-label">{uiText("YOUR HOLIDAYS")}</div>
+        <button className="sidebar-close iconbutton" aria-label={uiText("Close holiday menu")} onClick={()=>setMenu(false)}><X size={20}/></button>
+        {ledger.trips.some(t => !isBill(t)) && <div className="side-label">{uiText("YOUR HOLIDAYS")}</div>}
         <div className="tripnav">
           {ledger.trips.filter(t => !isBill(t)).map((t) => (
             <button
