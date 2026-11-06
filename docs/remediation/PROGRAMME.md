@@ -21,7 +21,7 @@ This record describes implementation evidence. It is not approval to release. No
 - **Persistence:**
   - Cloudflare D1: JSON trips, relational memberships, append-only activity, and a global `sync_state` compare-and-swap row.
   - R2 receipt images.
-  - Migrations `0000` to `0013`. No PR in this programme adds a migration.
+  - Migrations `0000` to `0013`. #76 adds `0014` (F-16, owner approved); no other PR adds one.
 - **Deployment:** a Vinext / React 19 Worker. Sites deploys separately from GitHub, so pushing a PR does not deploy.
 - **Receipt evaluation:** a synthetic golden corpus (19 receipts, 23 after #64). The live vision evaluation is `not-run`.
 - **Implementation and review:**
@@ -48,9 +48,9 @@ Statuses: Unresolved, Already fixed and verified, In progress, Implemented and t
 | F-11 durable reading | P1 | 4 | Implemented and tested | #65; [#74](https://github.com/Dessimat0r/triptab/pull/74) `0d3bcd4` | A disconnected request still stores the proposal once, kept alive by `waitUntil`; a retry is idempotent. #74: draft rows show Reading receipt… after a reload, then fill in; Reading didn't finish after the limit | iPhone Safari and PWA lock test |
 | F-12 several payers | Deferred | — | Explicitly deferred | — | D08 | Future programme |
 | F-13 settled-expense warnings | P1 (owner) | 5 | Implemented and tested | #66 | Audit numbers: delete means "Gary pays Sam £10.00", change to £30 means "Sam pays Gary £5.00"; payments unchanged | Review |
-| F-14 Undo | P1/P2 | 5 | In progress | #66; [#73](https://github.com/Dessimat0r/triptab/pull/73) `db384ff` | 30 seconds, visible over forms, restores the same entry. #73: Restore receipt draft from History | Bill soft delete, option A (owner decision): in progress |
+| F-14 Undo | P1/P2 | 5 | Implemented and tested | #66; [#73](https://github.com/Dessimat0r/triptab/pull/73) `db384ff`; [#75](https://github.com/Dessimat0r/triptab/pull/75) `aab47f1` | 30 seconds, visible over forms, restores the same entry. #73: Restore receipt draft from History. #75: a deleted bill can be restored with its photos for 30 days (Undo, plus Recently deleted), then is removed; hidden from every access check | Undo banner for the drawer delete path (#71) when the two are integrated; review |
 | F-15 wording | P2 | 5 | Implemented and tested | #66 | "Delete payment", "Invite someone", bill lifecycle errors with translations | Review |
-| F-16 global revision | P2, high risk | 7 | In progress | — | Investigated (`docs/remediation/phase-7-notes.md`) | Migration approved by the owner; implementation in progress |
+| F-16 global revision | P2, high risk | 7 | Implemented and tested | [#76](https://github.com/Dessimat0r/triptab/pull/76) `905094f` | Migration 0014: per-trip revision maintained by triggers; the app saves only changed trips; another trip's save is no longer a conflict; migration test on existing data; health check | Test on a production-sized copy; D1 backup before applying; review |
 | F-17 limits | P2 | 7 | Implemented and tested | #68 | 50 holidays and 100 bills counted separately; friendly messages; restore per kind | Review |
 | F-18 unsaved entry | P2 | 7 | Implemented and tested | #68 | Kept per account and trip; survives a reload; resumed once | Review |
 | F-19 several photos | P2 | 7 | Explicitly deferred | — | Investigated | After #61 and #64; image lifecycle work |
@@ -67,14 +67,16 @@ Statuses: Unresolved, Already fixed and verified, In progress, Implemented and t
 | 4 | #64 F-02/F-10 discounts | `ed984f6` | #61 | Green | #61; retarget to main after #61 merges |
 | 5 | #63 F-08 merge | `118d6b0` | main | Green | — |
 | 6 | #65 F-07/F-11 scan | `0585199` | main | Green | — |
-| 7 | #66 F-06/F-13/F-14/F-15 actions | `5e226ee` | main | Running | — |
+| 7 | #66 F-06/F-13/F-14/F-15 actions | `5e226ee` | main | Green | — |
 | 8 | #67 F-04/F-05 bills | `f15eaaf` | main | Green | — |
 | 9 | #68 F-09/F-17/F-18/F-20 resilience | `6a969e3` | main | Green | — |
-| — | #69 integration check (do not merge) | `9dcc95d` | main | Running | #59 to #68 (#71 to #74 not yet included) |
-| 10 | #71 F-06 row and drawer menus | `1d0c4ed` | #66 | Running | #66 |
-| 11 | #72 F-04/F-05 add people later; archived Activity | `d6f2353` | #67 | Running | #67 |
-| 12 | #73 F-14 restore drafts from History | `db384ff` | #66 | Running | #66 |
-| 13 | #74 F-11 reading status per draft | `0d3bcd4` | #65 | Running | #65 |
+| — | #69 integration check (do not merge) | `9dcc95d` | main | Green | #59 to #68 (#71 to #76 not yet included) |
+| 10 | #71 F-06 row and drawer menus | `1d0c4ed` | #66 | Green | #66 |
+| 11 | #72 F-04/F-05 add people later; archived Activity | `d6f2353` | #67 | Green | #67 |
+| 12 | #73 F-14 restore drafts from History | `db384ff` | #66 | Green | #66 |
+| 13 | #74 F-11 reading status per draft | `0d3bcd4` | #65 | Green | #65 |
+| 14 | #75 F-14 bill undo, option A | `aab47f1` | #73 | Running | #73 |
+| 15 | #76 F-16 per-trip revisions (**migration 0014**) | `905094f` | #63 | Running | #63; backup first |
 
 - **Conflicts:** each later PR conflicts textually with earlier ones in `components/trip-app.tsx` and the editor test harness. #69 merges all of them in this order. Its merge commits hold the resolutions (unions of both sides), and it passes:
   - unit tests: 1,376/1,381 under Node 22 (the other 5 are the Node 22-only failures)
@@ -85,7 +87,7 @@ Statuses: Unresolved, Already fixed and verified, In progress, Implemented and t
 
 ## Release plan
 
-Owner approval is needed for every merge, deployment and migration. **No migration is needed for #59 to #68.**
+Owner approval is needed for every merge, deployment and migration. **No migration is needed for #59 to #75. #76 adds migration `0014_trip_revisions.sql`, which the owner approved: take the D1 backup, apply 0014, then deploy.**
 
 1. **Backup:** take a D1 backup and a record of the R2 inventory, following the procedure in `docs/operations.md`, even though no schema changes. #64 writes a new calculation-rule value that older code cannot read.
 2. **Server and client compatibility:**
@@ -114,10 +116,10 @@ Owner approval is needed for every merge, deployment and migration. **No migrati
    - It never changes stored amounts.
 8. **Known residual risks:**
    - **Live AI evaluation not run.** Promotion extraction is untested on real scans.
-   - **F-16 contention remains.** Saves are lossless after #63 but may need a second press under load.
+   - **F-16 is addressed by #76**, which needs migration 0014 applied before deploy.
    - **Device checks not done:** iPhone, PWA and swipe on a real phone.
    - **No independent review** has been completed for any PR.
-   - **Bill deletion has no Undo.** Soft delete needs an owner decision on the two designs in `docs/remediation/bill-soft-delete.md`.
+   - **Recently deleted bills** stay on the server for up to 30 days (owner decision A, #75).
 
 ## Release gates
 
