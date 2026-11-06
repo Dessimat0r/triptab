@@ -1491,10 +1491,12 @@
 .calculation-health li { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); overflow-wrap: anywhere; }
 .calculation-health li button { min-height: 44px; flex: none; }
 .saved-banner.unsaved-entry { flex-wrap: wrap; }
-/* F-06: the drawer's holiday and bill rows carry the same ⋯ menu. */
-.tripnav-row { display: flex; align-items: center; gap: var(--space-1); min-width: 0; }
-.tripnav-row > button { flex: 1; min-width: 0; }
-.tripnav-row > .row-actions { flex: none; }
-.tripnav .row-actions-trigger { padding: 0; justify-content: center; border-radius: 10px; }
+/* F-06: the drawer's holiday and bill rows carry the same ⋯ menu. It sits over
+   the row's right edge so names keep their width and rows their height. */
+.tripnav-row { position: relative; min-width: 0; }
+.tripnav-row > button { width: 100%; min-width: 0; padding-right: 44px; }
+/* No transform here: it would make the fixed-position menu relative to this box. */
+.tripnav-row > .row-actions { position: absolute; top: 0; bottom: 0; right: 0; display: flex; align-items: center; }
+.tripnav .row-actions-trigger { width: 40px; min-width: 40px; padding: 0; justify-content: center; border-radius: 10px; }
 .tripnav .row-actions-menu button { display: block; padding: 0 var(--space-3); font-weight: 500; font-size: inherit; }
 .payment-row-actions .row-actions { align-self: center; }
