@@ -85,6 +85,8 @@ export async function prepareReceiptImage(file: File, onQualityWarnings?: (warni
 
 export type ReceiptCaptureProps = {
   receiptId?: string;
+  /** The editor was opened by Scan receipt: the camera button takes initial focus (F-07). */
+  focusCamera?: boolean;
   /**
    * Which part to render. `compact`: before any photo exists, the two capture
    * actions with optional notes first. `status`: what is happening to a
@@ -129,6 +131,7 @@ export type ReceiptCaptureProps = {
 
 export default function ReceiptCapture({
   receiptId,
+  focusCamera = false,
   part = "tools",
   contextFields,
   busy,
@@ -178,7 +181,8 @@ export default function ReceiptCapture({
     : undefined;
   const automaticAvailable = aiConfigured && aiEligible && (aiProvider === "api" || aiSiwcAvailable);
   const handoffNeedsPaste = Boolean(prompt && chatgptUrl === "https://chatgpt.com/");
-  const readingText = aiProvider === "api" ? "Reading receipt with AI…" : "Reading receipt with ChatGPT…";
+  // F-11: reading continues on the server, so the person may lock the phone or leave.
+  const readingText = (aiProvider === "api" ? "Reading receipt with AI…" : "Reading receipt with ChatGPT…") + " You can leave this screen; the items appear when ready.";
   const handoffStatus = "Request prepared. TripTab cannot verify tools in an external conversation. Enable TripTab there and send this request; no external processing is confirmed until a proposal arrives.";
   let assistanceStatus: string;
   if (ready) {
@@ -249,6 +253,7 @@ export default function ReceiptCapture({
         capture="environment"
         aria-describedby={`${hintId}${captureError ? " " + errorId : ""}`}
         disabled={locked}
+        data-autofocus={focusCamera ? true : undefined}
         onChange={capture}
       />
     </label>

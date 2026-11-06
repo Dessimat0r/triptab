@@ -48,6 +48,8 @@ function financialCsv(trip: Trip): string {
     'item_details_json', 'receipt_scan_json', 'field_sources_json',
     'receipt_location', 'receipt_location_source', 'receipt_location_hint_json',
     'kind',
+    // Appended so earlier columns keep their positions (F-02).
+    'adjustments_json', 'calculation_rule',
   ]];
   for (const expense of trip.expenses) {
     let original: number | undefined;
@@ -68,6 +70,7 @@ function financialCsv(trip: Trip): string {
       expense.receiptScan ? JSON.stringify(expense.receiptScan) : '', expense.fieldSources ? JSON.stringify(expense.fieldSources) : '',
       expense.location?.label, expense.location?.source, expense.locationHint ? JSON.stringify(expense.locationHint) : '',
       trip.kind ?? 'holiday',
+      expense.adjustments?.length ? JSON.stringify(expense.adjustments) : '', expense.adjustmentAllocation ?? '',
     ]);
   }
   for (const payment of trip.payments) {
@@ -75,7 +78,7 @@ function financialCsv(trip: Trip): string {
       'payment', payment.id, '', payment.date, payment.time, payment.timezone,
       '', '', '', trip.currency, payment.amount, decimal(payment.amount), '', name(payment.from), name(payment.to), payment.method, payment.note,
       '', '', '', '', '', '', '', '', '', '', ...trip.members.map(() => ''), '', '', '', '', '', '',
-      trip.kind ?? 'holiday',
+      trip.kind ?? 'holiday', '', '',
     ]);
   }
   return csv(rows);

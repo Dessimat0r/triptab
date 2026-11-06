@@ -49,7 +49,8 @@ async function fixtures(page: Page, options: { draft?: Draft; scan?: Partial<Dra
       scans++; await options.holdScan;
       const args = request.postDataJSON(), draft = current.drafts.find(value => value.id === args.draftId)!;
       Object.assign(draft, proposal(options.scan), { id: draft.id, receiptId: draft.receiptId });
-      return route.fulfill({ json: { data: { trips: [current] }, revision: ++revision } });
+      // The page may have reloaded meanwhile (F-11): the proposal is stored either way.
+      return route.fulfill({ json: { data: { trips: [current] }, revision: ++revision } }).catch(() => {});
     }
     if (pathname === '/api/fx') return route.fulfill({ json: { rate: 0.86, asOf: '2026-10-08' } });
     const json = pathname === '/api/ledger' ? { data: { trips: [current] }, revision }
@@ -63,9 +64,12 @@ async function fixtures(page: Page, options: { draft?: Draft; scan?: Partial<Dra
 }
 const clicks = (page: Page) => page.evaluate(() => (window as unknown as { __expenseClicks: string[] }).__expenseClicks);
 async function openDraft(page: Page) { await page.goto('/expenses?receiptDraft=confirm-draft&receiptTrip=confirm-trip'); await expect(page.locator('.editor')).toBeVisible(); }
-async function scan(page: Page) {
-  const chooser = page.waitForEvent('filechooser');
+// F-07: Scan receipt opens the editor at its camera button; the photo is one more tap.
+async function scan(page: Page, name?: string) {
   await page.getByRole('button', { name: 'Scan receipt', exact: true }).click();
+  if (name) await page.getByRole('textbox', { name: 'Expense name', exact: true }).fill(name);
+  const chooser = page.waitForEvent('filechooser');
+  await page.locator('.editor .receipt-capture-action').filter({ hasText: 'Scan receipt' }).click();
   await (await chooser).setFiles(photo);
 }
 const save = (page: Page) => page.locator('.editor-footer').getByRole('button', { name: /^(Confirm & save expense|Save expense)$/ });
@@ -96,7 +100,8 @@ test('Scan receipt starts reading and a clean scan needs only allocation and the
   await page.getByRole('button', { name: 'Share the remaining item equally', exact: true }).click();
   await expect(page.locator('.editor button[type=submit], .editor-footer .primary')).toHaveCount(1);
   await save(page).click(); await expect(page.locator('.editor')).toHaveCount(0);
-  expect(await clicks(page)).toEqual(['Scan receipt', 'Share the remaining item equally', 'Save expense']);
+  // F-07: Scan receipt first offers an optional name, then the camera button: one deliberate extra tap.
+  expect(await clicks(page)).toEqual(['Scan receipt', 'Scan receipt', 'Share the remaining item equally', 'Save expense']);
   expect(state.uploads).toBe(1); expect(state.scans).toBe(1); expect(state.posts).toBe(1);
 });
 
@@ -132,6 +137,10 @@ for (const edits of [false, true]) test(`one confirmation covers ambiguous curre
     await page.getByRole('textbox', { name: 'Amount', exact: true }).fill('43.10');
     await page.getByText('Check or correct printed totals', { exact: true }).click();
     await page.getByRole('textbox', { name: 'Printed subtotal (optional)', exact: true }).fill('43.11');
+    await save(page).click(); expect(state.posts).toBe(0);
+    await page.getByText('Save anyway with a written reason', { exact: true }).click();
+    await page.getByRole('textbox', { name: 'Reason for the receipt difference', exact: true }).fill('Printed subtotal contains a rounding difference.');
+    await page.getByRole('button', { name: 'Accept this difference with my reason', exact: true }).click();
   }
   await expect(save(page)).toHaveText('Confirm & save expense');
   await save(page).click(); await expect(page.locator('.editor')).toHaveCount(0);
@@ -139,6 +148,28 @@ for (const edits of [false, true]) test(`one confirmation covers ambiguous curre
   expect(expense.receiptScan?.missingTotalAcknowledgement?.fingerprint).toBe(receiptScanFingerprint(expense));
   expect(expense.fieldSources?.currency).toBe('user'); expect(expense.receiptScan?.printedTotal).toBeNull();
   if (!edits) expect(await clicks(page)).toEqual(['Confirm & save expense']);
+});
+
+test('F-01 a 750 versus 450 receipt blocks ordinary Save and requires a written, auditable exception', async ({ page }) => {
+  const draft = proposal({ items: [{ id: 'p1', name: 'Pringles', amount: 300, members: ['gary'] }, { id: 'p2', name: 'Pringles', amount: 300, members: ['gary'] }, { id: 'milk', name: 'Milk', amount: 150, members: ['gary', 'sam'] }],
+    receiptScan: { version: 1, printedCurrency: 'EUR', printedTotal: 450, status: 'matched', warnings: [],
+      sourceLines: [{ lineIndex: 3, observedText: 'BOGOF -3.00', amount: -300, kind: 'adjustment', mappedTo: 'unmapped' }] } });
+  const state = await fixtures(page, { draft }); await openDraft(page);
+  const banner = page.locator('.receipt-difference');
+  await expect(banner).toContainText('€3.00');
+  await expect(page.locator('.receipt-scan-totals')).toContainText('€4.50');
+  await expect(page.locator('.receipt-scan-totals')).toContainText('€7.50');
+  await save(page).click(); expect(state.posts).toBe(0);
+  await banner.getByText('Save anyway with a written reason', { exact: true }).click();
+  const accept = banner.getByRole('button', { name: 'Accept this difference with my reason', exact: true });
+  await expect(accept).toBeDisabled();
+  await page.getByRole('textbox', { name: 'Reason for the receipt difference', exact: true }).fill('Qualifying promotion is being disputed with the shop.');
+  await accept.click(); await expect(banner).toContainText('remains unreconciled');
+  await save(page).click(); await expect(page.locator('.editor')).toHaveCount(0);
+  expect(state.posts).toBe(1);
+  expect(state.trip.expenses[0].receiptScan?.calculatedTotal).toBe(750);
+  expect(state.trip.expenses[0].receiptScan?.status).toBe('needs-review');
+  expect(state.trip.expenses[0].receiptScan?.acknowledgement?.reason).toBe('Qualifying promotion is being disputed with the shop.');
 });
 
 test('processing names only the ongoing read and cannot post incomplete incoming values', async ({ page }) => {
@@ -289,4 +320,61 @@ test('offline is explanatory text and a Save press leaves focus at Save', async 
   await save(page).evaluate(button=>{(button as HTMLButtonElement).focus();(button as HTMLButtonElement).click();});
   await expect(save(page)).toBeFocused(); await expect(page.locator('.expense-save-announcement')).toContainText('You’re offline');
   expect(state.posts).toBe(0); await page.context().setOffline(false);
+});
+
+test('F-07: a name typed before the photo survives reading, items fill in without a review tap, and the keyboard stays down', async ({ page }) => {
+  const state = await fixtures(page);
+  await page.goto('/expenses');
+  await page.getByRole('button', { name: 'Scan receipt', exact: true }).click();
+  const name = page.getByRole('textbox', { name: 'Expense name', exact: true });
+  await expect(name).toHaveAttribute('placeholder', 'Name (optional)');
+  await expect(name).not.toBeFocused();
+  await scan(page, 'Snacks for the train');
+  await expect.poll(() => state.scans).toBe(1);
+  await expect(page.locator('.receipt-scan-totals')).toContainText('€42.10');
+  await expect(name).toHaveValue('Snacks for the train');
+  await expect(name).not.toBeFocused();
+  await expect(page.getByRole('button', { name: 'Review processed receipt', exact: true })).toHaveCount(0);
+  await expect(page.locator('.editor')).not.toContainText('Add an expense name');
+});
+
+test('F-07: with no typed name the merchant fills it in', async ({ page }) => {
+  const state = await fixtures(page);
+  await page.goto('/expenses');
+  await scan(page);
+  await expect.poll(() => state.scans).toBe(1);
+  await expect(page.getByRole('textbox', { name: 'Expense name', exact: true })).toHaveValue('Coffee and cake');
+});
+
+test('F-11: after a reload mid-reading the draft row says Reading receipt…, then fills in by itself', async ({ page }) => {
+  const hold = deferred();
+  const state = await fixtures(page, { holdScan: hold.promise });
+  await page.goto('/expenses');
+  await scan(page);
+  await expect.poll(() => state.scans).toBe(1);
+  // The phone locks or the page reloads while the server is still reading.
+  await page.goto('/receipts');
+  const row = page.locator('.draft').first();
+  await expect(row).toContainText('Reading receipt…');
+  hold.resolve();
+  // The stored proposal arrives with the next background refresh.
+  await expect(row).toContainText('Ready to review', { timeout: 15_000 });
+  expect(state.scans).toBe(1);
+});
+
+test('F-11: a reading that never stored a proposal says so after the time limit', async ({ page }) => {
+  const state = await fixtures(page, { holdScan: new Promise(() => {}) });
+  await page.goto('/expenses');
+  await scan(page);
+  await expect.poll(() => state.scans).toBe(1);
+  // Jump past the server's limit: the saved start time is moved back.
+  await page.evaluate(() => {
+    for (const key of Object.keys(localStorage).filter(value => value.startsWith('triptab:reading:'))) {
+      const entries = JSON.parse(localStorage.getItem(key)!) as Record<string, { startedAt: number }>;
+      for (const entry of Object.values(entries)) entry.startedAt -= 10 * 60_000;
+      localStorage.setItem(key, JSON.stringify(entries));
+    }
+  });
+  await page.goto('/receipts');
+  await expect(page.locator('.draft').first()).toContainText('Reading didn’t finish · open it to read again');
 });

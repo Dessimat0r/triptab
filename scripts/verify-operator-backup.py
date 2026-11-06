@@ -15,6 +15,8 @@ spec.loader.exec_module(backup)
 
 
 def main():
+    if os.name != 'posix':
+        raise backup.BackupError('Operator backup verification requires POSIX private file modes.')
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('archive')
     parser.add_argument('key')

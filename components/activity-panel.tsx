@@ -333,12 +333,23 @@ function changes(event: ActivityEvent, currency: Currency | undefined, names: Re
   for (const [key, label] of Object.entries({ amount: "Amount", tax: "Tax", tip: "Tip", discount: "Discount", bankAmount: "Actual bank charge" })) add(key, label, (value, snapshot) => money(value, key === "bankAmount" || String(event.entityType) === "payment" ? currency : auditText(snapshot.currency) || currency));
   for (const [key, label] of Object.entries({ from: "Paid by", to: "Paid to", payer: "Receipt payer", memberId: "Traveller" })) add(key, label, value => traveller(value, names));
   add("percentages", "Whole-receipt split", value => percentages(value, names));
+  add("adjustments", "Discounts and charges", (value, snapshot) => {
+    const records = Array.isArray(value) ? value as Record<string, unknown>[] : [];
+    if (!records.length) return "None";
+    const items = Array.isArray(snapshot.items) ? snapshot.items as Record<string, unknown>[] : [];
+    return records.map(record => {
+      const scope = record.scope as { type?: string; itemIds?: string[] } | undefined;
+      const amount = typeof record.amount === "number" ? money(record.amount, auditText(snapshot.currency) || currency) : typeof record.percent === "number" ? `${record.percent}%` : "Amount not recorded";
+      const target = scope?.type === "items" ? (scope.itemIds ?? []).map(id => auditText(items.find(item => item.id === id)?.name) || "removed item").join(", ") : "whole receipt";
+      return `${record.kind === "charge" ? "Charge" : "Discount"} ${auditText(record.label) || ""} ${record.kind === "charge" ? "+" : "−"}${amount} on ${target}`.replace(/\s+/g, " ");
+    }).join("\n");
+  });
   add("memberWeights", "Traveller weights", value => { const weights = auditRecord(value); return weights ? Object.entries(weights).map(([id, weight]) => `${traveller(id, names)} counts as ${String(weight)}`).join("\n") : "Everyone counts once"; });
   add("weight", "Counts as", value => typeof value === "number" && value > 1 ? `${value} people` : "1 person");
   add("joinedOn", "Joined on", value => typeof value === "string" ? value : "From the start");
   add("leftOn", "Left on", value => typeof value === "string" ? value : "Until the end");
   add("budget", "Group budget", value => typeof value === "number" ? money(value, currency) : "No budget");
-  add("adjustmentAllocation", "Split calculation rule", value => value === "rotating-remainder" ? "People selected on receipt items; pennies rounded once on the receipt total, with leftover pennies rotating between people" : value === "receipt-total" ? "People selected on receipt items; pennies rounded once on the receipt total" : value === "selected-participants" ? "People selected on receipt items; pennies rounded per item" : "Earlier rule: all travellers");
+  add("adjustmentAllocation", "Split calculation rule", value => value === "scoped-adjustments" ? "People selected on receipt items, with item discounts reducing only their items; whole currency units, rounded once on the receipt total" : value === "native-minor-units" ? "People selected on receipt items; whole currency units, rounded once on the receipt total with rotating leftover pennies" : value === "rotating-remainder" ? "People selected on receipt items; pennies rounded once on the receipt total, with leftover pennies rotating between people" : value === "receipt-total" ? "People selected on receipt items; pennies rounded once on the receipt total" : value === "selected-participants" ? "People selected on receipt items; pennies rounded per item" : "Earlier rule: all travellers");
   add("fx", "Exchange rate", value => {
     const fx = auditRecord(value); return fx ? `Rate: ${fx.rate}\nAs of: ${auditText(fx.asOf)}\nSource: ${auditText(fx.source)}` : "No recorded rate";
   });
@@ -471,6 +482,7 @@ export default function ActivityPanel({ tripId, tripKind, accountId, expenseId, 
         <p className="footnote"><time dateTime={event.createdAt}>{scope ? auditTimestamp(event.createdAt) : formatClockTime(event.createdAt)}</time> · {auditSource(event.source)}</p>
         <ActivityEventDetails event={event} currency={currency} tripKind={tripKind} memberNames={memberNames} actorMemberNames={actorMemberNames} />
         {onRestore && event.action === "delete" && event.before && ["expense", "payment"].includes(event.entityType) && <button type="button" className="quiet" disabled={busy} onClick={() => onRestore(event)}>{uiText("Review ")}{event.entityType}{uiText(" to restore")}</button>}
+        {onRestore && event.action === "delete" && event.before && event.entityType === "draft" && <button type="button" className="quiet" disabled={busy} onClick={() => onRestore(event)}>{uiText("Restore receipt draft")}</button>}
       </li>;
     })}</ol>
     {history.nextCursor !== null && <button type="button" className="quiet phone-wide" disabled={history.loading} onClick={history.loadOlder}>{history.loading ? uiText("Loading…") : uiText("Load older changes")}</button>}
