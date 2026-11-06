@@ -38,6 +38,7 @@ import ExpenseItemRow from "@/components/expense-item-row";
 import ItemReceiptConversation from "@/components/item-receipt-conversation";
 import PaymentEditor from "@/components/payment-editor";
 import ActivityPanel from "@/components/activity-panel";
+import ReceiptAuditPanel from "@/components/receipt-audit-panel";
 import RestorationNotice, { type RestorationInfo } from "@/components/restoration-notice";
 import "@/components/receipt-history-view.css";
 import "@/components/expense-editor.css";
@@ -509,18 +510,19 @@ export default function Home({ children }: { children: ReactNode }) {
   }, [entryQuery]);
   useEffect(() => {
     if (!profile?.id || loading || !receiptAI || receiptAI.accountId !== profile.id) return;
-    const params = new URLSearchParams(entryQuery), draftId = params.get("receiptDraft"), tripId = params.get("receiptTrip");
-    if (!draftId || !tripId) return;
+    const params = new URLSearchParams(entryQuery), draftId = params.get("receiptDraft"), expenseId = params.get("receiptExpense"), tripId = params.get("receiptTrip");
+    if ((!draftId && !expenseId) || !tripId) return;
     const current = ledger.trips.find(value => value.id === tripId), draft = current?.drafts.find(value => value.id === draftId);
-    if (!current || !draft) return;
-    const key = `${profile.id}:${tripId}:${draftId}:${entryQuery}`;
+    const expense = current?.expenses.find(value => value.id === expenseId);
+    if (!current || (!draft && !expense)) return;
+    const key = `${profile.id}:${tripId}:${draftId || expenseId}:${entryQuery}`;
     if (receiptResumeRequest.current === key) return;
     let active = true;
     void Promise.resolve().then(() => {
       if (!active) return;
       if (trip?.id !== tripId) { closeReceiptEditor(); setSelected(tripId); return; }
       receiptResumeRequest.current = key;
-      openDraft(draft);
+      if (expense) openExpense(expense); else if (draft) openDraft(draft);
       const outcome = params.get("chatgpt_plan");
       params.delete("receiptDraft"); params.delete("receiptTrip"); params.delete("chatgpt_plan");
       const search = params.toString();
@@ -2031,7 +2033,7 @@ export default function Home({ children }: { children: ReactNode }) {
                       )}
                     </>
                   );
-      case "history": return <ActivityPanel tripId={trip.id} tripKind={trip.kind} accountId={profile?.id} refreshKey={activityRefreshKey} currency={trip.currency} memberNames={memberNames} actorMemberNames={actorMemberNames} busy={saving || loading} onRestore={event => void reviewRestore(event)} />;
+      case "history": return <><ReceiptAuditPanel key={`${profile?.id}:${trip.id}`} tripId={trip.id} onReview={id => { const expense = trip.expenses.find(value => value.id === id); if (expense) openExpense(expense); }} /><ActivityPanel tripId={trip.id} tripKind={trip.kind} accountId={profile?.id} refreshKey={activityRefreshKey} currency={trip.currency} memberNames={memberNames} actorMemberNames={actorMemberNames} busy={saving || loading} onRestore={event => void reviewRestore(event)} /></>;
       case "receipts": return (
                     <>
                       <div className="sectionheading">
@@ -2851,7 +2853,10 @@ export default function Home({ children }: { children: ReactNode }) {
                     <h3 id="expense-step-purchase" className="expense-step-title"><span className="expense-step-number" aria-hidden="true">1</span>{uiText("Purchase")}</h3>
                     {!editing.receiptId && renderReceiptCapture(editing, trip, "compact")}
                     <div id={EXPENSE_TARGETS.review} className="expense-target">
-                      <ReceiptScanReview entry={editing} onChange={setEditing}
+                      <ReceiptScanReview entry={editing} onChange={setEditing} onAdjustment={kind => {
+                        setAdjustmentsFor(editing.id);
+                        requestAnimationFrame(() => focusExpenseTarget('expense-adjustments', `input[aria-label="${kind === 'discount' ? 'discount' : 'tax'}"]`));
+                      }}
                         photo={editing.receiptId ? <ReceiptPhotoViewer receiptId={editing.receiptId} variant="thumbnail" /> : undefined}>
                         {editing.receiptId && renderReceiptCapture(editing, trip, "status")}
                       </ReceiptScanReview>
@@ -3075,7 +3080,7 @@ export default function Home({ children }: { children: ReactNode }) {
                       {!adjustmentsShown && <button type="button" className="quiet" onClick={() => setAdjustmentsFor(editing.id)}><Plus size={16} aria-hidden="true" />{uiText(" Tip, tax or discount")}</button>}
                     </div>
                     {adjustmentsShown && <>
-                    <div className="adjustments">
+                    <div className="adjustments" id="expense-adjustments">
                       {(["tax", "tip", "discount"] as const).map((k) => (
                         <label key={k}>
                           {k === "tax"

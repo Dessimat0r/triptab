@@ -7,7 +7,7 @@ import { focusExpenseTarget } from "@/components/expense-quick-review";
 import { CURRENCIES } from "@/lib/model";
 import type { ReceiptEditor } from "@/lib/receipt-processing";
 import { receiptEditorTotal } from "@/lib/receipt-processing";
-import { canConfirmReceiptWarning, reconcileReceiptScan, receiptWarningLabel, RESOLVABLE_SCAN_WARNINGS as resolvable } from "@/lib/receipt-scan";
+import { acknowledgeReceiptDifference, canConfirmReceiptWarning, reconcileReceiptScan, receiptScanFingerprint, receiptWarningLabel, RESOLVABLE_SCAN_WARNINGS as resolvable } from "@/lib/receipt-scan";
 import { formatMoney } from "@/lib/money-format";
 
 export function receiptMoney(amount: number, currency: string | null | undefined) {
@@ -21,7 +21,7 @@ const warningNames: Record<string, string> = {
   "subtotal-mismatch": "The item prices differ from the printed subtotal.",
   "total-mismatch": "The item prices and adjustments differ from the printed total.",
   "possible-duplicate": "These lines may be duplicates. Check the image before removing anything.",
-  "unmapped-adjustment": "A discount, refund or charge needs checking. Correct the affected item's full line price and shares, or the receipt adjustment, before confirming it is handled.",
+  "unmapped-adjustment": "A discount, refund or charge needs checking. Review its scope and add the appropriate adjustment; keep original item prices.",
   "included-tax-ambiguous": "Check whether this tax is already included. Only extra tax should be added.",
   "image-may-be-incomplete": "The image may not contain the whole receipt. Check every line and the printed total.",
   "low-confidence": "This receipt detail is uncertain. Check it against the image.",
@@ -54,11 +54,15 @@ function PrintedAmount({ label, value, onChange }: { label: string; value?: numb
  * Save confirms are listed once, under Check & save; who shares each line is
  * shown by the lines themselves.
  */
-export default function ReceiptScanReview({ entry, onChange, photo, children }: { entry: ReceiptEditor; onChange: (entry: ReceiptEditor) => void; photo?: ReactNode; children?: ReactNode }) {
+export default function ReceiptScanReview({ entry, onChange, onAdjustment, photo, children }: { entry: ReceiptEditor; onChange: (entry: ReceiptEditor) => void; onAdjustment?: (kind: 'discount' | 'charge') => void; photo?: ReactNode; children?: ReactNode }) {
   const titleId = useId();
+  const [reason, setReason] = useState('');
   const scan = useMemo(() => entry.receiptScan && reconcileReceiptScan(entry), [entry]);
   if (!entry.receiptId && !entry.receiptScan) return null;
   const calculated = receiptEditorTotal(entry);
+  const mismatch = scan?.warnings.find(warning => warning.code === 'total-mismatch')
+    ?? scan?.warnings.find(warning => warning.code === 'subtotal-mismatch');
+  const accepted = !!scan?.acknowledgement?.reason && scan.acknowledgement.fingerprint === receiptScanFingerprint(entry);
   const unknown = entry.items.filter(item => item.amount === null).length;
   const warnings = scan?.warnings.filter(warning => !warning.resolved && warning.code !== "unassigned-item" && !canConfirmReceiptWarning(entry, warning)) || [];
   const name = (itemId?: string) => entry.items.find(item => item.id === itemId)?.name || "Item needing review";
@@ -72,6 +76,20 @@ export default function ReceiptScanReview({ entry, onChange, photo, children }: 
         <div><dt>{uiText("Itemised total")}</dt><dd>{!entry.items.length ? uiText("Not processed") : calculated === null ? uiText("Incomplete prices") : receiptMoney(calculated, entry.currency)}</dd></div>
         {scan?.printedSubtotal !== undefined && scan.printedSubtotal !== null && <div><dt>{uiText("Printed subtotal")}</dt><dd>{receiptMoney(scan.printedSubtotal, scan.printedCurrency || entry.currency)}</dd></div>}
       </dl>
+      {mismatch && <div className="receipt-difference" role="status">
+        <strong>{receiptMoney(Math.abs(mismatch.difference || 0), entry.currency)} {uiText('difference to explain')}</strong>
+        <p>{uiText('Review the extracted items, discounts and missing charges. Ordinary saving is blocked until you reconcile the difference or explicitly record an exception.')}</p>
+        <div className="action-row">
+          <button type="button" className="quiet" onClick={() => focusExpenseTarget('expense-items')}>{uiText('Review extracted items')}</button>
+          {onAdjustment && <><button type="button" className="quiet" onClick={() => onAdjustment('discount')}>{uiText('Add or correct a discount')}</button><button type="button" className="quiet" onClick={() => onAdjustment('charge')}>{uiText('Add a missing charge')}</button></>}
+        </div>
+        {accepted ? <p>{uiText('Exception recorded for saving. This receipt remains unreconciled. Reason: ')}{scan!.acknowledgement!.reason}</p> : <details>
+          <summary>{uiText('Save anyway with a written reason')}</summary>
+          <p>{uiText('The printed and calculated amounts above differ. Your reason and this evidence will be saved in the receipt history; the difference will remain visible.')}</p>
+          <label>{uiText('Reason for the receipt difference')}<textarea aria-label={uiText('Reason for the receipt difference')} maxLength={500} value={reason} onChange={event => setReason(event.target.value)} /></label>
+          <button type="button" className="quiet" disabled={!reason.trim()} onClick={() => onChange(acknowledgeReceiptDifference(entry, reason))}>{uiText('Accept this difference with my reason')}</button>
+        </details>}
+      </div>}
       {(!entry.items.length || unknown > 0 || !entry.currency) && <p className="receipt-review-counts">{entry.items.length} {entry.items.length === 1 ? uiText("line") : uiText("lines")}{unknown ? uiText(" · {value0} missing {value1}", { value0: unknown, value1: unknown === 1 ? "price" : "prices" }) : ""}{!entry.currency ? uiText(" · currency needs review") : ""}</p>}
       {!!warnings.length && <ul className="receipt-scan-warnings">{warnings.map((warning, index) => <li key={`${warning.code}:${warning.itemId || index}`}>
         <strong>{warning.itemId ? `${name(warning.itemId)}: ` : ""}{warningNames[warning.code] || uiText("Check this receipt detail.")}</strong>

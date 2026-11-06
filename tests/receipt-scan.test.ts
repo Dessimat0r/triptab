@@ -23,7 +23,8 @@ function holiday(expenses: Expense[] = [], drafts: Draft[] = []): Trip {
 }
 function withAcknowledgement(entry: Draft): Draft {
   const reconciled = { ...entry, receiptScan: reconcileReceiptScan(entry)! };
-  return { ...reconciled, receiptScan: { ...reconciled.receiptScan, acknowledgement: { fingerprint: receiptScanFingerprint(reconciled) } } };
+  return { ...reconciled, receiptScan: { ...reconciled.receiptScan, acknowledgement: {
+    fingerprint: receiptScanFingerprint(reconciled), reason: 'I checked the printed difference against the receipt.' } } };
 }
 
 test('receipt scan matches independently observed subtotal and total in integer hundredths', () => {
@@ -296,7 +297,7 @@ test('raw and reconciled review fingerprints agree after stale warnings are remo
   const reconciled = { ...entry, receiptScan: reconcileReceiptScan(entry)! };
   assert.equal(receiptScanFingerprint(entry), receiptScanFingerprint(reconciled));
   const reviewed = { ...reconciled, receiptScan: { ...reconciled.receiptScan,
-    acknowledgement: { fingerprint: receiptScanFingerprint(entry) } } };
+    acknowledgement: { fingerprint: receiptScanFingerprint(entry), reason: 'Verified printed rounding.' } } };
   assert.equal(receiptScanSaveError(reviewed), null);
   assert.doesNotThrow(() => validateLedger({ trips: [holiday([posted(reviewed)])] }));
 });

@@ -132,6 +132,10 @@ for (const edits of [false, true]) test(`one confirmation covers ambiguous curre
     await page.getByRole('textbox', { name: 'Amount', exact: true }).fill('43.10');
     await page.getByText('Check or correct printed totals', { exact: true }).click();
     await page.getByRole('textbox', { name: 'Printed subtotal (optional)', exact: true }).fill('43.11');
+    await save(page).click(); expect(state.posts).toBe(0);
+    await page.getByText('Save anyway with a written reason', { exact: true }).click();
+    await page.getByRole('textbox', { name: 'Reason for the receipt difference', exact: true }).fill('Printed subtotal contains a rounding difference.');
+    await page.getByRole('button', { name: 'Accept this difference with my reason', exact: true }).click();
   }
   await expect(save(page)).toHaveText('Confirm & save expense');
   await save(page).click(); await expect(page.locator('.editor')).toHaveCount(0);
