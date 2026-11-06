@@ -61,7 +61,7 @@ Statuses: Unresolved, Already fixed and verified, In progress, Implemented and t
 
 | Order | PR | Head | Base | CI | Depends on |
 | --- | --- | --- | --- | --- | --- |
-| 1 | #59 F-03 sidebar, plus the CI container copy | `6135b30` | main | Running | — |
+| 1 | #59 F-03 sidebar, plus the CI container copy | `6135b30` | main | Green | — |
 | 2 | #60 F-21 Node 24 | `391adb5` | main | Green | — |
 | 3 | #61 F-01 gate and historical audit | `d8a5439` | main | Green | — |
 | 4 | #64 F-02/F-10 discounts | `ed984f6` | #61 | Green | #61; retarget to main after #61 merges |
@@ -70,13 +70,13 @@ Statuses: Unresolved, Already fixed and verified, In progress, Implemented and t
 | 7 | #66 F-06/F-13/F-14/F-15 actions | `5e226ee` | main | Green | — |
 | 8 | #67 F-04/F-05 bills | `f15eaaf` | main | Green | — |
 | 9 | #68 F-09/F-17/F-18/F-20 resilience | `6a969e3` | main | Green | — |
-| — | #69 integration check (do not merge) | `bbd5b9f` | main | Running | All of #59 to #76 |
-| 10 | #71 F-06 row and drawer menus | `fb04c71` | #66 | Running | #66 |
+| — | #69 integration check (do not merge) | `bbd5b9f` | main | Green | All of #59 to #76 |
+| 10 | #71 F-06 row and drawer menus | `fb04c71` | #66 | Green | #66 |
 | 11 | #72 F-04/F-05 add people later; archived Activity | `d6f2353` | #67 | Green | #67 |
 | 12 | #73 F-14 restore drafts from History | `db384ff` | #66 | Green | #66 |
 | 13 | #74 F-11 reading status per draft | `0d3bcd4` | #65 | Green | #65 |
-| 14 | #75 F-14 bill undo, option A | `aab47f1` | #73 | Running | #73 |
-| 15 | #76 F-16 per-trip revisions (**migration 0014**) | `905094f` | #63 | Running | #63; backup first |
+| 14 | #75 F-14 bill undo, option A | `aab47f1` | #73 | Green | #73 |
+| 15 | #76 F-16 per-trip revisions (**migration 0014**) | `905094f` | #63 | Green | #63; backup first |
 
 - **Conflicts:** each later PR conflicts textually with earlier ones in `components/trip-app.tsx` and the editor test harness. #69 merges all of them in this order. Its merge commits hold the resolutions (unions of both sides), and it passes:
   - unit tests: 1,376/1,381 under Node 22 (the other 5 are the Node 22-only failures)
