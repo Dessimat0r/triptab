@@ -61,7 +61,7 @@ Statuses: Unresolved, Already fixed and verified, In progress, Implemented and t
 
 | Order | PR | Head | Base | CI | Depends on |
 | --- | --- | --- | --- | --- | --- |
-| 1 | #59 F-03 sidebar, plus the CI container copy | `4ed3e55` | main | Green | — |
+| 1 | #59 F-03 sidebar, plus the CI container copy | `6135b30` | main | Running | — |
 | 2 | #60 F-21 Node 24 | `391adb5` | main | Green | — |
 | 3 | #61 F-01 gate and historical audit | `d8a5439` | main | Green | — |
 | 4 | #64 F-02/F-10 discounts | `ed984f6` | #61 | Green | #61; retarget to main after #61 merges |
@@ -70,8 +70,8 @@ Statuses: Unresolved, Already fixed and verified, In progress, Implemented and t
 | 7 | #66 F-06/F-13/F-14/F-15 actions | `5e226ee` | main | Green | — |
 | 8 | #67 F-04/F-05 bills | `f15eaaf` | main | Green | — |
 | 9 | #68 F-09/F-17/F-18/F-20 resilience | `6a969e3` | main | Green | — |
-| — | #69 integration check (do not merge) | `9dcc95d` | main | Green | #59 to #68 (#71 to #76 not yet included) |
-| 10 | #71 F-06 row and drawer menus | `1d0c4ed` | #66 | Green | #66 |
+| — | #69 integration check (do not merge) | `bbd5b9f` | main | Running | All of #59 to #76 |
+| 10 | #71 F-06 row and drawer menus | `fb04c71` | #66 | Running | #66 |
 | 11 | #72 F-04/F-05 add people later; archived Activity | `d6f2353` | #67 | Green | #67 |
 | 12 | #73 F-14 restore drafts from History | `db384ff` | #66 | Green | #66 |
 | 13 | #74 F-11 reading status per draft | `0d3bcd4` | #65 | Green | #65 |
@@ -83,6 +83,13 @@ Statuses: Unresolved, Already fixed and verified, In progress, Implemented and t
   - Chromium browser suite: 206/206
   - build and types
 - **When merging one by one:** after each merge, merge `main` into the next PR and reuse #69's resolution.
+- **#69 now merges all of #59 to #76** (`bbd5b9f`). Results: unit tests 1,398/1,403 (the other 5 are the Node 22-only failures), Chromium browser suite 224/224, build and types clean.
+- **Found and fixed by integrating:**
+  - #71's drawer ⋯ button wrapped sidebar rows at 1280×800. Fixed on #71 (`fb04c71`): the button now overlays the row's edge.
+  - #59's sidebar test counted the ⋯ buttons as rows. Fixed on #59 (`6135b30`).
+- **Two resolutions that live only in #69 for now.** Carry them over when the PRs are merged one by one:
+  - When #75 meets #68, restoring a deleted bill must use #68's open-bill limit (`MAX_OPEN_BILLS`), not the combined limit.
+  - When #75 meets #71, the drawer's Delete bill must also show the Undo banner.
 - **Follow-ups #71 to #74** are stacked on their parent PRs. Retarget each to `main` after its parent merges. #71 and #73 both build on #66 and touch `components/trip-app.tsx`, so expect a small conflict between them.
 
 ## Release plan
