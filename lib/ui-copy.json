@@ -3874,5 +3874,47 @@
     "Añadir a {value0} (en TripTab)",
     "Ajouter {value0} (sur TripTab)",
     "{value0} hinzufügen (bei TripTab)"
+  ],
+  [
+    "Open",
+    "Abrir",
+    "Ouvrir",
+    "Öffnen"
+  ],
+  [
+    "Holiday settings",
+    "Ajustes del viaje",
+    "Paramètres du voyage",
+    "Reiseeinstellungen"
+  ],
+  [
+    "Actions for {value0}",
+    "Acciones para {value0}",
+    "Actions pour {value0}",
+    "Aktionen für {value0}"
+  ],
+  [
+    "Delete payment",
+    "Eliminar pago",
+    "Supprimer le paiement",
+    "Zahlung löschen"
+  ],
+  [
+    "Remove from my list",
+    "Quitar de mi lista",
+    "Retirer de ma liste",
+    "Aus meiner Liste entfernen"
+  ],
+  [
+    "untitled receipt",
+    "recibo sin título",
+    "reçu sans titre",
+    "unbenannter Beleg"
+  ],
+  [
+    "Unable to change this holiday.",
+    "No se puede cambiar este viaje.",
+    "Impossible de modifier ce voyage.",
+    "Diese Reise kann nicht geändert werden."
   ]
 ]
