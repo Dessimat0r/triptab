@@ -1776,7 +1776,7 @@ test('ledger reads seek only indexed accessible trips and memberships, retaining
   assert.equal(snapshot.data.trips[1].ownerId,member);
   assert.equal(snapshot.data.trips[1].members[0].userId,actor);
   assert.equal(snapshot.data.trips[1].members[0].email,'owner@example.com');
-  assert.deepEqual(Object.keys(await store.readLedger(actor)).sort(),['data','revision']);
+  assert.deepEqual(Object.keys(await store.readLedger(actor)).sort(),['data','revision','revisions']);
   assert.equal(batches[1].length, 3, 'MCP-style body reads retain one coherent transaction');
   assert.ok(!batches[1].some(statement => /activity_events|receipt_link_version/.test(statement.sql)),
     'body-only readers do not compute freshness metadata they discard');
@@ -1818,7 +1818,7 @@ test('real ledger POST returns its saved body/revision/tag from one response sna
   const body = await response.json() as Awaited<ReturnType<typeof store.readLedger>>;
   assert.equal(body.revision, 2); assert.deepEqual(body.data.trips[0].expenses,
     changed.trips[0].expenses.map(expense => ({ ...expense, adjustmentAllocation: 'native-minor-units' })));
-  assert.deepEqual(Object.keys(body).sort(), ['data', 'revision']);
+  assert.deepEqual(Object.keys(body).sort(), ['data', 'revision', 'revisions']);
   assert.equal(response.headers.get('x-ledger-revision'), String(body.revision));
   const tag = response.headers.get('etag'); assert(tag);
   const reads = batches.filter(statements => statements.some(statement => statement.sql.includes('t.data')));
@@ -1980,7 +1980,7 @@ test('successful ledger POST returns the ETag of its exact response snapshot for
   const body = await response.json() as typeof initial;
   const tag = response.headers.get('etag'); assert.equal(tag, await ledgerEtag(database.asD1(), actor));
   assert.equal(response.headers.get('x-ledger-revision'), String(body.revision));
-  assert.deepEqual(Object.keys(body).sort(), ['data','revision']);
+  assert.deepEqual(Object.keys(body).sort(), ['data','revision','revisions']);
   assert.equal((await route.GET(ledgerReadRequest(tag!))).status, 304);
 });
 
@@ -2222,4 +2222,70 @@ test('F-08 two accounts: a stale name edit cannot overwrite a newer amount, and 
   const ownerView = await store.readLedger(actor);
   assert.equal(ownerView.data.trips[0].expenses[0].items[0].amount, 3000);
   assert.equal(ownerView.data.trips[0].expenses[0].title, "Dinner at Rosa's");
+});
+
+// F-16: per-trip revisions (migration 0014).
+const tripRevision = (database: SQLiteD1, tripId: string) => (database.sqlite.prepare('SELECT revision FROM trips WHERE id = ?').get(tripId) as { revision: number }).revision;
+
+test('F-16: trip revisions advance on data, owner and membership changes, never on an identical write', async () => {
+  const database = await storage();
+  await store.writeLedger(actor, { trips: [trip('t1')] }, 0);
+  const start = tripRevision(database, 't1');
+  assert.ok(start >= 1, 'creating the owner membership counts as a change');
+  database.sqlite.prepare("UPDATE trips SET data = data WHERE id = 't1'").run();
+  assert.equal(tripRevision(database, 't1'), start, 'an identical write changes nothing');
+  database.sqlite.prepare("UPDATE trips SET data = json_set(data, '$.name', 'Porto') WHERE id = 't1'").run();
+  assert.equal(tripRevision(database, 't1'), start + 1);
+  database.sqlite.prepare("INSERT INTO memberships (trip_id, user_id, member_id) VALUES ('t1', ?, 'b')").run(member);
+  assert.equal(tripRevision(database, 't1'), start + 2, 'a joining account (invite, add-connected) is a change');
+  database.sqlite.prepare("DELETE FROM memberships WHERE trip_id = 't1' AND user_id = ?").run(member);
+  assert.equal(tripRevision(database, 't1'), start + 3, 'leaving is a change');
+  database.sqlite.prepare("UPDATE trips SET owner = ? WHERE id = 't1'").run(member);
+  assert.equal(tripRevision(database, 't1'), start + 4, 'an ownership transfer is a change');
+});
+
+test('F-16: saving one trip no longer conflicts with another device saving a different trip', async () => {
+  const database = await storage();
+  const first = await store.writeLedger(actor, { trips: [trip('t1'), trip('t2')] }, 0);
+  // Device A loaded both trips; device B then saves t2.
+  const deviceA = structuredClone(first);
+  const deviceB = structuredClone(first);
+  deviceB.data.trips[1].name = 'Changed on B';
+  const afterB = await store.writeLedger(actor, deviceB.data, deviceB.revision);
+  assert.equal(afterB.revisions.t1, first.revisions.t1, 'B left t1 alone, so its revision is unchanged');
+  // A saves only t1, with t1's own revision: no conflict, and B's change is kept.
+  const t1 = deviceA.data.trips[0];
+  t1.expenses.push(dinner());
+  const saved = await store.writeTrips(actor, { trips: [t1] }, { t1: deviceA.revisions.t1 });
+  assert.deepEqual(saved.data.trips.map(value => [value.id, value.name, value.expenses.length]), [['t1', 'Lisbon', 1], ['t2', 'Changed on B', 0]]);
+  assert.equal(saved.revisions.t2, afterB.revisions.t2, 'the untouched trip is not rewritten');
+  const events = database.sqlite.prepare("SELECT trip_id, entity_type FROM activity_events WHERE entity_type = 'expense'").all().map(row => ({ ...row }));
+  assert.deepEqual(events, [{ trip_id: 't1', entity_type: 'expense' }], 'history records only the real change');
+});
+
+test('F-16: a change to the same trip, including someone joining it, is still a conflict', async () => {
+  const database = await storage();
+  const first = await store.writeLedger(actor, { trips: [trip('t1')] }, 0);
+  const stale = structuredClone(first);
+  const other = structuredClone(first);
+  other.data.trips[0].name = 'Renamed elsewhere';
+  await store.writeLedger(actor, other.data, other.revision);
+  stale.data.trips[0].expenses.push(dinner());
+  await assert.rejects(store.writeTrips(actor, { trips: stale.data.trips }, { t1: stale.revisions.t1 }), /CONFLICT/);
+  const fresh = await store.readLedger(actor);
+  database.sqlite.prepare("INSERT INTO memberships (trip_id, user_id, member_id) VALUES ('t1', ?, 'b')").run(member);
+  fresh.data.trips[0].expenses.push(dinner());
+  await assert.rejects(store.writeTrips(actor, { trips: fresh.data.trips }, { t1: fresh.revisions.t1 }), /CONFLICT/);
+  assert.equal((await store.readLedger(actor)).data.trips[0].expenses.length, 0, 'nothing was saved');
+});
+
+test('F-16: a new trip needs no revision; an open trip must name one; validation still applies', async () => {
+  await storage();
+  const first = await store.writeLedger(actor, { trips: [trip('t1')] }, 0);
+  const added = await store.writeTrips(actor, { trips: [trip('t2')] }, {});
+  assert.deepEqual(added.data.trips.map(value => value.id), ['t1', 't2']);
+  await assert.rejects(store.writeTrips(actor, { trips: [first.data.trips[0]] }, {}), /Send each trip’s revision/);
+  await assert.rejects(store.writeTrips(actor, { trips: [trip('t3')] }, { t1: 1 }), /Send each trip’s revision/);
+  const invalid = { ...first.data.trips[0], expenses: [{ ...dinner(), payer: 'nobody' }] };
+  await assert.rejects(store.writeTrips(actor, { trips: [invalid] }, { t1: added.revisions.t1 }));
 });
