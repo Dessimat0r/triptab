@@ -24,6 +24,60 @@ async function change(
   if (!response.ok) throw Error(body.error || 'Unable to change this holiday.');
 }
 
+/** F-04: leaving never erases what someone owes; say what remains. */
+function leaveBalance(trip: Trip, accountId: string | undefined) {
+  try {
+    const index = trip.members.findIndex(member => member.userId === accountId);
+    if (index < 0) return '';
+    const value = balances(trip)[index];
+    const amount = formatMoney(Math.abs(value), trip.currency);
+    return value < 0 ? `You still owe ${amount} on this ${isBill(trip) ? 'bill' : 'holiday'}. ` : value > 0 ? `You are still owed ${amount}. ` : 'You are settled. ';
+  } catch { return ''; }
+}
+
+type Confirm = ReturnType<typeof useConfirmation>['confirm'];
+export type TripAction = 'archive' | 'leave' | 'transfer' | 'delete';
+
+/**
+ * Asks the confirmations a lifecycle action needs, then calls the server.
+ * Shared by Manage this bill/holiday and the drawer's ⋯ menus (F-06), so both
+ * paths ask the same questions. Returns false when the person cancels.
+ */
+export async function runTripAction(trip: Trip, accountId: string | undefined, value: TripAction, confirm: Confirm,
+  extra: { memberId?: string; confirmName?: string } = {}): Promise<boolean> {
+  if (
+    value === 'leave' &&
+    !(await confirm({
+      title: isBill(trip) ? 'Leave this bill?' : 'Leave this holiday?',
+      message: `${leaveBalance(trip, accountId)}You will lose access. Your expenses, payments and balance remain in the group’s records; leaving does not settle them.`,
+      confirmLabel: isBill(trip) ? 'Leave bill' : 'Leave holiday',
+      destructive: true,
+    }))
+  )
+    return false;
+  if (
+    value === 'transfer' &&
+    !(await confirm({
+      title: 'Transfer ownership?',
+      message:
+        isBill(trip) ? 'The new owner will manage invitations and bill ownership. You stay as a participant.' : 'The new owner will manage invitations and holiday ownership. You stay as a traveller.',
+      confirmLabel: 'Transfer ownership',
+    }))
+  )
+    return false;
+  // F-06: a bill is deleted after one plain confirmation; typing the name is kept for holidays with entries.
+  if (value === 'delete' && isBill(trip) && (trip.expenses.length || trip.payments.length || trip.drafts.length) && !(await confirm({
+    title: 'Delete this bill?',
+    message: `Delete “${trip.name}” with ${trip.expenses.length} ${trip.expenses.length === 1 ? 'expense' : 'expenses'} and ${trip.payments.length} ${trip.payments.length === 1 ? 'payment' : 'payments'}? Its receipt photos are removed; History keeps the record. To keep it but hide it, use Remove from my list.`,
+    confirmLabel: 'Delete bill', destructive: true,
+  }))) return false;
+  await change(value === 'delete' && isBill(trip) && !trip.expenses.length && !trip.payments.length && !trip.drafts.length && !trip.members.some(member => member.userId && member.userId !== accountId) ? 'discard' : value, trip.id, { memberId: extra.memberId || '',
+  // The plain confirmation above stands in for typing a bill's name; the
+  // server still checks the name, so a bill is never deleted by accident.
+  confirmName: value === 'delete' && isBill(trip) ? trip.name : extra.confirmName || '' });
+  return true;
+}
+
 export default function TripControls({
   trip,
   accountId,
@@ -41,51 +95,12 @@ export default function TripControls({
     [message, setMessage] = useState('');
   const { confirm, dialog } = useConfirmation(`${trip.id}:${accountId}`);
   const own = trip.ownerId === accountId;
-  // F-04: leaving never erases what someone owes; say what remains.
-  function leaveBalance() {
-    try {
-      const index = trip.members.findIndex(member => member.userId === accountId);
-      if (index < 0) return '';
-      const value = balances(trip)[index];
-      const amount = formatMoney(Math.abs(value), trip.currency);
-      return value < 0 ? `You still owe ${amount} on this ${isBill(trip) ? 'bill' : 'holiday'}. ` : value > 0 ? `You are still owed ${amount}. ` : 'You are settled. ';
-    } catch { return ''; }
-  }
-  async function action(value: 'archive' | 'leave' | 'transfer' | 'delete') {
+  async function action(value: TripAction) {
     if (busy || saving) return;
-    if (
-      value === 'leave' &&
-      !(await confirm({
-        title: isBill(trip) ? 'Leave this bill?' : 'Leave this holiday?',
-        message: `${leaveBalance()}You will lose access. Your expenses, payments and balance remain in the group’s records; leaving does not settle them.`,
-        confirmLabel: isBill(trip) ? 'Leave bill' : 'Leave holiday',
-        destructive: true,
-      }))
-    )
-      return;
-    if (
-      value === 'transfer' &&
-      !(await confirm({
-        title: 'Transfer ownership?',
-        message:
-          isBill(trip) ? 'The new owner will manage invitations and bill ownership. You stay as a participant.' : 'The new owner will manage invitations and holiday ownership. You stay as a traveller.',
-        confirmLabel: 'Transfer ownership',
-      }))
-    )
-      return;
-    // F-06: a bill is deleted after one plain confirmation; typing the name is kept for holidays with entries.
-    if (value === 'delete' && isBill(trip) && (trip.expenses.length || trip.payments.length || trip.drafts.length) && !(await confirm({
-      title: 'Delete this bill?',
-      message: `Delete “${trip.name}” with ${trip.expenses.length} ${trip.expenses.length === 1 ? 'expense' : 'expenses'} and ${trip.payments.length} ${trip.payments.length === 1 ? 'payment' : 'payments'}? Its receipt photos are removed; History keeps the record. To keep it but hide it, use Remove from my list.`,
-      confirmLabel: 'Delete bill', destructive: true,
-    }))) return;
     setSaving(true);
     setMessage('');
     try {
-      await change(value === 'delete' && isBill(trip) && !trip.expenses.length && !trip.payments.length && !trip.drafts.length && !trip.members.some(member => member.userId && member.userId !== accountId) ? 'discard' : value, trip.id, { memberId: owner,
-        // The plain confirmation above stands in for typing a bill's name; the
-        // server still checks the name, so a bill is never deleted by accident.
-        confirmName: value === 'delete' && isBill(trip) ? trip.name : confirmName });
+      if (!await runTripAction(trip, accountId, value, confirm, { memberId: owner, confirmName })) return;
       await onChanged();
       setMessage(
         value === 'transfer' ? 'Ownership transferred.' : isBill(trip) ? 'Bill updated.' : 'Holiday updated.',
