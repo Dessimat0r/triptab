@@ -45,9 +45,11 @@ export function useAccountResource<T>(accountId: string | undefined, url: string
     }
   }, [accountId, url]);
   useEffect(() => {
-    void refresh();
-    // A new account, URL or refresh key starts a new read and retires older ones.
-    return () => { request.current++; };
+    // A new account, URL or refresh key starts a new read and retires older
+    // ones. The read starts after this render commits, like other app reads.
+    const requests = request;
+    void Promise.resolve().then(refresh);
+    return () => { requests.current++; };
   }, [refresh, options.refreshKey]);
   useLiveRefresh(refresh, { accountId, enabled: !!accountId });
   return state && accountId && state.accountId === accountId ? state.value : null;
