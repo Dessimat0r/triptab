@@ -471,6 +471,7 @@ export default function ActivityPanel({ tripId, tripKind, accountId, expenseId, 
         <p className="footnote"><time dateTime={event.createdAt}>{scope ? auditTimestamp(event.createdAt) : formatClockTime(event.createdAt)}</time> · {auditSource(event.source)}</p>
         <ActivityEventDetails event={event} currency={currency} tripKind={tripKind} memberNames={memberNames} actorMemberNames={actorMemberNames} />
         {onRestore && event.action === "delete" && event.before && ["expense", "payment"].includes(event.entityType) && <button type="button" className="quiet" disabled={busy} onClick={() => onRestore(event)}>{uiText("Review ")}{event.entityType}{uiText(" to restore")}</button>}
+        {onRestore && event.action === "delete" && event.before && event.entityType === "draft" && <button type="button" className="quiet" disabled={busy} onClick={() => onRestore(event)}>{uiText("Restore receipt draft")}</button>}
       </li>;
     })}</ol>
     {history.nextCursor !== null && <button type="button" className="quiet phone-wide" disabled={history.loading} onClick={history.loadOlder}>{history.loading ? uiText("Loading…") : uiText("Load older changes")}</button>}
