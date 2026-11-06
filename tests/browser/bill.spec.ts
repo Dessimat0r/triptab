@@ -51,7 +51,7 @@ async function fixtures(page: Page) {
 }
 async function selectBill(page: Page) {
   await page.getByRole('button', { name: 'Open holidays', exact: true }).click();
-  await page.getByRole('button', { name: /Dinner at Taberna Real/ }).click();
+  await page.getByRole('button', { name: /^Dinner at Taberna Real/ }).click();
 }
 async function fits(page: Page) {
   expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(1);
