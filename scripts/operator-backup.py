@@ -406,6 +406,8 @@ def check_dump_end(path, metadata):
 
 
 def main():
+    if os.name != 'posix':
+        raise BackupError('Operator backup requires POSIX file ownership and private file modes.')
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--base-url', required=True)
     parser.add_argument('--output-dir', required=True)
