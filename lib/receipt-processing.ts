@@ -1,3 +1,4 @@
+import { applyAdjustments, type Adjustment } from './adjustments';
 import { equalSavedValue } from './client-ledger';
 import type { Draft, DraftItem, Expense, Trip } from './model';
 
@@ -58,9 +59,10 @@ export function receiptProposalEditor(editor: ReceiptEditor, draft: Draft): Rece
   return next;
 }
 
-export function receiptEditorTotal(entry: Pick<ReceiptEditor, 'items' | 'tax' | 'tip' | 'discount'>): number | null {
+export function receiptEditorTotal(entry: Pick<ReceiptEditor, 'items' | 'tax' | 'tip' | 'discount'> & { adjustments?: Adjustment[] }): number | null {
   if (entry.items.some(item => item.amount === null || !Number.isSafeInteger(item.amount))) return null;
-  const amount = entry.items.reduce((sum, item) => sum + item.amount!, 0) + entry.tax + entry.tip - entry.discount;
+  const adjusted = applyAdjustments(entry.items, entry.adjustments);
+  const amount = adjusted.net.reduce<number>((sum, value) => sum + value!, 0) + adjusted.receiptDelta + entry.tax + entry.tip - entry.discount;
   return Number.isSafeInteger(amount) ? amount : null;
 }
 

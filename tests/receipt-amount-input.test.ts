@@ -8,9 +8,10 @@ import { createSourceFile, isFunctionDeclaration, JsxEmit, ModuleKind, ScriptKin
 const source = await readFile(new URL('../components/trip-app.tsx', import.meta.url), 'utf8');
 const syntax = createSourceFile('trip-app.tsx', source, ScriptTarget.Latest, true, ScriptKind.TSX);
 const declaration = syntax.statements.find(statement => isFunctionDeclaration(statement) && statement.name?.text === 'Amount');
-const parser = syntax.statements.find(statement => isFunctionDeclaration(statement) && statement.name?.text === 'parseAmountText');
-assert(declaration && parser);
-const compiled = transpileModule(parser.getText(syntax) + '\n' + declaration.getText(syntax) + '\nmodule.exports = Amount; module.exports.parseAmountText = parseAmountText;', {compilerOptions: {module: ModuleKind.CommonJS, target: ScriptTarget.ES2022, jsx: JsxEmit.ReactJSX}}).outputText;
+// The parser is shared from lib so the discount editor uses the same rules.
+const parserSource = (await readFile(new URL('../lib/amount-text.ts', import.meta.url), 'utf8')).replace('export function', 'function');
+assert(declaration);
+const compiled = transpileModule(parserSource + '\n' + declaration.getText(syntax) + '\nmodule.exports = Amount; module.exports.parseAmountText = parseAmountText;', {compilerOptions: {module: ModuleKind.CommonJS, target: ScriptTarget.ES2022, jsx: JsxEmit.ReactJSX}}).outputText;
 function control(initial: number | null, nullable: boolean) {
   let value = initial, text: unknown;
   const changes: (number | null)[] = [];

@@ -11,6 +11,7 @@ const example = (fixture: ReceiptGoldenFixture): ReceiptEvaluationResult => ({
   printedSubtotal: fixture.expected.printedSubtotal,
   printedTotal: fixture.expected.printedTotal,
   adjustments: { ...fixture.expected.adjustments },
+  ...(fixture.expected.scopedAdjustments ? { scopedAdjustments: structuredClone(fixture.expected.scopedAdjustments) } : {}),
   warningCodes: [...fixture.expected.warningCodes] as ReceiptEvaluationResult['warningCodes'],
   unreadableFields: [...fixture.expected.unreadableFields],
 });
@@ -18,10 +19,10 @@ const results = (rows: ReceiptEvaluationResult[]) => ({ corpusVersion: 1, result
 
 test('versioned synthetic corpus covers all requested single-image financial and capture cases without customer data', async () => {
   assert.equal(corpus.version, 1);
-  assert.equal(corpus.fixtures.length, 19);
+  assert.equal(corpus.fixtures.length, 23);
   const ids = corpus.fixtures.map(fixture => fixture.id);
   assert.equal(new Set(ids).size, ids.length);
-  for (const id of ['cafe', 'restaurant-included-vat', 'service-charge', 'separate-tip', 'unit-price', 'repeated-names', 'comma-decimals', 'foreign-currency', 'ambiguous-dollar', 'global-coupon', 'item-discount', 'negative-refund', 'long-receipt', 'blurry-amount', 'cropped-receipt', 'missing-line-subtotal', 'inclusive-tax-summary', 'multiple-totals', 'printed-injection']) assert.ok(ids.includes(id), id);
+  for (const id of ['bogof', 'multibuy', 'percentage-discount', 'loyalty', 'cafe', 'restaurant-included-vat', 'service-charge', 'separate-tip', 'unit-price', 'repeated-names', 'comma-decimals', 'foreign-currency', 'ambiguous-dollar', 'global-coupon', 'item-discount', 'negative-refund', 'long-receipt', 'blurry-amount', 'cropped-receipt', 'missing-line-subtotal', 'inclusive-tax-summary', 'multiple-totals', 'printed-injection']) assert.ok(ids.includes(id), id);
   for (const fixture of corpus.fixtures) {
     assert.equal(fixture.expected.lineCount, fixture.expected.items.length);
     assert.deepEqual(fixture.expected.sourceOrder, fixture.expected.items.map(item => item.lineIndex));
@@ -64,7 +65,7 @@ test('evaluation counts omissions, invented and duplicate lines instead of hidin
   assert.equal(report.metrics.hallucinatedLines, 2);
   assert.deepEqual(report.metrics.exactPriceAccuracy, { correct: 1, evaluated: 2, rate: 0.5 });
   assert.equal(report.metrics.successfulReconciliationRate.rate, 0);
-  assert.equal(report.notEvaluated.length, 18);
+  assert.equal(report.notEvaluated.length, corpus.fixtures.length - 1);
 });
 
 test('one-cent price changes, wrong currency, fabricated totals and source reordering reduce their respective metrics', () => {
@@ -142,7 +143,7 @@ test('invented prices and matching invented totals are a false match even on an 
 test('a corpus with no supplied predictions reports unrun coverage and null scores rather than invented accuracy', () => {
   const report = evaluateReceiptResults(corpus.fixtures, results([]));
   assert.equal(report.evaluatedFixtures, 0);
-  assert.equal(report.notEvaluated.length, 19);
+  assert.equal(report.notEvaluated.length, corpus.fixtures.length);
   assert.equal(report.metrics.lineRecall.rate, null);
   assert.equal(report.metrics.printedTotalAccuracy.rate, null);
   assert.equal(report.metrics.successfulReconciliationRate.rate, null);

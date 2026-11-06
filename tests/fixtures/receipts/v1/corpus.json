@@ -434,7 +434,7 @@
     },
     {
       "id": "global-coupon",
-      "description": "Global coupon applied once",
+      "description": "A receipt-wide coupon is one receipt-wide discount, applied once",
       "image": "images/global-coupon.png",
       "source": {
         "merchant": "SYNTHETIC TEST RECEIPT — NOT A SALE",
@@ -479,17 +479,26 @@
         "adjustments": {
           "tax": 0,
           "tip": 0,
-          "discount": 200
+          "discount": 0
         },
         "warningCodes": [],
         "unreadableFields": [],
-        "reconciliationStatus": "matched"
+        "reconciliationStatus": "matched",
+        "scopedAdjustments": [
+          {
+            "kind": "discount",
+            "amount": 200,
+            "scope": "receipt",
+            "itemLineIndexes": [],
+            "sourceLineIndex": 3
+          }
+        ]
       },
       "sourceImage": "images/global-coupon.svg"
     },
     {
       "id": "item-discount",
-      "description": "An item-specific discount remains visible evidence and is not counted twice",
+      "description": "An item-specific coupon is a discount on its own line only, counted once",
       "image": "images/item-discount.png",
       "source": {
         "merchant": "SYNTHETIC TEST RECEIPT — NOT A SALE",
@@ -534,17 +543,28 @@
         "adjustments": {
           "tax": 0,
           "tip": 0,
-          "discount": 50
+          "discount": 0
         },
         "warningCodes": [],
         "unreadableFields": [],
-        "reconciliationStatus": "matched"
+        "reconciliationStatus": "matched",
+        "scopedAdjustments": [
+          {
+            "kind": "discount",
+            "amount": 50,
+            "scope": "items",
+            "itemLineIndexes": [
+              0
+            ],
+            "sourceLineIndex": 1
+          }
+        ]
       },
       "sourceImage": "images/item-discount.svg"
     },
     {
       "id": "negative-refund",
-      "description": "A refund is a supported subtractive adjustment, not a negative purchase row",
+      "description": "A bottle-deposit return is not a promotion: it stays visible evidence for a person, never a negative purchase or a discount",
       "image": "images/negative-refund.png",
       "source": {
         "merchant": "SYNTHETIC TEST RECEIPT — NOT A SALE",
@@ -577,11 +597,13 @@
         "adjustments": {
           "tax": 0,
           "tip": 0,
-          "discount": 200
+          "discount": 0
         },
-        "warningCodes": [],
+        "warningCodes": [
+          "unmapped-adjustment"
+        ],
         "unreadableFields": [],
-        "reconciliationStatus": "matched"
+        "reconciliationStatus": "needs-review"
       },
       "sourceImage": "images/negative-refund.svg"
     },
@@ -1434,6 +1456,301 @@
         "reconciliationStatus": "matched"
       },
       "sourceImage": "images/printed-injection.svg"
+    },
+    {
+      "id": "bogof",
+      "description": "BOGOF on two bags of crisps is a discount on those two lines only",
+      "image": "images/bogof.png",
+      "source": {
+        "merchant": "SYNTHETIC TEST RECEIPT — NOT A SALE",
+        "currencyText": "GBP",
+        "lines": [
+          "PRINGLES ORIGINAL 200G   3.00",
+          "PRINGLES ORIGINAL 200G   3.00",
+          "SEMI SKIMMED MILK 2PT    1.50",
+          "BOGOF PRINGLES          -3.00",
+          "TOTAL GBP                4.50"
+        ]
+      },
+      "expected": {
+        "lineCount": 3,
+        "items": [
+          {
+            "lineIndex": 0,
+            "name": "PRINGLES ORIGINAL 200G",
+            "amount": 300,
+            "observedText": "PRINGLES ORIGINAL 200G   3.00",
+            "acceptedNames": [
+              "PRINGLES ORIGINAL 200G"
+            ]
+          },
+          {
+            "lineIndex": 1,
+            "name": "PRINGLES ORIGINAL 200G",
+            "amount": 300,
+            "observedText": "PRINGLES ORIGINAL 200G   3.00",
+            "acceptedNames": [
+              "PRINGLES ORIGINAL 200G"
+            ]
+          },
+          {
+            "lineIndex": 2,
+            "name": "SEMI SKIMMED MILK 2PT",
+            "amount": 150,
+            "observedText": "SEMI SKIMMED MILK 2PT    1.50",
+            "acceptedNames": [
+              "SEMI SKIMMED MILK 2PT"
+            ]
+          }
+        ],
+        "sourceOrder": [
+          0,
+          1,
+          2
+        ],
+        "currency": "GBP",
+        "printedSubtotal": null,
+        "printedTotal": 450,
+        "adjustments": {
+          "tax": 0,
+          "tip": 0,
+          "discount": 0
+        },
+        "scopedAdjustments": [
+          {
+            "kind": "discount",
+            "amount": 300,
+            "scope": "items",
+            "itemLineIndexes": [
+              0,
+              1
+            ],
+            "sourceLineIndex": 3
+          }
+        ],
+        "warningCodes": [],
+        "unreadableFields": [],
+        "reconciliationStatus": "matched"
+      },
+      "sourceImage": "images/bogof.svg"
+    },
+    {
+      "id": "multibuy",
+      "description": "A 3-for-2 multibuy saving applies only to the three qualifying lines",
+      "image": "images/multibuy.png",
+      "source": {
+        "merchant": "SYNTHETIC TEST RECEIPT — NOT A SALE",
+        "currencyText": "GBP",
+        "lines": [
+          "COLA 330ML              1.20",
+          "COLA 330ML              1.20",
+          "COLA 330ML              1.20",
+          "BREAD                   1.80",
+          "3 FOR 2 COLA           -1.20",
+          "TOTAL GBP               4.20"
+        ]
+      },
+      "expected": {
+        "lineCount": 4,
+        "items": [
+          {
+            "lineIndex": 0,
+            "name": "COLA 330ML",
+            "amount": 120,
+            "observedText": "COLA 330ML              1.20",
+            "acceptedNames": [
+              "COLA 330ML"
+            ]
+          },
+          {
+            "lineIndex": 1,
+            "name": "COLA 330ML",
+            "amount": 120,
+            "observedText": "COLA 330ML              1.20",
+            "acceptedNames": [
+              "COLA 330ML"
+            ]
+          },
+          {
+            "lineIndex": 2,
+            "name": "COLA 330ML",
+            "amount": 120,
+            "observedText": "COLA 330ML              1.20",
+            "acceptedNames": [
+              "COLA 330ML"
+            ]
+          },
+          {
+            "lineIndex": 3,
+            "name": "BREAD",
+            "amount": 180,
+            "observedText": "BREAD                   1.80",
+            "acceptedNames": [
+              "BREAD"
+            ]
+          }
+        ],
+        "sourceOrder": [
+          0,
+          1,
+          2,
+          3
+        ],
+        "currency": "GBP",
+        "printedSubtotal": null,
+        "printedTotal": 420,
+        "adjustments": {
+          "tax": 0,
+          "tip": 0,
+          "discount": 0
+        },
+        "scopedAdjustments": [
+          {
+            "kind": "discount",
+            "amount": 120,
+            "scope": "items",
+            "itemLineIndexes": [
+              0,
+              1,
+              2
+            ],
+            "sourceLineIndex": 4
+          }
+        ],
+        "warningCodes": [],
+        "unreadableFields": [],
+        "reconciliationStatus": "matched"
+      },
+      "sourceImage": "images/multibuy.svg"
+    },
+    {
+      "id": "percentage-discount",
+      "description": "A printed 10% saving on one product line",
+      "image": "images/percentage-discount.png",
+      "source": {
+        "merchant": "SYNTHETIC TEST RECEIPT — NOT A SALE",
+        "currencyText": "EUR",
+        "lines": [
+          "HEADPHONES             40.00",
+          "CABLE                   5.00",
+          "10% OFF HEADPHONES     -4.00",
+          "TOTAL EUR              41.00"
+        ]
+      },
+      "expected": {
+        "lineCount": 2,
+        "items": [
+          {
+            "lineIndex": 0,
+            "name": "HEADPHONES",
+            "amount": 4000,
+            "observedText": "HEADPHONES             40.00",
+            "acceptedNames": [
+              "HEADPHONES"
+            ]
+          },
+          {
+            "lineIndex": 1,
+            "name": "CABLE",
+            "amount": 500,
+            "observedText": "CABLE                   5.00",
+            "acceptedNames": [
+              "CABLE"
+            ]
+          }
+        ],
+        "sourceOrder": [
+          0,
+          1
+        ],
+        "currency": "EUR",
+        "printedSubtotal": null,
+        "printedTotal": 4100,
+        "adjustments": {
+          "tax": 0,
+          "tip": 0,
+          "discount": 0
+        },
+        "scopedAdjustments": [
+          {
+            "kind": "discount",
+            "amount": 400,
+            "scope": "items",
+            "itemLineIndexes": [
+              0
+            ],
+            "sourceLineIndex": 2
+          }
+        ],
+        "warningCodes": [],
+        "unreadableFields": [],
+        "reconciliationStatus": "matched"
+      },
+      "sourceImage": "images/percentage-discount.svg"
+    },
+    {
+      "id": "loyalty",
+      "description": "A loyalty saving printed for the whole basket is one receipt-wide discount",
+      "image": "images/loyalty.png",
+      "source": {
+        "merchant": "SYNTHETIC TEST RECEIPT — NOT A SALE",
+        "currencyText": "EUR",
+        "lines": [
+          "APPLES                  2.00",
+          "CHEESE                  4.00",
+          "SUBTOTAL EUR            6.00",
+          "MEMBER SAVINGS         -0.60",
+          "TOTAL EUR               5.40"
+        ]
+      },
+      "expected": {
+        "lineCount": 2,
+        "items": [
+          {
+            "lineIndex": 0,
+            "name": "APPLES",
+            "amount": 200,
+            "observedText": "APPLES                  2.00",
+            "acceptedNames": [
+              "APPLES"
+            ]
+          },
+          {
+            "lineIndex": 1,
+            "name": "CHEESE",
+            "amount": 400,
+            "observedText": "CHEESE                  4.00",
+            "acceptedNames": [
+              "CHEESE"
+            ]
+          }
+        ],
+        "sourceOrder": [
+          0,
+          1
+        ],
+        "currency": "EUR",
+        "printedSubtotal": 600,
+        "printedTotal": 540,
+        "adjustments": {
+          "tax": 0,
+          "tip": 0,
+          "discount": 0
+        },
+        "scopedAdjustments": [
+          {
+            "kind": "discount",
+            "amount": 60,
+            "scope": "receipt",
+            "itemLineIndexes": [],
+            "sourceLineIndex": 3
+          }
+        ],
+        "warningCodes": [],
+        "unreadableFields": [],
+        "reconciliationStatus": "matched"
+      },
+      "sourceImage": "images/loyalty.svg"
     }
   ]
 }
