@@ -1,0 +1,11 @@
+ℹ session: 1 D1 round trips, 1 statements, 20ms simulated transport floor
+ℹ linked-provider: 1 D1 round trips, 1 statements, 20ms simulated transport floor
+ℹ legacy-provider: 1 D1 round trips, 1 statements, 20ms simulated transport floor
+ℹ tests 1442
+ℹ suites 0
+ℹ pass 1442
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 65730.627387

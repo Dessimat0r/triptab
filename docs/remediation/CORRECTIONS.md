@@ -136,6 +136,31 @@ Owner approval is required for every step. The owner decisions stand:
 - **The leave-balance warning on shared lifecycle actions is unchanged.**
 - **Corrective commits conflict only with each other in `components/trip-app.tsx`.** They were made sequentially on this branch. When cherry-picking onto separate PRs, follow the commit order in the table above.
 
+## Verification results
+
+The code under test is `ce2e082` (the docs-only commits after it change no code). Runs were made on Linux with Node 24.22.1, on 6 November 2026.
+
+| Check | Command | Result | Time |
+| --- | --- | --- | --- |
+| Units (complete) | `npm test` | **1,442 / 1,442 passed**, 0 failed (review baseline 1,403) | 66 s |
+| Types | `npx --no-install tsc --noEmit` | Passed | 9 s |
+| Lint | `npm run lint` | 0 errors, 4 warnings (the same four as the baseline) | 36 s |
+| Production build | `npm run build` | Passed | 10 s |
+| Chromium, full suite, local | `playwright test --project chromium`, with `TRIPTAB_PREVIOUS_URL` set to a separate build of main `01be219` | **242 / 242 passed**, including the three previous-bundle tests | 149 s |
+| Chromium, CI (combined head `6e9ce7f`) | GitHub Actions in Playwright's container | 239 passed, 3 skipped (the previous-bundle tests, which need a main preview) | 2.9 min |
+| WebKit, CI (combined head `6e9ce7f`) | GitHub Actions in Playwright's container | **239 passed**, 3 skipped (the same three) | 3.2 min |
+| Migrations | `membership-revision-migration`, `trip-revisions-migration`, `health` and `receipt-operations` tests (Miniflare D1 with every migration) | Passed | within units |
+
+Logs are in `correction-evidence/final-*.log`.
+
+**One intermittent WebKit failure is recorded, not dismissed.**
+- On CI at `740f82c`, WebKit failed 1 of 236. The test was `expense-layout.spec.ts › 1024×768 › receipt fits without clipping`: the "Show first for item 1" select was not found within 5 s.
+- It passed on the next combined run (`6e9ce7f`), and at `c0566c1`.
+- That select renders only once the receipt's bilingual names are known, which depends on the trip-language read. None of these corrections touch that code.
+- The trace is in that run's `browser-failure-webkit` artifact (run 42310528517).
+- The root cause is not established. It is close to the WebKit receipt-layout instability the review saw, and it needs its own investigation. It is listed as a release gate.
+- The review's Windows-host WebKit layout failures (28 of 37 on baseline main) were not reproducible on Linux.
+
 ## Release gates still open
 
 Corrected code does not close these. Do not give release approval while any is open.
@@ -158,4 +183,6 @@ Corrected code does not close these. Do not give release approval while any is o
    - Run the old-tab smoke check in production.
 6. **Paid live model evaluation (F-10):** not run. No paid calls were made in this pass.
 7. **Physical devices:** iPhone Safari, PWA lock and resume, and swipe.
-8. **WebKit:** the combined WebKit result comes from CI on PR #77 (Playwright's Linux container). The reviewer's Windows WebKit layout failures were not reproducible here and need a separate look on that host.
+8. **WebKit:**
+   - Root-cause the intermittent `expense-layout 1024×768 receipt` failure above, using the CI trace.
+   - Look at the reviewer's Windows-host WebKit layout failures on that host.
