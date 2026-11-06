@@ -11,6 +11,7 @@ import { buildReceiptPrompt } from '../lib/receipt-chatgpt';
 import { isBlankReceipt, isUnchangedInitialReceipt, matchingReceiptProposal, mayFillInitialReceipt, receiptEditableValue, receiptProposalEditor, receiptEditorTotal, type ReceiptEditor } from '../lib/receipt-processing';
 import { acknowledgeReceiptReview, receiptScanSaveError } from '../lib/receipt-scan';
 import { expenseSaveBlockers, visibleExpenseBlockers } from '../lib/expense-readiness';
+import { findLikelyDuplicates } from '../lib/duplicates';
 import { isBill, CURRENT_CALCULATION_RULE, stampCalculationRules, tripMemberWeights, defaultParticipants, itemSchema, draftItemSchema, expenseSchema, itemSplitError, ledgerSchema, receiptSplitError, total, validateLedger, type Draft, type Expense, type ReceiptMessage, type Trip } from '../lib/model';
 
 // Execute the actual page handlers against a small state/persistence boundary.
@@ -50,7 +51,7 @@ const controllerSource = `return function createController(initial, boundary) {
   const receiptAIStatusRequest={current:0},receiptAIStatusInFlight={current:null};
   const updates = [], editorBaseline = {current:null};
   const latestSnapshot = {current:{data:{trips:[trip]},revision:0}};
-  const {isBill,firstBillExpense,isFirstBillReceipt,CURRENT_CALCULATION_RULE,stampCalculationRules,tripMemberWeights,defaultParticipants,canonicalJson,sha256Hex,itemSchema,draftItemSchema,expenseSchema,acknowledgeReceiptReview,expenseSaveBlockers,visibleExpenseBlockers,receiptScanSaveError,receiptEditorTotal,itemSplitError,receiptSplitError,total,equalFinancialValue,equalSavedValue,buildReceiptPrompt,isBlankReceipt,isUnchangedInitialReceipt,matchingReceiptProposal,mayFillInitialReceipt,receiptEditableValue,receiptProposalEditor} = boundary;
+  const {findLikelyDuplicates,isBill,firstBillExpense,isFirstBillReceipt,CURRENT_CALCULATION_RULE,stampCalculationRules,tripMemberWeights,defaultParticipants,canonicalJson,sha256Hex,itemSchema,draftItemSchema,expenseSchema,acknowledgeReceiptReview,expenseSaveBlockers,visibleExpenseBlockers,receiptScanSaveError,receiptEditorTotal,itemSplitError,receiptSplitError,total,equalFinancialValue,equalSavedValue,buildReceiptPrompt,isBlankReceipt,isUnchangedInitialReceipt,matchingReceiptProposal,mayFillInitialReceipt,receiptEditableValue,receiptProposalEditor} = boundary;
   const uid = boundary.uid, today = () => '2026-10-04', localTime = () => '12:00';
   const money = (amount, currency) => currency+' '+amount/100;
   const previewTotal = entry => total(entry);
@@ -80,6 +81,7 @@ const controllerSource = `return function createController(initial, boundary) {
   const setReceiptHistoryOpen = next => {receiptHistoryOpen=next};
   const setRestoration = next => {restoration=next};
   const setEditorConflict = next => {editorConflict=next};
+  const safeStorage = () => undefined, clearUnsavedEntry = () => {}, expenseDate = value => value;
   const setReferenceRate = next => {referenceRate=next};
   const setPaste = next => {paste=next};
   const setFxError = next => {fxError=next};
@@ -129,7 +131,7 @@ type Controller = {
   restoring(): void; restoration: unknown;
 };
 const createController = new Function(compiled)() as (initial: Trip, boundary: object) => Controller;
-const controller = (trip: Trip) => createController(trip, { isBill, firstBillExpense, isFirstBillReceipt, canonicalJson, sha256Hex, uid: randomUUID, ledgerSchema, CURRENT_CALCULATION_RULE, stampCalculationRules, tripMemberWeights, defaultParticipants, itemSchema, draftItemSchema, expenseSchema, acknowledgeReceiptReview, expenseSaveBlockers, visibleExpenseBlockers, itemSplitError, receiptSplitError, total, validateLedger, equalFinancialValue, equalSavedValue, buildReceiptPrompt, isBlankReceipt, isUnchangedInitialReceipt, matchingReceiptProposal, mayFillInitialReceipt, receiptEditableValue, receiptProposalEditor, receiptEditorTotal, receiptScanSaveError });
+const controller = (trip: Trip) => createController(trip, { findLikelyDuplicates, isBill, firstBillExpense, isFirstBillReceipt, canonicalJson, sha256Hex, uid: randomUUID, ledgerSchema, CURRENT_CALCULATION_RULE, stampCalculationRules, tripMemberWeights, defaultParticipants, itemSchema, draftItemSchema, expenseSchema, acknowledgeReceiptReview, expenseSaveBlockers, visibleExpenseBlockers, itemSplitError, receiptSplitError, total, validateLedger, equalFinancialValue, equalSavedValue, buildReceiptPrompt, isBlankReceipt, isUnchangedInitialReceipt, matchingReceiptProposal, mayFillInitialReceipt, receiptEditableValue, receiptProposalEditor, receiptEditorTotal, receiptScanSaveError });
 const stamp = '2026-10-04T12:00:00Z';
 const question: ReceiptMessage = { id: 'question', role: 'user', text: 'Check the replacement image', createdAt: stamp };
 const reply: ReceiptMessage = { id: 'reply', role: 'assistant', replyTo: question.id, text: 'Reviewed replacement image', createdAt: stamp };

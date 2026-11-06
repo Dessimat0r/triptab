@@ -373,7 +373,12 @@ export const tripSchema = z.object({
   expenses: z.array(expenseSchema).max(1000), drafts: z.array(draftSchema).max(100),
   payments: z.array(paymentSchema).max(1000),
 });
-export const ledgerSchema = z.object({ trips: z.array(tripSchema).max(50) });
+/** Separate open-list limits (F-17, D07). Nothing is archived automatically. */
+export const MAX_OPEN_HOLIDAYS = 50;
+export const MAX_OPEN_BILLS = 100;
+// The array cap is only a size guard; the per-kind limits give the message people see.
+const MAX_LEDGER_TRIPS = 200;
+export const ledgerSchema = z.object({ trips: z.array(tripSchema).max(MAX_LEDGER_TRIPS) });
 export type Expense = z.infer<typeof expenseSchema>;
 export type Draft = z.infer<typeof draftSchema>;
 export type Payment = z.infer<typeof paymentSchema>;
@@ -391,7 +396,7 @@ const storedTripSchema = tripSchema.extend({
   expenses: z.array(expenseBaseSchema.extend({ bankAmount: cents.optional() }).superRefine(expenseItemAllocationValidation)).max(1000),
   drafts: z.array(draftSchema.extend({ bankAmount: cents.optional() })).max(100),
 });
-const storedLedgerSchema = z.object({ trips: z.array(storedTripSchema).max(50) });
+const storedLedgerSchema = z.object({ trips: z.array(storedTripSchema).max(MAX_LEDGER_TRIPS) });
 
 export function parseStoredTrip(data: unknown): Trip {
   return storedTripSchema.parse(data);
@@ -475,6 +480,9 @@ export function validateLedger(data: unknown, options: { previous?: Ledger; sour
   const ledger = previous ? parseLedgerStructure(data) : ledgerSchema.parse(data);
   const unique = (values: string[]) => new Set(values).size === values.length;
   if (!unique(ledger.trips.map(trip => trip.id))) throw new LedgerValidationError('Duplicate trips');
+  const openBills = ledger.trips.filter(isBill).length, openHolidays = ledger.trips.length - openBills;
+  if (openBills > MAX_OPEN_BILLS) throw new LedgerValidationError(`You have ${MAX_OPEN_BILLS} open bills, the most TripTab keeps in your list. Remove a settled bill from your list (bill options → Remove from my list) before starting another.`);
+  if (openHolidays > MAX_OPEN_HOLIDAYS) throw new LedgerValidationError(`You have ${MAX_OPEN_HOLIDAYS} open holidays, the most TripTab keeps in your list. Archive one you have finished before adding another.`);
   for (const trip of ledger.trips) {
     const prior = previous?.trips.find(value => value.id === trip.id);
     if (isBill(trip) && (!prior || !sameStoredValue(trip, prior))) {

@@ -1,12 +1,13 @@
 import { accountAuditStatement, activityStatements, type ActivityChange } from './audit';
-import { isBill, type Trip } from './model';
+import { isBill, MAX_OPEN_BILLS, MAX_OPEN_HOLIDAYS, type Trip } from './model';
 
 /** Holiday archive, leave, ownership transfer and deletion (audit F-23). */
 export class TripLifecycleError extends Error {
   constructor(message: string, public readonly status = 400) { super(message); }
 }
 
-export const MAX_OPEN_TRIPS = 50;
+/** Combined size guard; the per-kind limits below decide restores (F-17). */
+export const MAX_OPEN_TRIPS = MAX_OPEN_HOLIDAYS + MAX_OPEN_BILLS;
 type Actor = { id: string; displayName: string };
 
 /** Holidays in an account's open list. Archived holidays stay accessible elsewhere. */
@@ -65,14 +66,18 @@ export async function setTripArchived(database: D1Database, actor: Actor, rawTri
     ]);
     return { archived };
   }
-  // Restoring must keep the open list within the full-ledger save limit.
+  // Restoring keeps each kind within its own open-list limit (F-17).
+  const bill = trip.kind === 'bill';
+  const limit = bill ? MAX_OPEN_BILLS : MAX_OPEN_HOLIDAYS;
+  const sameKind = `(SELECT COUNT(*) FROM trips o WHERE o.id IN (${OPEN_TRIP_IDS}) AND ${bill ? "json_extract(o.data, '$.kind') = 'bill'" : "COALESCE(json_extract(o.data, '$.kind'), 'holiday') <> 'bill'"})`;
   const results = await database.batch([
     database.prepare(`DELETE FROM trip_archives WHERE user_id = ? AND trip_id = ? AND ${identity}
-      AND (SELECT COUNT(*) FROM (${OPEN_TRIP_IDS})) < ?`).bind(actor.id, id, actor.id, actor.id, ...openTripBindings(actor.id), MAX_OPEN_TRIPS),
+      AND ${sameKind} < ?`).bind(actor.id, id, actor.id, actor.id, ...openTripBindings(actor.id), limit),
     audit,
   ]);
   if (!results[0].meta.changes && await database.prepare('SELECT 1 FROM trip_archives WHERE user_id = ? AND trip_id = ?').bind(actor.id, id).first()) {
-    throw new TripLifecycleError(`You already have ${MAX_OPEN_TRIPS} open holidays and bills. Archive one before restoring another.`, 409);
+    throw new TripLifecycleError(bill ? `You already have ${MAX_OPEN_BILLS} open bills. Remove one from your list before restoring another.`
+      : `You already have ${MAX_OPEN_HOLIDAYS} open holidays. Archive one before restoring another.`, 409);
   }
   return { archived };
 }
