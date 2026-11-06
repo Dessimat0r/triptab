@@ -2242,6 +2242,8 @@ test('F-01 historical receipt audit includes authorised archived records, exclud
   await assert.rejects(store.readReceiptAuditTrips(actor, { tripId: 'guessed' }), /not found/);
   await assert.rejects(store.readReceiptAuditTrips(actor, { limit: 1000 }), /valid receipt audit/);
   assert.equal(snapshot(), before);
+});
+
 test('F-08 two accounts: a stale name edit cannot overwrite a newer amount, and the merged save keeps both', async () => {
   const database = await storage();
   const holiday = trip(); holiday.expenses = [{ ...dinner(), items: [{ id: 'food', name: 'Dinner', amount: 2000, members: ['a', 'b'] }] }];

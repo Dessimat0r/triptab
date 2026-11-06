@@ -67,7 +67,7 @@ import { localDate, localTime, formatCalendarDate, formatClockTime } from "@/lib
 import { equalFinancialValue, equalSavedValue, hasNewMatchingPayment, rebaseLedger } from "@/lib/client-ledger";
 import { mergeExpenseEdits, type MergeChoice, type MergeConflict } from "@/lib/expense-merge";
 import { buildReceiptPrompt, chatgptReceiptUrl } from "@/lib/receipt-chatgpt";
-import { isBlankReceipt, isUnchangedInitialReceipt, matchingReceiptProposal, mayFillInitialReceipt, receiptEditableValue, receiptProposalEditor, receiptEditorTotal, userReceiptField, type ReceiptEditor, type InitialReceiptReview } from "@/lib/receipt-processing";
+import { isBlankApartFromPersonalDetails, isBlankReceipt, isUnchangedInitialReceipt, matchingReceiptProposal, mayFillInitialReceipt, receiptEditableValue, receiptProposalEditor, receiptEditorTotal, userReceiptField, type ReceiptEditor, type InitialReceiptReview } from "@/lib/receipt-processing";
 import { collapseToQuick, hasItemSplitDetail, isManualSingleLine, quickEligible, singleReceiptLineEligible, withQuickName } from "@/lib/quick-expense";
 import type { ActivityEvent } from "@/lib/store";
 import {
@@ -272,6 +272,8 @@ export default function Home({ children }: { children: ReactNode }) {
     ),
     [paste, setPaste] = useState(""),
     [uploading, setUploading] = useState(false),
+    // F-07: Scan receipt opens the editor at its camera button with an optional name, not the camera at once.
+    [scanFirst, setScanFirst] = useState(false),
     [uploadOpen, setUploadOpen] = useState(false),
     [captureNotes, setCaptureNotes] = useState(""),
     [receiptPending, setReceiptPending] = useState(false),
@@ -308,7 +310,6 @@ export default function Home({ children }: { children: ReactNode }) {
     [referenceRate, setReferenceRate] = useState<{ rate: number; currency: Currency; date: string; time: string; timezone: string } | null>(null);
   const billDefaults = useRef<BillDefaults | null>(null);
   const editorBaseline = useRef<{ tripId: string; expense?: Expense } | null>(null);
-  const scanReceiptInput = useRef<HTMLInputElement>(null);
   const pendingEditorFocus = useRef<{ editorId: string; target: string; focus: string } | null>(null);
   const expenseSubmitInFlight = useRef(false);
   const receiptSession = useRef(0);
@@ -683,6 +684,8 @@ export default function Home({ children }: { children: ReactNode }) {
     const saved = latestSnapshot.current.data.trips.find(value => value.id === bill.id)!;
     billDefaults.current = { tripId: bill.id, name: !values.name, currency: values.currencyDefault, previousTripId };
     setSelected(bill.id); setView("expenses"); setBillStart(false); newExpense(undefined, saved);
+    // F-07: a name typed for the bill is the receipt's name too; the merchant never replaces it.
+    if (values.name) setEditing(previous => previous && userReceiptField(previous, "title", values.name));
     if (values.file) setBillScan(values.file);
   }
   // The photo is chosen during the tap that starts the bill, because browsers
@@ -791,7 +794,7 @@ export default function Home({ children }: { children: ReactNode }) {
       return;
     }
     editorBaseline.current = { tripId: trip.id, expense: structuredClone(expense) };
-    setEditorConflict(null); setAdjustmentDraft(null); setMergeNotice(null); setMergeChoices({}); setReferenceRate(null); resetReceiptReview();
+    setEditorConflict(null); setAdjustmentDraft(null); setMergeNotice(null); setMergeChoices({}); setScanFirst(false); setReferenceRate(null); resetReceiptReview();
     if (pending) editorDraftBinding.current = { draftId: pending.id, receiptId: pending.receiptId, expenseId: pending.expenseId };
     setEditing(structuredClone({ ...expense, adjustmentAllocation: CURRENT_CALCULATION_RULE, expenseId: expense.id,
       draftId: pending?.id, conversation: mergeReceiptConversation(expense.conversation, pending?.conversation),
@@ -854,7 +857,7 @@ export default function Home({ children }: { children: ReactNode }) {
     setPaste("");
     setFxError("");
     editorBaseline.current = { tripId: current.id };
-    setEditorConflict(null); setAdjustmentDraft(null); setMergeNotice(null); setMergeChoices({}); setReferenceRate(null);
+    setEditorConflict(null); setAdjustmentDraft(null); setMergeNotice(null); setMergeChoices({}); setScanFirst(false); setReferenceRate(null);
     // Expenses are usually entered where the previous one was bought, even
     // when catching up later from a phone set to the home time zone. The
     // default date and time are "now" in that same zone, so all three
@@ -898,7 +901,7 @@ export default function Home({ children }: { children: ReactNode }) {
     const existing = trip.expenses.find(value => value.id === d.expenseId);
     const draft = structuredClone(d);
     editorBaseline.current = { tripId: trip.id, expense: structuredClone(existing) };
-    setEditorConflict(null); setAdjustmentDraft(null); setMergeNotice(null); setMergeChoices({}); setReferenceRate(null);
+    setEditorConflict(null); setAdjustmentDraft(null); setMergeNotice(null); setMergeChoices({}); setScanFirst(false); setReferenceRate(null);
     const entry: ReceiptEditor = {
       ...draft,
       languageViewId: draft.languageViewId || existing?.languageViewId || draft.expenseId || draft.id,
@@ -1126,11 +1129,12 @@ export default function Home({ children }: { children: ReactNode }) {
   async function captureEditorReceipt(file: File) {
     if (!trip || !editing) return;
     const entry = editing, tripId = trip.id, accountId = profile?.id || "";
-    const blank = isBlankReceipt(entry) && blankReceiptEditor.current?.editorId === entry.id
-      && blankReceiptEditor.current.tripId === tripId && equalSavedValue(blankReceiptEditor.current.financial, receiptEditableValue(entry));
+    // F-07: a name typed before the photo leaves the receipt blank for reading.
+    const blank = blankReceiptEditor.current?.editorId === entry.id && blankReceiptEditor.current.tripId === tripId
+      && isBlankApartFromPersonalDetails(entry, blankReceiptEditor.current.financial);
     const notes = captureNotes.trim();
     if (notes && (entry.conversation?.length || 0) >= 100) { setError("This receipt conversation has reached its message limit."); return; }
-    const receiptEntry = { ...entry, ...(blank ? { items: [] } : {}),
+    const receiptEntry = { ...entry, ...(blank ? { items: [], title: entry.fieldSources?.title === "user" ? entry.title : "" } : {}),
       ...(notes ? { conversation: [...entry.conversation || [], { id: uid(), role: "user" as const, text: notes, createdAt: new Date().toISOString() }] } : {}) };
     resetReceiptReview();
     const session = receiptSession.current;
@@ -1239,7 +1243,15 @@ export default function Home({ children }: { children: ReactNode }) {
       applySnapshot(snapshot, "", true);
       return true;
     } catch (cause) {
-      if (requestId === receiptProcessRequest.current && isReceiptSessionCurrent(session, tripId, accountId)) setReceiptHandoffError(cause instanceof Error ? cause.message : "ChatGPT could not read this receipt. Try again.");
+      // F-11: a dropped connection (phone locked, app left) does not stop the
+      // server's reading; its stored proposal arrives with the next refresh.
+      const disconnected = cause instanceof TypeError || (typeof document !== "undefined" && document.visibilityState === "hidden");
+      if (requestId === receiptProcessRequest.current && isReceiptSessionCurrent(session, tripId, accountId)) {
+        if (disconnected && !questionId) {
+          setReceiptHandoffError("The connection dropped while reading. TripTab keeps reading this receipt; the items appear here automatically, or tap Read receipt to check again.");
+          setTimeout(() => { void load({ background: true, fresh: true }); }, 5000);
+        } else setReceiptHandoffError(cause instanceof Error ? cause.message : "ChatGPT could not read this receipt. Try again.");
+      }
       return false;
     } finally {
       if (requestId === receiptProcessRequest.current) { receiptProcessInFlight.current = false; setReceiptProcessing(false); }
@@ -1320,7 +1332,11 @@ export default function Home({ children }: { children: ReactNode }) {
       setError("Check for the latest processed receipt before reviewing it.");
       return;
     }
-    openDraft({ ...latest, icon: editing.icon, languageViewId: editing.languageViewId || editing.expenseId || editing.id, conversation: mergeReceiptConversation(latest.conversation, editing.conversation) });
+    // F-07: a name or other detail the person typed always wins over the receipt.
+    const merged = receiptProposalEditor(editing, latest);
+    const typed = (["title", "date", "time", "timezone", "payer", "location"] as const).filter(field => editing.fieldSources?.[field] === "user");
+    openDraft({ ...latest, ...Object.fromEntries(typed.map(field => [field, merged[field]])), fieldSources: merged.fieldSources,
+      icon: editing.icon, languageViewId: editing.languageViewId || editing.expenseId || editing.id, conversation: mergeReceiptConversation(latest.conversation, editing.conversation) });
   }
   async function upload(file: File, context: ReceiptUploadContext = {}, signal?: AbortSignal, onSaving?: () => boolean): Promise<boolean> {
     if (!trip || signal?.aborted) return false;
@@ -1574,7 +1590,7 @@ export default function Home({ children }: { children: ReactNode }) {
       } catch (cause) { setError(cause instanceof Error ? cause.message : "Unable to check the saved receipt."); return; }
     }
     editorBaseline.current = { tripId: current.id };
-    setEditorConflict(null); setAdjustmentDraft(null); setMergeNotice(null); setMergeChoices({}); setReferenceRate(null); resetReceiptReview(); setError("");
+    setEditorConflict(null); setAdjustmentDraft(null); setMergeNotice(null); setMergeChoices({}); setScanFirst(false); setReferenceRate(null); resetReceiptReview(); setError("");
     if (expense.percentages === undefined && expense.adjustmentAllocation === undefined && expense.items.every(item => item.amount === 0) && expense.tax + expense.tip > expense.discount && current.members.some(member => !expense.items.some(item => item.members.includes(member.id)))) {
       adjustments.push("This earlier receipt shared tax and tip across all travellers. Restoring it uses the current rule: share these adjustments between the people selected on receipt items. Review those shares before saving.");
     }
@@ -2221,6 +2237,7 @@ export default function Home({ children }: { children: ReactNode }) {
   const renderReceiptCapture = (entry: ReceiptEditor, current: Trip, part: "compact" | "status" | "tools") => (
     <ReceiptCapture
       part={part}
+      focusCamera={part === "compact" && scanFirst && !entry.receiptId}
       contextFields={part === "status" ? undefined : <div className="receipt-capture-context">
         {!entry.receiptId && <><label htmlFor="receipt-upload-notes">{uiText("Who bought what? ")}<small>{uiText("optional")}</small></label><textarea id="receipt-upload-notes" autoComplete="off" rows={3} maxLength={4000} value={captureNotes} disabled={uploading || saving || receiptProcessing} placeholder={uiText("Gary had a decaf, I had a cappuccino. We each had 2 croissants.")} onChange={event => setCaptureNotes(event.target.value)} /></>}
         <ReceiptLocationFields key={`${profile?.id}:${current.id}:${entry.id}:${receiptSession.current}`} value={{ location: entry.location, locationHint: entry.locationHint }} onChange={setEditorPlace} disabled={uploading || saving || receiptProcessing} />
@@ -2534,11 +2551,7 @@ export default function Home({ children }: { children: ReactNode }) {
             </div>
             {trip && <div className="expense-entry-actions">
               <button className="primary" onClick={newExpense} disabled={saving}><Plus size={18} />{uiText(isBill(trip) ? "Add receipt" : " Add expense")}</button>
-              <button type="button" className="quiet" disabled={saving || uploading} onClick={event => { newExpense(event); scanReceiptInput.current?.click(); }}><Camera size={18} />{uiText(" Scan receipt")}</button>
-              <input ref={scanReceiptInput} type="file" hidden aria-label={uiText("Scan receipt photo")} accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif" capture="environment" onChange={event => {
-                const file = event.target.files?.[0]; event.target.value = "";
-                if (file) void scanReceiptFile(file);
-              }} />
+              <button type="button" className="quiet" disabled={saving || uploading} onClick={event => { newExpense(event); setScanFirst(true); }}><Camera size={18} />{uiText(" Scan receipt")}</button>
             </div>}
           </div>
           {error && (
@@ -2856,11 +2869,12 @@ export default function Home({ children }: { children: ReactNode }) {
                       aria-label={uiText("Expense name")}
                       className="expense-title-input"
                       // QuickSplit keeps receipt review's initial focus and the keyboard closed.
-                      data-autofocus={!editingSaved && (!unassignedItemIds(editing).length || !trip.members.length) ? true : undefined}
+                      // F-07: after a photo the keyboard stays down; the name is optional.
+                      data-autofocus={!editingSaved && !scanFirst && !editing.receiptId && !uploading && !receiptProcessing && (!unassignedItemIds(editing).length || !trip.members.length) ? true : undefined}
                       value={editing.title}
                       required
                       maxLength={200}
-                      placeholder={uiText("What was it?")}
+                      placeholder={scanFirst && !editing.receiptId ? uiText("Name (optional)") : uiText("What was it?")}
                       autoComplete="off"
                       onChange={(e) => {
                         const next = userReceiptField(editing, "title", e.target.value);
