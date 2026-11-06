@@ -470,8 +470,8 @@ async function releaseUnverifiedEmail(database: D1Database, email: string, claim
   const released = { sql: 'NOT EXISTS (SELECT 1 FROM auth_credentials WHERE user_id = ?)', bindings: [holder.user_id] };
   return [
     database.prepare(`DELETE FROM auth_credentials WHERE user_id = ? AND email = ? AND email_verified_at IS NULL AND created_at <= ?
-      AND NOT EXISTS (SELECT 1 FROM trips WHERE owner = ?) AND NOT EXISTS (SELECT 1 FROM memberships WHERE user_id = ?)
-      AND NOT EXISTS (SELECT 1 FROM receipts WHERE owner = ?)`).bind(holder.user_id, email, cutoff, holder.user_id, holder.user_id, holder.user_id),
+      AND NOT EXISTS (SELECT 1 FROM trips WHERE owner = ? OR owner = 'deleted:' || ?) AND NOT EXISTS (SELECT 1 FROM memberships WHERE user_id = ?)
+      AND NOT EXISTS (SELECT 1 FROM receipts WHERE owner = ?)`).bind(holder.user_id, email, cutoff, holder.user_id, holder.user_id, holder.user_id, holder.user_id),
     accountAuditStatement(database, { userId: holder.user_id, actorName: holder.display_name || 'Traveller', entityType: 'password', entityId: 'account',
       action: 'delete', before: { hasPassword: true, emailVerified: false }, after: { hasPassword: false, reason: 'unverified email claimed by its verified owner' }, source: 'system' }),
     database.prepare(`DELETE FROM auth_sessions WHERE user_id = ? AND ${released.sql}`).bind(holder.user_id, ...released.bindings),
@@ -582,12 +582,12 @@ async function linkChatGPT(request: Request, database: D1Database) {
   const results = await database.batch([database.prepare(`
     INSERT INTO auth_links (oai_user_id, user_id, created_at)
     SELECT ?, ?, ? WHERE ? = ? OR (
-      NOT EXISTS (SELECT 1 FROM trips WHERE owner = ?)
+      NOT EXISTS (SELECT 1 FROM trips WHERE owner = ? OR owner = 'deleted:' || ?)
       AND NOT EXISTS (SELECT 1 FROM memberships WHERE user_id = ?)
       AND NOT EXISTS (SELECT 1 FROM receipts WHERE owner = ?)
       AND NOT EXISTS (SELECT 1 FROM auth_credentials WHERE user_id = ?)
     ) ON CONFLICT(oai_user_id) DO NOTHING
-  `).bind(provider.id, local.id, new Date().toISOString(), provider.id, local.id, provider.id, provider.id, provider.id, provider.id),
+  `).bind(provider.id, local.id, new Date().toISOString(), provider.id, local.id, provider.id, provider.id, provider.id, provider.id, provider.id),
   accountAuditStatement(database, { userId: local.id, actorName: profile.display_name, entityType: 'chatgpt', entityId: 'account',
     action: 'create', before: { connected: false }, after: { connected: true } }, { sql: 'changes() > 0', bindings: [] })]);
   if (!results[0].meta.changes && !existing) {

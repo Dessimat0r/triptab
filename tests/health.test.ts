@@ -131,3 +131,23 @@ test('bilingual receipts cannot report ready before private language preferences
   for(const name of (await readdir(new URL('../drizzle/',import.meta.url))).filter(name=>name.endsWith('.sql')&&Number(name.slice(0,4))<=10).sort())sqlite.exec(await readFile(new URL('../drizzle/'+name,import.meta.url),'utf8'));
   const response=await GET();assert.equal(response.status,503);assert.deepEqual(await response.json(),{status:'unavailable'});
 });
+
+test('F-16: readiness requires migration 0014 (trip revision column and its maintenance triggers)', async context => {
+  for (const [kind, name] of [['COLUMN', 'revision'], ['TRIGGER', 'trips_revision_update'], ['TRIGGER', 'memberships_revision_insert'],
+    ['TRIGGER', 'memberships_revision_delete'], ['TRIGGER', 'memberships_revision_update']]) await context.test(name, async () => {
+    sqlite = new DatabaseSync(':memory:'); receiptBinding = true;
+    for (const file of (await readdir(new URL('../drizzle/', import.meta.url))).filter(file => file.endsWith('.sql')).sort()) sqlite.exec(await readFile(new URL('../drizzle/' + file, import.meta.url), 'utf8'));
+    sqlite.exec(kind === 'COLUMN' ? 'DROP TRIGGER trips_revision_update; DROP TRIGGER memberships_revision_insert; DROP TRIGGER memberships_revision_delete; DROP TRIGGER memberships_revision_update; ALTER TABLE trips DROP COLUMN revision' : `DROP TRIGGER ${name}`);
+    const response = await GET(); assert.equal(response.status, 503); assert.deepEqual(await response.json(), { status: 'unavailable' });
+  });
+});
+test('R11: a database at 0014 without the membership no-op guard cannot report ready', async () => {
+  sqlite = new DatabaseSync(':memory:'); receiptBinding = true;
+  for (const name of (await readdir(new URL('../drizzle/', import.meta.url))).filter(name => name.endsWith('.sql') && Number(name.slice(0, 4)) <= 14).sort()) sqlite.exec(await readFile(new URL('../drizzle/' + name, import.meta.url), 'utf8'));
+  const response = await GET(); assert.equal(response.status, 503); assert.deepEqual(await response.json(), { status: 'unavailable' });
+});
+test('R06: a database without the receipt operation claims (0016) cannot report ready', async () => {
+  sqlite = new DatabaseSync(':memory:'); receiptBinding = true;
+  for (const name of (await readdir(new URL('../drizzle/', import.meta.url))).filter(name => name.endsWith('.sql') && Number(name.slice(0, 4)) <= 15).sort()) sqlite.exec(await readFile(new URL('../drizzle/' + name, import.meta.url), 'utf8'));
+  const response = await GET(); assert.equal(response.status, 503); assert.deepEqual(await response.json(), { status: 'unavailable' });
+});

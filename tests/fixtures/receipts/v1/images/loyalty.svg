@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="300" viewBox="0 0 640 300">
+<title>A loyalty saving printed for the whole basket is one receipt-wide discount</title>
+<defs><filter id="obscured"><feGaussianBlur stdDeviation="2.5"/></filter></defs>
+<rect width="640" height="300" fill="#fff"/>
+<g fill="#111" font-family="monospace" font-size="22">
+<text x="25" y="35" font-size="16">SYNTHETIC TEST RECEIPT — NOT A SALE</text>
+<text x="25" y="65" font-size="16">Corpus v1: loyalty</text>
+<text x="25" y="115">APPLES                  2.00</text>
+<text x="25" y="145">CHEESE                  4.00</text>
+<text x="25" y="175">SUBTOTAL EUR            6.00</text>
+<text x="25" y="205">MEMBER SAVINGS         -0.60</text>
+<text x="25" y="235">TOTAL EUR               5.40</text>
+</g>
+
+</svg>

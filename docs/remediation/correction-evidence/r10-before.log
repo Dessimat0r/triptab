@@ -1,0 +1,118 @@
+✖ R10: my reorder survives the other person's title change, with the shares it implies (6.822358ms)
+✖ R10: the same reorder on both sides is fine; different reorders are a conflict a person resolves (1.325442ms)
+✖ R10: additions and removals keep their place around a kept reorder (1.05061ms)
+✖ R10: a scoped discount still applies to the same lines after a merged reorder (19.152494ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 0
+ℹ fail 4
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 360.631043
+
+✖ failing tests:
+
+test at tests/expense-merge.test.ts:1:9363
+✖ R10: my reorder survives the other person's title change, with the shares it implies (6.822358ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+    [
+  +   'i1',
+      'i2',
+  -   'i1'
+    ]
+  
+      at TestContext.<anonymous> (/tmp/claude-0/-home-user-triptab/515433d0-bb30-53e4-accf-82f10631ed55/scratchpad/prefix/tests/expense-merge.test.ts:168:10)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.start (node:internal/test_runner/test:1262:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [ 'i1', 'i2' ],
+    expected: [ 'i2', 'i1' ],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at tests/expense-merge.test.ts:1:10240
+✖ R10: the same reorder on both sides is fine; different reorders are a conflict a person resolves (1.325442ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+  + []
+  - [
+  -   'item-order'
+  - ]
+  
+      at TestContext.<anonymous> (/tmp/claude-0/-home-user-triptab/515433d0-bb30-53e4-accf-82f10631ed55/scratchpad/prefix/tests/expense-merge.test.ts:187:10)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [],
+    expected: [ 'item-order' ],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at tests/expense-merge.test.ts:1:11170
+✖ R10: additions and removals keep their place around a kept reorder (1.05061ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+    [
+  -   'c',
+      'a',
+      'd',
+  +   'c'
+    ]
+  
+      at TestContext.<anonymous> (/tmp/claude-0/-home-user-triptab/515433d0-bb30-53e4-accf-82f10631ed55/scratchpad/prefix/tests/expense-merge.test.ts:200:10)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [ 'a', 'd', 'c' ],
+    expected: [ 'c', 'a', 'd' ],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at tests/expense-merge.test.ts:1:11851
+✖ R10: a scoped discount still applies to the same lines after a merged reorder (19.152494ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+    [
+  +   'i1',
+  +   'i2',
+      'i3',
+  -   'i2',
+  -   'i1'
+    ]
+  
+      at TestContext.<anonymous> (/tmp/claude-0/-home-user-triptab/515433d0-bb30-53e4-accf-82f10631ed55/scratchpad/prefix/tests/expense-merge.test.ts:211:10)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [ 'i1', 'i2', 'i3' ],
+    expected: [ 'i3', 'i2', 'i1' ],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }

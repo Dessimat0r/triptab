@@ -203,3 +203,49 @@ test('a photo changed after reconciliation is preserved when its queued update r
   assert.equal(editor.editing.receiptId, 'replacement-photo'); assert.equal(editor.editing.items[0].amount, 0);
   assert.equal(editor.editing.conversation, undefined); assert.equal(editor.itemized, false); assert.equal(editor.proposal, null);
 });
+
+// R04: discount records were missing from the editable-value projection, so an
+// edit to them alone neither stopped an automatic fill nor won a queued race.
+const human = { id: 'coupon', kind: 'discount' as const, amount: 200, scope: { type: 'items' as const, itemIds: ['line'] }, source: 'user' as const };
+
+test('R04: a queued initial itemisation yields to an adjustment-only edit, which survives and leaves Review available', () => {
+  const editor = controller(); editor.initialise(); editor.reconcile();
+  editor.change({ adjustments: [human] }); editor.flush();
+  assert.deepEqual(editor.editing.adjustments, [human], 'the queued fill was rejected');
+  editor.reconcile(); editor.flush();
+  assert.deepEqual(editor.editing.adjustments, [human]);
+  assert.equal(editor.editing.items[0].amount, 0, 'no automatic fill after human money work');
+  assert.equal(editor.itemized, false);
+  assert.equal(editor.proposal?.items[0].amount, 1200, 'the reading is offered for review instead');
+});
+
+test('R04: every adjustment-only change counts as editable money work', () => {
+  const second = { id: 'tenoff', kind: 'discount' as const, percent: 10, scope: { type: 'receipt' as const } };
+  const base: ReceiptEditor = { ...blankEditor(), items: [{ id: 'line', name: 'Pasta', amount: 1200, members: ['alice', 'bob'] }, { id: 'wine', name: 'Wine', amount: 800, members: ['alice'] }],
+    adjustments: [human, second] };
+  const value = receiptEditableValue(base);
+  const changed: [string, ReceiptEditor['adjustments']][] = [
+    ['added', [human, second, { id: 'extra', kind: 'charge', amount: 50, scope: { type: 'receipt' } }]],
+    ['amount edited', [{ ...human, amount: 300 }, second]],
+    ['allocated', [{ ...human, scope: { type: 'items', itemIds: ['line', 'wine'] }, allocation: { line: 0, wine: 200 } }, second]],
+    ['reordered', [second, human]],
+    ['one removed', [second]],
+    ['all removed', []],
+  ];
+  for (const [label, adjustments] of changed) assert.equal(equalSavedValue(receiptEditableValue({ ...base, adjustments }), value), false, label);
+  // No records and an explicit empty list are the same (nothing to lose).
+  assert.equal(equalSavedValue(receiptEditableValue({ ...base, adjustments: [] }), receiptEditableValue({ ...base, adjustments: undefined })), true);
+  assert.equal(isBlankReceipt({ ...blankEditor(), adjustments: [human] }), false, 'a receipt with only a discount is not blank');
+  assert.equal(isBlankReceipt({ ...blankEditor(), adjustments: [] }), true);
+});
+
+test('R04: a reading that brings its own discount still fills an untouched editor', () => {
+  const trip = proposedTrip();
+  const bogof = { id: 'bogof', kind: 'discount' as const, amount: 600, scope: { type: 'items' as const, itemIds: ['line'] }, source: 'receipt' as const, sourceLineIndex: 1 };
+  trip.drafts[0].adjustments = [bogof];
+  const editor = controller(blankEditor(), trip);
+  editor.initialise(); editor.reconcile(); editor.flush(); editor.reconcile(); editor.flush();
+  assert.equal(editor.editing.items[0].amount, 1200);
+  assert.deepEqual(editor.editing.adjustments, [bogof]);
+  assert.equal(editor.itemized, true);
+});

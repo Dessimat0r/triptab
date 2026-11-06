@@ -1,3 +1,4 @@
+import { FINANCIAL_FORMAT, FINANCIAL_FORMAT_HEADER } from '../../lib/financial-format';
 import { createHash, randomBytes } from 'node:crypto';
 import { readFile, readdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
@@ -79,6 +80,8 @@ export async function createReceiptFlowWorker(options: { seedTrip?: boolean } = 
     const browserRequest = async (path: string, init: BrowserRequestInit = {}) => {
       const headers = new Headers(init.headers);
       headers.set('cookie', `tt_session=${sessionToken}`);
+      // A current bundle declares the money format it reads (R01).
+      headers.set(FINANCIAL_FORMAT_HEADER, String(FINANCIAL_FORMAT));
       if (!['GET', 'HEAD'].includes(init.method ?? 'GET')) {
         headers.set('origin', origin);
         headers.set('sec-fetch-site', 'same-origin');

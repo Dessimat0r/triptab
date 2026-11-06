@@ -8,14 +8,15 @@ export async function GET() {
     await db().prepare(`SELECT r.state, r.created_at, r.legacy_cleanup_after, r.content_type, r.size_bytes, r.sha256,
       i.audit_id, p.generation, a.sequence, a.id, a.user_id, a.actor_name, a.created_at, a.entity_type,
       a.entity_id, a.action, a.before_data, a.after_data, a.source,
-      e.sequence, m.message_data, t.receipt_link_version,
+      e.sequence, m.message_data, t.receipt_link_version, t.revision,
       ai.id, ai.user_id, ai.provider, ai.api_key_encrypted, pc.credentials, pt.transaction_data, lp.user_id, lp.trip_id, lp.data, lp.revision
       ,ac.email_verified_at,et.purpose,ta.archived_at,rh.until,os.session_id,os.user_agent,
-      pr.deleted_at,pr.ui_language,np.scope,np.delivery,np.reminders,nd.updates,sr.sent_at,rp.receipt_id
+      pr.deleted_at,pr.ui_language,np.scope,np.delivery,np.reminders,nd.updates,sr.sent_at,rp.receipt_id,
+      ro.operation_key,ro.status,ro.attempt_id,ro.lease_until
       FROM auth_credentials ac CROSS JOIN auth_email_tokens et CROSS JOIN trip_archives ta
       CROSS JOIN receipt_restore_holds rh CROSS JOIN auth_sessions os CROSS JOIN profiles pr
       CROSS JOIN notification_preferences np CROSS JOIN notification_digests nd
-      CROSS JOIN settlement_reminders sr CROSS JOIN receipt_object_purges rp
+      CROSS JOIN settlement_reminders sr CROSS JOIN receipt_object_purges rp CROSS JOIN receipt_operations ro
       CROSS JOIN receipts r CROSS JOIN activity_events e CROSS JOIN trips t
       CROSS JOIN invites i CROSS JOIN push_subscriptions p
       CROSS JOIN account_activity_events a INDEXED BY account_activity_events_user_sequence_idx
@@ -36,10 +37,15 @@ export async function GET() {
       .bind(...receiptHistoryIndexes).all<{ name: string }>();
     if (indexes.results.length !== receiptHistoryIndexes.length) throw Error('Missing receipt history migration');
     const receiptLinkTriggers = ['current_receipt_links_insert', 'current_receipt_links_update', 'current_receipt_links_delete',
-      'receipt_history_links_insert', 'receipt_history_links_no_update', 'receipt_history_links_no_delete', 'receipt_history_links_no_replace'];
+      'receipt_history_links_insert', 'receipt_history_links_no_update', 'receipt_history_links_no_delete', 'receipt_history_links_no_replace',
+      // F-16 (0014): per-trip revisions must be maintained for every writer.
+      'trips_revision_update', 'memberships_revision_insert', 'memberships_revision_delete', 'memberships_revision_update'];
     const triggers = await db().prepare(`SELECT name FROM sqlite_master WHERE type = 'trigger' AND name IN (${receiptLinkTriggers.map(() => '?').join(',')})`)
       .bind(...receiptLinkTriggers).all<{ name: string }>();
     if (triggers.results.length !== receiptLinkTriggers.length) throw Error('Missing receipt link maintenance');
+    // R11 (0015): the membership trigger ignores updates that change nothing.
+    const membershipTrigger = await db().prepare(`SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'memberships_revision_update'`).all<{ sql: string }>();
+    if (!membershipTrigger.results[0]?.sql.includes('OLD.member_id IS NOT NEW.member_id')) throw Error('Missing membership revision guard');
     const receiptMessageTriggers = ['activity_events_no_replace', 'account_activity_events_no_update',
       'account_activity_events_no_delete', 'account_activity_events_no_replace',
       'receipt_messages_from_activity', 'receipt_messages_no_update', 'receipt_messages_no_delete', 'receipt_messages_no_replace'];

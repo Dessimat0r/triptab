@@ -252,6 +252,7 @@ function updateDescription(event: NotificationChange, kind?: Trip['kind']): { ti
     add('tax', 'Receipt tax updated', ['tax']);
     add('the tip', 'Receipt tip updated', ['tip']);
     add('the discount', 'Receipt discount updated', ['discount']);
+    add('discounts and charges', 'Receipt discounts updated', ['adjustments']);
     add('the transaction date', 'Expense date changed', ['date']);
     add('the transaction time', 'Expense time changed', ['time', 'timezone']);
     add('the receipt image', 'Receipt image changed', ['receiptId']);
@@ -478,6 +479,12 @@ async function deliverNotifications(tripId: string, actor: string, title: string
 /** Notification failures never invalidate an already-saved holiday change. */
 export async function notifyMembers(tripId: string, actor: string, title: string, body: string, involvedMembers?: string[]) {
   const delivery = deliverNotifications(tripId, actor, title, body, undefined, involvedMembers);
+  try { waitUntil(delivery); } catch { await delivery; }
+}
+
+/** One linked person on a trip (e.g. someone just added to a bill). No amounts are included. */
+export async function notifyMember(tripId: string, actor: string, memberId: string, title: string, body: string) {
+  const delivery = deliverNotifications(tripId, actor, title, body, memberId);
   try { waitUntil(delivery); } catch { await delivery; }
 }
 
