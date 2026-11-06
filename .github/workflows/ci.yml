@@ -57,7 +57,7 @@ jobs:
 
   browser:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     strategy:
       # A failing engine must not cancel the other engine's coverage.
       fail-fast: false
@@ -84,7 +84,8 @@ jobs:
           # Browser revisions and OS libraries must match; no fallback keys.
           key: playwright-${{ runner.os }}-${{ runner.arch }}-ubuntu-24.04-${{ matrix.browser }}-${{ hashFiles('node_modules/playwright-core/browsers.json') }}
       - name: Install layout-test browsers
-        timeout-minutes: 5
+        # The Ubuntu mirror can be slow; WebKit needs ~114 MB of OS packages.
+        timeout-minutes: 10
         # Check/install OS dependencies even on a browser-cache hit. Chromium
         # uses the headless shell, so its unused full-browser download is omitted.
         run: npx --no-install playwright install --with-deps --only-shell ${{ matrix.browser }}
