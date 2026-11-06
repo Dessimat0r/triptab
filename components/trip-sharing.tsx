@@ -93,7 +93,7 @@ export function TripSharing({ trip, profile, onChanged }: { trip: Trip; profile:
 
   if (!owner) return <p className="footnote">{uiText(isBill(trip) ? "The bill owner can invite people to join this bill." : "The holiday organiser can invite people to join this trip.")}</p>;
   return <div className="panel sharing-panel">
-    <h3>{uiText("Invite a traveller")}</h3>
+    <h3>{uiText(isBill(trip) ? "Invite someone" : "Invite a traveller")}</h3>
     <p className="footnote">{uiText("Share a one-use link. They create a TripTab account with their email or sign in, then review the traveller’s saved expenses and payments before joining. ChatGPT is optional.")}</p>
     <p className="footnote">{uiText("Creating a new link replaces earlier unused links for the same traveller.")}</p>
     {available.length ? <form onSubmit={event => { event.preventDefault(); void createLink(memberId || available[0].id, email); }}>

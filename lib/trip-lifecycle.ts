@@ -20,7 +20,9 @@ const identity = 'NOT EXISTS (SELECT 1 FROM auth_links WHERE oai_user_id = ? AND
 const marked = 'EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND last_write = ?)';
 
 export function tripMessage(trip: Pick<Trip, 'kind'> | undefined, text: string) {
-  return trip && isBill(trip) ? text.replaceAll('holiday', 'bill').replaceAll('Holiday', 'Bill') : text;
+  // F-15: bills have people, not travellers.
+  return trip && isBill(trip) ? text.replaceAll('holiday', 'bill').replaceAll('Holiday', 'Bill')
+    .replaceAll('Other travellers', 'Other people').replaceAll('Another traveller', 'Another person') : text;
 }
 
 function tripId(value: unknown) {

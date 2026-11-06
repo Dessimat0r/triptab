@@ -63,10 +63,19 @@ export default function TripControls({
       }))
     )
       return;
+    // F-06: a bill is deleted after one plain confirmation; typing the name is kept for holidays with entries.
+    if (value === 'delete' && isBill(trip) && (trip.expenses.length || trip.payments.length || trip.drafts.length) && !(await confirm({
+      title: 'Delete this bill?',
+      message: `Delete “${trip.name}” with ${trip.expenses.length} ${trip.expenses.length === 1 ? 'expense' : 'expenses'} and ${trip.payments.length} ${trip.payments.length === 1 ? 'payment' : 'payments'}? Its receipt photos are removed; History keeps the record. To keep it but hide it, use Remove from my list.`,
+      confirmLabel: 'Delete bill', destructive: true,
+    }))) return;
     setSaving(true);
     setMessage('');
     try {
-      await change(value === 'delete' && isBill(trip) && !trip.expenses.length && !trip.payments.length && !trip.drafts.length && !trip.members.some(member => member.userId && member.userId !== accountId) ? 'discard' : value, trip.id, { memberId: owner, confirmName });
+      await change(value === 'delete' && isBill(trip) && !trip.expenses.length && !trip.payments.length && !trip.drafts.length && !trip.members.some(member => member.userId && member.userId !== accountId) ? 'discard' : value, trip.id, { memberId: owner,
+        // The plain confirmation above stands in for typing a bill's name; the
+        // server still checks the name, so a bill is never deleted by accident.
+        confirmName: value === 'delete' && isBill(trip) ? trip.name : confirmName });
       await onChanged();
       setMessage(
         value === 'transfer' ? 'Ownership transferred.' : isBill(trip) ? 'Bill updated.' : 'Holiday updated.',
@@ -82,11 +91,10 @@ export default function TripControls({
     }
   }
   if (isBill(trip)) {
-    const empty = !trip.expenses.length && !trip.payments.length && !trip.drafts.length && !trip.members.some(member => member.userId && member.userId !== accountId);
-    return <section className="panel trip-controls"><h3>{uiText('Manage this bill')}</h3><p className="footnote">{uiText('Archive removes this bill from your open list. You can restore it from the archive.')}</p><button type="button" className="quiet" disabled={busy || saving} onClick={() => void action('archive')}>{uiText('Archive bill')}</button>
+    return <section className="panel trip-controls"><h3>{uiText('Manage this bill')}</h3><p className="footnote">{uiText('Archive removes this bill from your open list. You can restore it from the archive.')}</p><button type="button" className="quiet" disabled={busy || saving} onClick={() => void action('archive')}>{uiText('Remove from my list')}</button>
       {own && <details><summary>{uiText('Transfer ownership')}</summary><label>{uiText('New owner')}<select value={owner} disabled={busy || saving} onChange={event => setOwner(event.target.value)}><option value="">{uiText('Choose a connected person')}</option>{trip.members.filter(member => member.userId && member.userId !== accountId).map(member => <option key={member.id} value={member.id}>{member.name}</option>)}</select></label><button type="button" className="quiet" disabled={busy || saving || !owner} onClick={() => void action('transfer')}>{uiText('Transfer ownership')}</button></details>}
       {!own && <button type="button" className="danger quiet" disabled={busy || saving} onClick={() => void action('leave')}>{uiText('Leave bill')}</button>}
-      {own && <details><summary>{uiText('Delete bill')}</summary><p className="footnote">{uiText('Deletion removes the bill and receipt photos. Shared history is retained. Bills another account can open must be archived instead.')}</p>{!empty && <label>{uiText('Type ')}{trip.name}{uiText(' to confirm')}<input value={confirmName} disabled={busy || saving} onChange={event => setConfirmName(event.target.value)} autoComplete="off" /></label>}<button type="button" className="danger quiet" disabled={busy || saving || !empty && confirmName.trim() !== trip.name.trim()} onClick={() => void action('delete')}>{uiText('Delete bill')}</button></details>}
+      {own && <details><summary>{uiText('Delete bill')}</summary><p className="footnote">{uiText('Deletion removes the bill and receipt photos. Shared history is retained. Bills another account can open must be archived instead.')}</p><button type="button" className="danger quiet" disabled={busy || saving} onClick={() => void action('delete')}>{uiText('Delete bill')}</button></details>}
       {message && <p className="footnote" role="status">{uiText(message)}</p>}{dialog}</section>;
   }
   return (
