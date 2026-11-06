@@ -2755,3 +2755,6 @@ footer {
   .expense > .row-actions { position: absolute; right: 4px; bottom: 4px; }
   .expense .expense-details small, .expense .expense-amount .expense-share { padding-right: 44px; }
 }
+/* F-11: reading status on a receipt-draft row. */
+.draft small.reading { color: var(--primary); }
+.draft small.warning { color: #8a5a00; }

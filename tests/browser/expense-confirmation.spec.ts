@@ -49,7 +49,8 @@ async function fixtures(page: Page, options: { draft?: Draft; scan?: Partial<Dra
       scans++; await options.holdScan;
       const args = request.postDataJSON(), draft = current.drafts.find(value => value.id === args.draftId)!;
       Object.assign(draft, proposal(options.scan), { id: draft.id, receiptId: draft.receiptId });
-      return route.fulfill({ json: { data: { trips: [current] }, revision: ++revision } });
+      // The page may have reloaded meanwhile (F-11): the proposal is stored either way.
+      return route.fulfill({ json: { data: { trips: [current] }, revision: ++revision } }).catch(() => {});
     }
     if (pathname === '/api/fx') return route.fulfill({ json: { rate: 0.86, asOf: '2026-10-08' } });
     const json = pathname === '/api/ledger' ? { data: { trips: [current] }, revision }
@@ -343,4 +344,37 @@ test('F-07: with no typed name the merchant fills it in', async ({ page }) => {
   await scan(page);
   await expect.poll(() => state.scans).toBe(1);
   await expect(page.getByRole('textbox', { name: 'Expense name', exact: true })).toHaveValue('Coffee and cake');
+});
+
+test('F-11: after a reload mid-reading the draft row says Reading receipt…, then fills in by itself', async ({ page }) => {
+  const hold = deferred();
+  const state = await fixtures(page, { holdScan: hold.promise });
+  await page.goto('/expenses');
+  await scan(page);
+  await expect.poll(() => state.scans).toBe(1);
+  // The phone locks or the page reloads while the server is still reading.
+  await page.goto('/receipts');
+  const row = page.locator('.draft').first();
+  await expect(row).toContainText('Reading receipt…');
+  hold.resolve();
+  // The stored proposal arrives with the next background refresh.
+  await expect(row).toContainText('Ready to review', { timeout: 15_000 });
+  expect(state.scans).toBe(1);
+});
+
+test('F-11: a reading that never stored a proposal says so after the time limit', async ({ page }) => {
+  const state = await fixtures(page, { holdScan: new Promise(() => {}) });
+  await page.goto('/expenses');
+  await scan(page);
+  await expect.poll(() => state.scans).toBe(1);
+  // Jump past the server's limit: the saved start time is moved back.
+  await page.evaluate(() => {
+    for (const key of Object.keys(localStorage).filter(value => value.startsWith('triptab:reading:'))) {
+      const entries = JSON.parse(localStorage.getItem(key)!) as Record<string, { startedAt: number }>;
+      for (const entry of Object.values(entries)) entry.startedAt -= 10 * 60_000;
+      localStorage.setItem(key, JSON.stringify(entries));
+    }
+  });
+  await page.goto('/receipts');
+  await expect(page.locator('.draft').first()).toContainText('Reading didn’t finish · open it to read again');
 });
