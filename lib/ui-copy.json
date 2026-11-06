@@ -3844,5 +3844,17 @@
     "Revocada por el propietario de la cuenta",
     "Révoquée par le propriétaire de la note",
     "Vom Rechnungsinhaber widerrufen"
+  ],
+  [
+    "Other people have joined this bill with their accounts. Transfer it or archive it instead; only a bill nobody else can open can be deleted.",
+    "Otras personas se han unido a esta cuenta con sus cuentas de usuario. Transfiérela o archívala; solo se puede eliminar una cuenta que nadie más pueda abrir.",
+    "D’autres personnes ont rejoint cette note avec leur compte. Transférez-la ou archivez-la ; seule une note que personne d’autre ne peut ouvrir peut être supprimée.",
+    "Andere Teilnehmer sind dieser Rechnung mit ihren Konten beigetreten. Übertrage oder archiviere sie; nur eine Rechnung, die niemand sonst öffnen kann, kann gelöscht werden."
+  ],
+  [
+    "Another person joined or the bill changed. Refresh and try again.",
+    "Otra persona se unió o la cuenta cambió. Actualiza e inténtalo de nuevo.",
+    "Une autre personne a rejoint la note ou celle-ci a changé. Actualisez et réessayez.",
+    "Ein weiterer Teilnehmer ist beigetreten oder die Rechnung wurde geändert. Lade sie neu und versuche es erneut."
   ]
 ]

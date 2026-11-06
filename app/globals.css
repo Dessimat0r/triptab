@@ -2712,3 +2712,9 @@ footer {
 
 .heading-with-order h2 { line-height: 1.2; }
 .heading-with-order > .muted { display: block; }
+/* F-06: on phones the ⋯ menu sits in the free bottom-right corner of the row,
+   so expense names keep their width. */
+@media (max-width: 480px) {
+  .expense > .row-actions { position: absolute; right: 4px; bottom: 4px; }
+  .expense .expense-details small, .expense .expense-amount .expense-share { padding-right: 44px; }
+}

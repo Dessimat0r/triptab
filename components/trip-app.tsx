@@ -29,6 +29,8 @@ import ReceiptUploadDialog, { type ReceiptUploadContext } from "@/components/rec
 import ReceiptLocationFields, { type ReceiptPlace } from "@/components/receipt-location-fields";
 import ReceiptPhotoViewer from "@/components/receipt-photo-viewer";
 import ExpenseIconPicker from "@/components/expense-icon";
+import { RowActionsMenu, SwipeRow } from "@/components/row-actions";
+import { describeSettlementImpact, settlementImpact } from "@/lib/settlement-impact";
 import ReceiptScanReview, { ReceiptReviewSummary, receiptMoney } from "@/components/receipt-scan-review";
 import { acknowledgeReceiptReview, carryReviewAcknowledgements, pendingReviewActions, receiptScanSaveError, receiptWarningLabel, reconcileReceiptScan } from "@/lib/receipt-scan";
 import { manualFxReview } from "@/lib/expense-fx-review";
@@ -736,6 +738,35 @@ export default function Home({ children }: { children: ReactNode }) {
     if (ok) setUndoNotice({ ...removal, id: Date.now(), tripId: current.id });
     return ok;
   }
+  /**
+   * Delete one expense (F-06, D05). Any member may delete; a confirmation is
+   * asked only when it matters financially: recorded payments exist (F-13
+   * says what the deletion changes) or someone else paid for it. Undo and
+   * History always recover it, and the payer is notified by the server.
+   */
+  async function requestDeleteExpense(current: Trip, expense: Expense) {
+    const total = previewTotal(expense, current);
+    const impact = settlementImpact(current, { remove: expense.id });
+    const consequence = describeSettlementImpact(impact, { kind: isBill(current) ? "bill" : "holiday", name, money: amount => money(amount, current.currency), action: "deletion" });
+    const me = current.members.find(member => member.userId === profile?.id)?.id;
+    const othersPaid = expense.payer !== me;
+    if ((consequence || othersPaid) && !await confirm({ title: "Delete expense?",
+      message: [`Delete “${expense.title}” (${money(total || 0, current.currency)})?`, consequence, othersPaid ? `${name(expense.payer)} paid for it and will be notified.` : "", "You can undo this, and History keeps its details."].filter(Boolean).join(" "),
+      confirmLabel: "Delete expense", destructive: true })) return false;
+    const mine = impact.changes.find(value => value.memberId === me);
+    return deleteWithUndo(current, {
+      message: `Deleted “${expense.title}” (${money(total || 0, current.currency)}).${mine ? ` Your balance changes by ${mine.change > 0 ? "+" : "−"}${money(Math.abs(mine.change), current.currency)}.` : ""}`,
+      payments: [], expenses: [{ entry: expense, index: current.expenses.indexOf(expense) }],
+      drafts: current.drafts.flatMap((draft, index) => draft.expenseId === expense.id ? [{ entry: draft, index }] : []) });
+  }
+  /** A copy as a new expense dated now: same people, split and amounts, no receipt or history. */
+  function duplicateExpense(current: Trip, expense: Expense) {
+    newExpense(undefined, current);
+    setEditing(previous => previous && { ...previous, title: expense.title, payer: expense.payer, currency: expense.currency, icon: expense.icon,
+      items: expense.items.map(item => ({ ...item, id: uid(), scanSource: undefined, fieldSources: undefined, conversation: undefined })),
+      tax: expense.tax, tip: expense.tip, discount: expense.discount, percentages: expense.percentages, fx: expense.fx, bankAmount: expense.bankAmount,
+      fieldSources: { title: "user", payer: "user", currency: "user" } });
+  }
   async function undoDeletion(notice: UndoNotice) {
     setUndoNotice(null);
     const current = latestSnapshot.current.data.trips.find(value => value.id === notice.tripId);
@@ -1376,6 +1407,14 @@ export default function Home({ children }: { children: ReactNode }) {
     expense.conversation = mergeReceiptConversation(mergeReceiptConversation(trip.expenses.find(value => value.id === expense.id)?.conversation, latestDraft?.conversation), expense.conversation);
     expense.memory = latestDraft?.memory ?? trip.expenses.find(value => value.id === expense.id)?.memory ?? expense.memory;
     const exists = trip.expenses.some((x) => x.id === expense.id);
+    // F-13: with recorded payments, say what the change does to who owes whom
+    // before saving. Payments are never rewritten.
+    if (exists && trip.payments.length) {
+      const impact = settlementImpact(trip, { replace: expense });
+      const consequence = describeSettlementImpact(impact, { kind: isBill(trip) ? "bill" : "holiday", name, money: amount => money(amount, trip.currency), action: "change" });
+      if (impact.changes.length && consequence && !await confirm({ title: impact.wasSettled ? "Change a settled expense?" : "Change this expense?",
+        message: `${consequence} Recorded payments are not changed.`, confirmLabel: "Save change" })) return false;
+    }
     if (editing.expenseId && !exists) {
       setError("This expense was removed. It cannot be updated from this receipt draft.");
       return;
@@ -1634,7 +1673,8 @@ export default function Home({ children }: { children: ReactNode }) {
   }, [savedNotice]);
   useEffect(() => {
     if (!undoNotice) return;
-    const timer = setTimeout(() => setUndoNotice(current => current === undoNotice ? null : current), 12000);
+    // F-14: long enough to notice, and shown above open forms too.
+    const timer = setTimeout(() => setUndoNotice(current => current === undoNotice ? null : current), 30000);
     return () => clearTimeout(timer);
   }, [undoNotice]);
   // One layout serves every entry. While it has one line, the Split step shows
@@ -1735,6 +1775,12 @@ export default function Home({ children }: { children: ReactNode }) {
   ])), [editing?.timezone]);
   const name = (id: string) =>
     trip?.members.find((m) => m.id === id)?.name || "Unknown";
+  // F-14: the same Undo is shown inside an open form, which covers the page.
+  const undoBanner = (notice: UndoNotice) => <p className={`saved-banner${editing ? " undo-over-editor" : ""}`} role="status">
+    <Trash2 size={18} aria-hidden="true" />
+    <span>{uiText(notice.message)}</span>
+    <button type="button" className="quiet" disabled={saving} onClick={() => void undoDeletion(notice)}><Undo2 size={16} aria-hidden="true" />{uiText(" Undo")}</button>
+  </p>;
   const balanceRow = (m: Trip["members"][number], i: number) => (
                       <div className="balance-row" key={m.id} data-entry-id={m.id} tabIndex={-1}>
                         <span className={"avatar color" + (i % 5)}>
@@ -1794,9 +1840,10 @@ export default function Home({ children }: { children: ReactNode }) {
   const renderExpenseRow = (e: Expense) => {
     if (!trip) return null;
     return (
+                            <SwipeRow key={e.id} deleteLabel="Delete" disabled={saving || loading} onDelete={() => void requestDeleteExpense(trip, e)}>
                             <div
                               className="expense"
-                              key={e.id} data-entry-id={e.id} tabIndex={-1}
+                              data-entry-id={e.id} tabIndex={-1}
                             >
                               <ExpenseIconPicker entry={e} disabled={saving || loading} onChange={icon => updateTrip({ ...trip,
                                 expenses: trip.expenses.map(expense => expense.id === e.id ? { ...expense, icon } : expense),
@@ -1837,7 +1884,13 @@ export default function Home({ children }: { children: ReactNode }) {
                                 {currentMemberIndex >= 0 && <small className="expense-share">{uiText("Your share ")}{expensePreviews.get(e.id)?.shares ? money(expensePreviews.get(e.id)!.shares![currentMemberIndex], trip.currency) : uiText("needs review")}</small>}
                               </span>
                               </button>
+                              <RowActionsMenu label={uiText("Actions for {value0}", { value0: e.title })} disabled={saving || loading} actions={[
+                                { label: "Edit", onSelect: () => { setPaste(""); openExpense(e); } },
+                                { label: "Duplicate", onSelect: () => duplicateExpense(trip, e) },
+                                { label: "Delete", destructive: true, onSelect: () => void requestDeleteExpense(trip, e) },
+                              ]} />
                             </div>
+                            </SwipeRow>
     );
   };
   const renderDraftRow = (d: Draft) => {
@@ -1876,8 +1929,8 @@ export default function Home({ children }: { children: ReactNode }) {
                                 className="iconbutton"
                                 aria-label={uiText("Remove draft")}
                                 disabled={saving}
-                                onClick={async () => {
-                                  if (!await confirm({ title: "Remove receipt draft?", message: `Remove the receipt draft “${d.title}”? Its removal will appear in activity history.`, confirmLabel: "Remove draft", destructive: true })) return;
+                                onClick={() => {
+                                  // A draft has no financial effect: remove it at once with Undo (F-06).
                                   void deleteWithUndo(trip, { message: `Removed the receipt draft “${d.title || "Untitled"}”.`, expenses: [], payments: [],
                                     drafts: [{ entry: d, index: trip.drafts.findIndex(x => x.id === d.id) }] });
                                 }}
@@ -1897,7 +1950,7 @@ export default function Home({ children }: { children: ReactNode }) {
                                 <span className="payment-row-actions">
                                 <button className="quiet" disabled={saving || loading} onClick={() => void openPayment(undefined, p)}>{uiText("Edit")}</button>
                                 <button
-                                  aria-label={uiText("Undo recorded payment")}
+                                  aria-label={uiText("Delete payment")}
                                   className="iconbutton"
                                   disabled={saving}
                                   onClick={async () => {
@@ -2435,11 +2488,7 @@ export default function Home({ children }: { children: ReactNode }) {
           </p>}
           {profile && <OfflineCapture key={profile.id} accountId={profile.id} name={profile.displayName} ledger={ledger} showControls={view === "settings"} onReview={id => { setSelected(id); setView("expenses"); }} onSynced={async () => { await load({fresh:true}); }} />}
           <SharedPhoto trips={ledger.trips} selected={trip?.id} accountId={profile?.id} busy={loading || saving || uploading} onSelect={setSelected} onReceive={file => upload(file)} />
-          {undoNotice && undoNotice.tripId === trip?.id && !editing && <p className="saved-banner" role="status">
-            <Trash2 size={18} aria-hidden="true" />
-            <span>{uiText(undoNotice.message)}</span>
-            <button type="button" className="quiet" disabled={saving} onClick={() => void undoDeletion(undoNotice)}><Undo2 size={16} aria-hidden="true" />{uiText(" Undo")}</button>
-          </p>}
+          {undoNotice && undoNotice.tripId === trip?.id && !editing && undoBanner(undoNotice)}
           {savedNotice && !editing && <p className="saved-banner" role="status">
             <CheckCircle2 size={18} aria-hidden="true" />
             <span>{uiText("Saved “")}{savedNotice.title}”.</span>
@@ -3189,6 +3238,7 @@ export default function Home({ children }: { children: ReactNode }) {
                 </div>
                 <p className="footnote">{uiText("Review your split and press Save expense to commit your choice.")}</p>
               </section>}
+              {undoNotice && undoNotice.tripId === trip.id && undoBanner(undoNotice)}
               <div className="editor-footer" ref={editorFooterRef}>
                 <div className="expense-save-announcement sr-only" role="alert" aria-atomic="true">{saveAnnouncement && <span key={saveAnnouncement.id}>{saveAnnouncement.message}</span>}</div>
                 <SaveChecklist key={editing.id} blockers={visibleBlockers} attempted={saveAttempted}
@@ -3207,12 +3257,8 @@ export default function Home({ children }: { children: ReactNode }) {
                       disabled={saving}
                       onClick={async () => {
                         if (!editorIsCurrent()) return;
-                        if (!await confirm({ title: "Delete expense?", message: `Delete “${editing.title}” (${money(previewTotal(editing, trip) || 0, trip.currency)})? Its previous details will remain in activity history.`, confirmLabel: "Delete expense", destructive: true })) return;
                         const saved = trip.expenses.find(x => x.id === editing.id)!;
-                        if (await deleteWithUndo(trip, { message: `Deleted “${saved.title}”.`, payments: [],
-                          expenses: [{ entry: saved, index: trip.expenses.indexOf(saved) }],
-                          drafts: trip.drafts.flatMap((draft, index) => draft.expenseId === editing.id ? [{ entry: draft, index }] : []) }))
-                          closeReceiptEditor();
+                        if (await requestDeleteExpense(trip, saved)) closeReceiptEditor();
                       }}
                     >
                       <Trash2 size={16} />
