@@ -14,8 +14,8 @@ const r1 = (): Draft => ({ id: 'r1-draft', receiptId: 'photo', title: 'Tesco', d
   receiptScan: { version: 1, printedCurrency: 'GBP', printedTotal: 450, status: 'needs-review', warnings: [],
     sourceLines: [{ lineIndex: 3, observedText: 'BOGOF PRINGLES -3.00', amount: -300, kind: 'adjustment', mappedTo: 'unmapped' }] } });
 
-async function fixtures(page: Page) {
-  let current: Trip = { ...structuredClone(base), drafts: [r1()] }, revision = 1, posts = 0;
+async function fixtures(page: Page, start: Trip = { ...structuredClone(base), drafts: [r1()] }) {
+  let current: Trip = start, revision = 1, posts = 0;
   await page.route('**/api/**', async route => {
     const request = route.request(), pathname = new URL(request.url()).pathname;
     if (pathname === '/api/ledger' && request.method() === 'POST') {
@@ -108,4 +108,29 @@ test('a missed discount added by hand as 50% of the Pringles, then removed, bloc
   await expect(page.locator('.editor')).toHaveCount(0);
   expect(state.trip.expenses[0].adjustments?.[0].allocation).toEqual({ p1: 0, p2: 300 });
   expect(expenseShares(state.trip.expenses[0], members, 'GBP')).toEqual([375, 75]);
+});
+
+test('R03: editing the first of two discounts previews, saves and stores the same total', async ({ page }) => {
+  // Two £5 lines; a £1 coupon then 50% off. Editing the coupon to £2 keeps it
+  // first: £10 − £2 = £8, then 50% → £4.00. Appending it would show £3.00.
+  const coupon = { id: 'coupon', kind: 'discount' as const, label: 'Coupon', amount: 100, scope: { type: 'receipt' as const }, source: 'user' as const };
+  const half = { id: 'half', kind: 'discount' as const, label: 'Half price', percent: 50, scope: { type: 'receipt' as const }, source: 'user' as const };
+  const draft: Draft = { id: 'r3-draft', title: 'Lunch', date: '2026-11-06', time: '12:00', timezone: 'Europe/London', currency: 'GBP', payer: 'bob',
+    status: 'review', tax: 0, tip: 0, discount: 0, adjustments: [coupon, half],
+    items: [{ id: 'a', name: 'Soup', amount: 500, members: ['alice'] }, { id: 'b', name: 'Salad', amount: 500, members: ['bob'] }] };
+  const state = await fixtures(page, { ...structuredClone(base), drafts: [draft] });
+  await page.goto('/expenses?receiptDraft=r3-draft&receiptTrip=r1-trip');
+  await expect(page.locator('.editor')).toBeVisible();
+  await discounts(page).getByRole('button', { name: 'Edit Coupon' }).click();
+  const form = discounts(page).locator('.adjustment-form');
+  await form.getByRole('textbox', { name: 'Discount amount' }).fill('2.00');
+  await expect(form.locator('.adjustment-preview')).toContainText('New total £4.00');
+  await form.getByRole('button', { name: 'Save changes' }).click();
+  await expect(discounts(page).locator('.adjustment-row').first()).toContainText('Coupon');
+  await save(page).click();
+  await expect(page.locator('.editor')).toHaveCount(0);
+  const expense = state.trip.expenses[0];
+  expect(expense.adjustments?.map(value => [value.id, value.amount ?? value.percent])).toEqual([['coupon', 200], ['half', 50]]);
+  expect(expense.adjustmentAllocation).toBe('scoped-adjustments');
+  expect(expenseShares(expense, members, 'GBP').reduce((sum, share) => sum + share, 0)).toBe(400);
 });

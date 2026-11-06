@@ -5,7 +5,7 @@ import { Minus, Pencil, Plus } from "lucide-react";
 import { applyAdjustments, type Adjustment } from "@/lib/adjustments";
 import { parseAmountText } from "@/lib/amount-text";
 import { formatMoney } from "@/lib/money-format";
-import { shares } from "@/lib/model";
+import { previewAdjustment } from "@/lib/adjustment-preview";
 import type { ReceiptEditor } from "@/lib/receipt-processing";
 
 /** Values for opening the form, e.g. from an unmapped receipt line or a reconciliation difference. */
@@ -26,9 +26,11 @@ function describeScope(adjustment: Adjustment, entry: ReceiptEditor) {
  * change; each row shows what it takes off which lines, and the form shows
  * every person's resulting change before it is added.
  */
+type Member = { id: string; name: string; weight?: number };
+
 export default function AdjustmentEditor({ entry, members, onChange, draft, onDraft }: {
   entry: ReceiptEditor;
-  members: { id: string; name: string }[];
+  members: Member[];
   onChange: (entry: ReceiptEditor) => void;
   /** The open form, or null. Owned by the parent so other controls can open it. */
   draft: AdjustmentDraft | null;
@@ -66,10 +68,7 @@ export default function AdjustmentEditor({ entry, members, onChange, draft, onDr
     {!!result.errors.length && <p className="error" role="alert">{uiText(result.errors[0])}</p>}
     {draft ? <AdjustmentForm key={draft.editing || draft.id || "new"} entry={entry} members={members} draft={draft}
       onCancel={() => onDraft(null)}
-      onSave={adjustment => {
-        const next = draft.editing ? adjustments.map(value => value.id === draft.editing ? adjustment : value) : [...adjustments, adjustment];
-        onChange({ ...entry, adjustments: next }); onDraft(null);
-      }} />
+      onSave={next => { onChange({ ...entry, adjustments: next }); onDraft(null); }} />
       : <div className="action-row">
         <button type="button" className="quiet" onClick={() => onDraft({ kind: "discount" })}><Plus size={16} aria-hidden="true" />{uiText(" Add discount")}</button>
         <button type="button" className="quiet" onClick={() => onDraft({ kind: "charge" })}><Plus size={16} aria-hidden="true" />{uiText(" Add charge")}</button>
@@ -78,8 +77,9 @@ export default function AdjustmentEditor({ entry, members, onChange, draft, onDr
 }
 
 function AdjustmentForm({ entry, members, draft, onSave, onCancel }: {
-  entry: ReceiptEditor; members: { id: string; name: string }[]; draft: AdjustmentDraft;
-  onSave: (adjustment: Adjustment) => void; onCancel: () => void;
+  entry: ReceiptEditor; members: Member[]; draft: AdjustmentDraft;
+  /** Receives the complete ordered list that was previewed (R03). */
+  onSave: (adjustments: Adjustment[]) => void; onCancel: () => void;
 }) {
   const formId = useId();
   const [kind, setKind] = useState<Adjustment["kind"]>(draft.kind ?? "discount");
@@ -105,21 +105,15 @@ function AdjustmentForm({ entry, members, draft, onSave, onCancel }: {
     ...(draft.sourceLineIndex !== undefined ? { sourceLineIndex: draft.sourceLineIndex } : {}),
     source: draft.source ?? "user",
   } : null;
-  const others = (entry.adjustments ?? []).filter(value => value.id !== draft.editing);
-  const before = applyAdjustments(entry.items, others);
-  const after = candidate ? applyAdjustments(entry.items, [...others, candidate]) : null;
+  // R03: one ordered list, with an edited row kept in place, for the
+  // preview, its validation and Save. Shares use the rule Save stamps.
+  const { list, before, after: applied, outcome } = previewAdjustment(entry, members, candidate, draft.editing);
+  const after = candidate ? applied : null;
   const problem = !candidate ? (scopeType === "items" && !chosen.length ? uiText("Choose the items it applies to") : uiText(mode === "amount" ? "Enter the amount" : "Enter a percentage up to 100"))
     : percent !== undefined && mode === "percent" && percent > 100 ? uiText("Enter a percentage up to 100")
       : after?.errors.length ? uiText(after.errors[0]) : null;
-  const total = (value: ReturnType<typeof applyAdjustments>) => value.net.reduce<number>((sum, net) => sum + (net ?? 0), 0) + value.receiptDelta + entry.tax + entry.tip - entry.discount;
-  const preview = (() => {
-    if (!candidate || problem || entry.items.some(item => item.amount === null)) return null;
-    try {
-      const old = shares({ ...entry, adjustments: others }, members);
-      const next = shares({ ...entry, adjustments: [...others, candidate] }, members);
-      return { total: total(after!), changes: members.map((member, index) => ({ name: member.name, change: next[index] - old[index] })).filter(value => value.change) };
-    } catch { return null; }
-  })();
+  const preview = !problem && outcome ? { total: outcome.total,
+    changes: outcome.changes.map(value => ({ name: members.find(member => member.id === value.id)?.name ?? "", change: value.change })) } : null;
   const defaultParts = after?.applied.find(value => value.id === candidate?.id)?.allocation;
 
   return <fieldset className="adjustment-form" aria-labelledby={`${formId}-legend`}>
@@ -164,7 +158,7 @@ function AdjustmentForm({ entry, members, draft, onSave, onCancel }: {
     </p>}
     {before.errors.length > 0 && <p className="footnote">{uiText(before.errors[0])}</p>}
     <div className="action-row">
-      <button type="button" className="primary" disabled={!candidate || !!problem} onClick={() => candidate && onSave(candidate)}>{draft.editing ? uiText("Save changes") : uiText("Add")}</button>
+      <button type="button" className="primary" disabled={!candidate || !!problem} onClick={() => list && !problem && onSave(list)}>{draft.editing ? uiText("Save changes") : uiText("Add")}</button>
       <button type="button" className="quiet" onClick={onCancel}>{uiText("Cancel")}</button>
     </div>
   </fieldset>;
