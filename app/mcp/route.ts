@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { adjustmentSchema, type Adjustment } from '@/lib/adjustments';
+import { adjustmentSchema, personControlled, type Adjustment } from '@/lib/adjustments';
 import { receiptExpenseIconSchema, receiptExpenseIconJsonSchema, nextSuggestedIcon } from '@/lib/receipt-proposals';
 import { languageSchema, receiptLanguageSchema, itemTranslationsSchema, RECEIPT_LANGUAGES } from '@/lib/receipt-languages';
 import { readTripLanguagePreferences } from '@/lib/trip-language-preferences';
@@ -786,16 +786,21 @@ export async function POST(request: Request) {
         if ((sourceLines?.length ?? 0) > 1000 || (scanWarnings?.length ?? 0) > 1000) {
           throw new Error('This receipt has reached its scan evidence limit. Your saved evidence is unchanged; review it before rescanning.');
         }
-        // Assistant records are proposals (source receipt); a person's own records
-        // always survive, and removed lines leave every record's scope.
-        const kept = (existing?.adjustments ?? []).filter(adjustment => proposedAdjustments === undefined || adjustment.source !== 'receipt');
+        // Assistant records are proposals (source receipt). A person's own
+        // records survive exactly (R05): never replaced, rescoped or
+        // reallocated. Removing a line one of them applies to is refused, as
+        // that would silently move its saving to other people.
+        const kept = (existing?.adjustments ?? []).filter(adjustment => proposedAdjustments === undefined || personControlled(adjustment));
         const keptLines = new Set(kept.flatMap(adjustment => adjustment.sourceLineIndex === undefined ? [] : [adjustment.sourceLineIndex]));
         const itemIds = new Set(items.map(item => item.id));
+        if (kept.some(adjustment => personControlled(adjustment) && adjustment.scope.type === 'items' && adjustment.scope.itemIds.some(itemId => !itemIds.has(itemId)))) {
+          throw new Error('A discount set by a person applies to a line this change removes. Change that discount in TripTab first.');
+        }
         const nextAdjustments: Adjustment[] = [...kept, ...(proposedAdjustments ?? [])
           .filter(adjustment => adjustment.sourceLineIndex === undefined || !keptLines.has(adjustment.sourceLineIndex))
           .map(adjustment => ({ ...adjustment, source: 'receipt' as const }))]
           .flatMap(adjustment => {
-            if (adjustment.scope.type === 'receipt') return [adjustment];
+            if (adjustment.scope.type === 'receipt' || personControlled(adjustment)) return [adjustment];
             const scope = adjustment.scope.itemIds.filter(itemId => itemIds.has(itemId));
             if (!scope.length) return [];
             const allocation = adjustment.allocation && scope.length === adjustment.scope.itemIds.length ? adjustment.allocation : undefined;

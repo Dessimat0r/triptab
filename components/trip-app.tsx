@@ -3462,7 +3462,7 @@ export default function Home({ children }: { children: ReactNode }) {
                       requestAnimationFrame(() => focusExpenseTarget("expense-discounts", ".adjustment-form input[type=radio]:checked"));
                     }} onApplyLine={line => {
                       // The qualifying items are a person's choice: the form asks for them (D01).
-                      setAdjustmentDraft({ kind: "discount", sourceLineIndex: line.lineIndex, source: "receipt",
+                      setAdjustmentDraft({ kind: "discount", sourceLineIndex: line.lineIndex,
                         ...(line.amount ? { amount: Math.abs(line.amount) } : {}), ...(line.observedText ? { label: line.observedText.slice(0, 80) } : {}) });
                       requestAnimationFrame(() => focusExpenseTarget("expense-discounts", ".adjustment-items input[type=checkbox]"));
                     }} />

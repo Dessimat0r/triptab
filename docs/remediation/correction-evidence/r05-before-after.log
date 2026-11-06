@@ -1,0 +1,8 @@
+== before-fix 1d6f40a
+saved source: receipt allocation: {"31048f1b-e751-4c60-b7fb-26b21022a0fd":0,"7883ef66-10a7-4212-a075-ac59f61ade98":300}
+shares before rescan: [ 300, 150 ]
+after rescan allocation: undefined total 450 shares [ 150, 300 ]
+== after-fix (working tree on fe43e02 + R05)
+saved source: user allocation: {"ab2a9566-e7b9-4e0e-9f67-3f7fe9d69df3":0,"e3f3b247-a76a-4ed6-804a-0cdf98a02af6":300}
+shares before rescan: [ 300, 150 ]
+after rescan allocation: {"ab2a9566-e7b9-4e0e-9f67-3f7fe9d69df3":0,"e3f3b247-a76a-4ed6-804a-0cdf98a02af6":300} total 450 shares [ 300, 150 ]

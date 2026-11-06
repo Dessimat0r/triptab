@@ -70,7 +70,9 @@ test('scan R1: the BOGOF line becomes a discount on both Pringles, reconciles, a
   await expect(page.locator('.editor')).toHaveCount(0);
   const expense = state.trip.expenses[0];
   expect(expense.items.map(item => item.amount)).toEqual([300, 300, 150]);
-  expect(expense.adjustments).toEqual([expect.objectContaining({ kind: 'discount', amount: 300, sourceLineIndex: 3, source: 'receipt',
+  // A person applied the printed line and chose its items, so the record is
+  // theirs (R05) and keeps the line as evidence.
+  expect(expense.adjustments).toEqual([expect.objectContaining({ kind: 'discount', amount: 300, sourceLineIndex: 3, source: 'user',
     scope: { type: 'items', itemIds: ['p1', 'p2'] } })]);
   expect(expense.adjustmentAllocation).toBe('scoped-adjustments');
   expect(expense.receiptScan?.status).toBe('matched');
