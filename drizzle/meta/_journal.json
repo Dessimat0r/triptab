@@ -113,6 +113,13 @@
       "when": 1794470400000,
       "tag": "0015_membership_revision_noop",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "6",
+      "when": 1794474000000,
+      "tag": "0016_receipt_operations",
+      "breakpoints": true
     }
   ]
 }

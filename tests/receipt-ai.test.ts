@@ -1024,10 +1024,12 @@ function reset() {
   state.writes = 0; state.writeAttempts = 0; state.accessCalls = 0; state.providerCalls = 0; state.imageReads = 0; state.providerBodies=[]; state.profileChecks = 0; state.savedSources = [];
   state.beforeWrite = undefined;
   state.duringModel = undefined; state.output = undefined; state.invalidOutput = false; state.actorChanged = false;
-  budgetDatabase.exec('DELETE FROM auth_rate_limits');
+  budgetDatabase.exec('DELETE FROM auth_rate_limits'); budgetDatabase.exec('DELETE FROM receipt_operations');
 }
 const budgetDatabase = new DatabaseSync(':memory:');
 budgetDatabase.exec('CREATE TABLE auth_rate_limits(key_hash TEXT PRIMARY KEY,window_start INTEGER NOT NULL,attempts INTEGER NOT NULL)');
+// R06: the production claim table, from its migration.
+budgetDatabase.exec((await readFile(new URL('../drizzle/0016_receipt_operations.sql', import.meta.url), 'utf8')).replaceAll('--> statement-breakpoint', ''));
 class BoundaryRequestError extends Error { constructor(message: string, readonly status = 400) { super(message); } }
 class BoundaryAccessError extends Error { constructor(message: string, readonly status = 403, readonly code = 'credential_denied') { super(message); } }
 const store = {
@@ -1072,6 +1074,7 @@ const routeCode = transpileWithSharedImports(routeSource, { compilerOptions: { m
   .replace("'@/lib/store'", JSON.stringify(storeUrl)).replace("'@/lib/receipt-ai-access'", JSON.stringify(accessUrl))
   .replace("'@/lib/receipt-ai'", JSON.stringify(new URL('../lib/receipt-ai.ts', import.meta.url).href))
   .replace("'@/lib/receipt-assistant'", JSON.stringify(new URL('../lib/receipt-assistant.ts', import.meta.url).href))
+  .replace("'@/lib/receipt-operations'", JSON.stringify(new URL('../lib/receipt-operations.ts', import.meta.url).href))
   .replace("'@/lib/trip-language-preferences'", JSON.stringify(dataUrl('export const readTripLanguagePreferences=async()=>({preferences:{readingLanguage:"en"},revision:0});')))
   .replace("'zod'", JSON.stringify(import.meta.resolve('zod')));
 const route = await import(dataUrl(routeCode)) as { POST(request: Request): Promise<Response> };
@@ -1461,4 +1464,122 @@ test('F-11: a client that disconnects while the receipt is read still gets the p
   const retry = await http({ ...requestBody, draftHash: await sha256Hex(canonicalJson(draft)) });
   assert.equal(retry.status, 409);
   assert.equal(state.providerCalls, 1);
+});
+
+// R06/R07: one paid operation per authorized source. Before the claim, two
+// identical in-flight requests both called the provider (200 and 409); a cut-off
+// attempt left nothing durable. The claim table here is migration 0016.
+const operations = () => budgetDatabase.prepare('SELECT status, attempts, attempt_id AS attemptId, error_code AS errorCode FROM receipt_operations').all() as { status: string; attempts: number; attemptId: string; errorCode: string | null }[];
+const storedProposal = () => state.data.trips[0].drafts.filter(value => value.id === draft.id && value.status === 'review');
+
+/** A request whose provider call waits until released, so others overlap it in flight. */
+async function heldRequest() {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const body = { ...requestBody, draftHash: await sha256Hex(canonicalJson(state.data.trips[0].drafts[0])) };
+  const originalFetch = globalThis.fetch;
+  const held = async () => { state.providerCalls++; await gate; return streamResponse([completed(state.output ?? transcription)]); };
+  const response = route.POST(declaredRequest('https://triptab.test/api/receipt/process', { method: 'POST',
+    headers: { origin: 'https://triptab.test', 'content-type': 'application/json' }, body: JSON.stringify(body) }));
+  globalThis.fetch = held as typeof fetch;
+  while (!state.providerCalls) await new Promise(resolve => setTimeout(resolve, 1));
+  globalThis.fetch = originalFetch;
+  return { response, release, body };
+}
+
+test('R06: simultaneous identical requests make one provider call and store one proposal; the second is told it is already reading', async () => {
+  reset();
+  const first = await heldRequest();
+  const second = await http(first.body);
+  assert.equal(second.status, 202, 'not 409, and no second provider call');
+  assert.equal((await second.json() as { reading?: boolean }).reading, true);
+  first.release();
+  assert.equal((await first.response).status, 200);
+  assert.equal(state.providerCalls, 1);
+  assert.equal(state.writes, 1);
+  assert.equal(storedProposal().length, 1);
+  assert.deepEqual(operations().map(row => [row.status, row.attempts]), [['stored', 1]]);
+  // A client reconnecting with the receipt it displayed before the proposal is
+  // refused by the fingerprint before any claim or spend: no rerun.
+  const stale = await http(first.body);
+  assert.equal(stale.status, 409);
+  assert.equal(state.providerCalls, 1);
+});
+
+test('R06: repeated requests while one is reading (reconnects, other members) neither spend, consume budget nor write', async () => {
+  reset();
+  const first = await heldRequest();
+  for (let index = 0; index < 3; index++) assert.equal((await http(first.body)).status, 202);
+  assert.equal(state.accessCalls, 1, 'one key lookup');
+  assert.equal(budgetDatabase.prepare("SELECT COALESCE(SUM(attempts),0) AS n FROM auth_rate_limits WHERE key_hash IS NOT NULL").get()!.n, 3, 'only the owner consumed budget (user, shared minute and shared day counters)');
+  first.release();
+  assert.equal((await first.response).status, 200);
+  assert.equal(state.providerCalls, 1); assert.equal(state.writes, 1);
+});
+
+test('R07: a cut-off attempt (lease expired after the provider accepted) is taken over once by the next request, which stores one proposal', async () => {
+  reset();
+  const hash = await sha256Hex(canonicalJson(state.data.trips[0].drafts[0]));
+  // The crashed attempt: claimed, spent, never finished.
+  const { claimOperation } = await import('../lib/receipt-operations');
+  const crashed = await claimOperation({ prepare: (sql: string) => ({ bind: (...values: (string | number | null)[]) => ({
+    first: async () => budgetDatabase.prepare(sql).get(...values) ?? null, run: async () => budgetDatabase.prepare(sql).run(...values) }) }) } as never,
+  { tripId: trip.id, draftId: draft.id, draftHash: hash, receiptId: 'photo', imageVersion: 'original-image' }, owner, { now: Date.now() - 200_000 });
+  assert.equal(crashed.owned, true);
+  // Within its lease nobody may take over; after it, one new attempt does.
+  const response = await http({ ...requestBody, draftHash: hash });
+  assert.equal(response.status, 200);
+  assert.equal(state.providerCalls, 1, 'one more call: the residual spend after a crash, never automatic');
+  assert.equal(storedProposal().length, 1);
+  assert.deepEqual(operations().map(row => [row.status, row.attempts]), [['stored', 2]]);
+});
+
+test('R07: failure before persistence is recorded and a retry may claim again; failure after persistence cannot rerun', async () => {
+  reset();
+  state.invalidOutput = true;
+  const failed = await http();
+  assert.notEqual(failed.status, 200);
+  assert.deepEqual(operations().map(row => row.status), ['failed']);
+  assert.equal(state.writes, 0);
+  state.invalidOutput = false;
+  assert.equal((await http()).status, 200);
+  assert.deepEqual(operations().map(row => [row.status, row.attempts]), [['stored', 2]]);
+  assert.equal(state.providerCalls, 2);
+  // After persistence: even if the outcome had not been recorded, the stored
+  // proposal changed the draft, so the original request cannot run again.
+  budgetDatabase.exec("UPDATE receipt_operations SET status='running', lease_until=0");
+  const again = await http({ ...requestBody, draftHash: await sha256Hex(canonicalJson(draft)) });
+  assert.equal(again.status, 409);
+  assert.equal(state.providerCalls, 2); assert.equal(storedProposal().length, 1);
+});
+
+test('R07: a slow attempt superseded after its lease ran out cannot commit a second proposal', async () => {
+  reset();
+  const slow = await heldRequest();
+  // It is still running but its lease has run out (the platform kept it past
+  // the lease); a new request takes over and finishes first.
+  budgetDatabase.exec('UPDATE receipt_operations SET lease_until = 0');
+  const newer = await http(slow.body);
+  assert.equal(newer.status, 200);
+  slow.release();
+  const late = await slow.response;
+  assert.equal(late.status, 409, 'the superseded result is discarded');
+  assert.equal(state.providerCalls, 2, 'both attempts reached the provider: the documented residual');
+  assert.equal(state.writes, 1);
+  assert.equal(storedProposal().length, 1);
+  const [row] = operations();
+  assert.deepEqual([row.status, row.attempts], ['stored', 2]);
+  assert.equal(storedProposal()[0].receiptScan?.attemptId, row.attemptId, 'the stored proposal is the current attempt\'s');
+});
+
+test('R06/R07: changed draft, photo or membership during reading leaves the claim failed and no proposal', async () => {
+  for (const change of [() => { state.data.trips[0].drafts[0].title = 'Edited meanwhile'; }, () => { state.imageVersion = 'replaced'; },
+    () => { state.data.trips[0].members = [...state.data.trips[0].members, { id: 'new', name: 'Newcomer' }]; }]) {
+    reset();
+    state.duringModel = change;
+    const response = await http();
+    assert.equal(response.status, 409);
+    assert.equal(state.writes, 0);
+    assert.deepEqual(operations().map(row => row.status), ['failed']);
+  }
 });
