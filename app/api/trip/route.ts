@@ -1,7 +1,7 @@
 import { bucket, db, ensureProfile, failure, readBoundedBody, RequestError, sameOrigin } from '@/lib/store';
 import { notifyMembers } from '@/lib/notifications';
 import { purgeDeletedTripReceipts } from '@/lib/receipt-lifecycle';
-import { discardEmptyBill, deleteTrip, leaveTrip, listArchivedTrips, setTripArchived, transferTripOwnership } from '@/lib/trip-lifecycle';
+import { discardEmptyBill, deleteTrip, leaveTrip, listArchivedTrips, listDeletedBills, purgeDeletedBill, restoreDeletedBill, setTripArchived, transferTripOwnership } from '@/lib/trip-lifecycle';
 
 export const dynamic = 'force-dynamic';
 const PRIVATE_HEADERS = { 'Cache-Control': 'private, no-store' };
@@ -10,7 +10,10 @@ export async function GET(request: Request) {
   try {
     const profile = await ensureProfile(request);
     const params = new URL(request.url).searchParams;
-    if (params.get('mode') !== 'archived' || [...params.keys()].length !== 1) throw new RequestError('Choose a valid holiday list.');
+    if ([...params.keys()].length !== 1) throw new RequestError('Choose a valid holiday list.');
+    // F-14: the account's own deleted bills that can still be restored.
+    if (params.get('mode') === 'deleted') return Response.json({ bills: await listDeletedBills(db(), profile.id) }, { headers: PRIVATE_HEADERS });
+    if (params.get('mode') !== 'archived') throw new RequestError('Choose a valid holiday list.');
     return Response.json({ trips: await listArchivedTrips(db(), profile.id) }, { headers: PRIVATE_HEADERS });
   } catch (error) {
     return failure(error);
@@ -53,10 +56,21 @@ export async function POST(request: Request) {
         });
         return respond({ ownerId: result.ownerId });
       }
+      case 'restore-deleted':
+        return respond(await restoreDeletedBill(db(), actor, details.tripId));
+      case 'purge-deleted': {
+        await purgeDeletedBill(db(), actor, details.tripId);
+        await Promise.resolve().then(() => purgeDeletedTripReceipts(db(), bucket(), { limit: 200 })).catch(() => {
+          console.warn('TripTab removed the bill; receipt image cleanup will retry.');
+        });
+        return respond({ deleted: true });
+      }
       case 'discard':
       case 'delete': {
-        if (details.action === 'discard') await discardEmptyBill(db(), actor, details.tripId);
-        else await deleteTrip(db(), actor, details.tripId, details.confirmName);
+        const result = details.action === 'discard' ? await discardEmptyBill(db(), actor, details.tripId)
+          : await deleteTrip(db(), actor, details.tripId, details.confirmName);
+        // A deleted bill keeps its photos until it is removed for good.
+        if (result.restorable) return respond({ deleted: true, restorable: true });
         // The deletion is committed; image cleanup that fails here is retried
         // by scheduled maintenance from the durable purge records.
         await Promise.resolve().then(() => purgeDeletedTripReceipts(db(), bucket(), { limit: 200 })).catch(() => {

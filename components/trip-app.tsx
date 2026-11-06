@@ -312,6 +312,7 @@ export default function Home({ children }: { children: ReactNode }) {
     [statement, setStatement] = useState(""),
     [savedNotice, setSavedNotice] = useState<{ title: string; at: number } | null>(null),
     [undoNotice, setUndoNotice] = useState<UndoNotice | null>(null),
+    [deletedBill, setDeletedBill] = useState<{ tripId: string; name: string; at: number } | null>(null),
     [summaryOpen, setSummaryOpen] = useState(false),
     [repeatOpen, setRepeatOpen] = useState(""),
     [referenceRate, setReferenceRate] = useState<{ rate: number; currency: Currency; date: string; time: string; timezone: string } | null>(null);
@@ -766,6 +767,19 @@ export default function Home({ children }: { children: ReactNode }) {
       items: expense.items.map(item => ({ ...item, id: uid(), scanSource: undefined, fieldSources: undefined, conversation: undefined })),
       tax: expense.tax, tip: expense.tip, discount: expense.discount, percentages: expense.percentages, fx: expense.fx, bankAmount: expense.bankAmount,
       fieldSources: { title: "user", payer: "user", currency: "user" } });
+  }
+  /** F-14: put a just-deleted bill back, with its photos (owner decision A). */
+  async function undoBillDeletion(notice: { tripId: string; name: string }) {
+    setDeletedBill(null); setError("");
+    const response = await fetch("/api/trip", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "restore-deleted", tripId: notice.tripId }) }).catch(() => null);
+    if (!response?.ok) {
+      const body = await response?.json().catch(() => null) as { error?: string } | null;
+      setError(body?.error || "The bill couldn’t be restored. Try again from Archived holidays.");
+      return;
+    }
+    await load({ fresh: true });
+    setSelected(notice.tripId); setView("expenses");
   }
   async function undoDeletion(notice: UndoNotice) {
     setUndoNotice(null);
@@ -1717,6 +1731,11 @@ export default function Home({ children }: { children: ReactNode }) {
   else if (editing && editorMode && !editorMode.itemised && editing.items.length > 1) setEditorMode({ ...editorMode, itemised: true });
   else if (!editing && editorMode) setEditorMode(null);
   // The saved confirmation belongs to the list view; opening a form retires it.
+  useEffect(() => {
+    if (!deletedBill) return;
+    const timer = setTimeout(() => setDeletedBill(current => current === deletedBill ? null : current), 30_000);
+    return () => clearTimeout(timer);
+  }, [deletedBill]);
   if (editing && savedNotice) setSavedNotice(null);
   const itemised = !!editing && editorMode?.id === editing.id && editorMode.itemised;
   // A manual line takes the expense name; a receipt line keeps the name it was read with.
@@ -2518,6 +2537,10 @@ export default function Home({ children }: { children: ReactNode }) {
           {profile && <OfflineCapture key={profile.id} accountId={profile.id} name={profile.displayName} ledger={ledger} showControls={view === "settings"} onReview={id => { setSelected(id); setView("expenses"); }} onSynced={async () => { await load({fresh:true}); }} />}
           <SharedPhoto trips={ledger.trips} selected={trip?.id} accountId={profile?.id} busy={loading || saving || uploading} onSelect={setSelected} onReceive={file => upload(file)} />
           {undoNotice && undoNotice.tripId === trip?.id && !editing && undoBanner(undoNotice)}
+          {deletedBill && <p className="saved-banner" role="status">
+            <span>{uiText("Deleted the bill “{value0}”. You can restore it for 30 days from Archived holidays.", { value0: deletedBill.name })}</span>
+            <button type="button" className="quiet" disabled={saving || loading} onClick={() => void undoBillDeletion(deletedBill)}><Undo2 size={16} aria-hidden="true" />{uiText(" Undo")}</button>
+          </p>}
           {savedNotice && !editing && <p className="saved-banner" role="status">
             <CheckCircle2 size={18} aria-hidden="true" />
             <span>{uiText("Saved “")}{savedNotice.title}”.</span>
@@ -2687,7 +2710,7 @@ export default function Home({ children }: { children: ReactNode }) {
       {summaryOpen && trip && <TripSummary trip={trip} onClose={() => setSummaryOpen(false)} />}
       {repeatOpen && trip && trip.expenses.some(expense => expense.id === repeatOpen) && <RepeatExpenseDialog trip={trip} expense={trip.expenses.find(expense => expense.id === repeatOpen)!} busy={saving}
         onClose={() => setRepeatOpen("")} onRepeat={copies => updateTrip({ ...trip, expenses: [...trip.expenses, ...copies] })} />}
-      {billOptions && trip && isBill(trip) && <ModalA11y className="overlay" onClose={() => setBillOptions(false)}><section className="modal bill-options" role="dialog" aria-modal="true" aria-label={uiText("Bill options")}><div className="modalheading"><h2>{uiText("Bill options")}</h2><button type="button" className="iconbutton" aria-label={uiText("Close")} onClick={() => setBillOptions(false)}>×</button></div><button type="button" className="quiet" onClick={() => { setBillOptions(false); setBillPeople(true); }}>{uiText("People")}</button><TripDetails trip={trip} showPeople={false} busy={saving || loading} accountId={profile?.id} paging={page("names", 20)} onSave={updateTrip} /><TripSharing key={`${trip.id}:${profile?.id || "anonymous"}`} trip={trip} profile={profile} onChanged={() => load({ background: true })} /><TripControls trip={trip} accountId={profile?.id} busy={saving || loading} onChanged={async () => { setBillOptions(false); await load({ fresh: true }); }} /></section></ModalA11y>}
+      {billOptions && trip && isBill(trip) && <ModalA11y className="overlay" onClose={() => setBillOptions(false)}><section className="modal bill-options" role="dialog" aria-modal="true" aria-label={uiText("Bill options")}><div className="modalheading"><h2>{uiText("Bill options")}</h2><button type="button" className="iconbutton" aria-label={uiText("Close")} onClick={() => setBillOptions(false)}>×</button></div><button type="button" className="quiet" onClick={() => { setBillOptions(false); setBillPeople(true); }}>{uiText("People")}</button><TripDetails trip={trip} showPeople={false} busy={saving || loading} accountId={profile?.id} paging={page("names", 20)} onSave={updateTrip} /><TripSharing key={`${trip.id}:${profile?.id || "anonymous"}`} trip={trip} profile={profile} onChanged={() => load({ background: true })} /><TripControls trip={trip} accountId={profile?.id} busy={saving || loading} onBillDeleted={bill => setDeletedBill({ tripId: bill.id, name: bill.name, at: Date.now() })} onChanged={async () => { setBillOptions(false); await load({ fresh: true }); }} /></section></ModalA11y>}
       {billPeople && trip && isBill(trip) && <BillPeople trip={trip} accountId={profile?.id} busy={saving || loading} onSave={updateTrip} onClose={() => setBillPeople(false)} confirm={confirm} />}
       {billStart && profile && <BillStart ledger={ledger} displayName={profile.displayName.slice(0, 50)} busy={saving} onClose={() => setBillStart(false)} onStart={startBill} />}
       {create && (

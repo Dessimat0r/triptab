@@ -7,6 +7,18 @@ export class TripLifecycleError extends Error {
 }
 
 export const MAX_OPEN_TRIPS = 50;
+/** A deleted bill can be restored for this long, then it is removed for good (F-14, owner decision A). */
+export const BILL_RESTORE_DAYS = 30;
+const RESTORE_MS = BILL_RESTORE_DAYS * 24 * 60 * 60 * 1000;
+/**
+ * A deleted bill's owner is replaced by this tombstone. Only bills nobody
+ * else can open may be deleted, so the owner was the only person with
+ * access; every owner-or-member access check in the app (ledger, history,
+ * receipts, invites, reminders, exports, language settings, MCP) then fails
+ * for it without any change to those readers.
+ */
+export const deletedOwner = (owner: string) => `deleted:${owner}`;
+export type DeletedBill = { id: string; name: string; deletedAt: string; restoreUntil: string };
 type Actor = { id: string; displayName: string };
 
 /** Holidays in an account's open list. Archived holidays stay accessible elsewhere. */
@@ -176,6 +188,26 @@ async function deleteTripRecord(database: D1Database, actor: Actor, rawTripId: u
   const marker = crypto.randomUUID(), now = new Date().toISOString();
   const change: ActivityChange = { tripId: id, entityType: 'trip', entityId: id, action: 'delete',
     before: { ...summary(trip), travellerCount: trip.members.length, expenseCount: trip.expenses.length, paymentCount: trip.payments.length }, after: null };
+  // A bill with entries is kept for BILL_RESTORE_DAYS so it can be restored
+  // with its receipt photos; an empty bill and a holiday are removed now.
+  if (!discard && isBill(trip)) {
+    const links = await database.prepare('SELECT user_id, member_id FROM memberships WHERE trip_id = ? AND user_id = ?').bind(id, actor.id)
+      .all<{ user_id: string; member_id: string }>();
+    const deletion = { at: now, owner: actor.id, memberships: links.results ?? [] };
+    const results = await database.batch([
+      advanceRevision(database, actor, marker, `EXISTS (SELECT 1 FROM trips t WHERE t.id = ? AND t.owner = ? AND t.data = ?
+        AND NOT EXISTS (SELECT 1 FROM memberships m WHERE m.trip_id = t.id AND m.user_id <> ?))`, [id, actor.id, row.data, actor.id]),
+      ...activityStatements(database, [change], actor, marker, 'current'),
+      database.prepare(`DELETE FROM invites WHERE trip_id = ? AND ${marked}`).bind(id, marker),
+      database.prepare(`DELETE FROM trip_archives WHERE trip_id = ? AND ${marked}`).bind(id, marker),
+      database.prepare(`DELETE FROM notification_digests WHERE trip_id = ? AND ${marked}`).bind(id, marker),
+      database.prepare(`DELETE FROM memberships WHERE trip_id = ? AND ${marked}`).bind(id, marker),
+      database.prepare(`UPDATE trips SET owner = ?, data = json_set(data, '$.deletion', json(?)) WHERE id = ? AND ${marked}`)
+        .bind(deletedOwner(actor.id), JSON.stringify(deletion), id, marker),
+    ]);
+    if (!results[0].meta.changes) throw new TripLifecycleError(tripMessage(trip, 'Another traveller joined or the holiday changed. Refresh and try again.'), 409);
+    return { tripName: trip.name, restorable: true };
+  }
   const results = await database.batch([
     advanceRevision(database, actor, marker, `EXISTS (SELECT 1 FROM trips t WHERE t.id = ? AND t.owner = ? AND t.data = ?
       AND NOT EXISTS (SELECT 1 FROM memberships m WHERE m.trip_id = t.id AND m.user_id <> ?))`, [id, actor.id, row.data, actor.id]),
@@ -191,5 +223,87 @@ async function deleteTripRecord(database: D1Database, actor: Actor, rawTripId: u
     database.prepare(`DELETE FROM trips WHERE id = ? AND ${marked}`).bind(id, marker),
   ]);
   if (!results[0].meta.changes) throw new TripLifecycleError(discard ? discardError : tripMessage(trip, 'Another traveller joined or the holiday changed. Refresh and try again.'), 409);
+  return { tripName: trip.name, restorable: false };
+}
+
+type Deletion = { at: string; owner: string; memberships: { user_id: string; member_id: string }[] };
+function deletionOf(data: string): Deletion | undefined {
+  const value = (JSON.parse(data) as { deletion?: Deletion }).deletion;
+  return value && typeof value.at === 'string' && typeof value.owner === 'string' && Array.isArray(value.memberships) ? value : undefined;
+}
+
+/** The account's deleted bills that can still be restored, newest first. */
+export async function listDeletedBills(database: D1Database, user: string, now = Date.now()): Promise<DeletedBill[]> {
+  const rows = await database.prepare(`SELECT id, json_extract(data, '$.name') AS name, json_extract(data, '$.deletion.at') AS deleted_at
+    FROM trips WHERE owner = ? ORDER BY deleted_at DESC, id LIMIT 200`).bind(deletedOwner(user)).all<{ id: string; name: string; deleted_at: string | null }>();
+  return (rows.results ?? []).flatMap(row => {
+    const at = Date.parse(row.deleted_at ?? '');
+    if (!Number.isFinite(at) || now - at > RESTORE_MS) return [];
+    return [{ id: row.id, name: String(row.name ?? ''), deletedAt: row.deleted_at!, restoreUntil: new Date(at + RESTORE_MS).toISOString() }];
+  });
+}
+
+/**
+ * Put a deleted bill back exactly as it was: same entries, owner link and
+ * receipt photos. Only its owner can, within BILL_RESTORE_DAYS, and only
+ * while the open list has room.
+ */
+export async function restoreDeletedBill(database: D1Database, actor: Actor, rawTripId: unknown, now = Date.now()) {
+  const id = tripId(rawTripId);
+  const row = await database.prepare('SELECT data FROM trips WHERE id = ? AND owner = ?').bind(id, deletedOwner(actor.id)).first<{ data: string }>();
+  const deletion = row && deletionOf(row.data);
+  if (!row || !deletion || deletion.owner !== actor.id) throw new TripLifecycleError('This bill can no longer be restored.', 404);
+  if (now - Date.parse(deletion.at) > RESTORE_MS) throw new TripLifecycleError(`Bills can be restored for ${BILL_RESTORE_DAYS} days after they are deleted.`, 410);
+  const trip = JSON.parse(row.data) as Trip;
+  await ensureSyncState(database);
+  const marker = crypto.randomUUID();
+  const memberships = deletion.memberships.filter(link => link.user_id === actor.id);
+  const results = await database.batch([
+    advanceRevision(database, actor, marker, `EXISTS (SELECT 1 FROM trips t WHERE t.id = ? AND t.owner = ? AND t.data = ?)
+      AND (SELECT COUNT(*) FROM (${OPEN_TRIP_IDS})) < ?`, [id, deletedOwner(actor.id), row.data, ...openTripBindings(actor.id), MAX_OPEN_TRIPS]),
+    database.prepare(`UPDATE trips SET owner = ?, data = json_remove(data, '$.deletion') WHERE id = ? AND ${marked}`).bind(actor.id, id, marker),
+    database.prepare(`INSERT OR IGNORE INTO memberships (trip_id, user_id, member_id)
+      SELECT ?, json_extract(value, '$.user_id'), json_extract(value, '$.member_id') FROM json_each(?) WHERE ${marked}`).bind(id, JSON.stringify(memberships), marker),
+    ...activityStatements(database, [{ tripId: id, entityType: 'trip', entityId: id, action: 'create', before: null,
+      after: { ...summary(trip), restored: true, travellerCount: trip.members.length, expenseCount: trip.expenses.length, paymentCount: trip.payments.length } }], actor, marker, 'current'),
+  ]);
+  if (!results[0].meta.changes) {
+    if (await database.prepare('SELECT 1 FROM trips WHERE id = ? AND owner = ?').bind(id, deletedOwner(actor.id)).first()) {
+      throw new TripLifecycleError(`You already have ${MAX_OPEN_TRIPS} open holidays and bills. Archive one before restoring another.`, 409);
+    }
+    throw new TripLifecycleError('This bill changed. Refresh and try again.', 409);
+  }
   return { tripName: trip.name };
+}
+
+/** Remove deleted bills for good: one by its owner now, or every expired one (scheduled). */
+function purgeStatements(database: D1Database, id: string, owner: string, data: string, now: string) {
+  const still = 'EXISTS (SELECT 1 FROM trips WHERE id = ? AND owner = ? AND data = ?)';
+  const guard = [id, owner, data];
+  return [
+    database.prepare(`INSERT OR IGNORE INTO receipt_object_purges (receipt_id, owner, created_at)
+      SELECT id, owner, ? FROM receipts WHERE trip_id = ? AND ${still}`).bind(now, id, ...guard),
+    database.prepare(`DELETE FROM receipts WHERE trip_id = ? AND ${still}`).bind(id, ...guard),
+    database.prepare(`DELETE FROM trip_language_preferences WHERE trip_id = ? AND ${still}`).bind(id, ...guard),
+    database.prepare(`DELETE FROM trips WHERE id = ? AND owner = ? AND data = ?`).bind(...guard),
+  ];
+}
+export async function purgeDeletedBill(database: D1Database, actor: Actor, rawTripId: unknown) {
+  const id = tripId(rawTripId), owner = deletedOwner(actor.id);
+  const row = await database.prepare('SELECT data FROM trips WHERE id = ? AND owner = ?').bind(id, owner).first<{ data: string }>();
+  if (!row) throw new TripLifecycleError('This bill was already removed.', 404);
+  const results = await database.batch(purgeStatements(database, id, owner, row.data, new Date().toISOString()));
+  if (!results[3].meta.changes) throw new TripLifecycleError('This bill changed. Refresh and try again.', 409);
+  return { tripName: String((JSON.parse(row.data) as Trip).name ?? '') };
+}
+export async function purgeExpiredDeletedBills(database: D1Database, options: { now?: number; limit?: number } = {}) {
+  const now = options.now ?? Date.now(), cutoff = new Date(now - RESTORE_MS).toISOString();
+  const rows = await database.prepare(`SELECT id, owner, data FROM trips WHERE owner LIKE 'deleted:%'
+    AND json_extract(data, '$.deletion.at') <= ? ORDER BY id LIMIT ?`).bind(cutoff, options.limit ?? 50).all<{ id: string; owner: string; data: string }>();
+  let purged = 0;
+  for (const row of rows.results ?? []) {
+    const results = await database.batch(purgeStatements(database, row.id, row.owner, row.data, new Date(now).toISOString()));
+    if (results[3].meta.changes) purged++;
+  }
+  return { purged };
 }

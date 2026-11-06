@@ -2195,3 +2195,18 @@ test('first approved bill scan may adopt currency only while consuming its sole 
   state.data.trips[0].expenses = [{ ...dinner(), currency: 'EUR', sourceDraftId: 'scan' }]; state.data.trips[0].drafts = [];
   assert.equal((await store.writeLedger(actor, state.data, state.revision)).data.trips[0].currency, 'EUR');
 });
+
+test('F-14: a stale copy of a deleted bill is refused and does not bring it back', async () => {
+  const database = await storage();
+  const bill = { ...trip('stale-bill'), kind: 'bill' as const, name: 'Stale bill' };
+  delete (bill as { startDate?: string }).startDate; delete (bill as { endDate?: string }).endDate;
+  const created = await store.writeLedger(actor, { trips: [bill] }, 0);
+  // Deleted on another device: the bill is tombstoned and hidden (lib/trip-lifecycle.ts).
+  database.sqlite.prepare("UPDATE trips SET owner = 'deleted:' || owner, data = json_set(data, '$.deletion', json('{}')) WHERE id = 'stale-bill'").run();
+  database.sqlite.prepare("DELETE FROM memberships WHERE trip_id = 'stale-bill'").run();
+  assert.deepEqual((await store.readLedger(actor)).data.trips, []);
+  const stale = structuredClone(created.data);
+  stale.trips[0].name = 'Renamed offline';
+  await assert.rejects(store.writeLedger(actor, stale, created.revision), /“Renamed offline” was deleted\. Refresh to continue\./);
+  assert.equal((database.sqlite.prepare("SELECT owner FROM trips WHERE id = 'stale-bill'").get() as { owner: string }).owner, `deleted:${actor}`);
+});
