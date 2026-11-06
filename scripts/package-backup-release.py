@@ -45,6 +45,7 @@ def finalize(path):
                 if any(e.name.rstrip('/') == 'dist/.openai/drizzle' or e.name.startswith('dist/.openai/drizzle/') for e in target):
                     raise ValueError('Migration subtree remains.')
             os.chmod(temporary, 0o600)
+            source.close()  # Windows cannot replace an archive while it is open.
             os.replace(temporary, path)
         finally:
             if os.path.exists(temporary): os.unlink(temporary)

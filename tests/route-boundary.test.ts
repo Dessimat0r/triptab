@@ -6,6 +6,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import * as runtime from 'react/jsx-runtime';
 import { JsxEmit, ModuleKind, ScriptTarget, transpileModule } from 'typescript';
 import { fileURLToPath } from 'node:url';
+import { normalize } from 'node:path';
 import { appRouter, matchAppRoute } from '../node_modules/vinext/dist/routing/app-router.js';
 
 async function layout(path: string) {
@@ -52,14 +53,16 @@ test('the production framework routes unknown URLs outside the persistent ledger
   for (const url of ['/unknown', '/unknown/nested']) {
     const match = matchAppRoute(url, routes);
     assert(match);
-    assert.equal(match.route.pagePath, missing);
-    assert.deepEqual(match.route.layouts, [root], 'missing pages cannot mount account or holiday state');
+    assert(match.route.pagePath);
+    assert.equal(normalize(match.route.pagePath), missing);
+    assert.deepEqual(match.route.layouts.map(normalize), [root], 'missing pages cannot mount account or holiday state');
   }
   for (const url of ['/', '/expenses', '/balances', '/receipts', '/travellers', '/history']) {
     const match = matchAppRoute(url, routes);
     assert(match);
-    assert.notEqual(match.route.pagePath, missing, 'the catch-all must not replace a real section route');
-    assert.deepEqual(match.route.layouts, [root, ledger]);
+    assert(match.route.pagePath);
+    assert.notEqual(normalize(match.route.pagePath), missing, 'the catch-all must not replace a real section route');
+    assert.deepEqual(match.route.layouts.map(normalize), [root, ledger]);
   }
 });
 
@@ -69,7 +72,8 @@ test('unknown API paths return a JSON 404 without loading holiday state', async 
   const route = fileURLToPath(new URL('../app/api/[...missing]/route.ts', import.meta.url));
   for (const url of ['/api/unknown', '/api/unknown/nested']) {
     const match = matchAppRoute(url, routes); assert(match);
-    assert.equal(match.route.routePath, route);
+    assert(match.route.routePath);
+    assert.equal(normalize(match.route.routePath), route);
   }
   const handlers = await import('../app/api/[...missing]/route');
   for (const handler of [handlers.GET, handlers.POST, handlers.PATCH, handlers.DELETE]) {
