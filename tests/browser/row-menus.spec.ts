@@ -126,7 +126,7 @@ test('drawer: Delete bill asks the same plain confirmation as Manage this bill',
   await page.locator('#holiday-sidebar').getByRole('button', { name: 'Actions for Coffee' }).click();
   await page.getByRole('menuitem', { name: 'Delete bill' }).click();
   await page.getByRole('dialog', { name: 'Delete this bill?' }).getByRole('button', { name: 'Delete bill' }).click();
-  await expect.poll(() => state.tripActions.map(value => value.action)).toEqual(['delete']);
+  await expect.poll(() => state.tripActions).toEqual([{ action: 'delete', tripId: 'menus-bill', memberId: '', confirmName: 'Coffee' }]);
 });
 
 test('drawer: a holiday row\'s ⋯ opens Holiday settings without deleting anything', async ({ page }) => {

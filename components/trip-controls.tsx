@@ -60,7 +60,10 @@ export async function runTripAction(trip: Trip, accountId: string | undefined, v
     message: `Delete “${trip.name}” with ${trip.expenses.length} ${trip.expenses.length === 1 ? 'expense' : 'expenses'} and ${trip.payments.length} ${trip.payments.length === 1 ? 'payment' : 'payments'}? Its receipt photos are removed; History keeps the record. To keep it but hide it, use Remove from my list.`,
     confirmLabel: 'Delete bill', destructive: true,
   }))) return false;
-  await change(value === 'delete' && isBill(trip) && !trip.expenses.length && !trip.payments.length && !trip.drafts.length && !trip.members.some(member => member.userId && member.userId !== accountId) ? 'discard' : value, trip.id, { memberId: extra.memberId || '', confirmName: extra.confirmName || '' });
+  await change(value === 'delete' && isBill(trip) && !trip.expenses.length && !trip.payments.length && !trip.drafts.length && !trip.members.some(member => member.userId && member.userId !== accountId) ? 'discard' : value, trip.id, { memberId: extra.memberId || '',
+  // The plain confirmation above stands in for typing a bill's name; the
+  // server still checks the name, so a bill is never deleted by accident.
+  confirmName: value === 'delete' && isBill(trip) ? trip.name : extra.confirmName || '' });
   return true;
 }
 
