@@ -132,6 +132,12 @@ small {
   position: fixed;
   inset: 0 auto 0 0;
   z-index: 20;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scroll-padding-block: var(--space-4);
+}
+.sidebar > :not(.sidebar-close) {
+  flex-shrink: 0;
 }
 .brand {
   display: flex;
@@ -167,7 +173,6 @@ small {
 .tripnav {
   display: grid;
   gap: var(--space-2);
-  overflow: auto;
 }
 .tripnav button {
   display: flex;
@@ -178,6 +183,10 @@ small {
   border-radius: 10px;
   font-weight: 650;
   font-size: 0.9rem;
+  min-height: 44px;
+}
+.bill-nav + .textbutton {
+  min-height: 44px;
 }
 .tripnav button.active {
   background: #edf0ff;
