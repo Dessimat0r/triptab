@@ -2,7 +2,7 @@
 
 Owner brief and evidence baseline: **TripTab Functionality, Usability and Financial Accuracy Audit, 6 November 2026**, audited commit `48de3f9`. Decisions D01 to D08 and the additional owner decisions govern this programme.
 
-This record describes implementation evidence. It is not approval to release. No merge, deployment or production migration is authorised. Status updated 6 November 2026.
+This record describes implementation evidence. It is not approval to release. No merge, deployment or production migration is authorised. Status updated 6 November 2026 (follow-ups #71 to #74 added).
 
 ## Baseline (6 November 2026)
 
@@ -31,17 +31,17 @@ Statuses: Unresolved, Already fixed and verified, In progress, Implemented and t
 | F-01 receipt gate, exceptions, historical audit, promotions | P0 | 1, 3 | Implemented and tested | [#61](https://github.com/Dessimat0r/triptab/pull/61) `d8a5439`; [#64](https://github.com/Dessimat0r/triptab/pull/64) `ed984f6` | #61: written-reason gate, server and MCP enforcement, read-only historical audit, browser 750 vs 450 case. #64: the scanned BOGOF reconciles as `matched` without an exception | Live model evaluation (F-10); review |
 | F-02 scoped discounts and charges | P0 | 3 | Implemented and tested | #64 `ed984f6` | Acceptance R1 375/75 and 150/300 stored and settled; 400-run property test; all earlier rules unchanged; old-client strip refused | Review; one-way rollback (see release gates) |
 | F-03 sidebar navigation | Immediate | 0 | Implemented and tested | [#59](https://github.com/Dessimat0r/triptab/pull/59) `4ed3e55` | Browser checks at 375×667, 390×844 and 1366×768; CI green on both engines | Physical phone check; review |
-| F-04 bills reach connected accounts | P1 | 6 | Implemented and tested | [#67](https://github.com/Dessimat0r/triptab/pull/67) `f15eaaf` | Two accounts plus an outsider on SQLite: connections, direct add, refusals leave every table unchanged, no access to other bills, leave | Adding people after creating a bill; privacy review |
-| F-05 Activity and People | P1 | 6 | Implemented and tested | #67 | Cross-trip activity; per currency, never netted; matched by account only; agrees with `settlements()` | Archived trips not included; review |
-| F-06 row menus, swipe, deletion | P1 | 5 | Implemented and tested | [#66](https://github.com/Dessimat0r/triptab/pull/66) `281d4e0` | Keyboard ⋯ menu, touch swipe, delete without a prompt when there is no financial effect, bill delete without typing the name | Menus on payment and drawer rows; WebKit and iPhone swipe; review |
+| F-04 bills reach connected accounts | P1 | 6 | Implemented and tested | [#67](https://github.com/Dessimat0r/triptab/pull/67) `f15eaaf`; [#72](https://github.com/Dessimat0r/triptab/pull/72) `d6f2353` | Two accounts plus an outsider on SQLite: connections, direct add, refusals leave every table unchanged, no access to other bills, leave. #72: add from People after the bill is created; a same-name person is linked only after confirmation | Privacy review |
+| F-05 Activity and People | P1 | 6 | Implemented and tested | #67; #72 | Cross-trip activity; per currency, never netted; matched by account only; agrees with `settlements()`. #72: archived trips included read-only (own archive only, no emails) | Review |
+| F-06 row menus, swipe, deletion | P1 | 5 | Implemented and tested | [#66](https://github.com/Dessimat0r/triptab/pull/66) `5e226ee`; [#71](https://github.com/Dessimat0r/triptab/pull/71) `1d0c4ed` | Keyboard ⋯ menu, touch swipe, delete without a prompt when there is no financial effect, bill delete without typing the name (server refusal fixed in `5e226ee`). #71: ⋯ menus and swipe on payment and draft rows; drawer ⋯ menus for holidays and bills | WebKit and iPhone swipe; review |
 | F-07 scan flow | P1 | 4 | Implemented and tested | [#65](https://github.com/Dessimat0r/triptab/pull/65) `0585199` | Name typed before or during reading is kept; no review tap; no keyboard after the photo; bill name carries over | Device check; review |
 | F-08 concurrent-edit merge | P0 (owner) | 2 | Implemented and tested | [#63](https://github.com/Dessimat0r/triptab/pull/63) `118d6b0` | Field-level three-way merge, 500-run property test, production handlers, two-account store test, browser clash choice | Two-browser test against a local Worker; review |
 | F-09 duplicate warnings | P1 | 7 | Implemented and tested | [#68](https://github.com/Dessimat0r/triptab/pull/68) `6a969e3` | Exact, near and false-positive cases; browser Save anyway / Open existing | Review |
 | F-10 promotion extraction and evaluation | P0/P1 | 3 | In progress | #64 | Prompt, schema and mapping; corpus contradiction resolved; BOGOF, multibuy, percentage and loyalty receipts added; prompt and corpus kept consistent | **Blocked:** live model evaluation needs credentials and paid calls |
-| F-11 durable reading | P1 | 4 | Implemented and tested | #65 | A disconnected request still stores the proposal once, kept alive by `waitUntil`; a retry is idempotent | iPhone Safari and PWA lock test; reading status per draft |
+| F-11 durable reading | P1 | 4 | Implemented and tested | #65; [#74](https://github.com/Dessimat0r/triptab/pull/74) `0d3bcd4` | A disconnected request still stores the proposal once, kept alive by `waitUntil`; a retry is idempotent. #74: draft rows show Reading receipt… after a reload, then fill in; Reading didn't finish after the limit | iPhone Safari and PWA lock test |
 | F-12 several payers | Deferred | — | Explicitly deferred | — | D08 | Future programme |
 | F-13 settled-expense warnings | P1 (owner) | 5 | Implemented and tested | #66 | Audit numbers: delete means "Gary pays Sam £10.00", change to £30 means "Sam pays Gary £5.00"; payments unchanged | Review |
-| F-14 Undo | P1/P2 | 5 | Implemented and tested | #66 | 30 seconds, visible over forms, restores the same entry | Restoring drafts from History; server soft-delete for bills |
+| F-14 Undo | P1/P2 | 5 | Implemented and tested | #66; [#73](https://github.com/Dessimat0r/triptab/pull/73) `db384ff` | 30 seconds, visible over forms, restores the same entry. #73: Restore receipt draft from History | **Owner decision:** soft delete for bills (`docs/remediation/bill-soft-delete.md` on #73) |
 | F-15 wording | P2 | 5 | Implemented and tested | #66 | "Delete payment", "Invite someone", bill lifecycle errors with translations | Review |
 | F-16 global revision | P2, high risk | 7 | Blocked | — | Investigated (`docs/remediation/phase-7-notes.md`) | Needs a migration and every writer changed; owner approval required |
 | F-17 limits | P2 | 7 | Implemented and tested | #68 | 50 holidays and 100 bills counted separately; friendly messages; restore per kind | Review |
@@ -60,16 +60,21 @@ Statuses: Unresolved, Already fixed and verified, In progress, Implemented and t
 | 4 | #64 F-02/F-10 discounts | `ed984f6` | #61 | Green | #61; retarget to main after #61 merges |
 | 5 | #63 F-08 merge | `118d6b0` | main | Green | — |
 | 6 | #65 F-07/F-11 scan | `0585199` | main | Green | — |
-| 7 | #66 F-06/F-13/F-14/F-15 actions | `281d4e0` | main | Green | — |
+| 7 | #66 F-06/F-13/F-14/F-15 actions | `5e226ee` | main | Running | — |
 | 8 | #67 F-04/F-05 bills | `f15eaaf` | main | Green | — |
 | 9 | #68 F-09/F-17/F-18/F-20 resilience | `6a969e3` | main | Green | — |
-| — | #69 integration check (do not merge) | `c5266a3` | main | Green | All of the above |
+| — | #69 integration check (do not merge) | `9dcc95d` | main | Running | #59 to #68 (#71 to #74 not yet included) |
+| 10 | #71 F-06 row and drawer menus | `1d0c4ed` | #66 | Running | #66 |
+| 11 | #72 F-04/F-05 add people later; archived Activity | `d6f2353` | #67 | Running | #67 |
+| 12 | #73 F-14 restore drafts from History | `db384ff` | #66 | Running | #66 |
+| 13 | #74 F-11 reading status per draft | `0d3bcd4` | #65 | Running | #65 |
 
 - **Conflicts:** each later PR conflicts textually with earlier ones in `components/trip-app.tsx` and the editor test harness. #69 merges all of them in this order. Its merge commits hold the resolutions (unions of both sides), and it passes:
   - unit tests: 1,376/1,381 under Node 22 (the other 5 are the Node 22-only failures)
   - Chromium browser suite: 206/206
   - build and types
 - **When merging one by one:** after each merge, merge `main` into the next PR and reuse #69's resolution.
+- **Follow-ups #71 to #74** are stacked on their parent PRs. Retarget each to `main` after its parent merges. #71 and #73 both build on #66 and touch `components/trip-app.tsx`, so expect a small conflict between them.
 
 ## Release plan
 
@@ -105,6 +110,7 @@ Owner approval is needed for every merge, deployment and migration. **No migrati
    - **F-16 contention remains.** Saves are lossless after #63 but may need a second press under load.
    - **Device checks not done:** iPhone, PWA and swipe on a real phone.
    - **No independent review** has been completed for any PR.
+   - **Bill deletion has no Undo.** Soft delete needs an owner decision on the two designs in `docs/remediation/bill-soft-delete.md`.
 
 ## Release gates
 
@@ -122,6 +128,16 @@ Owner approval is needed for every merge, deployment and migration. **No migrati
 An authoritative gate on mismatched totals requires a reason (1 to 500 characters) bound to a fingerprint of the receipt evidence. Ordinary review never creates an exception, MCP cannot create one, and scan evidence must survive editing. The read-only historical audit is paged and permission-checked, and covers archived trips.
 
 This session moved the difference block into Check & save, so the editor no longer opens scrolled, and updated three tests to the new gate. CI is green.
+
+### Follow-ups (#71 to #74)
+
+These cover the "Remaining" items above that needed no owner decision:
+- #71: menus on payment, draft and drawer rows
+- #72: adding people after a bill is created, and archived trips in Activity
+- #73: restoring drafts from History
+- #74: reading status per draft
+
+While building #71, a bug in #66 surfaced: deleting a bill with entries was refused by the server, because the typed-name check stayed after the UI stopped asking for the name. The fix is `5e226ee` on #66, with a regression test that fails without it, and it is merged into #71 and #69.
 
 ### Phases 2 to 7
 
