@@ -1034,7 +1034,8 @@ for (const migration of ['0016_receipt_operations.sql', '0017_receipt_operation_
 // R07: the execution-grant tables the operation fence reads, with the owner's live session.
 budgetDatabase.exec(`CREATE TABLE profiles(id TEXT PRIMARY KEY, deleted_at TEXT NOT NULL DEFAULT '');
   CREATE TABLE auth_sessions(token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL, expires_at TEXT NOT NULL, session_id TEXT NOT NULL DEFAULT '');
-  CREATE TABLE auth_links(oai_user_id TEXT PRIMARY KEY, user_id TEXT NOT NULL);`);
+  CREATE TABLE auth_links(oai_user_id TEXT PRIMARY KEY, user_id TEXT NOT NULL);
+  CREATE TABLE auth_credentials(user_id TEXT PRIMARY KEY);`);
 budgetDatabase.prepare('INSERT INTO profiles(id) VALUES (?)').run(owner);
 budgetDatabase.prepare("INSERT INTO auth_sessions(token_hash,user_id,expires_at,session_id) VALUES ('hash',?,'9999-12-31T00:00:00.000Z','route-session')").run(owner);
 class BoundaryRequestError extends Error { constructor(message: string, readonly status = 400) { super(message); } }
@@ -1505,7 +1506,12 @@ async function heldRequest() {
   const response = route.POST(declaredRequest('https://triptab.test/api/receipt/process', { method: 'POST',
     headers: { origin: 'https://triptab.test', 'content-type': 'application/json' }, body: JSON.stringify(body) }));
   globalThis.fetch = held as typeof fetch;
-  while (!state.providerCalls) await new Promise(resolve => setTimeout(resolve, 1));
+  const started = Date.now();
+  while (!state.providerCalls) {
+    // Fail fast with the route's answer instead of waiting forever if the request never reaches the provider.
+    if (Date.now() - started > 10_000) { globalThis.fetch = originalFetch; throw new Error(`The held request never reached the provider: ${(await Promise.race([response.then(value => value.text()), Promise.resolve('still pending')]))}`); }
+    await new Promise(resolve => setTimeout(resolve, 1));
+  }
   globalThis.fetch = originalFetch;
   return { response, release, body };
 }

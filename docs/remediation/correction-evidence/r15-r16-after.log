@@ -1,0 +1,15 @@
+# R15/R16 after: the same file on the corrected tree
+✔ R15: unlinking ChatGPT on a legacy account (profile ID = provider ID, password, self-link) revokes its background grant before any spend (1794.913691ms)
+✔ R15: unlinking while the browser's own reading is still at the provider means its result is not saved (1224.64044ms)
+✔ R15 control: separate profile and provider IDs, unlinked: refused the same way (1347.573537ms)
+✔ R15 positive controls: a legitimate unlinked legacy account and a self-linked legacy account still finish in the background (1413.753565ms)
+✔ R15: a live TripTab session takes precedence over provider headers when the grant is made (1300.179325ms)
+✔ R15: remapping the provider identity to another account, or deleting the account, revokes the grant (2622.987443ms)
+✔ R15: the grant rule agrees with normal authentication for every provider link, password and deletion state (405.816239ms)
+✔ R16: a session that expires while the commit is pending is expired at the commit: 409 and nothing written (4397.396438ms)
+✔ R16: a grant that expires after inference, while the commit is pending, is expired at the commit: 409 and nothing written (4596.196294ms)
+✔ R16 controls at the same pause: an unexpired owner commits; a removed grant does not (2293.697905ms)
+ℹ tests 10
+ℹ pass 10
+ℹ fail 0
+# Final tree: units 1,491/1,491; types pass; lint 0 errors / 4 pre-existing warnings; build passes; Chromium 241 passed / 3 skipped (previous-bundle cases, no preview in this run)

@@ -128,19 +128,48 @@ export function operationFence(claim: Extract<Claim, { owned: true }>): Operatio
 }
 
 /**
+ * R16: the database's own current time, evaluated inside the statement that
+ * uses it. Deadlines are never compared with a time the Worker captured
+ * earlier, so a session or grant that expires while a save is being prepared
+ * is expired when the commit runs. SQLite keeps 'now' fixed within one step.
+ */
+export const DB_NOW_MS = "CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)";
+export const DB_NOW_ISO = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
+
+/**
+ * R15: whether a trusted ChatGPT identity still authenticates as an account,
+ * using exactly the rules of lib/auth.ts authSnapshot/providerIdentity for a
+ * request without a live TripTab session:
+ * - a link from the provider identity to the account; or
+ * - the legacy fallback, where the account ID is the provider ID, no link for
+ *   that provider exists (so it was not remapped), and the account has no
+ *   password (a legacy account with a password and no link was disconnected).
+ * The account must exist and not be deleted. `provider` and `account` are SQL
+ * expressions (columns), so this can sit inside a guarded commit statement.
+ */
+export function providerAuthenticatesAsSql(provider: string, account: string) {
+  return `(EXISTS (SELECT 1 FROM profiles grant_profile WHERE grant_profile.id = ${account} AND grant_profile.deleted_at = '')
+    AND (EXISTS (SELECT 1 FROM auth_links grant_link WHERE grant_link.oai_user_id = ${provider} AND grant_link.user_id = ${account})
+      OR (${provider} = ${account}
+        AND NOT EXISTS (SELECT 1 FROM auth_links any_link WHERE any_link.oai_user_id = ${provider})
+        AND NOT EXISTS (SELECT 1 FROM auth_credentials grant_password WHERE grant_password.user_id = ${account}))))`;
+}
+
+/**
  * The condition under which an attempt may act for its operation: it holds
  * the claim, the writer is the person whose grant it carries, the grant has
- * not expired, the account exists, and the grant's server-side session (or
- * trusted ChatGPT link) is still live. Sign-out, session expiry, revocation,
- * account deletion and a takeover all make it false.
+ * not expired, the account exists, and the grant's server-side session is
+ * still live (or its ChatGPT identity still authenticates as the account, R15).
+ * Sign-out, session expiry or revocation, unlinking ChatGPT, remapping the
+ * provider identity, account deletion and a takeover all make it false. Every
+ * deadline is compared with the database's time inside the statement (R16).
  */
 const OWNER_CONDITION = `EXISTS (SELECT 1 FROM receipt_operations o JOIN profiles p ON p.id = o.user_id AND p.deleted_at = ''
-  WHERE o.operation_key = ? AND o.attempt_id = ? AND o.status = 'running' AND o.user_id = ? AND o.grant_expires_at > ?
+  WHERE o.operation_key = ? AND o.attempt_id = ? AND o.status = 'running' AND o.user_id = ? AND o.grant_expires_at > ${DB_NOW_MS}
     AND ((o.grant_kind = 'session' AND EXISTS (SELECT 1 FROM auth_sessions s WHERE s.session_id = o.grant_ref AND s.session_id <> ''
-          AND s.user_id = o.user_id AND s.expires_at > ?))
-      OR (o.grant_kind = 'chatgpt' AND (o.grant_ref = o.user_id
-          OR EXISTS (SELECT 1 FROM auth_links l WHERE l.oai_user_id = o.grant_ref AND l.user_id = o.user_id)))))`;
-const ownerBindings = (fence: OperationFence, userId: string, now: number) => [fence.key, fence.attemptId, userId, now, new Date(now).toISOString()];
+          AND s.user_id = o.user_id AND s.expires_at > ${DB_NOW_ISO}))
+      OR (o.grant_kind = 'chatgpt' AND ${providerAuthenticatesAsSql('o.grant_ref', 'o.user_id')})))`;
+const ownerBindings = (fence: OperationFence, userId: string) => [fence.key, fence.attemptId, userId];
 
 /**
  * R12: SQL for writeLedger's commit transaction. `gate` is a condition the
@@ -155,7 +184,7 @@ export function operationCommitSql(fence: OperationFence, userId: string, now = 
   if (!isOperationFence(fence)) throw new Error('Untrusted receipt operation');
   return {
     gate: OWNER_CONDITION,
-    gateBindings: ownerBindings(fence, userId, now) as (string | number)[],
+    gateBindings: ownerBindings(fence, userId) as (string | number)[],
     complete: `UPDATE receipt_operations SET status = 'stored', error_code = NULL, updated_at = ?
       WHERE operation_key = ? AND attempt_id = ? AND status = 'running' AND EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND last_write = ?)`,
     completeBindings: (marker: string) => [now, fence.key, fence.attemptId, marker] as (string | number)[],
@@ -163,8 +192,8 @@ export function operationCommitSql(fence: OperationFence, userId: string, now = 
 }
 
 /** Whether the attempt may still act (advisory: the commit decides again inside its transaction). */
-export async function operationAuthorized(database: Database, fence: OperationFence, userId: string, now = Date.now()) {
-  return !!await database.prepare(`SELECT ${OWNER_CONDITION} AS ok`).bind(...ownerBindings(fence, userId, now)).first<{ ok: number }>()
+export async function operationAuthorized(database: Database, fence: OperationFence, userId: string) {
+  return !!await database.prepare(`SELECT ${OWNER_CONDITION} AS ok`).bind(...ownerBindings(fence, userId)).first<{ ok: number }>()
     .then(row => row?.ok);
 }
 
@@ -177,7 +206,7 @@ export async function operationAuthorized(database: Database, fence: OperationFe
 export async function startProviderCall(database: Database, fence: OperationFence, userId: string, provider: OperationProvider, now = Date.now()) {
   const row = await database.prepare(`UPDATE receipt_operations SET provider = ?, provider_started_at = ?, updated_at = ?
     WHERE operation_key = ? AND attempt_id = ? AND (provider IS NULL OR provider = ?) AND ${OWNER_CONDITION} RETURNING attempt_id`)
-    .bind(provider, now, now, fence.key, fence.attemptId, provider, ...ownerBindings(fence, userId, now)).first<{ attempt_id: string }>();
+    .bind(provider, now, now, fence.key, fence.attemptId, provider, ...ownerBindings(fence, userId)).first<{ attempt_id: string }>();
   return !!row;
 }
 
