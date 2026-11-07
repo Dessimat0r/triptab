@@ -170,6 +170,7 @@ export async function GET(request: Request) {
         WHERE r.trip_id = ? AND r.state = 'active' AND ${ACCESS} AND r.id IN (
           SELECT json_extract(j.value, '$.receiptId') FROM json_each(t.data, '$.expenses') j
           UNION SELECT json_extract(j.value, '$.receiptId') FROM json_each(t.data, '$.drafts') j
+          UNION SELECT json_extract(t.data, '$.billPhotoId')
         ) ORDER BY r.id LIMIT 1100
       `).bind(tripId!, actor, actor).all<{ id: string; trip_id: string }>()).results.map(row => ({ id: row.id, tripId: row.trip_id })) : undefined;
       let languagePreferences: {tripId:string;preferences:ReturnType<typeof tripLanguagePreferencesSchema.parse>}[]|undefined;
