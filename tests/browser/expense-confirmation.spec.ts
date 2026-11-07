@@ -13,8 +13,8 @@ const proposal = (overrides: Partial<Draft> = {}): Draft => ({ id: 'confirm-draf
   receiptScan: { version: 1, printedCurrency: 'EUR', printedTotal: 4210, status: 'matched', warnings: [] }, ...overrides });
 function deferred() { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done; }); return { promise, resolve }; }
 
-async function fixtures(page: Page, options: { draft?: Draft; scan?: Partial<Draft>; holdScan?: Promise<void>; holdUpload?: (index: number) => Promise<void>; holdSave?: Promise<void>; rejectSave?: boolean; holdDraftSave?: Promise<void>; rejectDraftSave?: boolean } = {}) {
-  let current = structuredClone(base), revision = 1, uploads = 0, scans = 0, posts = 0, draftPosts = 0;
+async function fixtures(page: Page, options: { trip?: Trip; draft?: Draft; scan?: Partial<Draft>; holdScan?: Promise<void>; holdUpload?: (index: number) => Promise<void>; holdSave?: Promise<void>; rejectSave?: boolean; holdDraftSave?: Promise<void>; rejectDraftSave?: boolean } = {}) {
+  let current = structuredClone(options.trip ?? base), revision = 1, uploads = 0, scans = 0, posts = 0, draftPosts = 0;
   let rejectDraftSave = !!options.rejectDraftSave;
   if (options.draft) current.drafts.push(options.draft);
   await page.addInitScript(() => {
@@ -48,7 +48,9 @@ async function fixtures(page: Page, options: { draft?: Draft; scan?: Partial<Dra
     if (pathname === '/api/receipt/process') {
       scans++; await options.holdScan;
       const args = request.postDataJSON(), draft = current.drafts.find(value => value.id === args.draftId)!;
-      Object.assign(draft, proposal(options.scan), { id: draft.id, receiptId: draft.receiptId });
+      // As the server does (receipt-ai.test.ts): a name the person typed is kept over the merchant's.
+      const typed = draft.fieldSources?.title === 'user' ? { title: draft.title, fieldSources: { ...proposal(options.scan).fieldSources, title: 'user' as const } } : {};
+      Object.assign(draft, proposal(options.scan), { id: draft.id, receiptId: draft.receiptId }, typed);
       // The page may have reloaded meanwhile (F-11): the proposal is stored either way.
       return route.fulfill({ json: { data: { trips: [current] }, revision: ++revision } }).catch(() => {});
     }
@@ -378,3 +380,51 @@ test('F-11: a reading that never stored a proposal says so after the time limit'
   await page.goto('/receipts');
   await expect(page.locator('.draft').first()).toContainText('Reading didn’t finish · open it to read again');
 });
+
+// F-07 (audit reconciliation): all four ways to start a scan begin with an
+// optional name, and a typed name survives reading.
+test('F-07: in a bill, Scan receipt also starts with an optional name, which survives reading', async ({ page }) => {
+  const state = await fixtures(page, { trip: { ...structuredClone(base), kind: 'bill', name: 'Dinner' } as Trip });
+  await page.goto('/expenses');
+  await page.getByRole('button', { name: 'Scan receipt', exact: true }).click();
+  const name = page.getByRole('textbox', { name: 'Expense name', exact: true });
+  await expect(name).toHaveAttribute('placeholder', 'Name (optional)');
+  await expect(name).not.toBeFocused();
+  await name.fill('Team lunch');
+  const chooser = page.waitForEvent('filechooser');
+  await page.locator('.editor .receipt-capture-action').filter({ hasText: 'Scan receipt' }).click();
+  await (await chooser).setFiles(photo);
+  await expect.poll(() => state.scans).toBe(1);
+  await expect(page.locator('.receipt-scan-totals')).toContainText('€42.10');
+  await expect(name).toHaveValue('Team lunch');
+  await expect(page.getByRole('button', { name: 'Review processed receipt', exact: true })).toHaveCount(0);
+});
+
+test('F-07: the receipt inbox asks for an optional name before the photo; a typed name is saved as the person\'s and survives reading', async ({ page }) => {
+  const state = await fixtures(page);
+  await page.goto('/receipts');
+  await page.getByRole('button', { name: 'Add receipt', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Add a receipt', exact: true });
+  const name = dialog.getByRole('textbox', { name: /Expense name/ });
+  await expect(name).toHaveAttribute('placeholder', 'Name (optional)');
+  await name.fill('Team lunch');
+  await dialog.getByLabel('Choose image').setInputFiles(photo);
+  await expect.poll(() => state.trip.drafts.length).toBe(1);
+  expect([state.trip.drafts[0].title, state.trip.drafts[0].fieldSources?.title]).toEqual(['Team lunch', 'user']);
+  await expect.poll(() => state.scans).toBe(1);
+  await expect(page.getByRole('textbox', { name: 'Expense name', exact: true })).toHaveValue('Team lunch');
+  expect(state.trip.drafts[0].title).toBe('Team lunch');
+});
+
+test('F-07: the receipt inbox without a typed name lets the merchant name it', async ({ page }) => {
+  const state = await fixtures(page);
+  await page.goto('/receipts');
+  await page.getByRole('button', { name: 'Add receipt', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Add a receipt', exact: true }).getByLabel('Choose image').setInputFiles(photo);
+  await expect.poll(() => state.scans).toBe(1);
+  await expect(page.getByRole('textbox', { name: 'Expense name', exact: true })).toHaveValue('Coffee and cake');
+});
+
+// The fourth entry point, Split a bill → (More options) Name → Scan receipt, is
+// covered in bill.spec.ts "[P4] explicit name and settlement currency survive the
+// first foreign-currency scan" (typed name kept, stored as the person's).

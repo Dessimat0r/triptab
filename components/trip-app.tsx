@@ -1525,11 +1525,12 @@ export default function Home({ children }: { children: ReactNode }) {
       const body = await response.json() as { error?: string; receiptId: string };
       if (signal?.aborted || !isReceiptSessionCurrent(session, tripId, accountId, false)) return false;
       if (!response.ok) throw Error(body.error || "Unable to upload this receipt.");
-      const draft: Draft = { id: uid(), currency: trip.currency, title: file.name, source: "manual", receiptId: body.receiptId,
+      const typedName = context.name?.trim().slice(0, 200);
+      const draft: Draft = { id: uid(), currency: trip.currency, title: typedName || file.name, source: "manual", receiptId: body.receiptId,
         items: [], tax: 0, tip: 0, discount: 0,
         location: context.location, locationHint: context.locationHint,
         ...(context.notes?.trim() ? { conversation: [{ id: uid(), role: "user" as const, text: context.notes.trim(), createdAt: new Date().toISOString() }] } : {}),
-        fieldSources: { title: "default", currency: "default", date: "default", time: "default", timezone: "default", payer: "default", tax: "default", tip: "default", discount: "default", ...(context.location ? { location: "user" as const } : {}) },
+        fieldSources: { title: typedName ? "user" : "default", currency: "default", date: "default", time: "default", timezone: "default", payer: "default", tax: "default", tip: "default", discount: "default", ...(context.location ? { location: "user" as const } : {}) },
         payer: trip.members.find(member => member.userId === accountId)?.id || trip.members[0].id, status: "waiting" };
       if (signal?.aborted || (onSaving && !onSaving())) return false;
       if (!await updateTrip({ ...trip, drafts: [...trip.drafts, draft] })) return false;
