@@ -119,7 +119,26 @@ the starter exactly once across duplicate ticks, a retry and a late original; an
 during processing gets nothing and nothing is stored. The existing F-11 tests cover preference-off and the connected-page case.
 
 ## Test evidence
-(final counts below)
+
+Run locally on Linux, Node 24.22.2, on this branch's committed tree (stacked on #79 `ef3acf9`):
+
+| Check | Result |
+| --- | --- |
+| Unit suite (`tsx --test tests/*.test.ts`) | **1,605 passed, 0 failed, 0 skipped** (#79 reported 1,558; +47 new tests across six files) |
+| `tsc --noEmit` | passes |
+| Lint | 0 errors, 4 existing warnings |
+| Production build (`RECEIPT_AI_OWNER_EMAIL` set to a placeholder; nothing deployed) | passes; `dist/server/wrangler.json` contains `"compatibility_flags":["nodejs_compat","enable_request_signal"]`. Whether the hosting platform retains the flag is not verified |
+
+An earlier full run of this branch had 1,601 of 1,602 passing: the one failure was the existing settlement-reminder route test, whose module
+stubs did not provide the request fence my `/api/remind` fix needs. The stubs were extended (assertions untouched) and the clean run above followed.
+
+GitHub CI on #79's exact head `ef3acf9` (run 42406542154, Linux ubuntu-24.04): `quality` (types, lint), `regression`,
+`browser (chromium)`, `browser (webkit)` and `verify` all succeeded. CI for this branch's head is separate and not yet seen.
+
+Not run in this pass: Chromium and WebKit locally, the financial property suites as a separate step, migration 0014–0017 rehearsal.
+The browser suites were not re-run here; this branch changes only tests, one API route and docs. The brief's Phase 7 items
+(History loading stall, Windows WebKit failures, FX layout shift) were **not investigated** in this pass; #79 reports fixes and its Linux CI
+passes both engines, which is evidence but not my own reproduction. No physical iPhone/PWA claim is made.
 
 ## Remaining release gates
 Independent re-review of this pass and of #79; hosted disconnect-signal verification (N05) and the product decision above;
