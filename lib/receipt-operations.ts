@@ -201,6 +201,20 @@ export async function finishOperation(database: Database, key: string, attemptId
   return !!row;
 }
 
+/**
+ * Owner kill switch. Background resumes run only when RECEIPT_BACKGROUND_RESUME
+ * is unset, empty or "on". Any other value ("off", "false", "0", a typo) stops
+ * them: this check fails safe. While it is off, the runner reads and writes
+ * nothing and spends nothing. Interrupted readings behave as before R07: they
+ * stay as they are until the person reads the receipt again, which takes the
+ * operation over as one new attempt. Turning it back on resumes operations
+ * whose grant has not expired.
+ */
+export function backgroundResumeEnabled(environment: { RECEIPT_BACKGROUND_RESUME?: string }) {
+  const value = environment.RECEIPT_BACKGROUND_RESUME?.trim().toLowerCase();
+  return !value || value === 'on';
+}
+
 export type ResumableOperation = { key: string; userId: string; request: OperationSource; provider: OperationProvider | null };
 
 /**

@@ -22,9 +22,14 @@ if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(receiptAIOwnerEmail) || receiptAIOwnerEma
   throw new Error("Set RECEIPT_AI_OWNER_EMAIL to the verified owner's email before building TripTab.");
 }
 
+// R07 owner kill switch for background receipt resumes (lib/receipt-operations.ts
+// backgroundResumeEnabled). Unset keeps them on. It can also be set in the
+// Site's runtime environment; a build-time value is passed through here.
+const receiptBackgroundResume = process.env.RECEIPT_BACKGROUND_RESUME?.trim();
+
 const localBindingConfig = {
   main: backupOnly ? "./build/backup-worker.ts" : "./build/sites-worker.ts",
-  vars: { RECEIPT_AI_OWNER_EMAIL: receiptAIOwnerEmail },
+  vars: { RECEIPT_AI_OWNER_EMAIL: receiptAIOwnerEmail, ...(receiptBackgroundResume ? { RECEIPT_BACKGROUND_RESUME: receiptBackgroundResume } : {}) },
   compatibility_flags: ["nodejs_compat"],
   // Cloudflare-compatible output declares UTC maintenance every 15 minutes and
   // (R07) a per-minute resume of interrupted receipt readings, matched by
