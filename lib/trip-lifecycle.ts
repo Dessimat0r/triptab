@@ -250,7 +250,7 @@ async function deleteTripRecord(database: D1Database, actor: Actor, rawTripId: u
   const discardError = 'This bill has entries. Delete it from its settings instead.';
   if (!row || row.owner !== actor.id) throw new TripLifecycleError(discard ? 'Only the bill owner can discard it.' : tripMessage(row ? JSON.parse(row.data) : undefined, 'Only the holiday owner can delete it.'), 403);
   const trip = JSON.parse(row.data) as Trip;
-  if (discard && (!isBill(trip) || trip.expenses.length || trip.payments.length || trip.drafts.length)) throw new TripLifecycleError(discardError, 409);
+  if (discard && (!isBill(trip) || trip.expenses.length || trip.payments.length || trip.drafts.length || trip.billPhotoId)) throw new TripLifecycleError(discardError, 409);
   if (!discard && (typeof confirmName !== 'string' || confirmName.trim() !== trip.name.trim())) throw new TripLifecycleError(tripMessage(trip, 'Type the holiday name exactly to confirm deleting it.'));
   if (await database.prepare('SELECT 1 FROM memberships WHERE trip_id = ? AND user_id <> ? LIMIT 1').bind(id, actor.id).first()) {
     if (discard) throw new TripLifecycleError(discardError, 409);

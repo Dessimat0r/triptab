@@ -686,6 +686,10 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
         for(const other of trip.members)if(other.id!==firstMember.id&&other.name.trim().toLowerCase()===firstMember.name.trim().toLowerCase())other.name=`${other.name.slice(0,44)} (${trip.members.indexOf(other)+1})`;
       }
     }
+    // Bill photos use the existing authenticated image store, but never become receipt drafts.
+    if (trip.billPhotoId && !receiptRows.results.some(receipt => receipt.id === trip.billPhotoId && receipt.trip_id === trip.id)) {
+      throw new RequestError('This bill photo is unavailable or belongs to another bill. Upload it again before saving.');
+    }
     for (const entry of [...trip.expenses, ...trip.drafts]) {
       if (entry.receiptId && !receiptRows.results.some(receipt => receipt.id === entry.receiptId && receipt.trip_id === trip.id)) {
         throw new RequestError('This receipt was removed or does not belong to the trip. Upload it again before saving.');
@@ -741,9 +745,17 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
     if (!previous) newTrips.push(trip);
     else if (changes.some(change => change.tripId === trip.id)) changedTrips.push(trip);
   }
-  const receiptReferences = ledger.trips.flatMap(trip => [...trip.expenses, ...trip.drafts].flatMap(entry => entry.receiptId ? [{ id: entry.receiptId, tripId: trip.id }] : []));
+  // Both financial receipt evidence and independent bill photos must be pinned
+  // to their own trip before the CAS; detaching either retains the normal undo hold.
+  const receiptReferences = ledger.trips.flatMap(trip => [
+    ...(trip.billPhotoId ? [{ id: trip.billPhotoId, tripId: trip.id }] : []),
+    ...[...trip.expenses, ...trip.drafts].flatMap(entry => entry.receiptId ? [{ id: entry.receiptId, tripId: trip.id }] : []),
+  ]);
   const retainedReceiptIds = new Set(receiptReferences.map(reference => reference.id));
-  const removedReceiptIds = [...new Set([...previousTrips.values()].flatMap(trip => [...trip.expenses, ...trip.drafts].flatMap(entry => entry.receiptId && !retainedReceiptIds.has(entry.receiptId) ? [entry.receiptId] : [])))];
+  const removedReceiptIds = [...new Set([...previousTrips.values()].flatMap(trip => [
+    ...(trip.billPhotoId && !retainedReceiptIds.has(trip.billPhotoId) ? [trip.billPhotoId] : []),
+    ...[...trip.expenses, ...trip.drafts].flatMap(entry => entry.receiptId && !retainedReceiptIds.has(entry.receiptId) ? [entry.receiptId] : []),
+  ]))];
   const preimages = tripIds.map(tripId => ({ id: tripId, owner: existing.get(tripId)?.owner ?? null }));
   // Every production trip writer (ledger save and invitation acceptance) advances
   // the same transactional revision. CAS pins their data without rebinding JSON;

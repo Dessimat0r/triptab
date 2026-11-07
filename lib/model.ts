@@ -395,6 +395,8 @@ export const tripSchema = z.object({
   kind: z.enum(['holiday', 'bill']).optional(),
   id, ownerId: accountId.optional(), name: z.string().min(1).max(100), currency: currencySchema,
   receiptLanguage:receiptLanguageSchema.optional(),
+  // A bill-only photo is independent of receipt drafts, scans and money.
+  billPhotoId: id.optional(),
   startDate: dateSchema.optional(), endDate: dateSchema.optional(),
   // Optional group budget in settlement-currency hundredths.
   budget: cents.positive().optional(),
@@ -519,6 +521,7 @@ export function validateLedger(data: unknown, options: { previous?: Ledger; sour
   if (openHolidays > MAX_OPEN_HOLIDAYS) throw new LedgerValidationError(`You have ${MAX_OPEN_HOLIDAYS} open holidays, the most TripTab keeps in your list. Archive one you have finished before adding another.`);
   for (const trip of ledger.trips) {
     const prior = previous?.trips.find(value => value.id === trip.id);
+    if (!isBill(trip) && trip.billPhotoId) throw new LedgerValidationError('Only bills can have a bill photo.');
     if (isBill(trip) && (!prior || !sameStoredValue(trip, prior))) {
       if (trip.startDate !== undefined || trip.endDate !== undefined || trip.budget !== undefined) throw new LedgerValidationError('Bills don’t have dates or a budget.');
       if (trip.members.some(member => member.joinedOn !== undefined || member.leftOn !== undefined || member.weight !== undefined)) throw new LedgerValidationError('Bills don’t track traveller dates or family weights.');

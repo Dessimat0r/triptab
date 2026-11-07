@@ -32,7 +32,8 @@ const key = (owner: string, id: string) => `${encodeURIComponent(owner)}/${id}`;
 const access = `(r.owner = ? OR t.owner = ? OR EXISTS (SELECT 1 FROM memberships m WHERE m.trip_id = t.id AND m.user_id = ?))`;
 const identity = `NOT EXISTS (SELECT 1 FROM auth_links WHERE oai_user_id = ? AND user_id <> ?)`;
 const unreferenced = `NOT EXISTS (SELECT 1 FROM json_each(t.data, '$.expenses') e WHERE json_extract(e.value, '$.receiptId') = r.id)
-  AND NOT EXISTS (SELECT 1 FROM json_each(t.data, '$.drafts') d WHERE json_extract(d.value, '$.receiptId') = r.id)`;
+  AND NOT EXISTS (SELECT 1 FROM json_each(t.data, '$.drafts') d WHERE json_extract(d.value, '$.receiptId') = r.id)
+  AND json_extract(t.data, '$.billPhotoId') IS NOT r.id`;
 const expired = `((r.created_at <> '' AND r.created_at <= ?) OR
   (r.created_at = '' AND r.legacy_cleanup_after <> '' AND r.legacy_cleanup_after <= ?))`;
 // Exact metadata guards keep the before snapshot truthful across competing calls.
