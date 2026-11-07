@@ -22,7 +22,11 @@ export function RowActionsMenu({ label, actions, disabled }: { label: string; ac
     if (!open || !trigger.current || !menu.current) return;
     const place = () => {
       const button = trigger.current!.getBoundingClientRect(), height = menu.current!.offsetHeight;
-      const below = window.innerHeight - button.bottom - 8;
+      // A fixed bottom bar (the phone's section tabs) is drawn above list rows,
+      // so its top edge is the floor: a menu that would reach under it opens upwards.
+      const floor = [...document.querySelectorAll<HTMLElement>(".tabs")].reduce((lowest, bar) =>
+        getComputedStyle(bar).position === "fixed" ? Math.min(lowest, bar.getBoundingClientRect().top) : lowest, window.innerHeight);
+      const below = floor - button.bottom - 8;
       setPosition({ position: "fixed", right: Math.max(8, window.innerWidth - button.right),
         top: below >= height ? button.bottom + 4 : Math.max(8, button.top - height - 4) });
     };
