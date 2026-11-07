@@ -17,6 +17,7 @@ type Hooks = {
   /** Make the next ledger commit batch fail before it runs, or after it committed. */
   failNextCommit?: 'before' | 'after';
   commitBatches: number;
+  pauseBeforeSpend?: boolean; atSpend?: boolean; releaseSpend?: boolean;
   provider: { calls: number; holdNext: number; held: number; release: boolean; output: unknown; fail?: number };
   detached: number;
 };
@@ -34,7 +35,27 @@ function wrapDatabase(database: D1Database): D1Database {
   return new Proxy(database, { get(target, property) {
     if (property === 'prepare') return (sql: string) => {
       if (sql.startsWith('INSERT OR IGNORE INTO sync_state')) commitPrepared = true;
-      return target.prepare(sql);
+      const statement = target.prepare(sql);
+      if (sql.startsWith('INSERT INTO auth_rate_limits')) return new Proxy(statement, { get(target, property) {
+        if (property === 'bind') return (...values: unknown[]) => {
+          const bound = target.bind(...values);
+          return new Proxy(bound, { get(target, property) {
+            if (property === 'first') return async () => {
+              if (hooks.pauseBeforeSpend) {
+                hooks.pauseBeforeSpend = false; hooks.atSpend = true;
+                while (!hooks.releaseSpend) await sleep(5);
+                hooks.atSpend = false;
+              }
+              return target.first();
+            };
+            const value = Reflect.get(target, property);
+            return typeof value === 'function' ? value.bind(target) : value;
+          } });
+        };
+        const value = Reflect.get(target, property);
+        return typeof value === 'function' ? value.bind(target) : value;
+      } });
+      return statement;
     };
     if (property === 'batch') return async (statements: D1PreparedStatement[]) => {
       const commit = commitPrepared; commitPrepared = false;

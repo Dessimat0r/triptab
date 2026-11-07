@@ -91,26 +91,7 @@ export async function executeOperation(input: {
   const { userId, request, fence, signal } = input;
   const { trip, draft, image } = input.source;
   const database = db();
-  // Nothing is spent for an attempt that was superseded or whose grant ended.
-  const refused = await refusal(fence, userId);
-  if (refused) throw refused;
-  const { preferences: { readingLanguage } } = await readTripLanguagePreferences(database, userId, trip.id);
-  const connection = await input.credential();
-  if (!await startProviderCall(database, fence, userId, connection.provider)) {
-    throw await refusal(fence, userId) ?? new ReceiptAIAccessError('Receipt processing settings changed before this reading started. Read the receipt again.', 409, 'credentials_changed');
-  }
-  await consumeReceiptProcessBudget(database, userId, { provider: connection.provider });
-  logOperation('native-processing-started', input.log, { provider: connection.provider });
-  const context = { ...connection, trip, draft, readingLanguage, callerMemberId: trip.members.find(member => member.userId === userId)?.id ?? null };
-  const answer = request.questionId ? await processReceiptQuestion({ ...context, questionId: request.questionId }, { signal }) : undefined;
-  const transcription = image ? await processReceiptImage({ ...context, image }, { signal }) : undefined;
-  // An unrelated ledger edit does not invalidate a paid transcription. Rebase
-  // only onto an unchanged source draft and member context, always retaining
-  // the latest other entries. Every CAS retry repeats the access checks;
-  // inference itself runs once.
-  for (let attempt = 0; attempt < 3; attempt++) {
-    if (signal.aborted) throw new RequestError('Receipt processing was cancelled or timed out. Your saved receipt is unchanged.', 408);
-    await input.stillCurrent?.();
+  const currentSource = async () => {
     const latest = await readLedger(userId);
     const currentTrip = latest.data.trips.find(value => value.id === trip.id);
     const currentDraft = currentTrip?.drafts.find(value => value.id === draft.id);
@@ -125,6 +106,46 @@ export async function executeOperation(input: {
       if (!currentImage || currentImage.version !== image.version || currentImage.size !== image.size
         || currentImage.httpMetadata?.contentType !== image.mimeType) throw new RequestError('This receipt image changed during processing. Refresh before trying again.', 409);
     }
+    return { latest, currentTrip, currentDraft };
+  };
+  // Nothing is spent for an attempt that was superseded or whose grant ended.
+  const refused = await refusal(fence, userId);
+  if (refused) throw refused;
+  const { preferences: { readingLanguage } } = await readTripLanguagePreferences(database, userId, trip.id);
+  const connection = await input.credential();
+  if (!await startProviderCall(database, fence, userId, connection.provider)) {
+    throw await refusal(fence, userId) ?? new ReceiptAIAccessError('Receipt processing settings changed before this reading started. Read the receipt again.', 409, 'credentials_changed');
+  }
+  await consumeReceiptProcessBudget(database, userId, { provider: connection.provider });
+  const beforeRequest = async () => {
+    if (signal.aborted) throw new RequestError('Receipt processing was cancelled or timed out. Your saved receipt is unchanged.', 408);
+    // Quota consumption, credential/model preparation and model discovery can
+    // yield. Recheck at the actual outbound boundary, including again after a
+    // ChatGPT model-list response, rather than treating admission as a spend.
+    const refused = await refusal(fence, userId);
+    if (refused) throw refused;
+    await input.stillCurrent?.();
+    const currentConnection = await input.credential();
+    if (currentConnection.provider !== connection.provider || currentConnection.accessToken !== connection.accessToken || currentConnection.model !== connection.model) {
+      throw new ReceiptAIAccessError('Receipt processing settings changed before this reading started. Read the receipt again.', 409, 'credentials_changed');
+    }
+    await currentSource();
+    if (!await startProviderCall(database, fence, userId, connection.provider)) {
+      throw await refusal(fence, userId) ?? new ReceiptAIAccessError('Receipt processing settings changed before this reading started. Read the receipt again.', 409, 'credentials_changed');
+    }
+  };
+  logOperation('native-processing-started', input.log, { provider: connection.provider });
+  const context = { ...connection, trip, draft, readingLanguage, callerMemberId: trip.members.find(member => member.userId === userId)?.id ?? null };
+  const answer = request.questionId ? await processReceiptQuestion({ ...context, questionId: request.questionId }, { signal, beforeRequest }) : undefined;
+  const transcription = image ? await processReceiptImage({ ...context, image }, { signal, beforeRequest }) : undefined;
+  // An unrelated ledger edit does not invalidate a paid transcription. Rebase
+  // only onto an unchanged source draft and member context, always retaining
+  // the latest other entries. Every CAS retry repeats the access checks;
+  // inference itself runs once.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (signal.aborted) throw new RequestError('Receipt processing was cancelled or timed out. Your saved receipt is unchanged.', 408);
+    await input.stillCurrent?.();
+    const { latest, currentTrip, currentDraft } = await currentSource();
     const tripSnapshot = structuredClone(currentTrip);
     const proposal = answer && request.questionId ? applyReceiptQuestion(currentTrip, currentDraft, answer, request.questionId) : applyReceiptTranscription(currentTrip, currentDraft, transcription!, undefined, {
       readingLanguage, readPurchaseDetails: request.readPurchaseDetails, attemptId: fence.attemptId,

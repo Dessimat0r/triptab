@@ -23,6 +23,7 @@ export const transcription = {
 export type OperationRow = { operation_key: string; provider: string | null; status: string; attempt_id: string; attempts: number; error_code: string | null; phase: string | null;
   auto_resumes: number | null; lease_until: number };
 type Hooks = { pauseNextCommit: boolean; atCommit: boolean; proceed: boolean; failNextCommit?: 'before' | 'after'; commitBatches: number;
+  pauseBeforeSpend?: boolean; atSpend?: boolean; releaseSpend?: boolean;
   provider: { calls: number; holdNext: number; held: number; release: boolean; output: unknown; fail?: number }; detached: number };
 
 export async function createReceiptOperationWorker(options: { kind?: 'bill'; bindings?: Record<string, string> } = {}) {
@@ -244,7 +245,7 @@ export async function createReceiptOperationWorker(options: { kind?: 'bill'; bin
       // provider call) before disposing, so teardown never waits on them.
       dispose: async () => {
         await control('/__test/provider', { release: true }).catch(() => {});
-        await control('/__test/hooks', { proceed: true }).catch(() => {});
+        await control('/__test/hooks', { proceed: true, releaseSpend: true }).catch(() => {});
         await worker.dispose();
       } };
   } catch (error) { await worker.dispose(); throw error; }

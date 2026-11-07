@@ -1025,6 +1025,8 @@ function reset() {
   state.beforeWrite = undefined;
   state.duringModel = undefined; state.output = undefined; state.invalidOutput = false; state.actorChanged = false;
   budgetDatabase.exec('DELETE FROM auth_rate_limits'); budgetDatabase.exec('DELETE FROM receipt_operations');
+  budgetDatabase.exec('DELETE FROM trips');
+  budgetDatabase.prepare('INSERT INTO trips(id,owner) VALUES(?,?)').run(trip.id, owner);
 }
 const budgetDatabase = new DatabaseSync(':memory:');
 budgetDatabase.exec('CREATE TABLE auth_rate_limits(key_hash TEXT PRIMARY KEY,window_start INTEGER NOT NULL,attempts INTEGER NOT NULL)');
@@ -1035,7 +1037,9 @@ for (const migration of ['0016_receipt_operations.sql', '0017_receipt_operation_
 budgetDatabase.exec(`CREATE TABLE profiles(id TEXT PRIMARY KEY, deleted_at TEXT NOT NULL DEFAULT '');
   CREATE TABLE auth_sessions(token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL, expires_at TEXT NOT NULL, session_id TEXT NOT NULL DEFAULT '');
   CREATE TABLE auth_links(oai_user_id TEXT PRIMARY KEY, user_id TEXT NOT NULL);
-  CREATE TABLE auth_credentials(user_id TEXT PRIMARY KEY);`);
+  CREATE TABLE auth_credentials(user_id TEXT PRIMARY KEY);
+  CREATE TABLE trips(id TEXT PRIMARY KEY, owner TEXT NOT NULL);
+  CREATE TABLE memberships(trip_id TEXT NOT NULL, user_id TEXT NOT NULL, member_id TEXT NOT NULL);`);
 budgetDatabase.prepare('INSERT INTO profiles(id) VALUES (?)').run(owner);
 budgetDatabase.prepare("INSERT INTO auth_sessions(token_hash,user_id,expires_at,session_id) VALUES ('hash',?,'9999-12-31T00:00:00.000Z','route-session')").run(owner);
 class BoundaryRequestError extends Error { constructor(message: string, readonly status = 400) { super(message); } }
@@ -1055,7 +1059,13 @@ const store = {
     async head() { state.imageReads++; return state.imagePresent ? { version: state.imageVersion, size: state.imageSize, httpMetadata: { contentType: state.imageType } } : null; },
   }; },
   db() { return { prepare(sql: string) { return { bind(...values: (string | number)[]) { return {
-    async first() { return budgetDatabase.prepare(sql).get(...values) ?? null; }, async run() { return budgetDatabase.prepare(sql).run(...values); },
+    async first() {
+      // Mirror this fixture's ledger boundary for the real operation grant's
+      // trip-access predicate, including tests with imported textual IDs.
+      budgetDatabase.exec('DELETE FROM trips');
+      for (const trip of state.data.trips) budgetDatabase.prepare('INSERT INTO trips(id,owner) VALUES(?,?)').run(trip.id, trip.ownerId ?? owner);
+      return budgetDatabase.prepare(sql).get(...values) ?? null;
+    }, async run() { return budgetDatabase.prepare(sql).run(...values); },
   }; } }; } }; },
   async writeLedger(actor: string, data: Ledger, revision: number, options: { source: string; tripSnapshot?: Trip; operation?: { key: string; attemptId: string } }) {
     assert.equal(actor, owner); state.writeAttempts++; state.beforeWrite?.();
@@ -1146,7 +1156,7 @@ test('HTTP receipt processing saves native extraction to the exact draft for rev
   assert.deepEqual(saved.data.trips[0].expenses, approved);
   assert.deepEqual(state.savedSources, ['web']);
   assert.equal(state.providerCalls, 1);
-  assert.equal(state.profileChecks, 2);
+  assert.equal(state.profileChecks, 3, 'initial, outbound and final request-account checks');
 });
 
 test('HTTP accumulated scan evidence overflow returns an actionable 422 without discarding saved evidence or writing a proposal', async () => {
@@ -1393,7 +1403,7 @@ test('HTTP saved natural-language questions use text-only processing and stable 
   assert.equal(saved.draft.items[0].id,'coffee'); assert.equal(saved.draft.items[0].amount,250); assert.deepEqual(saved.draft.items[0].members,['bob']);
   assert.equal(saved.draft.status,'review'); assert.equal(saved.draft.conversation!.at(-1)!.replyTo,'share-question');
   const second=await http({tripId:trip.id,draftId:draft.id,questionId:'share-question'});
-  assert.equal(second.status,200); assert.equal(state.providerCalls,1); assert.equal(state.accessCalls,1); assert.equal(state.writes,1);
+  assert.equal(second.status,200); assert.equal(state.providerCalls,1); assert.equal(state.accessCalls,2); assert.equal(state.writes,1);
 });
 
 test('opting out of purchase detail reading protects existing date/time even with receipt provenance', () => {
@@ -1540,7 +1550,7 @@ test('R06: repeated requests while one is reading (reconnects, other members) ne
   reset();
   const first = await heldRequest();
   for (let index = 0; index < 3; index++) assert.equal((await http(first.body)).status, 202);
-  assert.equal(state.accessCalls, 1, 'one key lookup');
+  assert.equal(state.accessCalls, 2, 'initial lookup and final pre-spend key check; duplicates do neither');
   assert.equal(budgetDatabase.prepare("SELECT COALESCE(SUM(attempts),0) AS n FROM auth_rate_limits WHERE key_hash IS NOT NULL").get()!.n, 3, 'only the owner consumed budget (user, shared minute and shared day counters)');
   first.release();
   assert.equal((await first.response).status, 200);

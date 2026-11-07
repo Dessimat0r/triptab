@@ -166,6 +166,8 @@ export function providerAuthenticatesAsSql(provider: string, account: string) {
  */
 const OWNER_CONDITION = `EXISTS (SELECT 1 FROM receipt_operations o JOIN profiles p ON p.id = o.user_id AND p.deleted_at = ''
   WHERE o.operation_key = ? AND o.attempt_id = ? AND o.status = 'running' AND o.user_id = ? AND o.grant_expires_at > ${DB_NOW_MS}
+    AND EXISTS (SELECT 1 FROM trips grant_trip WHERE grant_trip.id=o.trip_id AND grant_trip.owner NOT LIKE 'deleted:%'
+      AND (grant_trip.owner=o.user_id OR EXISTS (SELECT 1 FROM memberships grant_member WHERE grant_member.trip_id=grant_trip.id AND grant_member.user_id=o.user_id)))
     AND ((o.grant_kind = 'session' AND EXISTS (SELECT 1 FROM auth_sessions s WHERE s.session_id = o.grant_ref AND s.session_id <> ''
           AND s.user_id = o.user_id AND s.expires_at > ${DB_NOW_ISO}))
       OR (o.grant_kind = 'chatgpt' AND ${providerAuthenticatesAsSql('o.grant_ref', 'o.user_id')})))`;

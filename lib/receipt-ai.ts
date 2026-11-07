@@ -211,7 +211,12 @@ async function boundedText(response: Response, limit = 1_000_000) {
   }
 }
 
-async function requestProvider(url: string, init: RequestInit, fetcher: typeof fetch) {
+/** Runs after all asynchronous preparation and immediately before each fetch. */
+export type ProviderRequestGuard = () => Promise<void>;
+async function requestProvider(url: string, init: RequestInit, fetcher: typeof fetch, beforeRequest?: ProviderRequestGuard) {
+  // Keep authorisation errors outside the transport catch: they must remain
+  // terminal refusals, rather than becoming a retryable provider outage.
+  await beforeRequest?.();
   let response: Response;
   try { response = await fetcher(url, init); }
   catch {
@@ -225,8 +230,8 @@ async function requestProvider(url: string, init: RequestInit, fetcher: typeof f
   return response;
 }
 
-export async function getChatGPTPlanModel(accessToken: string, preferred?: string, signal?: AbortSignal, fetcher: typeof fetch = fetch) {
-  const response = await requestProvider('https://api.openai.com/v1/models', { headers: { Authorization: `Bearer ${accessToken}` }, signal, redirect: 'manual' }, fetcher);
+export async function getChatGPTPlanModel(accessToken: string, preferred?: string, signal?: AbortSignal, fetcher: typeof fetch = fetch, beforeRequest?: ProviderRequestGuard) {
+  const response = await requestProvider('https://api.openai.com/v1/models', { headers: { Authorization: `Bearer ${accessToken}` }, signal, redirect: 'manual' }, fetcher, beforeRequest);
   let body: unknown;
   try { body = JSON.parse(await boundedText(response)); }
   catch (error) { if (!response.ok) throw providerError(response.status); throw error instanceof ReceiptAIError ? error : new ReceiptAIError('ChatGPT returned an invalid model list.'); }
@@ -394,7 +399,7 @@ async function completedStructured<T>(response: Response, provider: 'api' | 'siw
 export async function processReceiptImage(input: {
   accessToken: string; model?: string; provider: 'api' | 'siwc'; trip: Trip; draft: Draft; callerMemberId: string | null; questionId?: string;
   readingLanguage?:ReceiptLanguage; image: { bytes: Uint8Array; mimeType: string };
-}, options: { signal?: AbortSignal; fetcher?: typeof fetch } = {}) {
+}, options: { signal?: AbortSignal; fetcher?: typeof fetch; beforeRequest?: ProviderRequestGuard } = {}) {
   const { bytes, mimeType } = input.image;
   if (!['image/jpeg', 'image/png', 'image/webp'].includes(mimeType) || !bytes.byteLength || bytes.byteLength > 5 * 1024 * 1024) {
     throw new ReceiptAIError('Use a saved JPEG, PNG or WebP receipt no larger than 5 MB.', 400);
@@ -402,7 +407,7 @@ export async function processReceiptImage(input: {
   const context = JSON.stringify(receiptContext(input.trip, input.draft, input.callerMemberId, input.questionId, input.readingLanguage));
   if (context.length > 500_000) throw new ReceiptAIError('This receipt context is too large to process. Use manual item entry.', 413);
   const fetcher = options.fetcher ?? fetch;
-  const model = input.provider === 'siwc' ? await getChatGPTPlanModel(input.accessToken, input.model, options.signal, fetcher) : input.model || DEFAULT_RECEIPT_MODEL;
+  const model = input.provider === 'siwc' ? await getChatGPTPlanModel(input.accessToken, input.model, options.signal, fetcher, options.beforeRequest) : input.model || DEFAULT_RECEIPT_MODEL;
   if (!model) throw new ReceiptAIError('Choose a configured native image model for receipt processing.', 422);
   let binary = '';
   for (let offset = 0; offset < bytes.length; offset += 8192) binary += String.fromCharCode(...bytes.slice(offset, offset + 8192));
@@ -417,7 +422,7 @@ export async function processReceiptImage(input: {
       ] }],
       text: { format: { type: 'json_schema', name: 'triptab_receipt', strict: true, schema: transcriptionJsonSchema } },
     }),
-  }, fetcher);
+  }, fetcher, options.beforeRequest);
   if (!response.ok) {
     let body: unknown;
     try { body = JSON.parse(await boundedText(response)); } catch { /* Admission errors may be non-JSON. */ }
@@ -658,9 +663,9 @@ export async function consumeReceiptProcessBudget(database: D1Database, userId: 
 
 /** One bounded text-only request using the same server-side provider and stream validation. */
 export async function processStructuredText<T>(input:{accessToken:string;model?:string;provider:'api'|'siwc';instructions:string;context:unknown;
-  schema:z.ZodType<T>;jsonSchema:Record<string,unknown>;maxOutputTokens:number},options:{signal?:AbortSignal;fetcher?:typeof fetch}={}):Promise<T>{
+  schema:z.ZodType<T>;jsonSchema:Record<string,unknown>;maxOutputTokens:number},options:{signal?:AbortSignal;fetcher?:typeof fetch;beforeRequest?:ProviderRequestGuard}={}):Promise<T>{
   const fetcher=options.fetcher??fetch;
-  const model=input.provider==='siwc'?await getChatGPTPlanModel(input.accessToken,input.model,options.signal,fetcher):input.model||DEFAULT_RECEIPT_MODEL;
+  const model=input.provider==='siwc'?await getChatGPTPlanModel(input.accessToken,input.model,options.signal,fetcher,options.beforeRequest):input.model||DEFAULT_RECEIPT_MODEL;
   const context=JSON.stringify(input.context);
   if(new TextEncoder().encode(context).byteLength>150_000)throw new ReceiptAIError('Too many names to translate at once.',413);
   const response=await requestProvider('https://api.openai.com/v1/responses',{
@@ -669,7 +674,7 @@ export async function processStructuredText<T>(input:{accessToken:string;model?:
       ...(model===DEFAULT_RECEIPT_MODEL?{reasoning:{effort:'low'}}:{})}:{}),instructions:input.instructions,
       input:[{role:'user',content:[{type:'input_text',text:context}]}],
       text:{format:{type:'json_schema',name:'triptab_language',strict:true,schema:input.jsonSchema}}}),
-  },fetcher);
+  },fetcher,options.beforeRequest);
   if(!response.ok){let body:unknown;try{body=JSON.parse(await boundedText(response));}catch{}throw providerError(response.status,body,input.provider);}
   return completedStructured(response,input.provider,input.schema,Math.min(250_000,input.maxOutputTokens*16));
 }
