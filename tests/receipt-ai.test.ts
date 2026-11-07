@@ -1047,14 +1047,20 @@ const store = {
   db() { return { prepare(sql: string) { return { bind(...values: (string | number)[]) { return {
     async first() { return budgetDatabase.prepare(sql).get(...values) ?? null; }, async run() { return budgetDatabase.prepare(sql).run(...values); },
   }; } }; } }; },
-  async writeLedger(actor: string, data: Ledger, revision: number, options: { source: string; tripSnapshot?: Trip }) {
+  async writeLedger(actor: string, data: Ledger, revision: number, options: { source: string; tripSnapshot?: Trip; operation?: { key: string; attemptId: string } }) {
     assert.equal(actor, owner); state.writeAttempts++; state.beforeWrite?.();
+    // R12 boundary model: production decides ownership and records completion
+    // inside the commit transaction (tests/receipt-commit-ownership.test.ts
+    // exercises that on D1). This single-threaded stand-in is atomic likewise.
+    const owns = (fence: { key: string; attemptId: string }) => !!budgetDatabase.prepare("SELECT 1 FROM receipt_operations WHERE operation_key=? AND attempt_id=? AND status='running'").get(fence.key, fence.attemptId);
+    if (options.operation && !owns(options.operation)) throw new BoundaryRequestError('Another reading of this receipt took over. Refresh to see its result.', 409);
     if (options.tripSnapshot) {
       const current = state.data.trips.find(trip => trip.id === options.tripSnapshot!.id);
       if (!state.metadataAllowed || state.actorChanged || !state.imagePresent || state.imageVersion !== 'original-image' || JSON.stringify(current) !== JSON.stringify(options.tripSnapshot)) throw new Error('CONFLICT');
       data = { trips: state.data.trips.map(trip => data.trips.find(value => value.id === trip.id) ?? trip) };
     } else if (revision !== state.revision) throw new Error('CONFLICT');
     state.data = validateLedger(data, { previous: state.data }); state.revision++; state.writes++; state.savedSources.push(options.source);
+    if (options.operation) budgetDatabase.prepare("UPDATE receipt_operations SET status='stored' WHERE operation_key=? AND attempt_id=?").run(options.operation.key, options.operation.attemptId);
     return { data: structuredClone(state.data), revision: state.revision };
   },
   failure(error: unknown) { return Response.json({ error: error instanceof Error ? error.message : 'Failure' }, { status: error instanceof BoundaryRequestError ? error.status : error instanceof Error && error.message === 'CONFLICT' ? 409 : 400 }); },

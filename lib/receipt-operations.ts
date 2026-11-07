@@ -15,7 +15,8 @@ import { canonicalJson, sha256Hex } from './data-utils';
  *   was cut off after a disconnect): a new request may take it over, which
  *   starts one new attempt. Nothing retries automatically.
  *
- * Only the attempt that currently holds the claim may commit, and the commit
+ * Only the attempt that currently holds the claim may commit (R12: decided in
+ * the commit's own D1 transaction, see operationCommitSql), and the commit
  * still requires the unchanged draft, members and photo, so a superseded or
  * late attempt can never add a second proposal. A provider call that was
  * accepted by an attempt that then crashed is not refunded or deduplicated:
@@ -31,7 +32,7 @@ export type OperationSource = {
   questionId?: string; readPurchaseDetails?: boolean;
 };
 export type OperationStatus = 'running' | 'stored' | 'failed';
-export type Claim = { owned: true; key: string; attemptId: string; attempts: number }
+export type Claim = { owned: true; key: string; attemptId: string; attempts: number; fence: OperationFence }
   | { owned: false; key: string; status: OperationStatus; attempts: number };
 
 type Statement = { bind(...values: (string | number | null)[]): { first<T = Record<string, unknown>>(): Promise<T | null>; run(): Promise<unknown> } };
@@ -63,16 +64,56 @@ export async function claimOperation(database: Database, source: OperationSource
     .first<{ attempt_id: string; attempts: number }>();
   await database.prepare('DELETE FROM receipt_operations WHERE operation_key IN (SELECT operation_key FROM receipt_operations WHERE updated_at < ? AND status <> ? LIMIT 50)')
     .bind(now - OPERATION_RETENTION_MS, 'running').run();
-  if (row?.attempt_id === attemptId) return { owned: true, key, attemptId, attempts: Number(row.attempts) };
+  if (row?.attempt_id === attemptId) return { owned: true, key, attemptId, attempts: Number(row.attempts), fence: issue(key, attemptId) };
   const existing = await database.prepare('SELECT status, attempts FROM receipt_operations WHERE operation_key = ?').bind(key).first<{ status: OperationStatus; attempts: number }>();
   if (!existing) throw new Error('Receipt operation claim was not recorded');
   return { owned: false, key, status: existing.status, attempts: Number(existing.attempts) };
 }
 
 /**
- * Whether this attempt still holds the claim, so its result may be committed.
- * A takeover replaces the attempt ID, so a slow attempt that nobody replaced
- * may still commit after its lease; a replaced one never can.
+ * R12: the trusted identity of the attempt that may commit an operation's
+ * result. Only a successful claim creates one, and writeLedger accepts only
+ * fences issued here, so no request body, MCP argument or other caller can
+ * present itself as a reading's own write.
+ */
+export type OperationFence = { readonly key: string; readonly attemptId: string };
+const issuedFences = new WeakSet<object>();
+function issue(key: string, attemptId: string): OperationFence {
+  const fence = Object.freeze({ key, attemptId });
+  issuedFences.add(fence);
+  return fence;
+}
+export function isOperationFence(value: unknown): value is OperationFence {
+  return typeof value === 'object' && value !== null && issuedFences.has(value);
+}
+export function operationFence(claim: Extract<Claim, { owned: true }>): OperationFence {
+  if (!claim.owned || !issuedFences.has(claim.fence)) throw new Error('Not an owned receipt operation');
+  return claim.fence;
+}
+
+/**
+ * R12: SQL for writeLedger's commit transaction. `gate` is a condition the
+ * commit's guarded UPDATE must satisfy, so ownership is decided by the same
+ * statement that admits the ledger write; `complete` records the outcome in
+ * the same batch, conditional on that write having been admitted. A takeover
+ * that lands at any moment before the batch makes the gate false, and the
+ * whole write (ledger, history, completion) does not happen.
+ */
+export function operationCommitSql(fence: OperationFence, now = Date.now()) {
+  if (!isOperationFence(fence)) throw new Error('Untrusted receipt operation');
+  return {
+    gate: "EXISTS (SELECT 1 FROM receipt_operations o WHERE o.operation_key = ? AND o.attempt_id = ? AND o.status = 'running')",
+    gateBindings: [fence.key, fence.attemptId] as (string | number)[],
+    complete: `UPDATE receipt_operations SET status = 'stored', error_code = NULL, updated_at = ?
+      WHERE operation_key = ? AND attempt_id = ? AND status = 'running' AND EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND last_write = ?)`,
+    completeBindings: (marker: string) => [now, fence.key, fence.attemptId, marker] as (string | number)[],
+  };
+}
+
+/**
+ * Whether this attempt still holds the claim. This is advisory only (it lets a
+ * superseded attempt stop early, or names why a fenced commit was refused):
+ * the commit itself is fenced inside writeLedger's transaction.
  */
 export async function holdsOperation(database: Database, key: string, attemptId: string) {
   const row = await database.prepare("SELECT 1 AS held FROM receipt_operations WHERE operation_key = ? AND attempt_id = ? AND status = 'running'")
