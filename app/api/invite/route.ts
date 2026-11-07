@@ -3,7 +3,8 @@ import { activityStatements, db, ensureProfile, profileWriteAuthorization, failu
 import { AuthError, requestWriteAuthorizationSql, requestWriteAuthorized } from '@/lib/auth';
 import { DB_NOW_ISO } from '@/lib/receipt-operations';
 import { joinedNotification, notifyMembers } from '@/lib/notifications';
-import { parseStoredTrip, travellerFinancialPreview, type Trip } from '@/lib/model';
+import { isBill, parseStoredTrip, travellerFinancialPreview, type Trip } from '@/lib/model';
+import { openListGate } from '@/lib/trip-lifecycle';
 
 export const dynamic = 'force-dynamic';
 const PRIVATE_HEADERS = { 'Cache-Control': 'private, no-store' };
@@ -321,12 +322,15 @@ async function acceptInvite(profile: Profile, body: Record<string, unknown>) {
   const state = await invitationRevision(database);
   const marker = crypto.randomUUID();
   const before = await invitationSnapshot(invite, member.name, 'pending');
+  // F1: joining adds this trip to the account's open list, so the per-kind limit
+  // (50 holidays, 100 bills) is part of the admitting statement below.
+  const openList = openListGate(profile.id, isBill(nextTrip));
   // A compare-and-swap protects the trip JSON and invalidates any ledger loaded
   // before this join. Every subsequent statement is guarded by this batch marker.
   const results = await database.batch([
     database.prepare(`
       UPDATE sync_state SET revision = revision + 1, last_write = ?
-      WHERE id = 1 AND revision = ? AND ${authorization.condition} AND EXISTS (
+      WHERE id = 1 AND revision = ? AND ${authorization.condition} AND ${openList.condition} AND EXISTS (
         SELECT 1 FROM invites i JOIN trips t ON t.id = i.trip_id
         WHERE i.token_hash = ? AND i.audit_id = ? AND i.trip_id = ? AND i.member_id = ? AND i.created_by = ? AND i.email IS ?
           AND i.used_by IS NULL AND i.expires_at = ? AND i.expires_at > ${DB_NOW_ISO}
@@ -337,7 +341,7 @@ async function acceptInvite(profile: Profile, body: Record<string, unknown>) {
           AND EXISTS (SELECT 1 FROM json_each(t.data, '$.members') j
             WHERE json_extract(j.value, '$.id') = i.member_id AND json_extract(j.value, '$.userId') IS NULL)
       )
-    `).bind(marker, state.revision, ...authorization.bindings, hash, invite.audit_id, invite.trip_id, invite.member_id, invite.created_by, invite.email,
+    `).bind(marker, state.revision, ...authorization.bindings, ...openList.bindings, hash, invite.audit_id, invite.trip_id, invite.member_id, invite.created_by, invite.email,
       invite.expires_at, accountEmail, profile.id, invite.data, profile.id),
     database.prepare(`
       UPDATE invites SET used_by = ? WHERE token_hash = ? AND used_by IS NULL
@@ -366,6 +370,8 @@ async function acceptInvite(profile: Profile, body: Record<string, unknown>) {
     if (latest.used_by === profile.id && current?.member_id === invite.member_id) {
       return Response.json({ tripId: invite.trip_id, memberId: invite.member_id, alreadyMember: true }, { headers: PRIVATE_HEADERS });
     }
+    // Name the limit when it is why the join was refused; nothing was written.
+    if (await openList.count(database) >= openList.limit) throw new RequestError(openList.message, 409);
     throw new RequestError('The trip or invitation changed. Refresh before joining again.', 409);
   }
   const notification = joinedNotification(profile.displayName, nextTrip.name, nextTrip.kind);
