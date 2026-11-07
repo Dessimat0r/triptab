@@ -25,7 +25,7 @@ export type OperationRow = { operation_key: string; provider: string | null; sta
 type Hooks = { pauseNextCommit: boolean; atCommit: boolean; proceed: boolean; failNextCommit?: 'before' | 'after'; commitBatches: number;
   provider: { calls: number; holdNext: number; held: number; release: boolean; output: unknown; fail?: number }; detached: number };
 
-export async function createReceiptOperationWorker(options: { kind?: 'bill' } = {}) {
+export async function createReceiptOperationWorker(options: { kind?: 'bill'; bindings?: Record<string, string> } = {}) {
   const project = fileURLToPath(new URL('../../', import.meta.url));
   const shim = fileURLToPath(new URL('./workers-shim.ts', import.meta.url));
   const hasBackground = await access(new URL('../../lib/receipt-background.ts', import.meta.url)).then(() => true, () => false);
@@ -83,7 +83,7 @@ export async function createReceiptOperationWorker(options: { kind?: 'bill' } = 
   const tokenKey = randomBytes(32).toString('base64url');
   const worker = new Miniflare({ modules: true, script: bundled.outputFiles[0].text,
     compatibilityDate: '2026-05-15', compatibilityFlags: ['nodejs_compat'],
-    bindings: { RECEIPT_AI_OWNER_EMAIL: 'owner@example.test', RECEIPT_AI_TOKEN_KEY: tokenKey },
+    bindings: { RECEIPT_AI_OWNER_EMAIL: 'owner@example.test', RECEIPT_AI_TOKEN_KEY: tokenKey, ...options.bindings },
     d1Databases: { DB: 'receipt-operations' }, d1Persist: false, r2Buckets: ['RECEIPTS'], r2Persist: false,
     fetchMock, log: new Log(LogLevel.NONE),
   });
@@ -162,7 +162,7 @@ export async function createReceiptOperationWorker(options: { kind?: 'bill' } = 
     };
     const forgedSave = async (operation: unknown) => (await worker.dispatchFetch(`${origin}/__test/forged-save`, { method: 'POST',
       body: JSON.stringify({ userId: owner.id, tripId, operation }) })).json() as Promise<{ saved: boolean; error?: string }>;
-    const tick = async (now = Date.now()) => (await worker.dispatchFetch(`${origin}/__test/tick?now=${now}`)).json() as Promise<{ resumed: number; skipped: number; stored: number; failed: number }>;
+    const tick = async (now = Date.now()) => (await worker.dispatchFetch(`${origin}/__test/tick?now=${now}`)).json() as Promise<{ resumed: number; skipped: number; stored: number; failed: number; disabled: boolean }>;
     const historyCount = async () => Number((await database.prepare("SELECT COUNT(*) AS n FROM activity_events WHERE trip_id=?").bind(tripId).first<{ n: number }>())!.n);
     const tripRow = async () => (await database.prepare('SELECT data, revision FROM trips WHERE id=?').bind(tripId).first<{ data: string; revision: number }>())!;
     return { worker, database, origin, owner, sessionId, tripId, receiptId, request, readLedger, saveLedger, control, currentDraft,

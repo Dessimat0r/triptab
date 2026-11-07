@@ -1,6 +1,6 @@
 import { db } from './store';
 import { receiptAICredential, ReceiptAIAccessError, type ReceiptAIEnvironment } from './receipt-ai-access';
-import { BACKGROUND_TIMEOUT_MS, claimResume, finishOperation, interruptedOperations, operationFence } from './receipt-operations';
+import { BACKGROUND_TIMEOUT_MS, backgroundResumeEnabled, claimResume, finishOperation, interruptedOperations, operationFence } from './receipt-operations';
 import { errorCategory, executeOperation, loadOperationSource, logOperation, type OperationLog } from './receipt-operation-work';
 
 /**
@@ -28,11 +28,17 @@ import { errorCategory, executeOperation, loadOperationSource, logOperation, typ
  * commit, and resumes an interrupted one at most MAX_AUTO_RESUMES times.
  * Overlapping invocations claim each operation atomically: one runs it.
  */
-export async function runReceiptOperationTick(environment: ReceiptAIEnvironment, options: { now?: number; limit?: number } = {}) {
+export type ReceiptBackgroundEnvironment = ReceiptAIEnvironment & { RECEIPT_BACKGROUND_RESUME?: string };
+
+export async function runReceiptOperationTick(environment: ReceiptBackgroundEnvironment, options: { now?: number; limit?: number } = {}) {
+  if (!backgroundResumeEnabled(environment)) {
+    console.info('TripTab receipt operation', { event: 'native-background-disabled' });
+    return { resumed: 0, skipped: 0, stored: 0, failed: 0, disabled: true };
+  }
   const database = db();
   const now = options.now ?? Date.now();
   const candidates = await interruptedOperations(database, now, options.limit ?? 3);
-  const result = { resumed: 0, skipped: 0, stored: 0, failed: 0 };
+  const result = { resumed: 0, skipped: 0, stored: 0, failed: 0, disabled: false };
   await Promise.all(candidates.map(async candidate => {
     const claim = await claimResume(database, candidate.key, { now });
     if (!claim.owned) { result.skipped++; return; }

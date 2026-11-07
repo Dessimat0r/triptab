@@ -48,7 +48,7 @@ test('R07: a reading cut off after a disconnect completes in the background with
     assert.equal((await reconnect.json() as { reading?: boolean }).reading, true);
     assert.equal(await calls(fixture), 2);
     await fixture.control('/__test/provider', { release: true });
-    assert.deepEqual(await tick, { resumed: 1, skipped: 0, stored: 1, failed: 0 });
+    assert.deepEqual(await tick, { resumed: 1, skipped: 0, stored: 1, failed: 0, disabled: false });
     const late = await inline.abandoned;
     assert.equal(late.status, 409, 'the cut-off attempt, if it ever resumes, cannot commit');
     const [stored] = await fixture.operations();
@@ -60,7 +60,7 @@ test('R07: a reading cut off after a disconnect completes in the background with
     assert.equal(await fixture.historyCount(), historyBefore + 1, 'one proposal, one history event');
     assert.equal(await calls(fixture), 2, 'documented: the cut-off call cannot be retrieved, so the resume calls once more');
     // Nothing left to resume, and a stale reconnect spends nothing.
-    assert.deepEqual(await fixture.tick(), { resumed: 0, skipped: 0, stored: 0, failed: 0 });
+    assert.deepEqual(await fixture.tick(), { resumed: 0, skipped: 0, stored: 0, failed: 0, disabled: false });
     assert.equal((await fixture.process(inline.body)).status, 409);
     assert.equal(await calls(fixture), 2);
   } finally { await fixture.dispose(); }
@@ -130,7 +130,7 @@ for (const revocation of revocations) test(`R07: ${revocation.name} before the b
     assert.deepEqual([row.status, row.error_code], ['failed', revocation.code]);
     assert.deepEqual(await fixture.database.prepare('SELECT data FROM trips WHERE id = ?').bind(fixture.tripId).first<{ data: string }>(), before);
     assert.equal(await fixture.historyCount(), historyBefore);
-    assert.deepEqual(await fixture.tick(), { resumed: 0, skipped: 0, stored: 0, failed: 0 }, 'a failed operation is never resumed automatically');
+    assert.deepEqual(await fixture.tick(), { resumed: 0, skipped: 0, stored: 0, failed: 0, disabled: false }, 'a failed operation is never resumed automatically');
     // The abandoned attempt finishing late cannot commit either.
     await fixture.control('/__test/provider', { release: true });
     assert.notEqual((await inline.abandoned).status, 200);
@@ -160,7 +160,7 @@ for (const revocation of revocations.filter(value => ['sign-out (the session is 
       assert.deepEqual(await fixture.database.prepare('SELECT data FROM trips WHERE id = ?').bind(fixture.tripId).first<{ data: string }>(), before);
       assert.equal(await fixture.historyCount(), historyBefore);
       assert.equal(await calls(fixture), 2);
-      assert.deepEqual(await fixture.tick(), { resumed: 0, skipped: 0, stored: 0, failed: 0 });
+      assert.deepEqual(await fixture.tick(), { resumed: 0, skipped: 0, stored: 0, failed: 0, disabled: false });
       assert.equal(await calls(fixture), 2, 'no automatic paid retry after a refused commit');
     } finally { await fixture.dispose(); }
   });
@@ -173,7 +173,7 @@ test('R07: a reading that failed (provider error) is left for the person to retr
     assert.notEqual(failed.status, 200);
     assert.equal((await fixture.operations())[0].status, 'failed');
     await fixture.database.prepare('UPDATE receipt_operations SET lease_until = 0').run();
-    assert.deepEqual(await fixture.tick(), { resumed: 0, skipped: 0, stored: 0, failed: 0 });
+    assert.deepEqual(await fixture.tick(), { resumed: 0, skipped: 0, stored: 0, failed: 0, disabled: false });
     assert.equal(await calls(fixture), 1);
   } finally { await fixture.dispose(); }
 });
@@ -186,7 +186,7 @@ test('R07: a resumed attempt that is itself cut off is not resumed again; the op
     void fixture.tick(); // this background attempt is cut off too
     await fixture.waitFor(async () => (await fixture.control('/__test/provider')).held === 2, 'the background reading to reach the provider');
     await fixture.database.prepare('UPDATE receipt_operations SET lease_until = 0').run();
-    assert.deepEqual(await fixture.tick(), { resumed: 0, skipped: 0, stored: 0, failed: 0 });
+    assert.deepEqual(await fixture.tick(), { resumed: 0, skipped: 0, stored: 0, failed: 0, disabled: false });
     const [row] = await fixture.operations();
     assert.deepEqual([row.status, row.error_code, row.auto_resumes], ['failed', 'interrupted', 1]);
     assert.equal(await calls(fixture), 2, 'bounded: no third call');
@@ -204,11 +204,50 @@ test('R07: a connected reading needs no runner, and a running lease is never res
     await fixture.control('/__test/provider', { holdNext: 1, release: false });
     const response = fixture.process(await fixture.processBody());
     await fixture.waitFor(async () => (await fixture.control('/__test/provider')).held === 1, 'the reading to reach the provider');
-    assert.deepEqual(await fixture.tick(), { resumed: 0, skipped: 0, stored: 0, failed: 0 }, 'within its lease the request owns it');
+    assert.deepEqual(await fixture.tick(), { resumed: 0, skipped: 0, stored: 0, failed: 0, disabled: false }, 'within its lease the request owns it');
     await fixture.control('/__test/provider', { release: true });
     assert.equal((await response).status, 200);
     const [row] = await fixture.operations();
     assert.deepEqual([row.status, row.auto_resumes], ['stored', 0]);
     assert.equal(await calls(fixture), 1);
+  } finally { await fixture.dispose(); }
+});
+
+test('R07 kill switch: RECEIPT_BACKGROUND_RESUME off stops the runner; nothing is read, spent or written, and a person can still read again', async () => {
+  for (const value of ['off', 'OFF', 'false', '0', 'disabled']) {
+    const fixture = await createReceiptOperationWorker({ bindings: { RECEIPT_BACKGROUND_RESUME: value } });
+    try {
+      const inline = await cutOff(fixture);
+      const before = await fixture.tripRow(), historyBefore = await fixture.historyCount();
+      assert.deepEqual(await fixture.tick(), { resumed: 0, skipped: 0, stored: 0, failed: 0, disabled: true }, value);
+      const [row] = await fixture.operations();
+      assert.deepEqual([row.status, row.auto_resumes, row.attempt_id], ['running', 0, inline.attemptId], 'the operation is left exactly as the platform left it');
+      assert.equal(await calls(fixture), 1);
+      assert.deepEqual(await fixture.tripRow(), before);
+      assert.equal(await fixture.historyCount(), historyBefore);
+      // As before R07: the person's own retry takes the interrupted operation over and stores one proposal.
+      await fixture.control('/__test/provider', { holdNext: 0 });
+      const retry = await fixture.process(inline.body);
+      assert.equal(retry.status, 200, await retry.clone().text());
+      assert.equal((await fixture.operations())[0].status, 'stored');
+      assert.equal(await calls(fixture), 2);
+      // The cut-off attempt, if it ever finishes, cannot commit.
+      await fixture.control('/__test/provider', { release: true });
+      assert.equal((await inline.abandoned).status, 409);
+    } finally { await fixture.dispose(); }
+  }
+});
+
+test('R07 kill switch: unset, empty or "on" keeps the runner on', async () => {
+  const { backgroundResumeEnabled } = await import('../lib/receipt-operations');
+  for (const value of [undefined, '', ' ', 'on', 'ON', ' on ']) assert.equal(backgroundResumeEnabled({ RECEIPT_BACKGROUND_RESUME: value }), true, String(value));
+  for (const value of ['off', 'false', '0', 'no', 'of', 'onn']) assert.equal(backgroundResumeEnabled({ RECEIPT_BACKGROUND_RESUME: value }), false, value);
+  const fixture = await createReceiptOperationWorker({ bindings: { RECEIPT_BACKGROUND_RESUME: 'on' } });
+  try {
+    const inline = await cutOff(fixture);
+    const result = await fixture.tick();
+    assert.deepEqual([result.resumed, result.stored, result.disabled], [1, 1, false]);
+    await fixture.control('/__test/provider', { release: true });
+    assert.equal((await inline.abandoned).status, 409);
   } finally { await fixture.dispose(); }
 });
