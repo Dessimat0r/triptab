@@ -208,3 +208,11 @@ test('R07: the per-minute trigger only resumes interrupted receipt readings; mai
   } finally { console.warn = warn; boundary.failResume = false; }
   assert(!JSON.stringify(warnings).includes('secret-resource-id'));
 });
+
+test('the Worker entry exports only handlers and its default handler object (workerd refuses other named exports)', async () => {
+  const source = await readFile(new URL('../build/sites-worker.ts', import.meta.url), 'utf8');
+  const named = [...source.matchAll(/^export\s+(?:const|let|var|class|async\s+function|function)\s+(\w+)/gm)].map(match => match[1]);
+  // secureResponse is a plain function export the runtime accepts as a (never invoked) handler shape; constants are not.
+  assert.deepEqual(named.filter(name => !/^[a-z]/.test(name) || /^[A-Z_]+$/.test(name)), []);
+  assert(!/^export\s+const\s+[A-Z_]+\s*=/m.test(source), 'no exported constants');
+});

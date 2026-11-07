@@ -34,7 +34,8 @@ export function secureResponse(request: Request, response: Response, development
 }
 
 /** R07: resume receipt readings cut off after a disconnect (lib/receipt-background.ts). */
-export const RECEIPT_RESUME_CRON = "* * * * *";
+// Not exported: every named export of a Worker entry module must be a handler.
+const RECEIPT_RESUME_CRON = "* * * * *";
 
 async function resumeReceiptOperations(env: Cloudflare.Env, scheduledTime: number) {
   try {
