@@ -102,7 +102,8 @@ test('a concurrent profile change fails its baseline CAS and records no false be
 test('a canonical account link racing a provider profile update blocks the old identity', async () => {
   const database = await storage();
   database.beforeBatch = statements => { if (statements.some(statement => /^UPDATE profiles/.test(statement.sql.trim()))) { database.beforeBatch = undefined; database.sqlite.prepare('INSERT INTO auth_links (oai_user_id,user_id,created_at) VALUES (?,?,?)').run(alice, bob, '2026-10-04T12:00:00Z'); } };
-  assert.equal((await route.POST(request(alice, { displayName: 'Wrong account edit' }))).status, 409);
+  // F2: the provider identity no longer authenticates as this account when the write is admitted, which is a changed sign-in (401), as on the ledger path. Nothing is written either way.
+  assert.equal((await route.POST(request(alice, { displayName: 'Wrong account edit' }))).status, 401);
   assert.equal(name(database), 'Alice'); assert.equal(name(database, bob), 'Bob'); assert.equal(count(database), 0);
 });
 

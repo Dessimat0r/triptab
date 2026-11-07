@@ -1,4 +1,5 @@
-import { db, ensureProfile, failure, readBoundedBody, RequestError, sameOrigin } from '@/lib/store';
+import { db, ensureProfile, profileWriteAuthorization, failure, readBoundedBody, RequestError, sameOrigin } from '@/lib/store';
+import { AuthError, requestWriteAuthorizationSql, requestWriteAuthorized } from '@/lib/auth';
 import { accountAuditStatement } from '@/lib/audit';
 
 export const dynamic = 'force-dynamic';
@@ -32,13 +33,18 @@ export async function POST(request: Request) {
     const previous = await db().prepare('SELECT display_name FROM profiles WHERE id = ?').bind(profile.id).first<{ display_name: string }>();
     if (!previous) throw new RequestError('Your profile is unavailable. Sign in again.', 401);
     if (previous.display_name === displayName) return Response.json({ ...profile, displayName }, { headers: PRIVATE_HEADERS });
+    // F2: other travellers see this name, so the request's credential is part of the admitting statement.
+    const fence = requestWriteAuthorizationSql(profileWriteAuthorization(profile), profile.id);
     const results = await db().batch([
       db().prepare(`UPDATE profiles SET display_name = ? WHERE id = ? AND display_name = ?
-        AND NOT EXISTS (SELECT 1 FROM auth_links WHERE oai_user_id = ? AND user_id <> ?)`)
-        .bind(displayName, profile.id, previous.display_name, profile.id, profile.id),
+        AND NOT EXISTS (SELECT 1 FROM auth_links WHERE oai_user_id = ? AND user_id <> ?) AND ${fence.condition}`)
+        .bind(displayName, profile.id, previous.display_name, profile.id, profile.id, ...fence.bindings),
       accountAuditStatement(db(), { userId: profile.id, actorName: previous.display_name, entityType: 'profile', entityId: profile.id,
         action: 'update', before: { displayName: previous.display_name }, after: { displayName } }, { sql: 'changes() > 0', bindings: [] }),
     ]);
+    if (!results[0].meta.changes && !await requestWriteAuthorized(db(), profileWriteAuthorization(profile), profile.id)) {
+      throw new AuthError('Your sign-in changed before this saved. Sign in again and try once more.', 401);
+    }
     if (!results[0].meta.changes) throw new RequestError('Your profile changed while saving. Refresh it before trying again.', 409);
     return Response.json({ ...profile, displayName }, { headers: PRIVATE_HEADERS });
   } catch (error) {

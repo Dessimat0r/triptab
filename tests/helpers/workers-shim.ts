@@ -39,6 +39,8 @@ function wrapDatabase(database: D1Database): D1Database {
       if (sql.trimStart().startsWith('INSERT INTO invites') || sql.trimStart().startsWith('DELETE FROM invites WHERE token_hash')) commitPrepared = true;
       // A settlement reminder's final batch (a notification written for another traveller).
       if (sql.trimStart().startsWith('INSERT INTO settlement_reminders')) commitPrepared = true;
+      // F2: a person's receipt upload reservation, receipt delete mark and display-name change.
+      if (sql.trimStart().startsWith('INSERT INTO receipts (') || sql.trimStart().startsWith("UPDATE receipts AS r SET state = 'deleting'") || sql.trimStart().startsWith('UPDATE profiles SET display_name')) commitPrepared = true;
       const statement = target.prepare(sql);
       const budget = sql.startsWith('INSERT INTO auth_rate_limits');
       const providerAdmission = sql.startsWith('UPDATE receipt_operations SET provider =');
