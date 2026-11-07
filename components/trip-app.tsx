@@ -326,6 +326,7 @@ export default function Home({ children }: { children: ReactNode }) {
     [statement, setStatement] = useState(""),
     [savedNotice, setSavedNotice] = useState<{ title: string; at: number } | null>(null),
     [undoNotice, setUndoNotice] = useState<UndoNotice | null>(null),
+    [expenseCreator, setExpenseCreator] = useState<{ accountId: string; tripId: string; expenseId: string; name: string | null } | null>(null),
     [deletedBill, setDeletedBill] = useState<{ tripId: string; name: string; at: number; accountId: string } | null>(null),
     [archivedReview, setArchivedReview] = useState<{ tripId: string; expenseId: string; accountId: string } | null>(null),
     [summaryOpen, setSummaryOpen] = useState(false),
@@ -1819,6 +1820,22 @@ export default function Home({ children }: { children: ReactNode }) {
     setCaptureNotes("");
     setEditing({ ...expense, adjustmentAllocation: CURRENT_CALCULATION_RULE, expenseId: undefined });
   }
+  // D05: who added the saved expense being edited, from the trip's history.
+  // Bound to the account, trip and expense it was read for (R02).
+  const editingSavedId = editing && trip?.expenses.some(value => value.id === editing.id) ? editing.id : undefined;
+  useEffect(() => {
+    const accountId = profile?.id, tripId = trip?.id, expenseId = editingSavedId;
+    if (!accountId || !tripId || !expenseId) return;
+    const controller = new AbortController();
+    void fetch(`/api/expense-creator?${new URLSearchParams({ tripId, expenseId })}`, { cache: "no-store", signal: controller.signal })
+      .then(response => response.ok ? response.json() as Promise<{ accountId?: string; tripId?: string; expenseId?: string; name?: string | null }> : null)
+      .then(value => {
+        if (!value || value.accountId !== accountId || value.tripId !== tripId || value.expenseId !== expenseId) return;
+        setExpenseCreator({ accountId, tripId, expenseId, name: typeof value.name === "string" ? value.name : null });
+      })
+      .catch(() => { /* The line is informational; History still names the author. */ });
+    return () => controller.abort();
+  }, [profile?.id, trip?.id, editingSavedId]);
   // F-18: keep a new manual expense in this browser until it is saved or
   // closed, so a killed app or tab can offer to resume it. Receipt entries
   // already have a saved draft; existing expenses are on the server.
@@ -3614,6 +3631,14 @@ export default function Home({ children }: { children: ReactNode }) {
               </section>}
               {!editorConflict && !!mergeNotice?.length && <p className="notification-status merge-notice" role="status">{uiText("Another traveller changed this expense while you were editing. Their changes were added to your edits: ")}{mergeNotice.map(label => uiText(label)).join(", ")}</p>}
               {undoNotice && undoNotice.tripId === trip.id && undoNotice.accountId === profile?.id && undoBanner(undoNotice)}
+              {(() => {
+                // D05: any member may edit or delete, so say who added a saved expense and who paid.
+                const saved = trip.expenses.find(expense => expense.id === editing.id);
+                const creator = saved && expenseCreator?.accountId === profile?.id && expenseCreator?.tripId === trip.id && expenseCreator?.expenseId === saved.id
+                  ? expenseCreator.name : undefined;
+                const payer = saved ? trip.members.find(member => member.id === saved.payer)?.name : undefined;
+                return creator && payer ? <p className="footnote expense-provenance">{uiText("Added by {creator} · paid by {payer}", { creator, payer })}</p> : null;
+              })()}
               <div className="editor-footer" ref={editorFooterRef}>
                 <div className="expense-save-announcement sr-only" role="alert" aria-atomic="true">{saveAnnouncement && <span key={saveAnnouncement.id}>{saveAnnouncement.message}</span>}</div>
                 <SaveChecklist key={editing.id} blockers={visibleBlockers} attempted={saveAttempted}

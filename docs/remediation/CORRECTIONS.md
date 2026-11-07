@@ -82,7 +82,7 @@ Financial outcomes required to be preserved are asserted by unchanged, passing t
 
 ## Release gates still open
 
-1. Original-document reconciliation. **Partly done (7 November 2026):** the owner supplied the November audit, and D01 to D08 are now recorded in `PROGRAMME.md` (recommended options adopted; D05 is only partly implemented: expenses do not record their creator). Still open: checking F-01 to F-21 and R01 to R14 against the audit's findings and its ten acceptance tests (section F), and comparing these reproductions with the reviewer's `recheck-evidence`.
+1. Original-document reconciliation. **Partly done (7 November 2026):** the owner supplied the November audit, and D01 to D08 are now recorded in `PROGRAMME.md` (recommended options adopted; D05's missing creator was added the same day, from history, `correction-evidence/d05.log`). Still open: checking F-01 to F-21 and R01 to R14 against the audit's findings and its ten acceptance tests (section F), and comparing these reproductions with the reviewer's `recheck-evidence`.
 2. Independent review of R01 to R14 and every implementation PR.
 3. Production-representative D1 migration and restore through 0014 to 0017; the encrypted POSIX recovery drill; Sites migration atomicity and all-traffic rollout.
 4. **R07 hosted: accepted by the owner without verification (see above).** Still recommended after release: the shortest check (per-minute trigger in the logs, one closed-browser reading resumed and stored). Still open as a decision: provider-side stored responses, if the crash-window spend is not acceptable.

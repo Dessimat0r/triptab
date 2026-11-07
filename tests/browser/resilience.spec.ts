@@ -15,7 +15,7 @@ const base: Trip = { id: 'res-trip', ownerId: 'owner', name: 'London', currency:
 async function fixtures(page: Page, trip: Trip = base, options: { raw?: boolean } = {}) {
   let current = options.raw ? structuredClone(trip) : validateLedger({ trips: [trip] }).trips[0], revision = 1, posts = 0;
   await page.route('**/api/**', async route => {
-    const request = route.request(), pathname = new URL(request.url()).pathname;
+    const request = route.request(), url = new URL(request.url()), pathname = url.pathname;
     if (pathname === '/api/ledger' && request.method() === 'POST') {
       try { current = validateLedger(request.postDataJSON().data, { source: 'web', previous: { trips: [current] } }).trips[0]; }
       catch (error) { return route.fulfill({ status: 400, json: { error: String(error) } }); }
@@ -25,6 +25,7 @@ async function fixtures(page: Page, trip: Trip = base, options: { raw?: boolean 
     const json = pathname === '/api/ledger' ? { data: { trips: [current] }, revision }
       : pathname === '/api/profile' ? { id: 'owner', displayName: 'Gary', email: 'gary@example.invalid', authMethod: 'password' }
       : pathname === '/api/receipt/ai-status' ? { configured: false, connected: false, provider: 'api', eligible: false, manageable: false, siwcAvailable: false }
+      : pathname === '/api/expense-creator' ? { accountId: 'owner', tripId: url.searchParams.get('tripId'), expenseId: url.searchParams.get('expenseId'), name: url.searchParams.get('expenseId') === 'pizza' ? 'Gary' : null }
       : pathname === '/api/trip-language' ? { accountId: 'owner', tripId: trip.id, revision: 1, preferences: { readingLanguage: 'en', primaryVersion: 'reading', itemVersions: {} } }
       : { events: [], notifications: [], items: [] };
     return route.fulfill({ json, headers: pathname === '/api/ledger' ? { 'X-TripTab-Account': 'owner' } : {} });
@@ -101,4 +102,15 @@ test('F-20: one invalid legacy expense is named with an Open button; settlement 
   await expect(alert).toContainText('Total of the other expenses: £45.20 (incomplete)');
   await alert.getByRole('button', { name: 'Open' }).click();
   await expect(page.getByRole('textbox', { name: 'Expense name', exact: true })).toHaveValue('Old euro receipt');
+});
+
+test('D05: a saved expense says who added it (from history) and who paid; one older than history says nothing', async ({ page }) => {
+  await fixtures(page, { ...base, expenses: [pizza, { ...pizza, id: 'legacy', title: 'Old taxi', items: [{ ...pizza.items[0], id: 'legacy-item' }] }] });
+  await page.goto('/expenses');
+  await page.locator('.expense-open', { hasText: 'Pizza Express' }).click();
+  await expect(page.locator('.expense-provenance')).toHaveText('Added by Gary · paid by Sam');
+  await page.getByRole('button', { name: 'Close editor', exact: true }).click();
+  await page.locator('.expense-open', { hasText: 'Old taxi' }).click();
+  await expect(page.getByRole('textbox', { name: 'Expense name', exact: true })).toHaveValue('Old taxi');
+  await expect(page.locator('.expense-provenance')).toHaveCount(0);
 });
