@@ -20,12 +20,12 @@ export const transcription = {
   title: 'Café', currency: 'GBP', items: [{ id: null, name: 'Coffee', amount: 250 }, { id: null, name: 'Pastry', amount: 350 }],
   tax: 0, tip: 0, discount: 0, printedTotal: 600, date: '2026-09-28', time: '10:15', summary: 'Read two items.',
 };
-export type OperationRow = { operation_key: string; status: string; attempt_id: string; attempts: number; error_code: string | null; phase: string | null;
+export type OperationRow = { operation_key: string; provider: string | null; status: string; attempt_id: string; attempts: number; error_code: string | null; phase: string | null;
   auto_resumes: number | null; lease_until: number };
 type Hooks = { pauseNextCommit: boolean; atCommit: boolean; proceed: boolean; failNextCommit?: 'before' | 'after'; commitBatches: number;
   provider: { calls: number; holdNext: number; held: number; release: boolean; output: unknown; fail?: number }; detached: number };
 
-export async function createReceiptOperationWorker() {
+export async function createReceiptOperationWorker(options: { kind?: 'bill' } = {}) {
   const project = fileURLToPath(new URL('../../', import.meta.url));
   const shim = fileURLToPath(new URL('./workers-shim.ts', import.meta.url));
   const hasBackground = await access(new URL('../../lib/receipt-background.ts', import.meta.url)).then(() => true, () => false);
@@ -34,10 +34,11 @@ export async function createReceiptOperationWorker() {
       import * as ledger from './app/api/ledger/route.ts';
       import * as receipt from './app/api/receipt/route.ts';
       import * as process from './app/api/receipt/process/route.ts';
+      import * as tripRoute from './app/api/trip/route.ts';
       import { hooks } from ${JSON.stringify(shim)};
       import { readLedger as storedLedger, writeLedger } from './lib/store.ts';
       ${hasBackground ? "import * as background from './lib/receipt-background.ts';" : 'const background = undefined;'}
-      const routes = { '/api/ledger': ledger, '/api/receipt': receipt, '/api/receipt/process': process };
+      const routes = { '/api/ledger': ledger, '/api/receipt': receipt, '/api/receipt/process': process, '/api/trip': tripRoute };
       export default {
         async fetch(request, env, ctx) {
           const url = new URL(request.url);
@@ -132,7 +133,7 @@ export async function createReceiptOperationWorker() {
     };
     // A holiday with one saved receipt photo and its waiting draft, through production routes.
     const initial = await readLedger();
-    await saveLedger({ trips: [...initial.data.trips, { id: tripId, name: 'Operations holiday', currency: 'GBP',
+    await saveLedger({ trips: [...initial.data.trips, { id: tripId, name: 'Operations holiday', currency: 'GBP', ...(options.kind ? { kind: options.kind } : {}),
       members: [{ id: 'alice', name: owner.displayName }, { id: 'bob', name: 'Bob' }], expenses: [], drafts: [], payments: [] }] }, initial.revision);
     const upload = await request(`/api/receipt?tripId=${tripId}`, { method: 'POST', headers: { 'content-type': 'image/png' }, body: receiptFlowImage });
     if (!upload.ok) throw new Error(`upload ${upload.status} ${await upload.text()}`);
@@ -161,7 +162,7 @@ export async function createReceiptOperationWorker() {
     };
     const forgedSave = async (operation: unknown) => (await worker.dispatchFetch(`${origin}/__test/forged-save`, { method: 'POST',
       body: JSON.stringify({ userId: owner.id, tripId, operation }) })).json() as Promise<{ saved: boolean; error?: string }>;
-    const tick = async (now = Date.now()) => (await worker.dispatchFetch(`${origin}/__test/tick?now=${now}`)).json() as Promise<{ resumed: number; skipped: number }>;
+    const tick = async (now = Date.now()) => (await worker.dispatchFetch(`${origin}/__test/tick?now=${now}`)).json() as Promise<{ resumed: number; skipped: number; stored: number; failed: number }>;
     const historyCount = async () => Number((await database.prepare("SELECT COUNT(*) AS n FROM activity_events WHERE trip_id=?").bind(tripId).first<{ n: number }>())!.n);
     const tripRow = async () => (await database.prepare('SELECT data, revision FROM trips WHERE id=?').bind(tripId).first<{ data: string; revision: number }>())!;
     return { worker, database, origin, owner, sessionId, tripId, receiptId, request, readLedger, saveLedger, control, currentDraft,

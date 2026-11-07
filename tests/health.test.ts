@@ -151,3 +151,15 @@ test('R06: a database without the receipt operation claims (0016) cannot report 
   for (const name of (await readdir(new URL('../drizzle/', import.meta.url))).filter(name => name.endsWith('.sql') && Number(name.slice(0, 4)) <= 15).sort()) sqlite.exec(await readFile(new URL('../drizzle/' + name, import.meta.url), 'utf8'));
   const response = await GET(); assert.equal(response.status, 503); assert.deepEqual(await response.json(), { status: 'unavailable' });
 });
+test('R07: a database at 0016 without the receipt job columns and resume index (0017) cannot report ready', async () => {
+  sqlite = new DatabaseSync(':memory:'); receiptBinding = true;
+  for (const name of (await readdir(new URL('../drizzle/', import.meta.url))).filter(name => name.endsWith('.sql') && Number(name.slice(0, 4)) <= 16).sort()) sqlite.exec(await readFile(new URL('../drizzle/' + name, import.meta.url), 'utf8'));
+  const response = await GET(); assert.equal(response.status, 503); assert.deepEqual(await response.json(), { status: 'unavailable' });
+});
+test('R07: readiness requires the 0017 resume index on its own', async () => {
+  sqlite = new DatabaseSync(':memory:'); receiptBinding = true;
+  for (const file of (await readdir(new URL('../drizzle/', import.meta.url))).filter(file => file.endsWith('.sql')).sort()) sqlite.exec(await readFile(new URL('../drizzle/' + file, import.meta.url), 'utf8'));
+  assert.equal((await GET()).status, 200);
+  sqlite.exec('DROP INDEX receipt_operations_resume_idx');
+  assert.equal((await GET()).status, 503);
+});

@@ -50,7 +50,7 @@ function image(database: SQLiteD1, id: string, state = 'active', createdAt = '20
 }
 function dataUrl(source: string) { return 'data:text/javascript;base64,' + Buffer.from(source).toString('base64'); }
 function compile(source: string) { return transpileWithSharedImports(source, { compilerOptions: { target: ScriptTarget.ES2022, module: ModuleKind.ESNext } }).outputText; }
-const boundary = { requests: 0, connectors: 0 };
+const boundary: { requests: number; connectors: number; resumes?: number; resumeTimes?: number[]; failResume?: boolean } = { requests: 0, connectors: 0 };
 Object.defineProperty(globalThis, Symbol.for('triptab.scheduler-test'), { value: boundary, configurable: true });
 const handlerUrl = dataUrl("export default {fetch(){globalThis[Symbol.for('triptab.scheduler-test')].requests++;return new Response('TripTab');}};");
 const contextUrl = dataUrl("export function runWithConnectorBinding(binding,run){globalThis[Symbol.for('triptab.scheduler-test')].connectors++;return run();}");
@@ -60,6 +60,8 @@ const workerSource = compile(await readFile(new URL('../build/sites-worker.ts', 
   .replace('"../lib/receipt-lifecycle"', JSON.stringify(new URL('../lib/receipt-lifecycle.ts', import.meta.url).href))
   .replace("'../lib/trip-lifecycle'", JSON.stringify(new URL('../lib/trip-lifecycle.ts', import.meta.url).href))
   .replace("'../lib/notifications'", JSON.stringify(dataUrl('export const flushNotificationDigests=async()=>0;')))
+  // R07: the receipt resume runner has its own Miniflare tests (receipt-background.test.ts); here, record its dispatch.
+  .replace('"../lib/receipt-background"', JSON.stringify(dataUrl("export const runReceiptOperationTick=async(env,options)=>{const b=globalThis[Symbol.for('triptab.scheduler-test')];b.resumes=(b.resumes||0)+1;b.resumeTimes=[...(b.resumeTimes||[]),options.now];if(b.failResume)throw new Error('db error: secret-resource-id');return {resumed:0,skipped:0,stored:0,failed:0};};")))
   .replaceAll('import.meta.env.DEV', 'false');
 const worker = (await import(dataUrl(workerSource)) as { default: {
   scheduled(controller: ScheduledController, env: unknown, ctx: unknown): Promise<void>;
@@ -141,7 +143,7 @@ test('scheduled database failures and missing bindings expose a generic failure 
   } finally { console.warn = originalWarn; }
 });
 
-test('portable and managed Worker configurations retain a real 15-minute UTC Cron declaration for build and preview', async () => {
+test('portable and managed Worker configurations retain a real 15-minute UTC Cron declaration and the per-minute receipt resume for build and preview', async () => {
   const source = await readFile(new URL('../vite.config.ts', import.meta.url), 'utf8');
   const pluginUrl = dataUrl('export default ()=>({name:"vinext-fixture"}); export function sites(options){return {name:"sites-fixture",options};} export function connectorPreview(){return {name:"connector-fixture"};}');
   const viteUrl = dataUrl('export const defineConfig=config=>config;');
@@ -167,7 +169,7 @@ test('portable and managed Worker configurations retain a real 15-minute UTC Cro
       const configure = (await import(dataUrl(compiled)) as { default: (context: { command: string }) => Promise<{ plugins: { name: string; options?: { config?: Record<string, unknown> } }[] }> }).default;
       for (const command of ['serve', 'build']) {
         const config = (await configure({ command })).plugins.find(plugin => plugin.name === 'cloudflare-fixture')!.options!.config!;
-        assert.deepEqual(config.triggers, { crons: ['*/15 * * * *'] });
+        assert.deepEqual(config.triggers, { crons: ['*/15 * * * *', '* * * * *'] });
         assert.equal(config.main, './build/sites-worker.ts');
         assert.deepEqual(config.vars, { RECEIPT_AI_OWNER_EMAIL: 'ci-owner@example.invalid' });
         assert.deepEqual(config.d1_databases, [{ binding: 'DB', database_name: 'site-creator-d1', database_id: '00000000-0000-4000-8000-000000000000' }]);
@@ -178,4 +180,31 @@ test('portable and managed Worker configurations retain a real 15-minute UTC Cro
   } finally {
     for (const [name, value] of previous) { if (value === undefined) delete process.env[name]; else process.env[name] = value; }
   }
+});
+
+test('R07: the per-minute trigger only resumes interrupted receipt readings; maintenance runs also resume them', async () => {
+  const database = await storage();
+  image(database, 'old-image-a');
+  const removed: string[] = [];
+  const env = { DB: database.asD1(), RECEIPTS: { async delete(key: string) { removed.push(key); } } };
+  boundary.resumes = 0; boundary.resumeTimes = []; boundary.failResume = false;
+  const pending: Promise<unknown>[] = [];
+  const returned = worker.scheduled({ cron: '* * * * *', scheduledTime, noRetry() {} } as ScheduledController, env, { waitUntil(task: Promise<unknown>) { pending.push(task); } });
+  assert.equal(pending.length, 1); assert.equal(returned, pending[0]);
+  await returned;
+  assert.equal(boundary.resumes, 1);
+  assert.deepEqual(boundary.resumeTimes, [scheduledTime]);
+  assert.equal(removed.length, 0, 'the per-minute trigger does no receipt cleanup');
+  await dispatch(env);
+  assert.equal(boundary.resumes, 2, 'the 15-minute maintenance also resumes readings');
+  assert.equal(removed.length, 1);
+  // A resume failure fails the invocation without forwarding resource values.
+  boundary.failResume = true;
+  const warn = console.warn; const warnings: unknown[] = []; console.warn = (...args: unknown[]) => { warnings.push(args); };
+  try {
+    await assert.rejects(worker.scheduled({ cron: '* * * * *', scheduledTime, noRetry() {} } as ScheduledController, env, { waitUntil() {} }),
+      (error: Error) => !error.message.includes('secret-resource-id'));
+    await assert.rejects(dispatch(env), (error: Error) => !error.message.includes('secret-resource-id'));
+  } finally { console.warn = warn; boundary.failResume = false; }
+  assert(!JSON.stringify(warnings).includes('secret-resource-id'));
 });

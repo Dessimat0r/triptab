@@ -115,6 +115,30 @@ export async function sessionIdentity(request: Request, database: D1Database): P
   // profile. They share precedence rules without reading account flags.
   return (await authSnapshot(request, database, null, {}, false))?.identity ?? null;
 }
+/**
+ * R07: the execution grant for work done on this person's behalf after their
+ * request ends. It names the server-side session that authenticated the
+ * request (its stable session ID, never the cookie, token or token hash), or
+ * the trusted ChatGPT identity when no TripTab session is in use. Background
+ * work and its commit stop as soon as that session is signed out, expires or
+ * is revoked, the ChatGPT link changes, or the account is deleted. Precedence
+ * matches resolveIdentity: a live session wins over provider headers.
+ */
+export async function executionGrant(request: Request, database: D1Database, userId: string): Promise<{ kind: 'session' | 'chatgpt'; ref: string } | null> {
+  const token = sessionToken(request);
+  if (token) {
+    const row = await database.prepare(`SELECT s.session_id FROM auth_sessions s JOIN profiles p ON p.id=s.user_id AND p.deleted_at=''
+      WHERE s.token_hash=? AND s.user_id=? AND s.expires_at>? AND s.session_id<>''`)
+      .bind(await hashToken(token), userId, new Date().toISOString()).first<{ session_id: string }>();
+    if (row) return { kind: 'session', ref: row.session_id };
+  }
+  const signedOut = (request.headers.get('cookie') || '').split(';').some(value => value.trim() === `${SIGNED_OUT_COOKIE}=1`);
+  const provider = signedOut ? null : trustedChatGPTIdentity(request);
+  if (!provider) return null;
+  const linked = await database.prepare(`SELECT 1 AS ok FROM profiles p WHERE p.id=? AND p.deleted_at='' AND (p.id=?
+      OR EXISTS (SELECT 1 FROM auth_links l WHERE l.oai_user_id=? AND l.user_id=p.id))`).bind(userId, provider.id, provider.id).first<{ ok: number }>();
+  return linked ? { kind: 'chatgpt', ref: provider.id } : null;
+}
 export async function resolveIdentity(request: Request, options: { allowSession?: boolean } = {}, database: D1Database): Promise<AuthIdentity> {
   const snapshot = await authSnapshot(request, database, trustedChatGPTIdentity(request), options, false);
   if (!snapshot) throw new Error('UNAUTHORIZED');

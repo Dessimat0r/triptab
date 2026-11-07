@@ -1,13 +1,12 @@
-import { canonicalJson, sha256Hex } from '@/lib/data-utils';
 import { env, waitUntil } from 'cloudflare:workers';
 import { z } from 'zod';
-import { bucket, db, ensureProfile, failure, readBoundedBody, readLedger, receiptAccess, receiptKey, RequestError, sameOrigin, writeLedger } from '@/lib/store';
+import { db, ensureProfile, failure, readBoundedBody, readLedger, RequestError, sameOrigin } from '@/lib/store';
+import { executionGrant } from '@/lib/auth';
 import { getReceiptAIAccess, ReceiptAIAccessError, type ReceiptAIEnvironment } from '@/lib/receipt-ai-access';
-import { applyReceiptTranscription, consumeReceiptProcessBudget, processReceiptImage, ReceiptAIError } from '@/lib/receipt-ai';
-import { readTripLanguagePreferences } from '@/lib/trip-language-preferences';
-import { processReceiptQuestion, applyReceiptQuestion } from '@/lib/receipt-assistant';
+import { ReceiptAIError } from '@/lib/receipt-ai';
 import { financialFormatRefusal } from '@/lib/financial-format';
-import { claimOperation, finishOperation, operationFence, type Claim } from '@/lib/receipt-operations';
+import { claimOperation, finishOperation, operationFence, type Claim, type OperationSource } from '@/lib/receipt-operations';
+import { errorCategory, executeOperation, loadOperationSource, logOperation, type OperationLog } from '@/lib/receipt-operation-work';
 
 export const dynamic = 'force-dynamic';
 const id = z.string().min(1).max(100);
@@ -16,22 +15,15 @@ const requestSchema = z.object({ tripId: id, draftId: id, receiptId: id.regex(/^
   // fingerprint fences inference; this compatibility value never decides it.
   revision: z.number().int().min(0).optional(), draftHash: z.string().regex(/^[a-f0-9]{64}$/),
   questionId: id.optional(), readPurchaseDetails: z.boolean().optional() }).strict();
-type Operation = { attemptId: string; tripId: string; draftId: string; receiptId?: string };
-const errorCategory = (error: unknown) => error instanceof ReceiptAIError || error instanceof ReceiptAIAccessError ? error.code
-  : error instanceof RequestError && error.status === 409 ? 'ledger-changed' : error instanceof RequestError && error.status === 408 ? 'timed-out' : 'processing-failed';
-function logOperation(event: string, operation: Operation, details: Record<string, string | number | undefined> = {}) {
-  // Legacy/imported IDs can contain user text. Keep operational tokens only;
-  // receipt contents, account emails and provider secrets never enter logs.
-  const ids = Object.fromEntries(Object.entries(operation).filter(([, value]) => typeof value === 'string' && /^[-a-zA-Z0-9_]{1,100}$/.test(value)));
-  console.info('TripTab receipt operation', { event, ...ids, ...details });
-}
+/** A browser request's attempt; the background runner allows longer (lib/receipt-background.ts). */
+const REQUEST_TIMEOUT_MS = 90_000;
 
 export async function POST(request: Request) {
   // R01: refuse a bundle that would drop the proposal's discounts before any
   // paid inference runs for it.
   const refused = financialFormatRefusal(request);
   if (refused) return refused;
-  let operation: Operation | undefined;
+  let operation: OperationLog | undefined;
   let claim: Extract<Claim, { owned: true }> | undefined;
   try {
     sameOrigin(request);
@@ -45,106 +37,44 @@ export async function POST(request: Request) {
     const parsed = requestSchema.safeParse(body);
     if (!parsed.success) throw new RequestError('Reload TripTab and open the saved receipt again before processing it. A current receipt fingerprint is required.');
     const values = parsed.data;
-    const ledger = await readLedger(profile.id);
-    const trip = ledger.data.trips.find(value => value.id === values.tripId);
-    const draft = trip?.drafts.find(value => value.id === values.draftId);
-    if (!trip || !draft) throw new RequestError('Receipt draft not found in your holidays.', 404);
-    if (await sha256Hex(canonicalJson(draft)) !== values.draftHash) throw new RequestError('This receipt changed. Refresh before processing it.', 409);
-    if (draft.receiptId !== values.receiptId) throw new RequestError('This receipt changed. Refresh before processing it.', 409);
-    if (values.questionId && !draft.conversation?.some(message=>message.id===values.questionId&&message.role==='user')) throw new RequestError('Choose a saved question from this receipt.');
-    if (values.questionId && draft.conversation?.some(message=>message.replyTo===values.questionId&&message.role==='assistant')) return Response.json({...ledger,draft},{headers:{'Cache-Control':'private, no-store'}});
-    if ((draft.conversation?.length ?? 0) >= 100) throw new RequestError('This receipt conversation has reached its limit of 100 messages.');
-    let imageData: {bytes:Uint8Array;mimeType:string;owner:string;version:string;size:number}|undefined;
-    if (!values.questionId) {
-      if(!values.receiptId)throw new RequestError('Save a receipt photo before reading it.');
-      const access = await receiptAccess(profile.id, values.receiptId);
-      if (!access || access.tripId !== trip.id) throw new RequestError('This receipt image is unavailable.', 404);
-      const object = await bucket().get(receiptKey(access.owner, values.receiptId));
-      const mimeType = object?.httpMetadata?.contentType;
-      if (!object || !mimeType || !['image/jpeg', 'image/png', 'image/webp'].includes(mimeType)) throw new RequestError('This receipt image is unavailable.', 404);
-      if (object.size > 5 * 1024 * 1024) throw new RequestError('Use a receipt image no larger than 5 MB.', 413);
-      const bytes = new Uint8Array(await object.arrayBuffer());
-      if (!bytes.length || bytes.byteLength > 5 * 1024 * 1024) throw new RequestError('Use a receipt image no larger than 5 MB.', 413);
-      imageData={bytes,mimeType,owner:access.owner,version:object.version,size:object.size};
-    }
+    const source = await loadOperationSource(profile.id, values);
+    if (source.answered) return Response.json({ ...source.ledger, draft: source.draft }, { headers: { 'Cache-Control': 'private, no-store' } });
     const database = db();
+    // R07: the work may finish after this request ends (the background runner
+    // resumes it if the platform cuts it off). It acts only under this
+    // person's execution grant: their server-side session or trusted ChatGPT
+    // identity, rechecked before spending and inside the commit.
+    const grant = await executionGrant(request, database, profile.id);
+    if (!grant) throw new RequestError('Sign in to TripTab again before reading this receipt.', 401);
+    const job: OperationSource = { tripId: source.trip.id, draftId: source.draft.id, draftHash: values.draftHash, receiptId: values.receiptId,
+      imageVersion: source.image?.version, questionId: values.questionId, readPurchaseDetails: values.readPurchaseDetails };
     // R06: claim this operation before any budget, key lookup or provider
     // call. Identical requests, on any Worker instance, share one claim; only
     // its holder spends. The key is the authorized source just checked.
-    const attempt = await claimOperation(database, { tripId: trip.id, draftId: draft.id, draftHash: values.draftHash, receiptId: values.receiptId,
-      imageVersion: imageData?.version, questionId: values.questionId, readPurchaseDetails: values.readPurchaseDetails }, profile.id);
+    const attempt = await claimOperation(database, job, profile.id, { grant });
     if (!attempt.owned) {
-      // Already running: the app keeps showing it as reading and picks up the
-      // stored proposal on refresh. Already stored: return what was saved.
+      // Already running (here or in the background): the app keeps showing it
+      // as reading and picks up the stored proposal on refresh. Already stored:
+      // return what was saved.
       const latest = await readLedger(profile.id);
-      const latestDraft = latest.data.trips.find(value => value.id === trip.id)?.drafts.find(value => value.id === draft.id);
+      const latestDraft = latest.data.trips.find(value => value.id === source.trip.id)?.drafts.find(value => value.id === source.draft.id);
       return Response.json({ ...latest, draft: latestDraft, reading: attempt.status === 'running' },
         { status: attempt.status === 'running' ? 202 : 200, headers: { 'Cache-Control': 'private, no-store' } });
     }
     claim = attempt;
-    // F-11: a phone that locks or leaves the app drops this request. The paid
-    // reading continues on the server until its own time limit and stores the
-    // proposal, which the app picks up on its next refresh. The draft
-    // fingerprint above and the unchanged-draft check below keep it idempotent.
-    // R07: if the platform ends the work before it finishes (its grace period
-    // after a disconnect is shorter than this limit), the claim's lease runs
-    // out and the next request for the same receipt takes it over.
-    const signal = AbortSignal.timeout(90_000);
-    const {preferences:{readingLanguage}} = await readTripLanguagePreferences(database,profile.id,trip.id);
-    const connection = await getReceiptAIAccess(request, profile, database, env as unknown as ReceiptAIEnvironment);
-    await consumeReceiptProcessBudget(database, profile.id, { provider: connection.provider });
-    operation = { attemptId: claim.attemptId, tripId: trip.id, draftId: draft.id, receiptId: values.receiptId };
-    logOperation('native-processing-started', operation, { provider: connection.provider });
-    const context={...connection,trip,draft,readingLanguage,callerMemberId:trip.members.find(member=>member.userId===profile.id)?.id??null};
+    operation = { attemptId: claim.attemptId, tripId: source.trip.id, draftId: source.draft.id, receiptId: values.receiptId, runner: 'request' };
     const started = operation, held = claim;
-    const work = (async (): Promise<Response> => {
-      const answer = values.questionId ? await processReceiptQuestion({...context,questionId:values.questionId},{signal}) : undefined;
-      const transcription = imageData ? await processReceiptImage({...context,image:imageData},{signal}) : undefined;
-      // An unrelated ledger edit does not invalidate a paid transcription. Rebase
-      // only onto an unchanged source draft and member context, always retaining
-      // the latest other entries. Every CAS retry repeats the access checks;
-      // inference itself runs once.
-      for (let attempt = 0; attempt < 3; attempt++) {
-        if (signal.aborted) throw new RequestError('Receipt processing was cancelled or timed out. Your saved receipt is unchanged.', 408);
+    // F-11/R07: a phone that locks or leaves the app drops this request. The
+    // reading continues for the platform's post-disconnect grace period
+    // (waitUntil: up to 30 s after the client disconnects). If it is cut off
+    // there, no outcome is recorded, its lease runs out, and the background
+    // runner resumes the operation once under the same grant.
+    const signal = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+    const work = executeOperation({ userId: profile.id, request: job, source, fence: operationFence(held), log: started, signal,
+      credential: () => getReceiptAIAccess(request, profile, database, env as unknown as ReceiptAIEnvironment),
+      stillCurrent: async () => {
         if ((await ensureProfile(request)).id !== profile.id) throw new RequestError('Your signed-in account changed. Open this receipt again.', 409);
-        const latest = await readLedger(profile.id);
-        const currentTrip = latest.data.trips.find(value => value.id === trip.id);
-        const currentDraft = currentTrip?.drafts.find(value => value.id === draft.id);
-        const currentAccess = imageData && values.receiptId ? await receiptAccess(profile.id, values.receiptId) : undefined;
-        if (!currentTrip || !currentDraft || JSON.stringify(currentDraft) !== JSON.stringify(draft)
-          || currentTrip.ownerId !== trip.ownerId || currentTrip.receiptLanguage !== trip.receiptLanguage || JSON.stringify(currentTrip.members) !== JSON.stringify(trip.members)
-          || imageData && (!currentAccess || currentAccess.tripId !== trip.id || currentAccess.owner !== imageData.owner)) {
-          throw new RequestError('This receipt changed during processing. Refresh before trying again.', 409);
-        }
-        if(imageData && values.receiptId) {
-          const currentImage = await bucket().head(receiptKey(imageData.owner, values.receiptId));
-          if (!currentImage || currentImage.version !== imageData.version || currentImage.size !== imageData.size
-            || currentImage.httpMetadata?.contentType !== imageData.mimeType) throw new RequestError('This receipt image changed during processing. Refresh before trying again.', 409);
-        }
-        const tripSnapshot = structuredClone(currentTrip);
-        const proposal = answer && values.questionId ? applyReceiptQuestion(currentTrip,currentDraft,answer,values.questionId) : applyReceiptTranscription(currentTrip, currentDraft, transcription!, undefined, {
-          readingLanguage, readPurchaseDetails: values.readPurchaseDetails, attemptId: started.attemptId,
-          processedAt: new Date().toISOString(), processor: connection.provider === 'api' ? 'native-api' : 'native-siwc',
-          imageIds: values.receiptId ? [values.receiptId] : [],
-        });
-        currentTrip.drafts[currentTrip.drafts.findIndex(value => value.id === proposal.id)] = proposal;
-        // R06/R12: a superseded attempt (its claim was taken over after its
-        // lease ran out) never commits; the newer attempt owns the result.
-        // Ownership is decided inside the commit's own D1 transaction, which
-        // also records the operation as stored, so no takeover can land
-        // between a check and the write.
-        try {
-          const saved = await writeLedger(profile.id, { trips: [currentTrip] }, latest.revision, { source: 'web', tripSnapshot, operation: operationFence(held) });
-          const savedDraft = saved.data.trips.find(value => value.id === trip.id)?.drafts.find(value => value.id === draft.id);
-          logOperation('native-proposal-stored', started, {
-            status: savedDraft?.receiptScan?.status, lineCount: savedDraft?.items.length ?? 0, revision: saved.revision });
-          return Response.json({ ...saved, draft: savedDraft }, { headers: { 'Cache-Control': 'private, no-store' } });
-        } catch (error) {
-          if (!(error instanceof Error) || error.message !== 'CONFLICT') throw error;
-        }
-      }
-      throw new RequestError('Your ledger kept changing during processing. Refresh before trying again.', 409);
-    })();
+      } }).then(({ saved, savedDraft }) => Response.json({ ...saved, draft: savedDraft }, { headers: { 'Cache-Control': 'private, no-store' } }));
     // Keep the reading alive after the client disconnects; errors still reach a connected client.
     // A failure records the outcome on the claim, so a later request may retry.
     const settled = work.catch(async error => { await finishOperation(database, held.key, held.attemptId, 'failed', { errorCode: errorCategory(error) }).catch(() => {}); throw error; });
@@ -152,7 +82,7 @@ export async function POST(request: Request) {
     claim = undefined;
     return await settled;
   } catch (error) {
-    // A failure before the work started (key, budget, preferences) also ends the claim.
+    // A failure before the work started also ends the claim.
     if (claim) await finishOperation(db(), claim.key, claim.attemptId, 'failed', { errorCode: errorCategory(error) }).catch(() => {});
     if (operation) logOperation('native-processing-failed', operation, { category: errorCategory(error) });
     if (error instanceof ReceiptAIError || error instanceof ReceiptAIAccessError) {

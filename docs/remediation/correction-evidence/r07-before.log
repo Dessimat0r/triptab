@@ -1,0 +1,7 @@
+# R07 before: on f2e1e0b (R12 fixed, no background runner), a reading cut off at the provider with its lease expired.
+# Miniflare D1/R2, production routes, mocked provider; Node 24.22.1 Linux.
+background runner present: false (tick 501)
+operation: running   draft: waiting   provider calls: 1   (after lease expiry, no browser request)
+AssertionError: the reading completed without a browser request (expected draft status 'review')
+
+# The 20 cases of tests/receipt-background.test.ts on the same tree: 0 passed, 20 failed (first failing assertion: the credential kind is recorded before the call; no 0017 columns, no runner).

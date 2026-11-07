@@ -41,3 +41,9 @@ test('clearing and expiry keep storage small; unavailable storage never throws',
   assert.equal(readingState('gary', 'trip', draft, 0, broken), undefined);
   assert.equal(draftFingerprint(draft), draftFingerprint(JSON.parse(JSON.stringify(draft)) as Draft));
 });
+
+test('R07: a draft is not called stalled while the server may still finish it in the background', async () => {
+  const { OPERATION_LEASE_MS, BACKGROUND_LEASE_MS } = await import('../lib/receipt-operations');
+  // The runner's trigger (build/sites-worker.ts RECEIPT_RESUME_CRON) fires once a minute.
+  assert(READING_LIMIT_MS >= OPERATION_LEASE_MS + 60_000 + BACKGROUND_LEASE_MS, 'covers the request lease, one tick and one background attempt');
+});

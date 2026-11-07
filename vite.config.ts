@@ -26,9 +26,11 @@ const localBindingConfig = {
   main: backupOnly ? "./build/backup-worker.ts" : "./build/sites-worker.ts",
   vars: { RECEIPT_AI_OWNER_EMAIL: receiptAIOwnerEmail },
   compatibility_flags: ["nodejs_compat"],
-  // Cloudflare-compatible output declares UTC maintenance every 15 minutes.
-  // Sites' production deployment must separately confirm trigger activation.
-  triggers: { crons: backupOnly ? [] : ["*/15 * * * *"] },
+  // Cloudflare-compatible output declares UTC maintenance every 15 minutes and
+  // (R07) a per-minute resume of interrupted receipt readings, matched by
+  // RECEIPT_RESUME_CRON in build/sites-worker.ts. Sites' production deployment
+  // must separately confirm that both triggers are active.
+  triggers: { crons: backupOnly ? [] : ["*/15 * * * *", "* * * * *"] },
   d1_databases: d1
     ? [
         {

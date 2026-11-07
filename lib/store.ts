@@ -13,7 +13,7 @@ export { activityStatements, type ActivityEntity, type ActivitySource, type Acti
 import { receiptMemorySchema, type ReceiptMemory } from './receipt-context';
 import { receiptAliasIdentity, ReceiptMemoryOwnershipError, validateReceiptMemoryOwnership } from './receipt-memory-ownership';
 import { OPEN_TRIP_IDS, openTripBindings, TripLifecycleError } from './trip-lifecycle';
-import { holdsOperation, isOperationFence, operationCommitSql, type OperationFence } from './receipt-operations';
+import { holdsOperation, isOperationFence, operationAuthorized, operationCommitSql, type OperationFence } from './receipt-operations';
 
 export class RequestError extends Error {
   constructor(message: string, public readonly status = 400) {
@@ -23,6 +23,10 @@ export class RequestError extends Error {
 /** R12: this reading no longer owns its operation, so its result was not saved. */
 export class OperationSupersededError extends RequestError {
   constructor() { super('Another reading of this receipt took over. Refresh to see its result.', 409); }
+}
+/** R07: the person's sign-in that authorized this reading ended, so its result was not saved. */
+export class OperationUnauthorizedError extends RequestError {
+  constructor() { super('Your sign-in changed before this reading finished, so nothing was saved. Open the receipt and read it again.', 409); }
 }
 
 export async function owner(request: Request) {
@@ -552,7 +556,7 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
   // client value), is always a scoped receipt save, and commits only while
   // that attempt still owns the operation.
   if (options.operation !== undefined && (!isOperationFence(options.operation) || !scoped)) throw new Error('Invalid receipt operation save');
-  const operationCommit = options.operation ? operationCommitSql(options.operation) : undefined;
+  const operationCommit = options.operation ? operationCommitSql(options.operation, id) : undefined;
   const tripIds = ledger.trips.map(trip => trip.id);
   const tripIdsJson = JSON.stringify(tripIds);
   // D1 batches read one transactional snapshot. Reject future as well as stale
@@ -761,6 +765,7 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
   if (!results[1].meta.changes) {
     // Name a lost operation separately: retrying it can never succeed.
     if (options.operation && !await holdsOperation(db(), options.operation.key, options.operation.attemptId)) throw new OperationSupersededError();
+    if (options.operation && !await operationAuthorized(db(), options.operation, id)) throw new OperationUnauthorizedError();
     throw new Error('CONFLICT');
   }
   // The one-minute photo hold commits with the deletion. Undo can reattach an
