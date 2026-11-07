@@ -1,12 +1,27 @@
 # TripTab approved remediation programme
 
-Owner brief and evidence baseline: **TripTab Functionality, Usability and Financial Accuracy Audit, 6 November 2026**, audited commit `48de3f9`. Decisions D01 to D08 and the additional owner decisions govern this programme.
+Owner brief and evidence baseline: **TripTab Functionality, Usability and Financial Accuracy Audit, 6 November 2026**, audited commit `48de3f9`. Decisions D01 to D08 (recorded below) and the additional owner decisions govern this programme.
 
 This record describes implementation evidence. It is not approval to release. No merge, deployment or production migration is authorised. Status updated 6 November 2026 (follow-ups #71 to #74 added).
 
 ## Independent release review corrections (R01 to R11)
 
 The independent release review found one P0, seven P1 and three P2 defects in the combined stack. Corrections and their evidence are in [`CORRECTIONS.md`](CORRECTIONS.md) (branch `claude/new-session-kf3m0k`, draft PR #77). That file's closure matrix and status changes supersede the rows below where they differ. The stack is still **not approved for release**; the gates listed there remain open.
+
+## Owner decisions D01 to D08 (recorded 7 November 2026)
+
+D01 to D08 are the eight "Decisions for the product owner" in section E of the audit (*TripTab Functionality, Usability and Financial Accuracy Audit*, 6 November 2026, commit `48de3f9`). The audit gives the questions and its recommendations, not the answers. On 7 November 2026, in the Claude Code session for PR #78, the owner adopted the recommended option for all eight. For D07 and D08 the audit listed options without a recommendation, so the option already built was adopted. This records decisions; it is not a review of the implementation.
+
+| # | Question | Decision | Implementation evidence | Gap |
+| --- | --- | --- | --- | --- |
+| D01 | Default BOGOF split | Spread the saving over the promotion's items in proportion to printed price (equal prices share equally); "give it all to one item" available | `lib/adjustments.ts` (proportional default, D01); the editor's "Split between items manually" allocation can put the whole saving on one item; `adjustments.test.ts`, `adjustment-preview.test.ts`, `browser/discounts.spec.ts` | None known. "All to one item" is reached through the manual split, not a one-tap option |
+| D02 | Unexplained total differences | Block saving unless reconciled, or "Save anyway" with a typed reason that is stored | `lib/receipt-scan.ts` (server save gate requires a written reason; `RECEIPT_DIFFERENCE_ERROR`); `receipt-scan.test.ts` | None known |
+| D03 | Adding people to bills | Connected means sharing any holiday or bill; connected people are added directly, with a way to leave | `lib/trip-lifecycle.ts` `listConnections` (ownership and memberships, never names) and direct add; Leave (#67, #72); `connected-bills.test.ts` | Privacy review (open in the closure tracker) |
+| D04 | Activity and People views | Totals per person and per currency; never netted across bills or holidays | `lib/personal-activity.ts` (per currency, never netted); `personal-activity.test.ts` | None known |
+| D05 | Delete rights | Any member can edit and delete, with notifications and Undo | `components/trip-app.tsx` `requestDeleteExpense` (D05; confirmation when it matters financially or someone else paid); Undo and History restore; the payer and sharers are notified through the involved-members rule | **Partial:** expenses do not record who created them, so rows cannot show the creator and a creator who is neither payer nor sharer, on "involved only" notifications, is not told about a deletion. History does name the actor |
+| D06 | Swipe gestures | Swipe is a shortcut only, always alongside a visible ⋯ menu | #66, #71: ⋯ menus on expense, payment, draft and drawer rows, swipe on touch | Real-phone swipe check (device gate) |
+| D07 | Bills and the open limit | A separate bill limit (100 open bills, 50 open holidays) with friendly messages; nothing archived automatically | `lib/model.ts` / `validateLedger` limits; `phase-7-notes.md` F-17 (D07); `resilience.test.ts` | None known |
+| D08 | Several payers per expense | Later: explicitly deferred until the core remediation ships | F-12 deferred (`phase-7-notes.md`) | Future programme |
 
 ## Owner decisions, 6 November 2026 (after the follow-ups)
 
