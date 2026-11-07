@@ -537,30 +537,38 @@ export async function notifyReceiptReply(tripId: string, caller: string, authorM
 }
 
 /** Account-only wakeup after an already committed in-app notification. */
-export async function notifyAccountPush(userId:string) {
+export async function notifyAccountPush(userId:string, authorize?:()=>Promise<boolean>) {
   if(!pushConfiguration().enabled) return;
   const preference=await db().prepare('SELECT delivery FROM notification_preferences WHERE user_id=?').bind(userId).first<{delivery:string}>();
   if(preference?.delivery==='none') return;
   const subscriptions=await db().prepare('SELECT endpoint,user_id,generation,created_at FROM push_subscriptions WHERE user_id=? ORDER BY created_at LIMIT 4').bind(userId).all<Subscription>();
-  await Promise.allSettled(subscriptions.results.map(subscription=>sendPush(subscription)));
+  const currentAccount=async()=>!!await db().prepare(`SELECT 1 FROM profiles p WHERE p.id=? AND p.deleted_at=''
+    AND NOT EXISTS(SELECT 1 FROM notification_preferences preference WHERE preference.user_id=p.id AND preference.delivery='none')`).bind(userId).first();
+  await Promise.allSettled(subscriptions.results.map(subscription=>sendPush(subscription,sendTimeoutMs,authorize??currentAccount)));
 }
 export async function flushNotificationDigests(database:D1Database,now=Date.now()) {
   const cutoff=new Date(now-86400000).toISOString();
-  const pending=await database.prepare(`SELECT d.user_id,d.trip_id,d.updates,d.created_at,t.data FROM notification_digests d JOIN trips t ON t.id=d.trip_id JOIN memberships m ON m.trip_id=d.trip_id AND m.user_id=d.user_id JOIN notification_preferences p ON p.user_id=d.user_id WHERE d.created_at<=? AND p.scope<>'none' AND p.delivery='daily' ORDER BY d.created_at LIMIT 20`).bind(cutoff).all<{user_id:string;trip_id:string;updates:number;created_at:string;data:string}>();
+  const pending=await database.prepare(`SELECT d.user_id,d.trip_id,d.updates,d.created_at,t.data FROM notification_digests d
+    JOIN trips t ON t.id=d.trip_id AND t.owner NOT LIKE 'deleted:%'
+    JOIN profiles recipient ON recipient.id=d.user_id AND recipient.deleted_at=''
+    LEFT JOIN memberships m ON m.trip_id=d.trip_id AND m.user_id=d.user_id
+    JOIN notification_preferences p ON p.user_id=d.user_id
+    WHERE d.created_at<=? AND (t.owner=d.user_id OR m.user_id IS NOT NULL) AND p.scope<>'none' AND p.delivery='daily'
+    ORDER BY d.created_at LIMIT 20`).bind(cutoff).all<{user_id:string;trip_id:string;updates:number;created_at:string;data:string}>();
   let delivered=0;
   for(const digest of pending.results) {
     const id=crypto.randomUUID(),date=new Date(now).toISOString(),tripName=(JSON.parse(digest.data) as {name:string}).name;
     const body=compactText(`${digest.updates} updates to ${tripName}. Open TripTab to review the activity.`,160);
+    const recipient=notificationRecipient(digest.trip_id,digest.user_id,undefined,'daily');
     const result=await database.batch([
-      database.prepare(`INSERT INTO notifications(id,user_id,title,body,url,created_at) SELECT ?,?,'TripTab daily summary',?,'/',? WHERE EXISTS(SELECT 1 FROM notification_digests d
-        JOIN memberships m ON m.trip_id=d.trip_id AND m.user_id=d.user_id
-        JOIN profiles recipient ON recipient.id=d.user_id AND recipient.deleted_at=''
-        JOIN trips t ON t.id=d.trip_id AND t.owner NOT LIKE 'deleted:%'
-        JOIN notification_preferences p ON p.user_id=d.user_id WHERE d.user_id=? AND d.trip_id=? AND d.updates=? AND d.created_at=? AND p.scope<>'none' AND p.delivery='daily')`).bind(id,digest.user_id,body,date,digest.user_id,digest.trip_id,digest.updates,digest.created_at),
+      database.prepare(`INSERT INTO notifications(id,user_id,title,body,url,created_at) SELECT ?,?,'TripTab daily summary',?,'/',?
+        WHERE EXISTS(SELECT 1 FROM notification_digests d WHERE d.user_id=? AND d.trip_id=? AND d.updates=? AND d.created_at=?)
+          AND ${recipient.condition}`).bind(id,digest.user_id,body,date,digest.user_id,digest.trip_id,digest.updates,digest.created_at,...recipient.bindings),
       database.prepare('DELETE FROM notification_digests WHERE user_id=? AND trip_id=? AND EXISTS(SELECT 1 FROM notifications WHERE id=?)').bind(digest.user_id,digest.trip_id,id),
       database.prepare('DELETE FROM notifications WHERE user_id=? AND id NOT IN(SELECT id FROM notifications WHERE user_id=? ORDER BY created_at DESC,id DESC LIMIT 100)').bind(digest.user_id,digest.user_id),
     ]);
-    if(result[0].meta.changes) { delivered++; await notifyAccountPush(digest.user_id).catch(()=>{}); }
+    if(result[0].meta.changes) { delivered++; await notifyAccountPush(digest.user_id,async()=>
+      !!(await database.prepare(`SELECT ${recipient.condition} AS ok`).bind(...recipient.bindings).first<{ok:number}>())?.ok).catch(()=>{}); }
   }
   return delivered;
 }

@@ -91,3 +91,32 @@ test('N01: an authorised legacy owner without a membership still receives their 
  await notifications.notifyReceiptReply('secret','alice');await Promise.all(fixture.pending);
  assert.equal(db.sqlite.prepare("SELECT COUNT(*) AS n FROM notifications WHERE user_id='alice'").get()!.n,1);
 });
+
+test('N01: a legacy owner without a membership receives a daily reply digest using current permissions',async()=>{
+ const db=await seed();db.sqlite.prepare("DELETE FROM memberships WHERE user_id='alice'").run();
+ db.sqlite.prepare("INSERT INTO notification_preferences(user_id,scope,delivery,reminders) VALUES('alice','all','daily',0)").run();
+ await notifications.notifyReceiptReply('secret','alice');await Promise.all(fixture.pending);
+ assert.equal(db.sqlite.prepare("SELECT COUNT(*) AS n FROM notifications WHERE user_id='alice'").get()!.n,0);
+ db.sqlite.prepare("UPDATE notification_digests SET created_at='2000-01-01T00:00:00.000Z'").run();
+ assert.equal(await notifications.flushNotificationDigests(db.asD1()),1);
+ assert.equal(db.sqlite.prepare("SELECT COUNT(*) AS n FROM notifications WHERE user_id='alice'").get()!.n,1);
+});
+
+for(const cutoff of ['membership','account','bill','scope'] as const)test(`N01: daily digest flush rechecks ${cutoff} after its snapshot`,async()=>{
+ const db=await seed();
+ db.sqlite.prepare("INSERT INTO notification_preferences(user_id,scope,delivery,reminders) VALUES('bob','all','daily',0)").run();
+ await notifications.notifyMembers('secret','alice','Private bill','Private receipt');await Promise.all(fixture.pending);
+ db.sqlite.prepare("UPDATE notification_digests SET created_at='2000-01-01T00:00:00.000Z'").run();
+ fixture.pause=true;
+ const pending=notifications.flushNotificationDigests(fixture.database as unknown as D1Database);
+ try{
+  const until=Date.now()+3000;while(!fixture.paused&&Date.now()<until)await new Promise(resolve=>setTimeout(resolve,2));
+  assert(fixture.paused,'digest has read its snapshot and prepared the inbox write');
+  if(cutoff==='membership')db.sqlite.prepare("DELETE FROM memberships WHERE user_id='bob'").run();
+  if(cutoff==='account')db.sqlite.prepare("UPDATE profiles SET deleted_at=? WHERE id='bob'").run(new Date().toISOString());
+  if(cutoff==='bill')db.sqlite.prepare("UPDATE trips SET owner='deleted:alice' WHERE id='secret'").run();
+  if(cutoff==='scope')db.sqlite.prepare("UPDATE notification_preferences SET scope='none' WHERE user_id='bob'").run();
+  fixture.release=true;assert.equal(await pending,0);
+  assert.equal(db.sqlite.prepare("SELECT COUNT(*) AS n FROM notifications WHERE user_id='bob'").get()!.n,0);
+ }finally{fixture.release=true;await pending;}
+});
