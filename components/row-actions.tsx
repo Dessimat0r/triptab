@@ -75,22 +75,27 @@ export function SwipeRow({ children, onDelete, deleteLabel, disabled, className 
 }) {
   const [offset, setOffset] = useState(0);
   const [revealed, setRevealed] = useState(false);
-  const start = useRef<{ x: number; y: number; id: number; horizontal?: boolean } | null>(null);
+  const start = useRef<{ x: number; y: number; id: number; offset: number; horizontal?: boolean } | null>(null);
   const reveal = 88;
   const end = () => {
     if (!start.current) return;
-    const open = start.current.horizontal ? offset <= -reveal / 2 : revealed;
+    // Pointer moves are continuous updates: React may not paint their state
+    // before pointer-up. Decide from the actual latest gesture position.
+    const open = start.current.horizontal ? start.current.offset <= -reveal / 2 : revealed;
     start.current = null; setRevealed(open); setOffset(open ? -reveal : 0);
   };
   if (!onDelete || disabled) return <div className={`swipe-row swipe-row--off${className ? ` ${className}` : ""}`}><div className="swipe-row-content">{children}</div></div>;
   return <div className={`swipe-row${revealed ? " swipe-row--revealed" : ""}${offset || revealed ? " swipe-row--active" : ""}${className ? ` ${className}` : ""}`}
-    onPointerDown={(event: ReactPointerEvent) => { if (event.pointerType === "touch") start.current = { x: event.clientX - (revealed ? -reveal : 0), y: event.clientY, id: event.pointerId }; }}
+    onPointerDown={(event: ReactPointerEvent) => { if (event.pointerType === "touch") start.current = { x: event.clientX - (revealed ? -reveal : 0), y: event.clientY, id: event.pointerId, offset: revealed ? -reveal : 0 }; }}
     onPointerMove={(event: ReactPointerEvent) => {
       const current = start.current; if (!current || current.id !== event.pointerId) return;
       const dx = event.clientX - current.x, dy = event.clientY - current.y;
       // Decide once: a mostly vertical move is a scroll, not a swipe.
       if (current.horizontal === undefined && Math.hypot(dx, dy) > 8) current.horizontal = Math.abs(dx) > Math.abs(dy) * 1.5;
-      if (current.horizontal) setOffset(Math.max(-reveal * 1.4, Math.min(0, dx)));
+      if (current.horizontal) {
+        current.offset = Math.max(-reveal * 1.4, Math.min(0, dx));
+        setOffset(current.offset);
+      }
     }}
     onPointerUp={end} onPointerCancel={end}
     onClickCapture={event => {

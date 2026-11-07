@@ -78,6 +78,43 @@ test('swipe left reveals Delete; the gesture alone deletes nothing', async ({ pa
   expect(state.trip.expenses.map(value => value.id)).toEqual(['dinner']);
 });
 
+test('a fast swipe completed within one frame uses its final position without deleting anything', async ({ page }) => {
+  const state = await fixtures(page, bill());
+  await page.goto('/expenses');
+  const target = row(page, 'coffee');
+  await expect(target).toBeVisible();
+  await target.evaluate(element => {
+    const box = element.getBoundingClientRect();
+    const x = box.right - 30, y = box.top + box.height / 2;
+    // Continuous React updates may not paint before the discrete release.
+    // Gesture recognition must not depend on an intervening render.
+    for (const [type, clientX] of [['pointerdown', x], ['pointermove', x - 120], ['pointerup', x - 120]] as const) {
+      element.dispatchEvent(new PointerEvent(type, { pointerType: 'touch', pointerId: 7, clientX, clientY: y, bubbles: true }));
+    }
+  });
+  await expect(page.locator('.swipe-row--revealed .swipe-row-delete')).toBeVisible();
+  expect(state.posts).toHaveLength(0);
+  expect(state.trip.expenses.map(value => value.id)).toEqual(['coffee', 'dinner']);
+});
+
+test('short, vertical and unrelated-pointer gestures do not reveal or delete an expense', async ({ page }) => {
+  const state = await fixtures(page, bill());
+  await page.goto('/expenses');
+  const target = row(page, 'coffee');
+  for (const gesture of ['short', 'vertical', 'other-pointer'] as const) {
+    await target.evaluate((element, gesture) => {
+      const box = element.getBoundingClientRect(), x = box.right - 30, y = box.top + box.height / 2;
+      const send = (type: string, clientX: number, clientY: number, pointerId = 7) => element.dispatchEvent(new PointerEvent(type, { pointerType: 'touch', pointerId, clientX, clientY, bubbles: true }));
+      send('pointerdown', x, y);
+      send('pointermove', x - (gesture === 'short' ? 20 : 120), y + (gesture === 'vertical' ? 200 : 0), gesture === 'other-pointer' ? 8 : 7);
+      send('pointerup', x - 120, y);
+    }, gesture);
+    await expect(page.locator('.swipe-row--revealed')).toHaveCount(0);
+    expect(state.posts).toHaveLength(0);
+    expect(state.trip.expenses.map(value => value.id)).toEqual(['coffee', 'dinner']);
+  }
+});
+
 test('F-13: deleting from a settled bill or someone else\'s expense asks first and states the result', async ({ page }) => {
   const state = await fixtures(page, bill({ settled: true }));
   expect(balances(state.trip)).toEqual([0, 0]);
