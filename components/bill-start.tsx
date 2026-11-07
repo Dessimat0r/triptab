@@ -7,7 +7,7 @@ import { CURRENCIES, type Currency, type Ledger } from '@/lib/model';
 import './bills.css';
 
 /** `accounts[i]` is the verified account chosen for `names[i]` (F-04); never inferred from a name. */
-export type BillStartValues = { names: string[]; accounts?: (string | undefined)[]; name: string; currency: Currency; currencyDefault: boolean; file?: File };
+export type BillStartValues = { names: string[]; accounts?: (string | undefined)[]; name: string; currency: Currency; currencyDefault: boolean; file?: File; billPhoto?: File };
 export default function BillStart({ ledger, displayName, busy, onClose, onStart }: {
   ledger: Ledger; displayName: string; busy: boolean; onClose: () => void; onStart: (values: BillStartValues) => Promise<void>;
 }) {
@@ -40,9 +40,9 @@ export default function BillStart({ ledger, displayName, busy, onClose, onStart 
     }
     setNames(next); setEntry(''); setError(''); return next;
   }
-  const picker = useRef<HTMLInputElement>(null), pending = useRef<string[]>([]);
-  function values(next: string[], file?: File): BillStartValues {
-    return { names: [displayName, ...next], accounts: [undefined, ...next.map(value => linked[value.toLocaleLowerCase()])], name: name.trim(), currency, currencyDefault, file };
+  const picker = useRef<HTMLInputElement>(null), photoPicker = useRef<HTMLInputElement>(null), cameraPicker = useRef<HTMLInputElement>(null), pending = useRef<string[]>([]);
+  function values(next: string[], file?: File, billPhoto?: File): BillStartValues {
+    return { names: [displayName, ...next], accounts: [undefined, ...next.map(value => linked[value.toLocaleLowerCase()])], name: name.trim(), currency, currencyDefault, file, billPhoto };
   }
   function addConnected(person: { id: string; name: string }) {
     const label = person.name.trim().slice(0, 50) || 'Friend';
@@ -56,6 +56,13 @@ export default function BillStart({ ledger, displayName, busy, onClose, onStart 
     await onStart(values(next));
   }
   // The picker opens inside this tap; the bill is created once a photo is chosen.
+  function choosePhoto(camera: boolean) {
+    if (busy) return;
+    const next = add(entry.split(','));
+    if (next === false) return;
+    pending.current = next;
+    (camera ? cameraPicker : photoPicker).current?.click();
+  }
   function scan() {
     if (busy) return;
     const next = add(entry.split(','));
@@ -76,11 +83,25 @@ export default function BillStart({ ledger, displayName, busy, onClose, onStart 
       {suggestions.length > 0 && <div className="bill-suggestions">{suggestions.map(name => <button type="button" className="quiet" key={name} disabled={busy} aria-label={uiText('Add {value0}', { value0: name })} onClick={() => add([name])}>{name}</button>)}</div>}
       <details><summary>{uiText('More options')}</summary><label>{uiText('Name')}<input value={name} maxLength={100} disabled={busy} placeholder={uiText('Named after the receipt')} onChange={event => setName(event.target.value)} /></label><label>{uiText('Currency')}<select value={currency} disabled={busy} onChange={event => { setCurrency(event.target.value as Currency); setCurrencyDefault(false); }}>{CURRENCIES.map(({ code, name }) => <option key={code} value={code}>{code} · {currencyDisplayName(code, name)}</option>)}</select></label></details>
       {error && <p className="error" role="alert">{uiText(error)}</p>}
-      <div className="bill-start-actions"><button type="button" className="primary" disabled={busy} onClick={scan}>{uiText('Scan receipt')}</button><button type="button" className="quiet" disabled={busy} onClick={() => void enter()}>{uiText('Enter amount')}</button>
+      <div className="bill-start-actions">
+        <button type="button" className="primary" disabled={busy} onClick={scan}>{uiText('Scan receipt')}</button>
+        <button type="button" className="quiet" disabled={busy} onClick={() => void enter()}>{uiText('Enter amount')}</button>
+        <button type="button" className="quiet" disabled={busy} onClick={() => choosePhoto(false)}>{uiText('Choose image')}</button>
+        <button type="button" className="quiet" disabled={busy} onClick={() => choosePhoto(true)}>{uiText('Take photo')}</button>
         <input ref={picker} type="file" hidden aria-label={uiText('Scan receipt photo')} accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif" capture="environment" onChange={event => {
           const file = event.target.files?.[0]; event.target.value = '';
           if (file) void onStart(values(pending.current, file));
-        }} /></div>
+        }} />
+        <input ref={photoPicker} type="file" hidden aria-label={uiText('Choose bill image')} accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif" onChange={event => {
+          const file = event.target.files?.[0]; event.target.value = '';
+          if (file) void onStart(values(pending.current, undefined, file));
+        }} />
+        <input ref={cameraPicker} type="file" hidden aria-label={uiText('Take bill photo')} accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif" capture="environment" onChange={event => {
+          const file = event.target.files?.[0]; event.target.value = '';
+          if (file) void onStart(values(pending.current, undefined, file));
+        }} />
+      </div>
+      <p className="footnote">{uiText('Bill images are shared with bill members without scanning or changing any amounts.')}</p>
     </section>
   </ModalA11y>;
 }

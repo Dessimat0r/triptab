@@ -3,6 +3,13 @@
 .bill-name-chips, .bill-suggestions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 .bill-name-chips > span { padding: var(--space-3); border-radius: var(--radius-s); background: var(--paper); }
 .bill-start-actions { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-3); margin-top: var(--space-5); }
+.bill-photo-section { margin-block-end: var(--space-5); min-width: 0; }
+.bill-photo-section h2 { margin-top: 0; }
+.bill-photo-preview { overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-m); background: var(--paper); }
+.bill-photo-preview img { display: block; max-width: 100%; width: 100%; height: auto; max-height: 320px; object-fit: contain; }
+.bill-photo-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-block: var(--space-3); }
+.bill-photo-actions button { min-height: 44px; }
+.bill-photo-section .footnote { margin-block: var(--space-2); }
 .bill-start-actions button { min-height: 44px; white-space: normal; }
 @media (max-width: 359px) { .bill-start-actions { grid-template-columns: 1fr; } }
 .content-grid--bill { display: block; }
