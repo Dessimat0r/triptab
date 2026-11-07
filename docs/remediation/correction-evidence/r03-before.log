@@ -1,0 +1,34 @@
+
+Running 1 test using 1 worker
+
+[1/1] [chromium] › tests/browser/discounts.spec.ts:113:1 › R03: editing the first of two discounts previews, saves and stores the same total
+  1) [chromium] › tests/browser/discounts.spec.ts:113:1 › R03: editing the first of two discounts previews, saves and stores the same total 
+
+    Error: expect(locator).toContainText(expected) failed
+
+    Locator: locator('#expense-discounts').locator('.adjustment-form').locator('.adjustment-preview')
+    Expected substring: "New total £4.00"
+    Received string:    "New total £3.00 · Alice −£1.00 · Bob −£1.00"
+    Timeout: 5000ms
+
+    Call log:
+      - Expect "toContainText" with timeout 5000ms
+      - waiting for locator('#expense-discounts').locator('.adjustment-form').locator('.adjustment-preview')
+        14 × locator resolved to <p role="status" class="adjustment-preview">New total £3.00 · Alice −£1.00 · Bob −£1.00</p>
+           - unexpected value "New total £3.00 · Alice −£1.00 · Bob −£1.00"
+
+
+      125 |   const form = discounts(page).locator('.adjustment-form');
+      126 |   await form.getByRole('textbox', { name: 'Discount amount' }).fill('2.00');
+    > 127 |   await expect(form.locator('.adjustment-preview')).toContainText('New total £4.00');
+          |                                                     ^
+      128 |   await form.getByRole('button', { name: 'Save changes' }).click();
+      129 |   await expect(discounts(page).locator('.adjustment-row').first()).toContainText('Coupon');
+      130 |   await save(page).click();
+        at /home/user/triptab/tests/browser/discounts.spec.ts:127:53
+
+    Error Context: test-results/discounts-R03-editing-the--82217-s-and-stores-the-same-total-chromium/error-context.md
+
+
+  1 failed
+    [chromium] › tests/browser/discounts.spec.ts:113:1 › R03: editing the first of two discounts previews, saves and stores the same total 

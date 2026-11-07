@@ -1,5 +1,6 @@
 import {
   ensureProfile,
+  profileWriteAuthorization,
   failure,
   readBoundedBody,
   readLedger,
@@ -9,6 +10,7 @@ import {
 } from '@/lib/store';
 import { canonicalJson } from '@/lib/data-utils';
 import { expenseSchema } from '@/lib/model';
+import { financialFormatRefusal } from '@/lib/financial-format';
 export const dynamic = 'force-dynamic';
 const comparison = (value: unknown) => {
   const expense = { ...(value as Record<string, unknown>) };
@@ -19,6 +21,10 @@ const comparison = (value: unknown) => {
 
 /** Append one stable-ID entry to a fresh server snapshot, never a cached ledger. */
 export async function POST(request: Request) {
+  // R01: a queued expense is ledger money, so an undeclared or other-format bundle is refused (426)
+  // before anything is read or written. The client keeps its queued entry on that response.
+  const refused = financialFormatRefusal(request);
+  if (refused) return refused;
   try {
     sameOrigin(request);
     const actor = await ensureProfile(request),
@@ -56,7 +62,7 @@ export async function POST(request: Request) {
           actor.id,
           { trips: [{ ...trip, expenses: [expense, ...trip.expenses] }] },
           fresh.revision,
-          { preserveCalculationRules: true },
+          { preserveCalculationRules: true, authorization: profileWriteAuthorization(actor) },
         );
         return Response.json(
           { saved: true, receiptId: expense.receiptId },

@@ -1,0 +1,25 @@
+
+
+
+
+  242 passed (2.5m)
+[1/242] [chromium] › tests/browser/account-privacy.spec.ts:65:1 › R02: after a session switch the open Activity panel shows none of the previous account's archive, amounts or people
+[2/242] [chromium] › tests/browser/account-privacy.spec.ts:82:1 › R02: a delayed archive response for the previous account never appears after the switch
+[3/242] [chromium] › tests/browser/account-privacy.spec.ts:96:1 › R02: an archive whose membership is revoked while the panel is open disappears from it
+[4/242] [chromium] › tests/browser/account-privacy.spec.ts:108:1 › R02: on a bill both accounts share, the Undo notice and open connection suggestions belong to the account that saw them
+[15/242] [chromium] › tests/browser/audit-review.spec.ts:38:1 › R09: an audit link to an archived receipt opens it read-only and does not unarchive it
+[16/242] [chromium] › tests/browser/audit-review.spec.ts:53:1 › R09: Restore and review is explicit, then opens the receipt for editing
+[17/242] [chromium] › tests/browser/audit-review.spec.ts:66:13 › R09: a revoked or deleted archived holiday says the receipt isn’t available and reveals nothing
+[18/242] [chromium] › tests/browser/audit-review.spec.ts:66:13 › R09: a guessed trip ID says the receipt isn’t available and reveals nothing
+[19/242] [chromium] › tests/browser/audit-review.spec.ts:66:13 › R09: a guessed receipt ID in an archived holiday says the receipt isn’t available and reveals nothing
+[20/242] [chromium] › tests/browser/audit-review.spec.ts:66:13 › R09: a deleted receipt in an open holiday says the receipt isn’t available and reveals nothing
+[42/242] [chromium] › tests/browser/cached-client.spec.ts:56:3 › previous bundle (main 01be219) against the new server › control: without the boundary the previous bundle settles the BOGOF receipt at gross prices (£6.75, not £3.75)
+[43/242] [chromium] › tests/browser/cached-client.spec.ts:70:3 › previous bundle (main 01be219) against the new server › the previous bundle shows no amounts or suggestions from the new server, and cannot record a payment
+[44/242] [chromium] › tests/browser/cached-client.spec.ts:90:3 › previous bundle (main 01be219) against the new server › a previous bundle opened before the release keeps only its pre-release amounts, labelled, and its payment is refused
+[45/242] [chromium] › tests/browser/cached-client.spec.ts:141:1 › the current bundle reads, totals and settles the BOGOF receipt from the new server, and records the correct payment
+[51/242] [chromium] › tests/browser/discounts.spec.ts:47:1 › scan R1: the BOGOF line becomes a discount on both Pringles, reconciles, and stores the correct shares
+[52/242] [chromium] › tests/browser/discounts.spec.ts:84:1 › a missed discount added by hand as 50% of the Pringles, then removed, blocks Save again
+[53/242] [chromium] › tests/browser/discounts.spec.ts:115:1 › R03: editing the first of two discounts previews, saves and stores the same total
+[54/242] [chromium] › tests/browser/discounts.spec.ts:140:1 › R04: a change to discounts alone is unsaved work on Close, Escape and unload
+[157/242] [chromium] › tests/browser/people-incomplete.spec.ts:36:1 › R08: an invalid-only ledger names the bill and draws no debt-free conclusion
+[158/242] [chromium] › tests/browser/people-incomplete.spec.ts:44:1 › R08: a mixed open and archived ledger keeps valid totals but labels them incomplete

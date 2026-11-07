@@ -1,0 +1,15 @@
+# R12 after: same tests on the corrected code (first six; the forged-fence case was added after)
+✔ R12: an attempt taken over after its checks but before its commit writes nothing; the new owner stores the only proposal (1373.510024ms)
+✔ R12 control: the current owner, paused at the same point, commits its proposal and records completion atomically (946.841483ms)
+✔ R12: a person editing the receipt before the commit wins; the reading writes nothing and its operation fails (987.67945ms)
+✔ R12: a commit that fails leaves no proposal and a failed operation; an explicit retry stores one proposal (992.013664ms)
+✔ R12: if the Worker is lost right after the commit, the proposal and its completed operation agree, and a retry spends nothing (934.922963ms)
+✔ R12: overlapping identical requests still make one provider call and store one proposal (975.859335ms)
+ℹ tests 6
+ℹ suites 0
+ℹ pass 6
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 7578.124522

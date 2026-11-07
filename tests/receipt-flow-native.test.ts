@@ -128,7 +128,7 @@ test('native receipt flow keeps browser sessions separate from trusted MCP and d
   try {
     const browserMcp = await fixture.browserRequest('/mcp', { method: 'POST', body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'get_trip_ledger', arguments: { trip_id: fixture.tripId } } }) });
     assert.equal(browserMcp.status, 401);
-    const unauthenticated = await fixture.worker.dispatchFetch(fixture.origin + '/api/ledger');
+    const unauthenticated = await fixture.worker.dispatchFetch(fixture.origin + '/api/ledger', { headers: { 'X-TripTab-Financial-Format': '2' } });
     assert.equal(unauthenticated.status, 401);
     const upload = await fixture.browserRequest(`/api/receipt?tripId=${fixture.tripId}`, { method: 'POST', headers: { 'content-type': 'image/png' }, body: receiptFlowImage });
     const { receiptId } = await upload.json() as { receiptId: string };

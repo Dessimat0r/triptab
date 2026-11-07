@@ -1,0 +1,4 @@
+# second pass, Chromium full suite at 690dabb, TRIPTAB_PREVIOUS_URL=separately built main 01be219 (port 8788)
+  243 passed (3.1m)
+# cached-client.spec.ts at 571630f, 3 repeats, same preview:
+  12 passed (23.7s)

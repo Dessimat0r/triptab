@@ -38,6 +38,7 @@ async function fixtures(page: Page, ledger: () => unknown = () => trip) {
       : path === '/api/trip-language' ? { accountId: 'layout-owner', tripId: 'layout-trip', revision: 1,
         preferences: { readingLanguage: 'en', primaryVersion: 'reading', itemVersions: {} } }
       : path === '/api/receipt/ai-status' ? { configured: false, connected: false, provider: 'api', eligible: false, manageable: false, siwcAvailable: false }
+      : path === '/api/fx' ? { rate: 0.85, asOf: '2026-10-05' }
       : { events: [], notifications: [], items: [] };
     return route.fulfill({ json, headers: path === '/api/ledger' ? { 'X-TripTab-Account': 'layout-owner' } : {} });
   });
@@ -77,6 +78,7 @@ async function fits(page: Page) {
       itemRows,
       clipping: containers.map(element => getComputedStyle(element).overflowX),
       swipePolicy: containers.map(element => getComputedStyle(element).overscrollBehaviorX),
+      supportsSwipePolicy: CSS.supports('overscroll-behavior-x', 'auto'),
     };
   });
   expect(result.outside).toEqual([]);
@@ -96,7 +98,10 @@ async function fits(page: Page) {
   // the bounds checks above prove no control relies on that clipping.
   expect(result.clipping.slice(0, 2)).toEqual(['hidden', 'hidden']);
   expect(result.clipping[2]).not.toMatch(/hidden|clip/);
-  expect(result.swipePolicy).toEqual(['auto', 'auto', 'auto']);
+  if (result.supportsSwipePolicy) expect(result.swipePolicy).toEqual(['auto', 'auto', 'auto']);
+  // Windows WebKit lacks this property. Bounds/overflow checks above still
+  // run there; an unsupported computed property cannot equal the CSS default.
+  else expect(result.swipePolicy.every(value => value === undefined || value === '')).toBe(true);
 }
 
 async function hasComfortableMobileItemSpacing(page: Page) {
@@ -136,6 +141,7 @@ for (const { width, height, touch } of viewports) {
           await expect(page.getByRole('heading', { name: 'Edit expense', exact: true })).toBeVisible();
         }
         await expect(page.locator('.editor')).toBeVisible();
+        if (mode !== 'manual') await expect(page.locator('.rate-result')).toContainText('1 EUR = 0.85 GBP');
         const header = page.locator('.editor .modalheading');
         const title = header.getByRole('textbox', { name: 'Expense name', exact: true });
         await expect(title).toHaveCount(1);
@@ -202,6 +208,7 @@ test.describe('same-language receipt item', () => {
     } };
     await fixtures(page, () => sameLanguageTrip);
     await page.goto('/expenses?receiptDraft=layout-draft&receiptTrip=layout-trip');
+    await expect(page.locator('.rate-result')).toContainText('1 EUR = 0.85 GBP');
     const firstItem = page.locator('.item').first();
     await firstItem.locator('.item-edit > summary').click();
     await expect(firstItem.getByRole('textbox', { name: 'Item 1 name', exact: true })).toHaveValue(originalName);
@@ -209,6 +216,22 @@ test.describe('same-language receipt item', () => {
     await expect(page.getByRole('combobox', { name: 'Show first for item 1', exact: true })).toHaveCount(0);
     await fits(page);
     await hasComfortableMobileItemSpacing(page);
+  });
+});
+
+test.describe('foreign receipt with a failed rate lookup', () => {
+  test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+  test('shows the recoverable conversion error and keeps item editors usable', async ({ page }) => {
+    await fixtures(page);
+    await page.route('**/api/fx**', route => route.fulfill({ status: 503, json: { error: 'Rate unavailable in layout fixture.' } }));
+    await page.goto('/expenses?receiptDraft=layout-draft&receiptTrip=layout-trip');
+    await expect(page.locator('.fx-panel')).toContainText('Rate unavailable in layout fixture.');
+    await expect(page.locator('.manual-rate')).toHaveAttribute('open', '');
+    await page.locator('.item-edit > summary').first().click();
+    await expect(page.getByRole('combobox', { name: 'Show first for item 1', exact: true })).toBeEnabled();
+    await fits(page);
+    await page.locator('.manual-rate input[type=number]').fill('0.85');
+    await expect(page.locator('.rate-result')).toContainText('1 EUR = 0.85 GBP');
   });
 });
 

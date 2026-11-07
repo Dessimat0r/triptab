@@ -1,0 +1,18 @@
+# D05 before: tests/expense-creator.test.ts against 99e4437 (Node 24.22.1, Linux, Miniflare D1)
+    actual: undefined,
+    expected: 'Native Flow Owner',
+    expected: null,
+    expected: undefined,
+  AssertionError [ERR_ASSERTION]: Bob restored it; Alice added it
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  AssertionError [ERR_ASSERTION]: the creator was not notified
+ℹ fail 4
+ℹ pass 0
+ℹ tests 4
+✖ D05: an exactly restored expense keeps its original creator; a new expense is credited to whoever saves it (1176.174649ms)
+✖ D05: deleting an expense notifies whoever added it, even on "involved only" when they neither paid nor share it (6793.649978ms)
+✖ D05: outsiders and guessed IDs learn nothing; an expense older than history has no creator (995.512123ms)
+✖ D05: the creator comes from history; edits by others and forged fields never change it, and nothing is stored on the expense (1535.783204ms)
+
+# D05 after, final tree: tests/expense-creator.test.ts 4/4; units 1,481/1,481; Chromium full suite 241 passed / 3 skipped (previous-bundle cases, no preview in this run)

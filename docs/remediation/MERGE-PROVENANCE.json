@@ -1,0 +1,473 @@
+{
+  "schemaVersion": 1,
+  "refreshedAt": "2026-11-07",
+  "base": "01be219b2675ab6018d4090bf042e51400030eec",
+  "reviewedCandidate": "d50d2c14dac40ef351a8fa8c64696db61f3aad99",
+  "reviewedCandidateTree": "2c3a6722fced8d4b5b2a9e4ee5051bfd9bc8f3ee",
+  "replayedCommit": "f0e062e1141880feafc5a14e5b3fd68058f8eff0",
+  "replayedTree": "2c3a6722fced8d4b5b2a9e4ee5051bfd9bc8f3ee",
+  "identicalBeforeNewCorrections": true,
+  "explanation": "Replay of first-parent integration deltas and corrections; review vehicles 69, 77 and 78 are not merged. Feature content and resolution provenance are preserved; cherry-picked feature heads are not necessarily ancestors and their PRs will not auto-close.",
+  "sourcePullRequests": [
+    {
+      "number": 59,
+      "head": "6135b306f96baa94f075e7233e3ef9a3b2f0eb5e",
+      "base": "48de3f99580337cc2190db013033276744431df9",
+      "state": "open",
+      "draft": true
+    },
+    {
+      "number": 60,
+      "head": "391adb5ae36b8d60ed025284a8f751cc867f3b4c",
+      "base": "48de3f99580337cc2190db013033276744431df9",
+      "state": "open",
+      "draft": true
+    },
+    {
+      "number": 61,
+      "head": "d8a54399c996987fa37c8dddf4671c41ff3f3235",
+      "base": "48de3f99580337cc2190db013033276744431df9",
+      "state": "open",
+      "draft": true
+    },
+    {
+      "number": 62,
+      "head": "6d7aa49c80521695ba10afab117dddc33374e05c",
+      "base": "48de3f99580337cc2190db013033276744431df9",
+      "state": "closed",
+      "draft": false
+    },
+    {
+      "number": 63,
+      "head": "118d6b0a696e48cea4dcd2d5c218fa52c7dce788",
+      "base": "01be219b2675ab6018d4090bf042e51400030eec",
+      "state": "open",
+      "draft": true
+    },
+    {
+      "number": 64,
+      "head": "ed984f6bcc5163cd80af68a305f121be55dff1a0",
+      "base": "d8a54399c996987fa37c8dddf4671c41ff3f3235",
+      "state": "open",
+      "draft": true
+    },
+    {
+      "number": 65,
+      "head": "058519918aa0dfc2710ff63347be962132ae81ac",
+      "base": "01be219b2675ab6018d4090bf042e51400030eec",
+      "state": "open",
+      "draft": true
+    },
+    {
+      "number": 66,
+      "head": "5e226eec7ec9f7663755e392343b1442e6701dcf",
+      "base": "01be219b2675ab6018d4090bf042e51400030eec",
+      "state": "open",
+      "draft": true
+    },
+    {
+      "number": 67,
+      "head": "f15eaaf1abbedbb491bf770f4893adc2f77ebcbb",
+      "base": "01be219b2675ab6018d4090bf042e51400030eec",
+      "state": "open",
+      "draft": true
+    },
+    {
+      "number": 68,
+      "head": "6a969e3fd3da567f180fc04c6cc5a784b855f977",
+      "base": "01be219b2675ab6018d4090bf042e51400030eec",
+      "state": "open",
+      "draft": true
+    },
+    {
+      "number": 69,
+      "head": "bbd5b9f2d3c8239b2baabcd616416fb85d28675c",
+      "base": "01be219b2675ab6018d4090bf042e51400030eec",
+      "state": "open",
+      "draft": true
+    },
+    {
+      "number": 70,
+      "head": "21124c6b045783611f651bdc223e308ea86747fa",
+      "base": "d8a54399c996987fa37c8dddf4671c41ff3f3235",
+      "state": "open",
+      "draft": true
+    },
+    {
+      "number": 71,
+      "head": "fb04c71aecd281dd3c86c1601a49cca3f39dec0a",
+      "base": "5e226eec7ec9f7663755e392343b1442e6701dcf",
+      "state": "open",
+      "draft": true
+    },
+    {
+      "number": 72,
+      "head": "d6f23531f353fe70adccf6245a9aabe4fb261aea",
+      "base": "f15eaaf1abbedbb491bf770f4893adc2f77ebcbb",
+      "state": "open",
+      "draft": true
+    },
+    {
+      "number": 73,
+      "head": "db384ffcd90df3de706883f683f8565621d1c6ba",
+      "base": "5e226eec7ec9f7663755e392343b1442e6701dcf",
+      "state": "open",
+      "draft": true
+    },
+    {
+      "number": 74,
+      "head": "0d3bcd4df44d0bc5df58e7742a10b1101548ab66",
+      "base": "058519918aa0dfc2710ff63347be962132ae81ac",
+      "state": "open",
+      "draft": true
+    },
+    {
+      "number": 75,
+      "head": "aab47f11c323dcd42761fd4c2e14379c5c03d8a2",
+      "base": "db384ffcd90df3de706883f683f8565621d1c6ba",
+      "state": "open",
+      "draft": true
+    },
+    {
+      "number": 76,
+      "head": "905094fe6cc320d185f2128d51bea43c9dc592e1",
+      "base": "118d6b0a696e48cea4dcd2d5c218fa52c7dce788",
+      "state": "open",
+      "draft": true
+    },
+    {
+      "number": 77,
+      "head": "2e8bbc8afbdbfdc7759936f6042f83f15a5afc60",
+      "base": "01be219b2675ab6018d4090bf042e51400030eec",
+      "state": "open",
+      "draft": true
+    },
+    {
+      "number": 78,
+      "head": "d50d2c14dac40ef351a8fa8c64696db61f3aad99",
+      "base": "2e8bbc8afbdbfdc7759936f6042f83f15a5afc60",
+      "state": "open",
+      "draft": true
+    }
+  ],
+  "replay": [
+    {
+      "source": "2e68f46a1db33015f217ac6669786f93eaedab13",
+      "production": "0a12b3127eb48b25cfeef4d816e360aa54febf4f",
+      "subject": "Merge remote-tracking branch 'origin/codex/remediation-00-navigation' into HEAD",
+      "kind": "integration delta including conflict resolutions"
+    },
+    {
+      "source": "6b8baf12f077d309d644f7cf9d89c2377b538f8e",
+      "production": "9e9d4b92509c28b84723c7186fb74dacdd46a986",
+      "subject": "Merge remote-tracking branch 'origin/codex/remediation-07-test-environment' into HEAD",
+      "kind": "integration delta including conflict resolutions"
+    },
+    {
+      "source": "6bf325e8fa833f2e6b56addfda97235fff4e1bc9",
+      "production": "7a85bb953fc8756269e2de69a5643a7b08a0fd55",
+      "subject": "Merge remote-tracking branch 'origin/codex/remediation-01-reconciliation' into HEAD",
+      "kind": "integration delta including conflict resolutions"
+    },
+    {
+      "source": "65bd9297a615a8c017c21354e17eb890a1c1f511",
+      "production": "f714fd48b4ffe3d5e3f2b768fc49c659d4742ac1",
+      "subject": "Merge remote-tracking branch 'origin/claude/remediation-03-adjustments' into HEAD",
+      "kind": "integration delta including conflict resolutions"
+    },
+    {
+      "source": "2d993c9adeacae471a5abe7703e9e2697f51e393",
+      "production": "280943c8e0337d8193be898b79208330f12c2df6",
+      "subject": "Merge remote-tracking branch 'origin/claude/remediation-02-concurrency' into claude/remediation-integration",
+      "kind": "integration delta including conflict resolutions"
+    },
+    {
+      "source": "37ceccefd91e6b0d5dcd15fea83fcdfa8d9abffe",
+      "production": "e4c374b188015c9a7c628950ce99bf2333cff284",
+      "subject": "Merge remote-tracking branch 'origin/claude/remediation-04-scan' into claude/remediation-integration",
+      "kind": "integration delta including conflict resolutions"
+    },
+    {
+      "source": "10de943ff92f10a9cb03418edc26159b94909612",
+      "production": "60ab133b3552676aa2a007b468d78663dd58e398",
+      "subject": "Merge remote-tracking branch 'origin/claude/remediation-05-actions' into claude/remediation-integration",
+      "kind": "integration delta including conflict resolutions"
+    },
+    {
+      "source": "a9c603ce6d2045641b82c76665d02ab8f7ec50b6",
+      "production": "b47d9cd1a113c37494bfb6086a81165532d1c6c0",
+      "subject": "Merge remote-tracking branch 'origin/claude/remediation-06-bills' into claude/remediation-integration",
+      "kind": "integration delta including conflict resolutions"
+    },
+    {
+      "source": "c5266a38dbd6b321d27b9956802a88b5a2e5ea95",
+      "production": "88597c83dc4799d097fb72a531b0947fd9b485e1",
+      "subject": "Merge remote-tracking branch 'origin/claude/remediation-07-resilience' into claude/remediation-integration",
+      "kind": "integration delta including conflict resolutions"
+    },
+    {
+      "source": "9dcc95d7125da3272739ab9771dd17bc75c117a8",
+      "production": "d0a29320433884d2ae2a0d81432a30360475d6af",
+      "subject": "Merge remote-tracking branch 'origin/claude/remediation-05-actions' into claude/remediation-integration",
+      "kind": "integration delta including conflict resolutions"
+    },
+    {
+      "source": "4d06b6379defe32f341fe07a299d36d6b80760f8",
+      "production": "bdf34611b31b8124166fc27b233e8d9229a1bb75",
+      "subject": "Merge remote-tracking branch 'origin/claude/remediation-08-row-menus' into claude/remediation-integration",
+      "kind": "integration delta including conflict resolutions"
+    },
+    {
+      "source": "f16c42276854861469af633f01a1085b402f5491",
+      "production": "1197134bbf2e80d45b9698207ada9e566b6029fd",
+      "subject": "Merge remote-tracking branch 'origin/claude/remediation-09-bill-people' into claude/remediation-integration",
+      "kind": "integration delta including conflict resolutions"
+    },
+    {
+      "source": "38a51018c617bdfc31f4e23a91a82e4265b2eb35",
+      "production": "4fdf2f310b36d01395456fc20a86092aae69a46f",
+      "subject": "Merge remote-tracking branch 'origin/claude/remediation-10-restore' into claude/remediation-integration",
+      "kind": "integration delta including conflict resolutions"
+    },
+    {
+      "source": "e1e833894388c9ed7f491be423d0ad78e9e1900e",
+      "production": "82830251682b6d0cfc9ed72f9f40b233dc860ef3",
+      "subject": "Merge remote-tracking branch 'origin/claude/remediation-11-reading-status' into claude/remediation-integration",
+      "kind": "integration delta including conflict resolutions"
+    },
+    {
+      "source": "9f0e7a876d2543c0577bd5b14ffcd0ded233c6d9",
+      "production": "91196bb42c2dc75f5a1db7a94fa5f0d82f18515a",
+      "subject": "Merge remote-tracking branch 'origin/claude/remediation-12-bill-undo' into claude/remediation-integration",
+      "kind": "integration delta including conflict resolutions"
+    },
+    {
+      "source": "61fc7666d5a39c9a4bcc0118a9cc94af5a28e360",
+      "production": "21852ab281bfe213bea568a3b01013061ebbccb3",
+      "subject": "Merge remote-tracking branch 'origin/claude/remediation-13-trip-revision' into claude/remediation-integration",
+      "kind": "integration delta including conflict resolutions"
+    },
+    {
+      "source": "f685ff7468e8ee93adcdeef0eff5b96e3a494cba",
+      "production": "643711f17b8d816a3afe1ecd1adcce40794180db",
+      "subject": "Merge remote-tracking branch 'origin/claude/remediation-08-row-menus' into claude/remediation-integration",
+      "kind": "integration delta including conflict resolutions"
+    },
+    {
+      "source": "bbd5b9f2d3c8239b2baabcd616416fb85d28675c",
+      "production": "1ac4aa11c4df82367ccbae5a7a38f0d992ef7abf",
+      "subject": "Merge remote-tracking branch 'origin/codex/remediation-00-navigation' into claude/remediation-integration",
+      "kind": "integration delta including conflict resolutions"
+    },
+    {
+      "source": "1d6f40a8495c922e5b1ab5110eb99cfcc3cd88de",
+      "production": "49b146d5f05b27d2615aed90191952f287b43a76",
+      "subject": "Integrate #70 remediation tracker",
+      "kind": "integration delta including conflict resolutions"
+    },
+    {
+      "source": "b99b8a3008280dcd4fc1cec854b896d0913f63c2",
+      "production": "e7d64bfcf672d744dbea04f3ad1e061fe7748795",
+      "subject": "R01: refuse ledger money to bundles that cannot read scoped discounts",
+      "kind": "corrective commit"
+    },
+    {
+      "source": "f77fc949eef0e023243f7b6c7e6cd179067e1a78",
+      "production": "f52793c1d539b53f9ee6dff43a0d0add2f10333e",
+      "subject": "R03: preview, validate and save one ordered discount list",
+      "kind": "corrective commit"
+    },
+    {
+      "source": "fe43e022dd76ca6d2d972663a4375857b0f00dc6",
+      "production": "ab2f96b74d7c7397446d7c755bbeb829f1d5d8c6",
+      "subject": "R04: treat discount and charge records as unsaved editor work",
+      "kind": "corrective commit"
+    },
+    {
+      "source": "c0566c1f08c81a2c5a1dd8bb4b43e67a030006de",
+      "production": "0dc581920f7071289658079b06d9750604e710c2",
+      "subject": "R05: a person's edit to an extracted discount is theirs, and survives rescans",
+      "kind": "corrective commit"
+    },
+    {
+      "source": "049b128c1ac8e8f80aa5edb4a8cd56175191ba28",
+      "production": "470dd4f4b42b698168d87fa62dd97922843faae3",
+      "subject": "R02: bind private panels and Undo notices to the signed-in account",
+      "kind": "corrective commit"
+    },
+    {
+      "source": "c64564e0520be1b763e4ea3e5b01b29c4acfd059",
+      "production": "8ed26dd2fc8ab71b2dcb2794f0795cb659cdc516",
+      "subject": "R08: People never presents an incomplete balance as complete",
+      "kind": "corrective commit"
+    },
+    {
+      "source": "f4d5629cbdd931f110bace08f8061c008835d5fc",
+      "production": "97decafce6ac947680e49e4c4ca86d2a33d32390",
+      "subject": "R11: a membership update that changes nothing no longer advances the trip revision",
+      "kind": "corrective commit"
+    },
+    {
+      "source": "740f82ca9a897ca9bb37483fb9863643780a1c19",
+      "production": "c04b70b52226cfe3b61bdae726aa58a51204a3bd",
+      "subject": "R06/R07: claim each paid receipt operation durably before spending",
+      "kind": "corrective commit"
+    },
+    {
+      "source": "b9b4429dca384a5a3d1d1ab6d977811c8565fddd",
+      "production": "db6744a51afaa13946edc84754e1d6f6a7d67e4c",
+      "subject": "R09: audit links to archived receipts open a read-only review",
+      "kind": "corrective commit"
+    },
+    {
+      "source": "6e9ce7f401fa6edf577301a7af430e7ab61e7f02",
+      "production": "1b145e9ffbe2eb32bc057a6784d4cb7693988343",
+      "subject": "R10: merge line order three-way instead of always taking the saved order",
+      "kind": "corrective commit"
+    },
+    {
+      "source": "b4abe4b27ccb63c9d5cad23530a4b4d8e0c1f29f",
+      "production": "c1aa532a2a18a56ec0714fb96dff9c8117aa5fca",
+      "subject": "Corrections record, closure matrix and updated rollout/rollback runbook",
+      "kind": "corrective commit"
+    },
+    {
+      "source": "ce2e08285ba157540de82ba5c202805c6c8f4266",
+      "production": "9e71c954d72f56dc133bac8323f2615f6b22eda1",
+      "subject": "R02 follow-up: start account-bound reads after the render commits",
+      "kind": "corrective commit"
+    },
+    {
+      "source": "2e8bbc8afbdbfdc7759936f6042f83f15a5afc60",
+      "production": "ed4945ca2b2cd16573519e2a0fa369e06212933e",
+      "subject": "Record final verification results for the corrected candidate",
+      "kind": "corrective commit"
+    },
+    {
+      "source": "f2e1e0bda55fba21839a2a9fbd1e4b8b539bbb41",
+      "production": "1c8ec345957e9af9e8d851a0615b068cf44bcca5",
+      "subject": "R12: decide receipt commit ownership inside the commit transaction",
+      "kind": "corrective commit"
+    },
+    {
+      "source": "555ecf2441ba50cc067511fb38dc95d803fe7065",
+      "production": "459b9ca05457e30daff63da5ea9a83c37b0663e6",
+      "subject": "R07: finish receipt readings cut off after a disconnect, without a browser request",
+      "kind": "corrective commit"
+    },
+    {
+      "source": "2c7a34e88185ddc25bb5fc686bd75705a38e384d",
+      "production": "11a486fb414b5485681d7ebf9ef0972bd70d07f8",
+      "subject": "R07 follow-up: keep the resume cron constant out of the Worker's exports",
+      "kind": "corrective commit"
+    },
+    {
+      "source": "adb059f1b98cc478e38aeac838a1aa4620eb6252",
+      "production": "0ad4483824be7fe9e778b1d0928e5277fe275289",
+      "subject": "R13: run the duplicate-warning journey on its fixture's date",
+      "kind": "corrective commit"
+    },
+    {
+      "source": "690dabb16a1fb722e82cffaccbd22a74057dec04",
+      "production": "e00ec29f5ba24cfabe42322a97b99af7b53dbbc7",
+      "subject": "R14: stop and drain page requests before disposing the forwarding Worker",
+      "kind": "corrective commit"
+    },
+    {
+      "source": "571630ff9e5b5aed4e15962e4f98c1bced31292b",
+      "production": "0361d5504c466854aad5226badb48e7f30168cb5",
+      "subject": "R14 follow-up: forward conditional ledger reads without their validators",
+      "kind": "corrective commit"
+    },
+    {
+      "source": "c6751bcc0e5b50ecc8bc3d30705d1ff3e0b40a3b",
+      "production": "1991b89059edaf436f69dc9eb637e25dff7e57b7",
+      "subject": "Document the second correction pass (R12, R07, R13, R14)",
+      "kind": "corrective commit"
+    },
+    {
+      "source": "dd0e708106b5ddd788b0df11804978c8ee89db56",
+      "production": "bad722717c4627231e7ebaa5a5c00ec426cff131",
+      "subject": "Record the green CI run on the corrected head (WebKit 240/243, 3 previous-bundle skips)",
+      "kind": "corrective commit"
+    },
+    {
+      "source": "a005eaa28eb27dfb937d819e35ce0de055d0375c",
+      "production": "595bb32a3a0bacd87fb20be8aaaf6dff25189bba",
+      "subject": "R07: add an owner kill switch for background receipt resumes",
+      "kind": "corrective commit"
+    },
+    {
+      "source": "ac32e013b95397c24da8cf30f5a985b5fefd5e00",
+      "production": "ed93fce90d9734a94e7db2d17b147e4cf8a4cd95",
+      "subject": "Record the owner's acceptance of R07 without hosted verification",
+      "kind": "corrective commit"
+    },
+    {
+      "source": "99e443715ab34558d44aad72be5491d030416766",
+      "production": "c9b995e501b55140dfa615ab4245e9879f52e396",
+      "subject": "Record owner decisions D01 to D08 from the November audit",
+      "kind": "corrective commit"
+    },
+    {
+      "source": "8dcc9ca20c25720bfd30e112001a7ab453c9cd14",
+      "production": "f9f44f64ef967a294fc75bde125224a03fac1f24",
+      "subject": "D05: show who added an expense and tell them when it is deleted",
+      "kind": "corrective commit"
+    },
+    {
+      "source": "ee044d078528c35cf98d4d482c8b4b23b57570e3",
+      "production": "98a3fbd076dffe6f24f51d5db65958fc17cc2c1d",
+      "subject": "Reconcile the findings and acceptance tests against the November audit",
+      "kind": "corrective commit"
+    },
+    {
+      "source": "a8f95bda0347fe500fcd45868ccf6d99bcd93348",
+      "production": "1cf1275713577eed1b7c3ed0f23aefbd7bafb94a",
+      "subject": "R15/R16: end background grants exactly when sign-in ends, on the database's clock",
+      "kind": "corrective commit"
+    },
+    {
+      "source": "39a73badeeb33693e6301cc34b79996ab9e9cdf9",
+      "production": "65cba10a77ca91eca147d1b2b390cfaa44b467a9",
+      "subject": "F-11: tell the person who started a reading when it is ready to review",
+      "kind": "corrective commit"
+    },
+    {
+      "source": "e0115e47ac7f9cf24adbb77a0d239dd2bad50eca",
+      "production": "ba74b4abae0b063832af363cb52db04ce6032f32",
+      "subject": "Test restoring a deleted expense from History, including a purged photo",
+      "kind": "corrective commit"
+    },
+    {
+      "source": "10f001e8c0e1edd9edd7f8f4b00b36bd0ea892a0",
+      "production": "778ee43a1df348b2554e5fdd11337f5e94493f54",
+      "subject": "F-05: date range in Activity; search and filters on bills",
+      "kind": "corrective commit"
+    },
+    {
+      "source": "6415ab120f706362b4691af566675b3a04d52102",
+      "production": "1deb90fbd9ac23bd8382ed66c749bcd9d699dd50",
+      "subject": "Run audit acceptance 4, 7, 8 and 9 with two real accounts against production routes",
+      "kind": "corrective commit"
+    },
+    {
+      "source": "aec7de53e0181cbe4212ae33617df80d2fc5a441",
+      "production": "482c68a5c55551cfd93bc243190344861d356298",
+      "subject": "Keep row menus clear of the phone's fixed section tabs",
+      "kind": "corrective commit"
+    },
+    {
+      "source": "5197068090dd8fdbb9730d3d51332259a36b53f6",
+      "production": "c16445eb34979fd4be15e8912a610eddd0eac01a",
+      "subject": "F-07: the receipt inbox asks for an optional name too; every entry point tested",
+      "kind": "corrective commit"
+    },
+    {
+      "source": "d50d2c14dac40ef351a8fa8c64696db61f3aad99",
+      "production": "f0e062e1141880feafc5a14e5b3fd68058f8eff0",
+      "subject": "Record gaps 1 to 5 of the audit reconciliation as addressed",
+      "kind": "corrective commit"
+    }
+  ]
+}

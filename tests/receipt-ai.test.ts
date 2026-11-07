@@ -1,3 +1,4 @@
+import { declaredRequest } from './helpers/financial-request';
 import { canonicalJson, sha256Hex } from '../lib/data-utils';
 import { transpileWithSharedImports } from './helpers/transpile';
 import assert from 'node:assert/strict';
@@ -1023,14 +1024,30 @@ function reset() {
   state.writes = 0; state.writeAttempts = 0; state.accessCalls = 0; state.providerCalls = 0; state.imageReads = 0; state.providerBodies=[]; state.profileChecks = 0; state.savedSources = [];
   state.beforeWrite = undefined;
   state.duringModel = undefined; state.output = undefined; state.invalidOutput = false; state.actorChanged = false;
-  budgetDatabase.exec('DELETE FROM auth_rate_limits');
+  budgetDatabase.exec('DELETE FROM auth_rate_limits'); budgetDatabase.exec('DELETE FROM receipt_operations');
+  budgetDatabase.exec('DELETE FROM trips');
+  budgetDatabase.prepare('INSERT INTO trips(id,owner) VALUES(?,?)').run(trip.id, owner);
 }
 const budgetDatabase = new DatabaseSync(':memory:');
 budgetDatabase.exec('CREATE TABLE auth_rate_limits(key_hash TEXT PRIMARY KEY,window_start INTEGER NOT NULL,attempts INTEGER NOT NULL)');
+// R06: the production claim table, from its migration.
+for (const migration of ['0016_receipt_operations.sql', '0017_receipt_operation_jobs.sql'])
+  budgetDatabase.exec((await readFile(new URL('../drizzle/' + migration, import.meta.url), 'utf8')).replaceAll('--> statement-breakpoint', ''));
+// R07: the execution-grant tables the operation fence reads, with the owner's live session.
+budgetDatabase.exec(`CREATE TABLE profiles(id TEXT PRIMARY KEY, deleted_at TEXT NOT NULL DEFAULT '');
+  CREATE TABLE auth_sessions(token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL, expires_at TEXT NOT NULL, session_id TEXT NOT NULL DEFAULT '');
+  CREATE TABLE auth_links(oai_user_id TEXT PRIMARY KEY, user_id TEXT NOT NULL);
+  CREATE TABLE auth_credentials(user_id TEXT PRIMARY KEY);
+  CREATE TABLE trips(id TEXT PRIMARY KEY, owner TEXT NOT NULL);
+  CREATE TABLE memberships(trip_id TEXT NOT NULL, user_id TEXT NOT NULL, member_id TEXT NOT NULL);`);
+budgetDatabase.prepare('INSERT INTO profiles(id) VALUES (?)').run(owner);
+budgetDatabase.prepare("INSERT INTO auth_sessions(token_hash,user_id,expires_at,session_id) VALUES ('hash',?,'9999-12-31T00:00:00.000Z','route-session')").run(owner);
 class BoundaryRequestError extends Error { constructor(message: string, readonly status = 400) { super(message); } }
+class BoundarySupersededError extends BoundaryRequestError { constructor() { super('Another reading of this receipt took over. Refresh to see its result.', 409); } }
+class BoundaryUnauthorizedError extends BoundaryRequestError { constructor() { super('Your sign-in changed before this reading finished, so nothing was saved.', 409); } }
 class BoundaryAccessError extends Error { constructor(message: string, readonly status = 403, readonly code = 'credential_denied') { super(message); } }
 const store = {
-  RequestError: BoundaryRequestError,
+  RequestError: BoundaryRequestError, OperationSupersededError: BoundarySupersededError, OperationUnauthorizedError: BoundaryUnauthorizedError,
   sameOrigin(request: Request) { if (request.headers.get('origin') !== new URL(request.url).origin) throw new BoundaryRequestError('Invalid origin', 403); },
   async ensureProfile() { state.profileChecks++; return { id: state.actorChanged && state.profileChecks > 1 ? 'changed-account' : state.profileId }; },
   async readBoundedBody(request: Request, maximum: number) { const bytes = new Uint8Array(await request.arrayBuffer()); if (bytes.length > maximum) throw new BoundaryRequestError('Too large', 413); return bytes; },
@@ -1042,16 +1059,28 @@ const store = {
     async head() { state.imageReads++; return state.imagePresent ? { version: state.imageVersion, size: state.imageSize, httpMetadata: { contentType: state.imageType } } : null; },
   }; },
   db() { return { prepare(sql: string) { return { bind(...values: (string | number)[]) { return {
-    async first() { return budgetDatabase.prepare(sql).get(...values) ?? null; }, async run() { return budgetDatabase.prepare(sql).run(...values); },
+    async first() {
+      // Mirror this fixture's ledger boundary for the real operation grant's
+      // trip-access predicate, including tests with imported textual IDs.
+      budgetDatabase.exec('DELETE FROM trips');
+      for (const trip of state.data.trips) budgetDatabase.prepare('INSERT INTO trips(id,owner) VALUES(?,?)').run(trip.id, trip.ownerId ?? owner);
+      return budgetDatabase.prepare(sql).get(...values) ?? null;
+    }, async run() { return budgetDatabase.prepare(sql).run(...values); },
   }; } }; } }; },
-  async writeLedger(actor: string, data: Ledger, revision: number, options: { source: string; tripSnapshot?: Trip }) {
+  async writeLedger(actor: string, data: Ledger, revision: number, options: { source: string; tripSnapshot?: Trip; operation?: { key: string; attemptId: string } }) {
     assert.equal(actor, owner); state.writeAttempts++; state.beforeWrite?.();
+    // R12 boundary model: production decides ownership and records completion
+    // inside the commit transaction (tests/receipt-commit-ownership.test.ts
+    // exercises that on D1). This single-threaded stand-in is atomic likewise.
+    const owns = (fence: { key: string; attemptId: string }) => !!budgetDatabase.prepare("SELECT 1 FROM receipt_operations WHERE operation_key=? AND attempt_id=? AND status='running'").get(fence.key, fence.attemptId);
+    if (options.operation && !owns(options.operation)) throw new BoundarySupersededError();
     if (options.tripSnapshot) {
       const current = state.data.trips.find(trip => trip.id === options.tripSnapshot!.id);
       if (!state.metadataAllowed || state.actorChanged || !state.imagePresent || state.imageVersion !== 'original-image' || JSON.stringify(current) !== JSON.stringify(options.tripSnapshot)) throw new Error('CONFLICT');
       data = { trips: state.data.trips.map(trip => data.trips.find(value => value.id === trip.id) ?? trip) };
     } else if (revision !== state.revision) throw new Error('CONFLICT');
     state.data = validateLedger(data, { previous: state.data }); state.revision++; state.writes++; state.savedSources.push(options.source);
+    if (options.operation) budgetDatabase.prepare("UPDATE receipt_operations SET status='stored' WHERE operation_key=? AND attempt_id=?").run(options.operation.key, options.operation.attemptId);
     return { data: structuredClone(state.data), revision: state.revision };
   },
   failure(error: unknown) { return Response.json({ error: error instanceof Error ? error.message : 'Failure' }, { status: error instanceof BoundaryRequestError ? error.status : error instanceof Error && error.message === 'CONFLICT' ? 409 : 400 }); },
@@ -1065,17 +1094,27 @@ Object.defineProperty(globalThis, Symbol.for('triptab.receipt-ai-route-store'), 
 Object.defineProperty(globalThis, Symbol.for('triptab.receipt-ai-route-access'), { value: credentialAccess, configurable: true });
 const storeUrl = dataUrl(`const store=globalThis[Symbol.for('triptab.receipt-ai-route-store')];\n${Object.keys(store).map(name => `export const ${name}=store.${name};`).join('\n')}`);
 const accessUrl = dataUrl(`const access=globalThis[Symbol.for('triptab.receipt-ai-route-access')];\n${Object.keys(credentialAccess).map(name => `export const ${name}=access.${name};`).join('\n')}`);
+const languageUrl = dataUrl('export const readTripLanguagePreferences=async()=>({preferences:{readingLanguage:"en"},revision:0});');
+// The operation's work module (shared by the route and the background runner), on the same boundaries.
+const workCode = transpileWithSharedImports(await readFile(new URL('../lib/receipt-operation-work.ts', import.meta.url), 'utf8'), { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
+  .replace("'./store'", JSON.stringify(storeUrl)).replace("'./receipt-ai-access'", JSON.stringify(accessUrl))
+  .replace("'./receipt-ai'", JSON.stringify(new URL('../lib/receipt-ai.ts', import.meta.url).href))
+  .replace("'./receipt-assistant'", JSON.stringify(new URL('../lib/receipt-assistant.ts', import.meta.url).href))
+  .replace("'./trip-language-preferences'", JSON.stringify(languageUrl))
+  .replace("'./notifications'", JSON.stringify(dataUrl("export const notifyMember=async()=>{};export const notifyReceiptReady=async()=>false;")));
+const grantUrl = dataUrl("export const executionGrant=async()=>({kind:'session',ref:'route-session'});");
 const routeSource = await readFile(new URL('../app/api/receipt/process/route.ts', import.meta.url), 'utf8');
 const routeCode = transpileWithSharedImports(routeSource, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
-  .replace("'cloudflare:workers'", JSON.stringify(dataUrl('export const env={};')))
+  .replace("'cloudflare:workers'", JSON.stringify(dataUrl("export const env={}; export const waitUntil=promise=>{(globalThis[Symbol.for('triptab.wait-until')]??=[]).push(promise);};")))
   .replace("'@/lib/store'", JSON.stringify(storeUrl)).replace("'@/lib/receipt-ai-access'", JSON.stringify(accessUrl))
   .replace("'@/lib/receipt-ai'", JSON.stringify(new URL('../lib/receipt-ai.ts', import.meta.url).href))
   .replace("'@/lib/receipt-assistant'", JSON.stringify(new URL('../lib/receipt-assistant.ts', import.meta.url).href))
-  .replace("'@/lib/trip-language-preferences'", JSON.stringify(dataUrl('export const readTripLanguagePreferences=async()=>({preferences:{readingLanguage:"en"},revision:0});')))
+  .replace("'@/lib/receipt-operations'", JSON.stringify(new URL('../lib/receipt-operations.ts', import.meta.url).href))
+  .replace("'@/lib/receipt-operation-work'", JSON.stringify(dataUrl(workCode))).replace("'@/lib/auth'", JSON.stringify(grantUrl))
   .replace("'zod'", JSON.stringify(import.meta.resolve('zod')));
 const route = await import(dataUrl(routeCode)) as { POST(request: Request): Promise<Response> };
 const requestBody = { tripId: trip.id, draftId: draft.id, receiptId: 'photo' };
-async function http(body: unknown = requestBody, headers: Record<string, string> = {}) {
+async function http(body: unknown = requestBody, headers: Record<string, string> = {}, signal?: AbortSignal) {
   if (body && typeof body === 'object' && !Array.isArray(body) && !Object.hasOwn(body, 'draftHash')) {
     // Simulate the current client fencing the saved receipt it has displayed.
     body = { ...body, draftHash: await sha256Hex(canonicalJson(state.data.trips[0]?.drafts[0] ?? draft)) };
@@ -1085,8 +1124,8 @@ async function http(body: unknown = requestBody, headers: Record<string, string>
     state.providerBodies.push(JSON.parse(init!.body as string)); state.providerCalls++; state.duringModel?.();
     return streamResponse([completed(state.invalidOutput ? { ...transcription, payer: 'forged' } : state.output ?? transcription)]);
   };
-  try { return await route.POST(new Request('https://triptab.test/api/receipt/process', {
-    method: 'POST', headers: { origin: 'https://triptab.test', 'content-type': 'application/json', ...headers }, body: JSON.stringify(body),
+  try { return await route.POST(declaredRequest('https://triptab.test/api/receipt/process', {
+    method: 'POST', headers: { origin: 'https://triptab.test', 'content-type': 'application/json', ...headers }, body: JSON.stringify(body), signal,
   })); } finally { globalThis.fetch = originalFetch; }
 }
 
@@ -1117,7 +1156,7 @@ test('HTTP receipt processing saves native extraction to the exact draft for rev
   assert.deepEqual(saved.data.trips[0].expenses, approved);
   assert.deepEqual(state.savedSources, ['web']);
   assert.equal(state.providerCalls, 1);
-  assert.equal(state.profileChecks, 2);
+  assert.equal(state.profileChecks, 3, 'initial, outbound and final request-account checks');
 });
 
 test('HTTP accumulated scan evidence overflow returns an actionable 422 without discarding saved evidence or writing a proposal', async () => {
@@ -1154,6 +1193,19 @@ test('native operational logs retain safe attempt categories without imported ac
   assert.match(logged, /native-proposal-stored/);
   assert.match(logged, /attemptId/);
   assert.doesNotMatch(logged, /private\.user|private imported|test-api-key|Café|Coffee|Pastry|Shared context|private@example/);
+});
+
+test('R01: a cached bundle that cannot read discounts is refused before any key lookup, inference or write', async () => {
+  reset(); const before = structuredClone(state.data);
+  const body = { ...requestBody, draftHash: await sha256Hex(canonicalJson(state.data.trips[0].drafts[0])) };
+  for (const headers of [{}, { 'X-TripTab-Financial-Format': '1' }] as Record<string, string>[]) {
+    const response = await route.POST(new Request('https://triptab.test/api/receipt/process', { method: 'POST',
+      headers: { origin: 'https://triptab.test', 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) }));
+    assert.equal(response.status, 426);
+    assert.match((await response.json() as { error: string }).error, /Reload this page/);
+  }
+  assert.equal(state.accessCalls, 0); assert.equal(state.providerCalls, 0); assert.equal(state.writes, 0);
+  assert.deepEqual(state.data, before);
 });
 
 test('HTTP refuses wrong account/trip/draft/image and foreign or malformed requests before a model or key lookup', async () => {
@@ -1351,7 +1403,7 @@ test('HTTP saved natural-language questions use text-only processing and stable 
   assert.equal(saved.draft.items[0].id,'coffee'); assert.equal(saved.draft.items[0].amount,250); assert.deepEqual(saved.draft.items[0].members,['bob']);
   assert.equal(saved.draft.status,'review'); assert.equal(saved.draft.conversation!.at(-1)!.replyTo,'share-question');
   const second=await http({tripId:trip.id,draftId:draft.id,questionId:'share-question'});
-  assert.equal(second.status,200); assert.equal(state.providerCalls,1); assert.equal(state.accessCalls,1); assert.equal(state.writes,1);
+  assert.equal(second.status,200); assert.equal(state.providerCalls,1); assert.equal(state.accessCalls,2); assert.equal(state.writes,1);
 });
 
 test('opting out of purchase detail reading protects existing date/time even with receipt provenance', () => {
@@ -1426,4 +1478,148 @@ test('receipt reading stores a display suggestion without touching the user icon
     assert.equal(applyReceiptTranscription(trip,{...draft,suggestedIcon:previous},{...transcription,expenseIcon}).suggestedIcon,undefined,'an explicit unclear reading clears a stale suggestion');
   }
   assert.throws(()=>applyReceiptTranscription(trip,draft,{...transcription,expenseIcon:{symbol:'MadeUp',confidence:'high'}} as unknown as ReceiptTranscription),ReceiptAIError);
+});
+
+test('F-11: a client that disconnects while the receipt is read still gets the proposal stored once, kept alive by waitUntil', async () => {
+  reset();
+  const pending: Promise<unknown>[] = ((globalThis as Record<symbol, Promise<unknown>[]>)[Symbol.for('triptab.wait-until')] ??= []);
+  pending.length = 0;
+  const controller = new AbortController();
+  // The phone locks while the model is reading.
+  state.duringModel = () => controller.abort();
+  const response = await http(requestBody, {}, controller.signal);
+  assert.equal(response.status, 200, 'the reading is not cancelled by the dropped request');
+  assert.equal(pending.length, 1, 'the work is registered to outlive the request');
+  await Promise.all(pending);
+  assert.equal(state.providerCalls, 1, 'one model call');
+  const stored = state.data.trips[0].drafts[0];
+  assert.equal(stored.status, 'review');
+  assert.equal(stored.items.length, 2);
+  // A retry from the reconnected phone with the old fingerprint does not read or apply it again.
+  const retry = await http({ ...requestBody, draftHash: await sha256Hex(canonicalJson(draft)) });
+  assert.equal(retry.status, 409);
+  assert.equal(state.providerCalls, 1);
+});
+
+// R06/R07: one paid operation per authorized source. Before the claim, two
+// identical in-flight requests both called the provider (200 and 409); a cut-off
+// attempt left nothing durable. The claim table here is migration 0016.
+const operations = () => budgetDatabase.prepare('SELECT status, attempts, attempt_id AS attemptId, error_code AS errorCode FROM receipt_operations').all() as { status: string; attempts: number; attemptId: string; errorCode: string | null }[];
+const storedProposal = () => state.data.trips[0].drafts.filter(value => value.id === draft.id && value.status === 'review');
+
+/** A request whose provider call waits until released, so others overlap it in flight. */
+async function heldRequest() {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const body = { ...requestBody, draftHash: await sha256Hex(canonicalJson(state.data.trips[0].drafts[0])) };
+  const originalFetch = globalThis.fetch;
+  const held = async () => { state.providerCalls++; await gate; return streamResponse([completed(state.output ?? transcription)]); };
+  const response = route.POST(declaredRequest('https://triptab.test/api/receipt/process', { method: 'POST',
+    headers: { origin: 'https://triptab.test', 'content-type': 'application/json' }, body: JSON.stringify(body) }));
+  globalThis.fetch = held as typeof fetch;
+  const started = Date.now();
+  while (!state.providerCalls) {
+    // Fail fast with the route's answer instead of waiting forever if the request never reaches the provider.
+    if (Date.now() - started > 10_000) { globalThis.fetch = originalFetch; throw new Error(`The held request never reached the provider: ${(await Promise.race([response.then(value => value.text()), Promise.resolve('still pending')]))}`); }
+    await new Promise(resolve => setTimeout(resolve, 1));
+  }
+  globalThis.fetch = originalFetch;
+  return { response, release, body };
+}
+
+test('R06: simultaneous identical requests make one provider call and store one proposal; the second is told it is already reading', async () => {
+  reset();
+  const first = await heldRequest();
+  const second = await http(first.body);
+  assert.equal(second.status, 202, 'not 409, and no second provider call');
+  assert.equal((await second.json() as { reading?: boolean }).reading, true);
+  first.release();
+  assert.equal((await first.response).status, 200);
+  assert.equal(state.providerCalls, 1);
+  assert.equal(state.writes, 1);
+  assert.equal(storedProposal().length, 1);
+  assert.deepEqual(operations().map(row => [row.status, row.attempts]), [['stored', 1]]);
+  // A client reconnecting with the receipt it displayed before the proposal is
+  // refused by the fingerprint before any claim or spend: no rerun.
+  const stale = await http(first.body);
+  assert.equal(stale.status, 409);
+  assert.equal(state.providerCalls, 1);
+});
+
+test('R06: repeated requests while one is reading (reconnects, other members) neither spend, consume budget nor write', async () => {
+  reset();
+  const first = await heldRequest();
+  for (let index = 0; index < 3; index++) assert.equal((await http(first.body)).status, 202);
+  assert.equal(state.accessCalls, 2, 'initial lookup and final pre-spend key check; duplicates do neither');
+  assert.equal(budgetDatabase.prepare("SELECT COALESCE(SUM(attempts),0) AS n FROM auth_rate_limits WHERE key_hash IS NOT NULL").get()!.n, 3, 'only the owner consumed budget (user, shared minute and shared day counters)');
+  first.release();
+  assert.equal((await first.response).status, 200);
+  assert.equal(state.providerCalls, 1); assert.equal(state.writes, 1);
+});
+
+test('R07: a cut-off attempt (lease expired after the provider accepted) is taken over once by the next request, which stores one proposal', async () => {
+  reset();
+  const hash = await sha256Hex(canonicalJson(state.data.trips[0].drafts[0]));
+  // The crashed attempt: claimed, spent, never finished.
+  const { claimOperation } = await import('../lib/receipt-operations');
+  const crashed = await claimOperation({ prepare: (sql: string) => ({ bind: (...values: (string | number | null)[]) => ({
+    first: async () => budgetDatabase.prepare(sql).get(...values) ?? null, run: async () => budgetDatabase.prepare(sql).run(...values) }) }) } as never,
+  { tripId: trip.id, draftId: draft.id, draftHash: hash, receiptId: 'photo', imageVersion: 'original-image' }, owner, { now: Date.now() - 200_000 });
+  assert.equal(crashed.owned, true);
+  // Within its lease nobody may take over; after it, one new attempt does.
+  const response = await http({ ...requestBody, draftHash: hash });
+  assert.equal(response.status, 200);
+  assert.equal(state.providerCalls, 1, 'one more call: the residual spend after a crash, never automatic');
+  assert.equal(storedProposal().length, 1);
+  assert.deepEqual(operations().map(row => [row.status, row.attempts]), [['stored', 2]]);
+});
+
+test('R07: failure before persistence is recorded and a retry may claim again; failure after persistence cannot rerun', async () => {
+  reset();
+  state.invalidOutput = true;
+  const failed = await http();
+  assert.notEqual(failed.status, 200);
+  assert.deepEqual(operations().map(row => row.status), ['failed']);
+  assert.equal(state.writes, 0);
+  state.invalidOutput = false;
+  assert.equal((await http()).status, 200);
+  assert.deepEqual(operations().map(row => [row.status, row.attempts]), [['stored', 2]]);
+  assert.equal(state.providerCalls, 2);
+  // After persistence: even if the outcome had not been recorded, the stored
+  // proposal changed the draft, so the original request cannot run again.
+  budgetDatabase.exec("UPDATE receipt_operations SET status='running', lease_until=0");
+  const again = await http({ ...requestBody, draftHash: await sha256Hex(canonicalJson(draft)) });
+  assert.equal(again.status, 409);
+  assert.equal(state.providerCalls, 2); assert.equal(storedProposal().length, 1);
+});
+
+test('R07: a slow attempt superseded after its lease ran out cannot commit a second proposal', async () => {
+  reset();
+  const slow = await heldRequest();
+  // It is still running but its lease has run out (the platform kept it past
+  // the lease); a new request takes over and finishes first.
+  budgetDatabase.exec('UPDATE receipt_operations SET lease_until = 0');
+  const newer = await http(slow.body);
+  assert.equal(newer.status, 200);
+  slow.release();
+  const late = await slow.response;
+  assert.equal(late.status, 409, 'the superseded result is discarded');
+  assert.equal(state.providerCalls, 2, 'both attempts reached the provider: the documented residual');
+  assert.equal(state.writes, 1);
+  assert.equal(storedProposal().length, 1);
+  const [row] = operations();
+  assert.deepEqual([row.status, row.attempts], ['stored', 2]);
+  assert.equal(storedProposal()[0].receiptScan?.attemptId, row.attemptId, 'the stored proposal is the current attempt\'s');
+});
+
+test('R06/R07: changed draft, photo or membership during reading leaves the claim failed and no proposal', async () => {
+  for (const change of [() => { state.data.trips[0].drafts[0].title = 'Edited meanwhile'; }, () => { state.imageVersion = 'replaced'; },
+    () => { state.data.trips[0].members = [...state.data.trips[0].members, { id: 'new', name: 'Newcomer' }]; }]) {
+    reset();
+    state.duringModel = change;
+    const response = await http();
+    assert.equal(response.status, 409);
+    assert.equal(state.writes, 0);
+    assert.deepEqual(operations().map(row => row.status), ['failed']);
+  }
 });

@@ -262,6 +262,7 @@ export const SPANISH_UI: Readonly<Record<string, string>> = {
   Notifications: 'Notificaciones',
   'Browser notifications': 'Notificaciones del navegador',
   'Allow settlement reminders': 'Permitir recordatorios de pago',
+  'Receipt ready notifications': 'Avisos de recibo listo',
   'Only expenses I’m involved in': 'Solo gastos en los que participo',
   'Daily summary': 'Resumen diario',
   'As activity happens': 'Al momento',

@@ -1,13 +1,22 @@
 import { encodeBase64url, sha256Hex } from '@/lib/data-utils';
-import { activityStatements, db, ensureProfile, failure, MAX_STORED_TRIP_BYTES, readBoundedBody, RequestError, sameOrigin } from '@/lib/store';
+import { activityStatements, db, ensureProfile, profileWriteAuthorization, failure, MAX_STORED_TRIP_BYTES, readBoundedBody, RequestError, sameOrigin } from '@/lib/store';
+import { AuthError, requestWriteAuthorizationSql, requestWriteAuthorized } from '@/lib/auth';
+import { DB_NOW_ISO } from '@/lib/receipt-operations';
 import { joinedNotification, notifyMembers } from '@/lib/notifications';
-import { parseStoredTrip, travellerFinancialPreview, type Trip } from '@/lib/model';
+import { isBill, parseStoredTrip, travellerFinancialPreview, type Trip } from '@/lib/model';
+import { openListGate } from '@/lib/trip-lifecycle';
+import { financialFormatRefusal } from '@/lib/financial-format';
 
 export const dynamic = 'force-dynamic';
 const PRIVATE_HEADERS = { 'Cache-Control': 'private, no-store' };
 const INVITE_LIFETIME = 7 * 24 * 60 * 60 * 1000;
 
 type Profile = Awaited<ReturnType<typeof ensureProfile>>;
+async function explainAuthorizationRefusal(profile: Profile) {
+  if (!await requestWriteAuthorized(db(), profileWriteAuthorization(profile), profile.id)) {
+    throw new AuthError('Your sign-in changed before this invitation action finished. Sign in again and review the invitation.', 401);
+  }
+}
 type Member = Trip['members'][number];
 type Invite = {
   token_hash: string; audit_id: string; trip_id: string; member_id: string; email: string | null;
@@ -140,6 +149,12 @@ async function listInvitations(tripId: string, profile: Profile) {
 }
 
 export async function GET(request: Request) {
+  // R01: the invitation preview carries the traveller's cost shares, payments and net balances. The invitation
+  // list (mode=list) carries no money and is not gated.
+  if (!new URL(request.url).searchParams.has('mode')) {
+    const refused = financialFormatRefusal(request);
+    if (refused) return refused;
+  }
   try {
     const profile = await ensureProfile(request);
     const params = new URL(request.url).searchParams;
@@ -186,6 +201,7 @@ async function invitationSnapshot(invite: Pick<Invite, 'audit_id' | 'token_hash'
 }
 
 async function createInvite(request: Request, profile: Profile, body: Record<string, unknown>) {
+  const authorization = requestWriteAuthorizationSql(profileWriteAuthorization(profile), profile.id);
   const tripId = identifier(body.tripId, 'trip');
   const memberId = identifier(body.memberId, 'traveller');
   const email = targetEmail(body.email);
@@ -211,7 +227,7 @@ async function createInvite(request: Request, profile: Profile, body: Record<str
     database.prepare(`
       INSERT INTO invites (token_hash, audit_id, trip_id, member_id, email, expires_at, used_by, created_by)
       SELECT ?, ?, ?, ?, ?, ?, NULL, ? WHERE
-        NOT EXISTS (SELECT 1 FROM auth_links WHERE oai_user_id = ? AND user_id <> ?)
+        ${authorization.condition}
         AND EXISTS (SELECT 1 FROM trips t WHERE t.id = ? AND t.owner = ?
           AND NOT EXISTS (SELECT 1 FROM memberships m WHERE m.trip_id = t.id AND m.member_id = ?)
           AND EXISTS (SELECT 1 FROM json_each(t.data, '$.members') j
@@ -220,7 +236,7 @@ async function createInvite(request: Request, profile: Profile, body: Record<str
         AND (SELECT json_group_array(json_array(i.token_hash, i.audit_id, i.email, i.expires_at, i.created_by))
           FROM (SELECT token_hash, audit_id, email, expires_at, created_by FROM invites
             WHERE trip_id = ? AND member_id = ? AND used_by IS NULL ORDER BY token_hash) i) = ?
-    `).bind(hash, auditId, tripId, memberId, email, expiresAt, profile.id, profile.id, profile.id, tripId, profile.id, memberId, memberId, member.name, member.email, tripId, memberId,
+    `).bind(hash, auditId, tripId, memberId, email, expiresAt, profile.id, ...authorization.bindings, tripId, profile.id, memberId, memberId, member.name, member.email, tripId, memberId,
       JSON.stringify(previous.map(row => [row.token_hash, row.audit_id, row.email, row.expires_at, row.created_by]))),
     database.prepare(`
       DELETE FROM invites WHERE trip_id = ? AND member_id = ? AND used_by IS NULL AND token_hash <> ?
@@ -230,7 +246,10 @@ async function createInvite(request: Request, profile: Profile, body: Record<str
       { id: profile.id, displayName: profile.displayName }, '', 'current', 'web', createdGate),
     database.prepare('SELECT COALESCE((SELECT revision FROM sync_state WHERE id = 1), 0) AS revision'),
   ]);
-  if (!results[0].meta.changes) throw new RequestError('This traveller changed or has already joined. Refresh the trip.', 409);
+  if (!results[0].meta.changes) {
+    await explainAuthorizationRefusal(profile);
+    throw new RequestError('This traveller changed or has already joined. Refresh the trip.', 409);
+  }
   const url = new URL('/', request.url);
   url.searchParams.set('invite', token);
   const revision = (results.at(-1)!.results[0] as { revision: number }).revision;
@@ -238,6 +257,7 @@ async function createInvite(request: Request, profile: Profile, body: Record<str
 }
 
 async function revokeInvitation(profile: Profile, body: Record<string, unknown>) {
+  const authorization = requestWriteAuthorizationSql(profileWriteAuthorization(profile), profile.id);
   const tripId = identifier(body.tripId, 'trip');
   const database = db();
   await checkTripOwner(tripId, profile);
@@ -251,27 +271,31 @@ async function revokeInvitation(profile: Profile, body: Record<string, unknown>)
   const results = await database.batch([
     database.prepare(`
       DELETE FROM invites WHERE token_hash = ? AND audit_id = ? AND trip_id = ? AND member_id = ? AND created_by = ?
-        AND used_by IS NULL AND expires_at = ? AND expires_at > ? AND email IS ?
-        AND NOT EXISTS (SELECT 1 FROM auth_links WHERE oai_user_id = ? AND user_id <> ?)
+        AND used_by IS NULL AND expires_at = ? AND expires_at > ${DB_NOW_ISO} AND email IS ?
+        AND ${authorization.condition}
         AND EXISTS (SELECT 1 FROM trips t WHERE t.id = invites.trip_id AND t.owner = ?
           AND NOT EXISTS (SELECT 1 FROM memberships m WHERE m.trip_id = t.id AND m.member_id = invites.member_id)
           AND EXISTS (SELECT 1 FROM json_each(t.data, '$.members') j
             WHERE json_extract(j.value, '$.id') = invites.member_id AND json_extract(j.value, '$.userId') IS NULL
               AND json_extract(j.value, '$.name') = ? AND json_extract(j.value, '$.email') IS ?))
-    `).bind(selected.token_hash, selected.audit_id, tripId, selected.member_id, profile.id, selected.expires_at, new Date().toISOString(), selected.email,
-      profile.id, profile.id, profile.id, member.name, member.email),
+    `).bind(selected.token_hash, selected.audit_id, tripId, selected.member_id, profile.id, selected.expires_at, selected.email,
+      ...authorization.bindings, profile.id, member.name, member.email),
     // This single lifecycle event immediately follows the conditional delete.
     // Both statements roll back together if audit storage fails.
     ...activityStatements(database, [{ tripId, entityType: 'invite', entityId: before.id, action: 'update', before,
       after: { ...before, status: 'revoked', reason: 'owner' } }], { id: profile.id, displayName: profile.displayName }, '', 'current', 'web', { sql: 'changes() > 0', bindings: [] }),
     database.prepare('SELECT COALESCE((SELECT revision FROM sync_state WHERE id = 1), 0) AS revision'),
   ]);
-  if (!results[0].meta.changes) throw new RequestError('This invitation changed or was already used. Refresh the invitations.', 409);
+  if (!results[0].meta.changes) {
+    await explainAuthorizationRefusal(profile);
+    throw new RequestError('This invitation changed or was already used. Refresh the invitations.', 409);
+  }
   const revision = (results.at(-1)!.results[0] as { revision: number }).revision;
   return Response.json({ revoked: true, revision }, { headers: PRIVATE_HEADERS });
 }
 
 async function acceptInvite(profile: Profile, body: Record<string, unknown>) {
+  const authorization = requestWriteAuthorizationSql(profileWriteAuthorization(profile), profile.id);
   const hash = await sha256Hex(tokenValue(body.token));
   const invite = await getInvite(hash);
   checkInvite(invite, profile);
@@ -304,17 +328,19 @@ async function acceptInvite(profile: Profile, body: Record<string, unknown>) {
   const database = db();
   const state = await invitationRevision(database);
   const marker = crypto.randomUUID();
-  const now = new Date().toISOString();
   const before = await invitationSnapshot(invite, member.name, 'pending');
+  // F1: joining adds this trip to the account's open list, so the per-kind limit
+  // (50 holidays, 100 bills) is part of the admitting statement below.
+  const openList = openListGate(profile.id, isBill(nextTrip));
   // A compare-and-swap protects the trip JSON and invalidates any ledger loaded
   // before this join. Every subsequent statement is guarded by this batch marker.
   const results = await database.batch([
     database.prepare(`
       UPDATE sync_state SET revision = revision + 1, last_write = ?
-      WHERE id = 1 AND revision = ? AND NOT EXISTS (SELECT 1 FROM auth_links WHERE oai_user_id = ? AND user_id <> ?) AND EXISTS (
+      WHERE id = 1 AND revision = ? AND ${authorization.condition} AND ${openList.condition} AND EXISTS (
         SELECT 1 FROM invites i JOIN trips t ON t.id = i.trip_id
         WHERE i.token_hash = ? AND i.audit_id = ? AND i.trip_id = ? AND i.member_id = ? AND i.created_by = ? AND i.email IS ?
-          AND i.used_by IS NULL AND i.expires_at = ? AND i.expires_at > ?
+          AND i.used_by IS NULL AND i.expires_at = ? AND i.expires_at > ${DB_NOW_ISO}
           AND (i.email IS NULL OR lower(i.email) = ?)
           AND t.owner = i.created_by AND t.owner <> ?
           AND t.data = ?
@@ -322,8 +348,8 @@ async function acceptInvite(profile: Profile, body: Record<string, unknown>) {
           AND EXISTS (SELECT 1 FROM json_each(t.data, '$.members') j
             WHERE json_extract(j.value, '$.id') = i.member_id AND json_extract(j.value, '$.userId') IS NULL)
       )
-    `).bind(marker, state.revision, profile.id, profile.id, hash, invite.audit_id, invite.trip_id, invite.member_id, invite.created_by, invite.email,
-      invite.expires_at, now, accountEmail, profile.id, invite.data, profile.id),
+    `).bind(marker, state.revision, ...authorization.bindings, ...openList.bindings, hash, invite.audit_id, invite.trip_id, invite.member_id, invite.created_by, invite.email,
+      invite.expires_at, accountEmail, profile.id, invite.data, profile.id),
     database.prepare(`
       UPDATE invites SET used_by = ? WHERE token_hash = ? AND used_by IS NULL
         AND EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND last_write = ?)
@@ -344,12 +370,15 @@ async function acceptInvite(profile: Profile, body: Record<string, unknown>) {
     ], { id: profile.id, displayName: profile.displayName }, marker, state.revision + 1),
   ]);
   if (!results[0].meta.changes) {
+    await explainAuthorizationRefusal(profile);
     // Simultaneous clicks from the same account can safely return the first claim.
     const latest = await getInvite(hash);
     const current = await membership(invite.trip_id, profile.id);
     if (latest.used_by === profile.id && current?.member_id === invite.member_id) {
       return Response.json({ tripId: invite.trip_id, memberId: invite.member_id, alreadyMember: true }, { headers: PRIVATE_HEADERS });
     }
+    // Name the limit when it is why the join was refused; nothing was written.
+    if (await openList.count(database) >= openList.limit) throw new RequestError(openList.message, 409);
     throw new RequestError('The trip or invitation changed. Refresh before joining again.', 409);
   }
   const notification = joinedNotification(profile.displayName, nextTrip.name, nextTrip.kind);
@@ -362,6 +391,10 @@ async function acceptInvite(profile: Profile, body: Record<string, unknown>) {
 }
 
 export async function POST(request: Request) {
+  // R01: accepting reads and writes the invited trip's money (the traveller confirms its history), so every invitation
+  // write is refused for a bundle that cannot read it, before authentication, reads or writes.
+  const refused = financialFormatRefusal(request);
+  if (refused) return refused;
   try {
     try { sameOrigin(request); }
     catch { throw new RequestError('Invitation requests must come from TripTab.', 403); }

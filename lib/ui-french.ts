@@ -263,6 +263,7 @@ export const FRENCH_UI: Readonly<Record<string, string>> = {
   Notifications: 'Notifications',
   'Browser notifications': 'Notifications du navigateur',
   'Allow settlement reminders': 'Autoriser les rappels de paiement',
+  'Receipt ready notifications': 'Notifications de reçu prêt',
   'Only expenses I’m involved in': 'Uniquement les dépenses me concernant',
   'Daily summary': 'Résumé quotidien',
   'As activity happens': 'Au fil des événements',

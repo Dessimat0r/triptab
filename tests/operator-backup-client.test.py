@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import sqlite3
 import subprocess
+import sys
 import tempfile
 import threading
 import unittest
@@ -127,7 +128,7 @@ class ClientTests(unittest.TestCase):
             sql = (mirror / 'drizzle' / name).read_bytes()
             path.write_bytes(sql)
             paths.append(path)
-        command = ['python3', str(HERE / 'operator-backup.py'), '--base-url', 'http://127.0.0.1:' + str(self.server.server_port),
+        command = [sys.executable, str(HERE / 'operator-backup.py'), '--base-url', 'http://127.0.0.1:' + str(self.server.server_port),
                    '--allow-localhost-test', '--output-dir', str(self.root / 'backups'),
                    '--key-dir', str(self.root / 'keys'), '--token-stdin']
         for path in paths:
@@ -147,7 +148,7 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(key.stat().st_mode & 0o777, 0o600)
         self.assertTrue(archive.read_bytes().startswith(b'TRIPBK01'))
         self.assertNotIn(b'CREATE TABLE', archive.read_bytes())
-        verified = subprocess.run(['python3', str(HERE / 'verify-operator-backup.py'), str(archive), str(key)],
+        verified = subprocess.run([sys.executable, str(HERE / 'verify-operator-backup.py'), str(archive), str(key)],
                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         self.assertEqual(verified.returncode, 0, verified.stderr)
         self.assertEqual(json.loads(verified.stdout)['object_count'], 1)
@@ -176,7 +177,7 @@ class ClientTests(unittest.TestCase):
         corrupt = bytearray(archive.read_bytes())
         corrupt[len(corrupt) // 2] ^= 1
         archive.write_bytes(corrupt)
-        verified = subprocess.run(['python3', str(HERE / 'verify-operator-backup.py'), str(archive), summary['recovery_key']],
+        verified = subprocess.run([sys.executable, str(HERE / 'verify-operator-backup.py'), str(archive), summary['recovery_key']],
                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         self.assertNotEqual(verified.returncode, 0)
         self.assertIn('Encrypted archive verification failed', verified.stderr)

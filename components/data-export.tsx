@@ -5,6 +5,7 @@ import { t as uiText } from "@/lib/ui-language";
 import { useEffect, useId, useRef, useState } from "react";
 import { Download } from "lucide-react";
 import type { Trip } from "@/lib/model";
+import { financialFormatHeaders } from "@/lib/financial-format";
 import "./data-export.css";
 
 export type DataExportProps = {
@@ -40,7 +41,7 @@ export default function DataExport({ trips = [], tripId, compact = false }: Data
       if (scope === "trip" && format === "json" && receipts) params.set("receipts", "1");
       if (scope === "activity" && older && history?.tripId === selectedTrip && history.nextCursor !== null) params.set("before", String(history.nextCursor));
       if (scope === "account-activity" && older && accountHistoryCursors[format] !== null) params.set("before", String(accountHistoryCursors[format]));
-      const response = await fetch(`/api/export?${params}`, { cache: "no-store", credentials: "same-origin", signal: controller.signal });
+      const response = await fetch(`/api/export?${params}`, { cache: "no-store", credentials: "same-origin", headers: financialFormatHeaders(), signal: controller.signal });
       if (!response.ok) {
         const body = await response.json() as { error?: string };
         throw new Error(body.error || "Unable to download your data. Try again.");

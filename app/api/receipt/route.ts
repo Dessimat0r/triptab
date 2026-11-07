@@ -1,4 +1,4 @@
-import { owner, bucket, sameOrigin, failure, readBoundedBody, receiptKey, RequestError, ensureProfile, tripAccess, receiptAccess, db } from '@/lib/store';
+import { owner, bucket, sameOrigin, failure, readBoundedBody, receiptKey, RequestError, ensureProfile, profileWriteAuthorization, tripAccess, receiptAccess, db } from '@/lib/store';
 import { storeReceipt, deleteReceipt, maintainReceipts } from '@/lib/receipt-lifecycle';
 
 export const dynamic = 'force-dynamic';
@@ -21,7 +21,7 @@ function matchesImageType(bytes: Uint8Array, type: string) {
 export async function POST(r: Request) {
   try {
     sameOrigin(r);
-    const user = (await ensureProfile(r)).id;
+    const profile = await ensureProfile(r), user = profile.id;
     if (r.headers.get('X-TripTab-Account') && r.headers.get('X-TripTab-Account') !== user) throw new RequestError('Sign in to the account that captured this receipt.',409);
     const tripId = new URL(r.url).searchParams.get('tripId');
     if (!tripId || tripId.length > 100 || !await tripAccess(user, tripId)) throw new RequestError('Choose a trip you have access to.', 403);
@@ -33,7 +33,7 @@ export async function POST(r: Request) {
       console.warn('TripTab receipt maintenance will retry.');
     });
     const id = crypto.randomUUID();
-    await storeReceipt(db(), bucket(), user, tripId, id, bytes, type);
+    await storeReceipt(db(), bucket(), user, tripId, id, bytes, type, profileWriteAuthorization(profile));
     return Response.json({ receiptId: id }, { headers: { 'Cache-Control': 'private, no-store' } });
   } catch (e) {
     return failure(e);
@@ -43,12 +43,12 @@ export async function POST(r: Request) {
 export async function DELETE(r: Request) {
   try {
     sameOrigin(r);
-    const user = (await ensureProfile(r)).id;
+    const profile = await ensureProfile(r), user = profile.id;
     if (r.headers.get('X-TripTab-Account') && r.headers.get('X-TripTab-Account') !== user) throw new RequestError('Sign in to the account that captured this receipt.',409);
     const params = new URL(r.url).searchParams;
     const id = params.get('id');
     if (params.getAll('id').length !== 1 || !id || !RECEIPT_ID.test(id)) throw new RequestError('Invalid receipt.');
-    const result = await deleteReceipt(db(), bucket(), user, id);
+    const result = await deleteReceipt(db(), bucket(), user, id, profileWriteAuthorization(profile));
     return Response.json(result, { status: result.pending ? 202 : 200, headers: { 'Cache-Control': 'private, no-store' } });
   } catch (e) {
     return failure(e);

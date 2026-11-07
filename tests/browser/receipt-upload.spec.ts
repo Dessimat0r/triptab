@@ -55,7 +55,7 @@ for (const width of [320, 390, 1440]) {
       await expect(dialog).toBeVisible();
       expect(await page.evaluate(() => (window as unknown as { __locationRequests: number }).__locationRequests)).toBe(0);
       await dialog.getByRole('textbox', { name: /Who bought what/ }).fill('Gaz had a decaf, I had a cappuccino.');
-      const notesLabel = await dialog.locator(':scope > label').evaluate(label => {
+      const notesLabel = await dialog.locator(':scope > label', { hasText: 'Who bought what' }).evaluate(label => {
         const range = document.createRange(); range.selectNode(label.firstChild!);
         const heading = range.getBoundingClientRect(), helper = label.querySelector('small')!.getBoundingClientRect();
         return { overlaps: heading.left < helper.right && heading.right > helper.left && heading.top < helper.bottom && heading.bottom > helper.top,

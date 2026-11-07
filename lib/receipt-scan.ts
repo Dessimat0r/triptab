@@ -1,5 +1,6 @@
 import { canonicalJson as canonical } from './data-utils';
 import { z } from 'zod';
+import { applyAdjustments, type Adjustment } from './adjustments';
 
 const amount = z.number().int().min(0).max(100000000);
 const identifier = z.string().min(1).max(100);
@@ -13,7 +14,7 @@ export const scanSourceSchema = z.object({
 export const sourceLineSchema = scanSourceSchema.extend({
   kind: z.enum(['item', 'tax-summary', 'adjustment', 'subtotal', 'total', 'other']).optional(),
   amount: z.number().int().min(-100000000).max(100000000).nullable().optional(),
-  mappedTo: z.enum(['discount', 'tax', 'tip', 'included', 'unmapped']).optional(),
+  mappedTo: z.enum(['discount', 'tax', 'tip', 'included', 'adjustment', 'unmapped']).optional(),
 }).strict();
 export const itemFieldSourcesSchema = z.object({
   name: source.optional(), amount: source.optional(), quantity: source.optional(),
@@ -57,7 +58,10 @@ export const receiptScanSchema = z.object({
   processedAt: z.string().datetime({ offset: true }).optional(),
   processor: z.string().min(1).max(80).optional(),
   attemptId: identifier.optional(), imageIds: z.array(identifier).max(6).optional(),
-  acknowledgement: z.object({ fingerprint: z.string().regex(/^scan-v1:[a-f0-9]{64}$/) }).strict().optional(),
+  // Optional only for reading historical, reasonless acknowledgements. New
+  // exceptions require a written reason at the authoritative save gate.
+  acknowledgement: z.object({ fingerprint: z.string().regex(/^scan-v1:[a-f0-9]{64}$/),
+    reason: z.string().trim().min(1).max(500).optional() }).strict().optional(),
   // A human may review a receipt whose printed total is absent/unreadable.
   // Keep the unknown evidence and incomplete status rather than inventing it.
   missingTotalAcknowledgement: z.object({ fingerprint: z.string().regex(/^scan-v1:[a-f0-9]{64}$/) }).strict().optional(),
@@ -121,6 +125,7 @@ export type ScannableReceipt = {
   }[];
   tax: number; tip: number; discount: number;
   percentages?: Record<string, number>;
+  adjustments?: Adjustment[];
   fieldSources?: FieldSources;
   receiptScan?: ReceiptScan;
 };
@@ -201,7 +206,10 @@ export function reconcileReceiptScan(entry: ScannableReceipt): ReceiptScan | und
     const resolved = scan.warnings.find(warning => warningKey(warning) === warningKey(candidate) && warning.resolved);
     add(resolved || candidate);
   }
-  const calculatedTotal = calculatedSubtotal + entry.tax + entry.tip - entry.discount;
+  // Discount and charge records (F-02) count once each against the printed total.
+  const adjusted = applyAdjustments(entry.items, entry.adjustments);
+  const adjustmentEffect = adjusted.net.reduce<number>((sum, value, index) => sum + (value ?? 0) - (entry.items[index].amount ?? 0), 0) + adjusted.receiptDelta;
+  const calculatedTotal = calculatedSubtotal + adjustmentEffect + entry.tax + entry.tip - entry.discount;
   if (![entry.tax, entry.tip, entry.discount].every(value => Number.isSafeInteger(value) && value >= 0 && value <= 100000000)
     || ![calculatedSubtotal, calculatedTotal].every(Number.isSafeInteger)) {
     throw new Error('Receipt amounts must be integer hundredths');
@@ -222,9 +230,11 @@ export function reconcileReceiptScan(entry: ScannableReceipt): ReceiptScan | und
   if (scan.printedSubtotal !== undefined && scan.printedSubtotal !== null && calculatedSubtotal !== scan.printedSubtotal) {
     add({ code: 'subtotal-mismatch', difference: calculatedSubtotal - scan.printedSubtotal });
   }
+  const appliedLines = new Set((entry.adjustments ?? []).flatMap(adjustment => adjustment.sourceLineIndex === undefined ? [] : [adjustment.sourceLineIndex]));
   for (const line of scan.sourceLines || []) {
     if ((line.kind !== 'adjustment' && !(typeof line.amount === 'number' && line.amount < 0))
-      || (line.mappedTo && line.mappedTo !== 'unmapped')) continue;
+      || (line.mappedTo && line.mappedTo !== 'unmapped')
+      || (line.lineIndex !== undefined && appliedLines.has(line.lineIndex))) continue;
     const candidate: ReceiptScanWarning = { code: 'unmapped-adjustment',
       ...(line.lineIndex === undefined ? {} : { lineIndex: line.lineIndex }),
       ...(line.observedText === undefined ? {} : { observedText: line.observedText }),
@@ -290,6 +300,7 @@ export function receiptScanFingerprint(entry: ScannableReceipt): string {
     .filter(([field]) => ['currency', 'tax', 'tip', 'discount'].includes(field)));
   return `scan-v1:${sha256(canonical({ currency: entry.currency, items: entry.items.map(item=>Object.fromEntries(Object.entries(item).filter(([key])=>key!=="translations"&&key!=="nameLanguage"))),
     tax: entry.tax, tip: entry.tip, discount: entry.discount, percentages: entry.percentages,
+    ...(entry.adjustments?.length ? { adjustments: entry.adjustments } : {}),
     fieldSources: Object.keys(financialSources).length ? financialSources : undefined,
     receiptScan: scan && { version: scan.version, printedCurrency: scan.printedCurrency, printedSubtotal: scan.printedSubtotal,
       printedTotal: scan.printedTotal, sourceLines: scan.sourceLines, fieldSources: scan.fieldSources,
@@ -297,6 +308,9 @@ export function receiptScanFingerprint(entry: ScannableReceipt): string {
       imageIds: scan.imageIds, attemptId: scan.attemptId },
   }))}`;
 }
+
+/** The save error for an unexplained printed-total difference; its correction lives in Check & save. */
+export const RECEIPT_DIFFERENCE_ERROR = 'The itemised amounts do not match the printed receipt. Correct them or use Save anyway with a written reason explaining why you reviewed this difference.';
 
 export function receiptScanSaveError(entry: ScannableReceipt, options: {
   allowAcknowledgement?: boolean; previous?: ScannableReceipt;
@@ -323,8 +337,8 @@ export function receiptScanSaveError(entry: ScannableReceipt, options: {
   if (uncertainties.length) return 'Review and resolve the receipt scan warnings before saving.';
   if (!unresolved.length) return null;
   const acknowledgement = scan.acknowledgement?.fingerprint;
-  if (trustedAcknowledgement(acknowledgement, options.previous?.receiptScan?.acknowledgement?.fingerprint)) return null;
-  return 'The itemised amounts do not match the printed receipt. Correct them or explicitly confirm that you reviewed this difference before saving.';
+  if (scan.acknowledgement?.reason?.trim() && trustedAcknowledgement(acknowledgement, options.previous?.receiptScan?.acknowledgement?.fingerprint)) return null;
+  return RECEIPT_DIFFERENCE_ERROR;
 }
 
 /** An AI client cannot manufacture human review acknowledgement/resolutions. */
@@ -348,7 +362,7 @@ export function canConfirmReceiptWarning(entry: ScannableReceipt, warning: Recei
   if (warning.resolved) return false;
   if (warning.code === 'ambiguous-currency') return !!entry.currency;
   if (warning.code === 'uncertain-description' && warning.itemId && !entry.items.find(item => item.id === warning.itemId)?.name.trim()) return false;
-  return RESOLVABLE_SCAN_WARNINGS.has(warning.code) || ['subtotal-mismatch', 'total-mismatch', 'missing-printed-total'].includes(warning.code);
+  return RESOLVABLE_SCAN_WARNINGS.has(warning.code) || warning.code === 'missing-printed-total';
 }
 
 /** Number of acknowledgeable points in the final human confirmation. */
@@ -357,17 +371,15 @@ export function pendingReviewActions(entry: ScannableReceipt): number {
   if (!scan) return 0;
   const fingerprint = receiptScanFingerprint(entry);
   const checkable = scan.warnings.filter(warning => RESOLVABLE_SCAN_WARNINGS.has(warning.code) && canConfirmReceiptWarning(entry, warning)).length;
-  const mismatch = scan.warnings.some(warning => warning.code === 'subtotal-mismatch' || warning.code === 'total-mismatch')
-    && scan.acknowledgement?.fingerprint !== fingerprint ? 1 : 0;
   const missingTotal = (scan.printedTotal === null || scan.printedTotal === undefined)
     && scan.missingTotalAcknowledgement?.fingerprint !== fingerprint ? 1 : 0;
   const currency = entry.currency && scan.warnings.some(warning => !warning.resolved && warning.code === 'ambiguous-currency') ? 1 : 0;
-  return checkable + mismatch + missingTotal + currency;
+  return checkable + missingTotal + currency;
 }
 
 /**
  * One deliberate review action: mark every checkable warning as checked and
- * acknowledge a total difference or an unavailable printed total, using the
+ * acknowledge an unavailable printed total, using the
  * same fingerprint Save verifies. Unreadable prices, missing names and
  * a different printed currency still need real corrections. A selected
  * ambiguous currency is confirmed only by the browser's visible Save summary.
@@ -375,16 +387,27 @@ export function pendingReviewActions(entry: ScannableReceipt): number {
 export function acknowledgeReceiptReview<T extends ScannableReceipt>(entry: T): T {
   const scan = reconcileReceiptScan(entry);
   if (!entry.receiptScan || !scan) return entry;
+  const exception = scan.acknowledgement?.reason && scan.acknowledgement.fingerprint === receiptScanFingerprint(entry)
+    ? scan.acknowledgement : undefined;
   const warnings = scan.warnings.map(warning => RESOLVABLE_SCAN_WARNINGS.has(warning.code) && canConfirmReceiptWarning(entry, warning) ? { ...warning, resolved: true as const } : warning);
   const currencyConfirmed = entry.currency && scan.warnings.some(warning => !warning.resolved && warning.code === 'ambiguous-currency');
   const resolved: T = { ...entry, ...(currencyConfirmed ? { fieldSources: { ...entry.fieldSources, currency: 'user' as const } } : {}), receiptScan: { ...entry.receiptScan, warnings, acknowledgement: undefined, missingTotalAcknowledgement: undefined } };
   const fingerprint = receiptScanFingerprint(resolved);
-  const mismatch = scan.warnings.some(warning => warning.code === 'subtotal-mismatch' || warning.code === 'total-mismatch');
   const missingTotal = scan.printedTotal === null || scan.printedTotal === undefined;
   return { ...resolved, receiptScan: { ...resolved.receiptScan!,
-    ...(mismatch ? { acknowledgement: { fingerprint } } : {}),
+    ...(exception ? { acknowledgement: { ...exception, fingerprint } } : {}),
     ...(missingTotal ? { missingTotalAcknowledgement: { fingerprint } } : {}),
   } };
+}
+
+/** A separate, explicit human exception; ordinary Save can never create it. */
+export function acknowledgeReceiptDifference<T extends ScannableReceipt>(entry: T, reason: string): T {
+  const written = reason.trim();
+  if (!written || written.length > 500) throw new Error('Explain the receipt difference in 1–500 characters.');
+  const reviewed = acknowledgeReceiptReview(entry);
+  if (!reviewed.receiptScan) throw new Error('No receipt evidence to review.');
+  return { ...reviewed, receiptScan: { ...reviewed.receiptScan,
+    acknowledgement: { fingerprint: receiptScanFingerprint(reviewed), reason: written } } };
 }
 
 /**
@@ -403,7 +426,7 @@ export function carryReviewAcknowledgements<T extends ScannableReceipt>(previous
   const after = receiptScanFingerprint(next);
   if (after === before) return next;
   return { ...next, receiptScan: { ...next.receiptScan,
-    ...(keepAcknowledgement ? { acknowledgement: { fingerprint: after } } : {}),
+    ...(keepAcknowledgement ? { acknowledgement: { ...scan.acknowledgement!, fingerprint: after } } : {}),
     ...(keepMissingTotal ? { missingTotalAcknowledgement: { fingerprint: after } } : {}),
   } };
 }

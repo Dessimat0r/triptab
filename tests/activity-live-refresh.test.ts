@@ -1,3 +1,4 @@
+import * as financialFormat from '../lib/financial-format';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
@@ -32,6 +33,7 @@ function controller(fetcher: (url: string, options: RequestInit) => Promise<Resp
   new Function('require', 'module', 'exports', 'fetch', 'location', compiled)((name: string) => {
     if (name === 'react') return hooks;
     if (name === './use-live-refresh') return { useLiveRefresh: (callback: typeof liveRefresh) => { liveRefresh = callback; } };
+    if (name === '@/lib/financial-format') return financialFormat;
     return {};
   }, loaded, loaded.exports, fetcher, { origin: 'https://triptab.test' });
   return {

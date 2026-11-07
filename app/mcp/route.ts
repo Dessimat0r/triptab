@@ -1,9 +1,10 @@
 import { z } from 'zod';
+import { adjustmentSchema, personControlled, type Adjustment } from '@/lib/adjustments';
 import { receiptExpenseIconSchema, receiptExpenseIconJsonSchema, nextSuggestedIcon } from '@/lib/receipt-proposals';
 import { languageSchema, receiptLanguageSchema, itemTranslationsSchema, RECEIPT_LANGUAGES } from '@/lib/receipt-languages';
 import { readTripLanguagePreferences } from '@/lib/trip-language-preferences';
 import { readLedger, writeLedger, bucket, receiptKey, receiptAccess, ensureProfile, db } from '@/lib/store';
-import { hashToken, resolveIdentity } from '@/lib/auth';
+import { hashToken, resolveIdentity, identityWriteAuthorization, type RequestWriteAuthorization } from '@/lib/auth';
 import { notifyReceiptReply } from '@/lib/notifications';
 import { draftSchema, tripSchema, draftUnitsSchema, receiptQuantitySchema, CURRENCIES, type Currency, type Trip, type Ledger, type Draft, type Expense } from '@/lib/model';
 import { receiptMemorySchema, type ReceiptMemory } from '@/lib/receipt-context';
@@ -223,6 +224,13 @@ publishedDraft.properties = {
   ...publishedMetadata,
   expenseIcon: receiptExpenseIconJsonSchema,
   upsertItems: { type: 'array', maxItems: 200, items: publishedItem, description: 'Create or correct only these stable item IDs. Omitted existing items are retained. New items may have null unreadable amounts and no selected travellers.' },
+  adjustments: { type: 'array', maxItems: 20, description: 'Proposed promotion or charge records read from the receipt (BOGOF, multibuy, coupons, loyalty, percentage savings, service charges). They replace earlier assistant-proposed records; a person\u2019s own records are kept. Item scope uses stable item IDs of the qualifying lines only when the receipt makes them clear; otherwise omit the record and keep the line as unmapped sourceLines evidence. Refunds, returns and deposits are never records. Amounts are positive integer hundredths; never also put the saving in discount.',
+    items: { type: 'object', additionalProperties: false, required: ['id', 'kind', 'scope'], properties: {
+      id: identifier, kind: { type: 'string', enum: ['discount', 'charge'] }, label: { type: 'string', maxLength: 80 },
+      amount: { type: 'integer', minimum: 1, maximum: 100000000 }, percent: { type: 'number', exclusiveMinimum: 0, maximum: 100 },
+      scope: { type: 'object', additionalProperties: false, required: ['type'], properties: { type: { type: 'string', enum: ['receipt', 'items'] }, itemIds: { type: 'array', maxItems: 200, items: identifier } } },
+      sourceLineIndex: { type: 'integer', minimum: 0, maximum: 999 },
+    } } },
   removeItemIds: { type: 'array', maxItems: 200, uniqueItems: true, items: identifier, description: 'Explicitly remove only known active item IDs when requested. Their historical chats and aliases remain readable as inactive references.' },
   metadataPatch: { type: 'object', properties: metadataProperties, additionalProperties: false, description: 'Only explicit user-requested changes to purchase details, payer, original currency, receipt shares or adjustments. Legacy draft metadata does not overwrite an existing draft.' },
   receiptScan: {
@@ -349,6 +357,7 @@ const updateArgs = z.object({
     metadataPatch: metadataInput.optional(),
     receiptScan: scanEvidenceInput.optional(),
     expenseIcon: receiptExpenseIconSchema.optional(),
+    adjustments: z.array(adjustmentSchema).max(20).optional(),
   }).strict().refine(value => value.items === undefined || value.upsertItems === undefined,
     'Use upsertItems or the compatible items field, never both'),
 }).strict();
@@ -541,10 +550,12 @@ export async function POST(request: Request) {
     // browser cookie and an authenticated provider header are both present.
     let user: string;
     let providerId: string;
+    let authorization: RequestWriteAuthorization;
     try {
       const identity = await resolveIdentity(request, { allowSession: false }, db());
       user = identity.id;
       providerId = identity.chatgptId ?? identity.id;
+      authorization = identityWriteAuthorization(identity);
     }
     catch { throw new RpcError(-32001, 'Connect ChatGPT to use TripTab’s AI tools. Manual features work with your TripTab account.', 401); }
     await consumeToolBudget(providerId);
@@ -578,7 +589,7 @@ export async function POST(request: Request) {
         } else {
           if (values.revision !== ledger.revision) throw new Error('Your ledger changed. Read get_receipt_context again before updating this receipt memory.');
           draft.memory = values.memory;
-          const saved = await writeLedger(user, ledger.data, ledger.revision, { source: 'chatgpt' });
+          const saved = await writeLedger(user, ledger.data, ledger.revision, { source: 'chatgpt', authorization });
           const savedTrip = saved.data.trips.find(value => value.id === trip.id)!;
           result = await receiptContext(saved, savedTrip, savedTrip.drafts.find(value => value.id === draft.id)!, 'draft', user);
           logReceiptTool('memory-write', { tripId: trip.id, draftId: draft.id, revision: saved.revision });
@@ -623,7 +634,7 @@ export async function POST(request: Request) {
             createdAt: new Date().toISOString(), replyTo: question.id,
             ...(question.itemId ? { itemId: question.itemId } : {}),
           }];
-          result = toolLedger(await writeLedger(user, ledger.data, ledger.revision, { source: 'chatgpt' }), values.tripId);
+          result = toolLedger(await writeLedger(user, ledger.data, ledger.revision, { source: 'chatgpt', authorization }), values.tripId);
           // Queue only after the reply commits. Idempotent retries above never
           // send another alert, and notification failures cannot undo a reply.
           await notifyReceiptReply(values.tripId, user, question.authorMemberId, question.itemId ? 'item' : 'receipt', {
@@ -662,7 +673,7 @@ export async function POST(request: Request) {
             members: values.travellers.map((name, index) => ({ id: crypto.randomUUID(), name: index === 0 ? profile.displayName.slice(0, 50) : name })),
             expenses: [], drafts: [], payments: [],
           };
-          const saved = await writeLedger(user, { trips: [...ledger.data.trips, holiday] }, ledger.revision, { source: 'chatgpt' });
+          const saved = await writeLedger(user, { trips: [...ledger.data.trips, holiday] }, ledger.revision, { source: 'chatgpt', authorization });
           result = { trip_id: tripId, ...toolLedger(saved, tripId) };
         }
       } else {
@@ -744,7 +755,7 @@ export async function POST(request: Request) {
         // Legacy full-draft metadata initializes a new draft; explicit patches
         // are required to change saved manual metadata during corrections.
         const { id: draftId, receiptId: requestedReceiptId, items: ignoredItems, upsertItems: ignoredUpserts,
-          removeItemIds: ignoredRemovals, metadataPatch, receiptScan: scanEvidence, expenseIcon, ...legacyMetadata } = args.draft;
+          removeItemIds: ignoredRemovals, metadataPatch, receiptScan: scanEvidence, expenseIcon, adjustments: proposedAdjustments, ...legacyMetadata } = args.draft;
         void ignoredItems; void ignoredUpserts; void ignoredRemovals;
         const defaultReceiptMetadata = recognition && existing?.receiptId ? Object.fromEntries(Object.entries(legacyMetadata).filter(([key, value]) => value !== undefined
           && ((key === 'location' && (!existing.location || existing.location.source === 'receipt') && existing.fieldSources?.location !== 'user')
@@ -777,9 +788,31 @@ export async function POST(request: Request) {
         if ((sourceLines?.length ?? 0) > 1000 || (scanWarnings?.length ?? 0) > 1000) {
           throw new Error('This receipt has reached its scan evidence limit. Your saved evidence is unchanged; review it before rescanning.');
         }
+        // Assistant records are proposals (source receipt). A person's own
+        // records survive exactly (R05): never replaced, rescoped or
+        // reallocated. Removing a line one of them applies to is refused, as
+        // that would silently move its saving to other people.
+        const kept = (existing?.adjustments ?? []).filter(adjustment => proposedAdjustments === undefined || personControlled(adjustment));
+        const keptLines = new Set(kept.flatMap(adjustment => adjustment.sourceLineIndex === undefined ? [] : [adjustment.sourceLineIndex]));
+        const itemIds = new Set(items.map(item => item.id));
+        if (kept.some(adjustment => personControlled(adjustment) && adjustment.scope.type === 'items' && adjustment.scope.itemIds.some(itemId => !itemIds.has(itemId)))) {
+          throw new Error('A discount set by a person applies to a line this change removes. Change that discount in TripTab first.');
+        }
+        const nextAdjustments: Adjustment[] = [...kept, ...(proposedAdjustments ?? [])
+          .filter(adjustment => adjustment.sourceLineIndex === undefined || !keptLines.has(adjustment.sourceLineIndex))
+          .map(adjustment => ({ ...adjustment, source: 'receipt' as const }))]
+          .flatMap(adjustment => {
+            if (adjustment.scope.type === 'receipt' || personControlled(adjustment)) return [adjustment];
+            const scope = adjustment.scope.itemIds.filter(itemId => itemIds.has(itemId));
+            if (!scope.length) return [];
+            const allocation = adjustment.allocation && scope.length === adjustment.scope.itemIds.length ? adjustment.allocation : undefined;
+            const { allocation: dropped, ...rest } = adjustment; void dropped;
+            return [{ ...rest, scope: { type: 'items' as const, itemIds: scope }, ...(allocation ? { allocation } : {}) }];
+          });
         const candidate = {
           title: '', currency: null, tax: 0, tip: 0, discount: 0,
           ...existing,
+          ...(existing?.adjustments || nextAdjustments.length ? { adjustments: nextAdjustments } : {}),
           ...cleanMetadata,
           suggestedIcon: nextSuggestedIcon(expenseIcon, existing?.suggestedIcon),
           id: draftId,
@@ -834,7 +867,7 @@ export async function POST(request: Request) {
           delete draft.receiptScan.missingTotalAcknowledgement;
         }
         if (index < 0) trip.drafts.push(draft); else trip.drafts[index] = draft;
-        const saved = await writeLedger(user, ledger.data, ledger.revision, { source: 'chatgpt' });
+        const saved = await writeLedger(user, ledger.data, ledger.revision, { source: 'chatgpt', authorization });
         result = toolLedger(saved, args.trip_id);
         logReceiptTool('draft-write', { tripId: trip.id, draftId: draft.id, receiptId: draft.receiptId, revision: saved.revision });
       }

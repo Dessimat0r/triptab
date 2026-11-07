@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { adjustmentsSchema, applyAdjustments, claimEditedProposals, type Adjustment } from './adjustments';
 import { validCalendarDate } from './dates';
 import { receiptMemorySchema } from './receipt-context';
 import { receiptLocationSchema, receiptLocationHintSchema } from './receipt-location';
@@ -288,10 +289,30 @@ const expenseItemSchema = rawItemSchema.extend({
 // 'rotating-remainder': as 'receipt-total', but exact remainder ties start at a
 // person chosen from the entry ID, so the same traveller does not always get
 // the leftover penny (F-21). Older rules keep their historical tie order.
-const calculationRuleSchema = z.enum(['selected-participants', 'receipt-total', 'rotating-remainder', 'native-minor-units']);
+// 'scoped-adjustments': as 'native-minor-units', plus separate discount and
+// charge records (F-02). Only entries that have adjustments use it, so every
+// other entry, and every earlier one, keeps its rule and result.
+const calculationRuleSchema = z.enum(['selected-participants', 'receipt-total', 'rotating-remainder', 'native-minor-units', 'scoped-adjustments']);
 export type CalculationRule = z.infer<typeof calculationRuleSchema>;
 /** Rule stamped on every new or changed entry. Earlier entries keep the rule they were saved with. */
 export const CURRENT_CALCULATION_RULE: CalculationRule = 'native-minor-units';
+/** Rule for a new or changed entry with discount or charge records. */
+export const SCOPED_ADJUSTMENTS_RULE: CalculationRule = 'scoped-adjustments';
+/**
+ * A reader must refuse to calculate an entry whose rule it does not know: a
+ * later money format would otherwise fall through to the oldest rule and show
+ * gross prices as settled amounts (R01). Callers report the entry as needing
+ * attention and suppress totals and settlements that depend on it.
+ */
+const knownCalculationRules: ReadonlySet<unknown> = new Set(calculationRuleSchema.options);
+export const NEWER_FORMAT_MESSAGE = 'This entry was saved by a newer version of TripTab. Reload TripTab to see its amounts.';
+function assertReadableEntry(entry: { adjustmentAllocation?: unknown; adjustments?: unknown }) {
+  if (entry.adjustmentAllocation !== undefined && !knownCalculationRules.has(entry.adjustmentAllocation)) throw new LedgerValidationError(NEWER_FORMAT_MESSAGE);
+  if (entry.adjustments !== undefined && !Array.isArray(entry.adjustments)) throw new LedgerValidationError(NEWER_FORMAT_MESSAGE);
+}
+/** Rules that round on the receipt total in native minor units with rotating ties. */
+const nativeMinorRule = (rule: CalculationRule | undefined) => rule === 'native-minor-units' || rule === 'scoped-adjustments';
+export type { Adjustment };
 /** Weighted equal shares in force when an entry was saved (only people counting as more than one). */
 const MAX_MEMBER_WEIGHT = 20;
 const memberWeightsSchema = z.record(id, z.number().int().min(2).max(MAX_MEMBER_WEIGHT));
@@ -315,6 +336,7 @@ const expenseBaseSchema = z.object({
   conversation: conversationSchema.optional(),
   memory: receiptMemorySchema.optional(),
   tax: cents, tip: cents, discount: cents, receiptId: id.optional(),
+  adjustments: adjustmentsSchema.optional(),
 });
 function expenseItemAllocationValidation(expense: { items: Item[]; percentages?: Record<string, number> }, context: z.RefinementCtx) {
   // A valid receipt-wide percentage split is itself the cost allocation. Keep
@@ -328,7 +350,13 @@ function expenseItemAllocationValidation(expense: { items: Item[]; percentages?:
     }
   });
 }
-export const expenseSchema = expenseBaseSchema.superRefine(expenseItemAllocationValidation);
+function adjustmentValidation(expense: { items: { id: string; amount: number | null }[]; adjustments?: Adjustment[] }, context: z.RefinementCtx) {
+  if (!expense.adjustments?.length) return;
+  for (const message of applyAdjustments(expense.items, expense.adjustments).errors) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['adjustments'], message });
+  }
+}
+export const expenseSchema = expenseBaseSchema.superRefine(expenseItemAllocationValidation).superRefine(adjustmentValidation);
 export const draftSchema = z.object({
   location: receiptLocationSchema.optional(), locationHint: receiptLocationHintSchema.optional(),
   id, title: z.string().max(200), receiptId: id.optional(), expenseId: id.optional(),
@@ -347,6 +375,7 @@ export const draftSchema = z.object({
   conversation: conversationSchema.optional(),
   memory: receiptMemorySchema.optional(),
   items: z.array(draftItemSchema).max(200), tax: cents, tip: cents, discount: cents,
+  adjustments: adjustmentsSchema.optional(),
   payer: id, status: z.enum(['waiting', 'review']),
 });
 export const paymentSchema = z.object({
@@ -373,7 +402,12 @@ export const tripSchema = z.object({
   expenses: z.array(expenseSchema).max(1000), drafts: z.array(draftSchema).max(100),
   payments: z.array(paymentSchema).max(1000),
 });
-export const ledgerSchema = z.object({ trips: z.array(tripSchema).max(50) });
+/** Separate open-list limits (F-17, D07). Nothing is archived automatically. */
+export const MAX_OPEN_HOLIDAYS = 50;
+export const MAX_OPEN_BILLS = 100;
+// The array cap is only a size guard; the per-kind limits give the message people see.
+const MAX_LEDGER_TRIPS = 200;
+export const ledgerSchema = z.object({ trips: z.array(tripSchema).max(MAX_LEDGER_TRIPS) });
 export type Expense = z.infer<typeof expenseSchema>;
 export type Draft = z.infer<typeof draftSchema>;
 export type Payment = z.infer<typeof paymentSchema>;
@@ -391,7 +425,7 @@ const storedTripSchema = tripSchema.extend({
   expenses: z.array(expenseBaseSchema.extend({ bankAmount: cents.optional() }).superRefine(expenseItemAllocationValidation)).max(1000),
   drafts: z.array(draftSchema.extend({ bankAmount: cents.optional() })).max(100),
 });
-const storedLedgerSchema = z.object({ trips: z.array(storedTripSchema).max(50) });
+const storedLedgerSchema = z.object({ trips: z.array(storedTripSchema).max(MAX_LEDGER_TRIPS) });
 
 export function parseStoredTrip(data: unknown): Trip {
   return storedTripSchema.parse(data);
@@ -422,8 +456,8 @@ export function tripMemberWeights(members: readonly { id: string; weight?: numbe
 }
 
 /** Apply the current calculation rule and traveller weights to an entry being saved or previewed. */
-export function stampCalculationRules<Entry extends { adjustmentAllocation?: CalculationRule; memberWeights?: Record<string, number> }>(entry: Entry, members: readonly { id: string; weight?: number }[]): Entry {
-  entry.adjustmentAllocation = CURRENT_CALCULATION_RULE;
+export function stampCalculationRules<Entry extends { adjustmentAllocation?: CalculationRule; memberWeights?: Record<string, number>; adjustments?: Adjustment[] }>(entry: Entry, members: readonly { id: string; weight?: number }[]): Entry {
+  entry.adjustmentAllocation = entry.adjustments?.length ? SCOPED_ADJUSTMENTS_RULE : CURRENT_CALCULATION_RULE;
   const weights = tripMemberWeights(members);
   if (weights) entry.memberWeights = weights;
   else delete entry.memberWeights;
@@ -466,15 +500,23 @@ export function receiptSplitError(expense: Pick<Expense, 'percentages'>): string
 
 function financialValue(entry:Expense|Draft) {
   return {currency:entry.currency,payer:entry.payer,bankAmount:entry.bankAmount,rate:entry.fx?.rate,percentages:entry.percentages,
-    tax:entry.tax,tip:entry.tip,discount:entry.discount,items:entry.items.map(item=>({id:item.id,amount:item.amount,members:item.members,percentages:item.percentages,units:item.units?{total:item.units.total,allocations:item.units.allocations}:undefined}))};
+    tax:entry.tax,tip:entry.tip,discount:entry.discount,adjustments:entry.adjustments?.length?entry.adjustments:undefined,items:entry.items.map(item=>({id:item.id,amount:item.amount,members:item.members,percentages:item.percentages,units:item.units?{total:item.units.total,allocations:item.units.allocations}:undefined}))};
 }
-export function validateLedger(data: unknown, options: { previous?: Ledger; source?: 'web' | 'mcp'; preserveCalculationRules?: boolean } = {}): Ledger {
+/**
+ * `claimEditedProposals`: this write is a person's (the web ledger route), so a
+ * reading's discount proposal they changed becomes theirs (R05). Processing
+ * writes, imports and MCP never set it.
+ */
+export function validateLedger(data: unknown, options: { previous?: Ledger; source?: 'web' | 'mcp'; preserveCalculationRules?: boolean; claimEditedProposals?: boolean } = {}): Ledger {
   // `previous` is a server-side compatibility boundary, never request input.
   // New records and every changed record still use the strict schemas/rules.
   const previous = options.previous && parseLedgerStructure(options.previous);
   const ledger = previous ? parseLedgerStructure(data) : ledgerSchema.parse(data);
   const unique = (values: string[]) => new Set(values).size === values.length;
   if (!unique(ledger.trips.map(trip => trip.id))) throw new LedgerValidationError('Duplicate trips');
+  const openBills = ledger.trips.filter(isBill).length, openHolidays = ledger.trips.length - openBills;
+  if (openBills > MAX_OPEN_BILLS) throw new LedgerValidationError(`You have ${MAX_OPEN_BILLS} open bills, the most TripTab keeps in your list. Remove a settled bill from your list (bill options → Remove from my list) before starting another.`);
+  if (openHolidays > MAX_OPEN_HOLIDAYS) throw new LedgerValidationError(`You have ${MAX_OPEN_HOLIDAYS} open holidays, the most TripTab keeps in your list. Archive one you have finished before adding another.`);
   for (const trip of ledger.trips) {
     const prior = previous?.trips.find(value => value.id === trip.id);
     if (isBill(trip) && (!prior || !sameStoredValue(trip, prior))) {
@@ -509,6 +551,10 @@ export function validateLedger(data: unknown, options: { previous?: Ledger; sour
     }
     if (!unique(draftTargets)) throw new LedgerValidationError('An expense can only have one pending receipt draft');
     const unchanged = new Set<Expense | Draft>();
+    if (options.claimEditedProposals && prior) {
+      const earlier = new Map([...prior.expenses, ...prior.drafts].flatMap(entry => entry.adjustments ?? []).map(adjustment => [adjustment.id, adjustment]));
+      for (const entry of [...trip.expenses, ...trip.drafts]) if (entry.adjustments?.length) entry.adjustments = claimEditedProposals(entry.adjustments, earlier);
+    }
     if (prior?.currency === trip.currency) {
       for (const entry of trip.expenses) if (sameStoredValue(entry, prior.expenses.find(old => old.id === entry.id))) unchanged.add(entry);
       for (const entry of trip.drafts) if (sameStoredValue(entry, prior.drafts.find(old => old.id === entry.id))) unchanged.add(entry);
@@ -521,6 +567,16 @@ export function validateLedger(data: unknown, options: { previous?: Ledger; sour
         // saved new/modified record adopts the current calculation rule and
         // the traveller weights in force now.
         const old = [...(prior?.expenses || []), ...(prior?.drafts || [])].find(value => value.id === expense.id);
+        const scannedSource = old ?? prior?.drafts.find(value => value.id === ('sourceDraftId' in expense ? expense.sourceDraftId : undefined))
+          ?? (expense.receiptId ? [...(prior?.expenses ?? []), ...(prior?.drafts ?? [])].find(value => value.receiptId === expense.receiptId) : undefined);
+        if (scannedSource?.receiptScan && !expense.receiptScan) {
+          throw new LedgerValidationError('Keep the saved receipt evidence when editing or posting a scanned receipt.');
+        }
+        // An older app version drops discount records it does not know. Removing
+        // them is an explicit empty list, never a missing field (F-02).
+        if (old?.adjustments?.length && expense.adjustments === undefined) {
+          throw new LedgerValidationError('This entry has discounts that this version of TripTab cannot edit. Refresh TripTab and try again.');
+        }
         if (old && sameStoredValue(financialValue(expense),financialValue(old))) {
           // Chats, translations and other descriptive changes cannot resplit
           // an approved receipt or adopt today's family weights.
@@ -529,6 +585,9 @@ export function validateLedger(data: unknown, options: { previous?: Ledger; sour
           if(old.adjustmentAllocation===undefined)delete expense.adjustmentAllocation;
           if(old.memberWeights===undefined)delete expense.memberWeights;
         } else if (!options.preserveCalculationRules) stampCalculationRules(expense, trip.members);
+        if (expense.adjustments?.length && expense.adjustmentAllocation !== SCOPED_ADJUSTMENTS_RULE) {
+          throw new LedgerValidationError('Discount records need the current calculation rule. Refresh TripTab and try again.');
+        }
         if (options.source === 'mcp' && receiptScanHumanReviewChanged(expense, old)) {
           throw new LedgerValidationError('Receipt scan warnings and differences must be reviewed in TripTab by a person.');
         }
@@ -611,10 +670,10 @@ function allocateExact(amount: number, weights: bigint[], tieOrder: number[] = w
   return output;
 }
 
-type OriginalAmounts = Pick<Expense, 'tax' | 'tip' | 'discount' | 'percentages' | 'adjustmentAllocation'> & {
-  items: { amount: number | null; members: string[] }[];
+type OriginalAmounts = Pick<Expense, 'tax' | 'tip' | 'discount' | 'percentages' | 'adjustmentAllocation' | 'adjustments'> & {
+  items: { id?: string; amount: number | null; members: string[] }[];
 };
-type AllocatedAmounts = Pick<Expense, 'tax' | 'tip' | 'discount' | 'percentages' | 'adjustmentAllocation' | 'memberWeights'> & { items: DraftItem[]; id?: string };
+type AllocatedAmounts = Pick<Expense, 'tax' | 'tip' | 'discount' | 'percentages' | 'adjustmentAllocation' | 'memberWeights' | 'adjustments'> & { items: DraftItem[]; id?: string };
 function addAmount(left: number, right: number): number {
   const result = left + right;
   if (!Number.isSafeInteger(left) || !Number.isSafeInteger(right) || !Number.isSafeInteger(result)) {
@@ -624,8 +683,26 @@ function addAmount(left: number, right: number): number {
 }
 
 export function total(expense: OriginalAmounts): number {
-  const subtotal = expense.items.reduce((sum, item) => item.amount === null ? sum : addAmount(sum, item.amount), 0);
-  return addAmount(addAmount(addAmount(subtotal, expense.tax), expense.tip), -expense.discount);
+  assertReadableEntry(expense);
+  const adjusted = applyAdjustments(expense.items, expense.adjustments);
+  const subtotal = adjusted.net.reduce<number>((sum, amount) => amount === null ? sum : addAmount(sum, amount), 0);
+  return addAmount(addAmount(addAmount(addAmount(subtotal, adjusted.receiptDelta), expense.tax), expense.tip), -expense.discount);
+}
+
+/**
+ * The same receipt with each line at its net price and receipt-wide
+ * adjustments folded into tax/discount, so the existing share rules apply:
+ * an item discount only reduces the weights of people on that item.
+ */
+function netAdjusted<Entry extends AllocatedAmounts>(expense: Entry): Entry {
+  assertReadableEntry(expense);
+  if (!expense.adjustments?.length) return expense;
+  const adjusted = applyAdjustments(expense.items, expense.adjustments);
+  if (adjusted.errors.length) throw new LedgerValidationError(adjusted.errors[0]);
+  return { ...expense, adjustments: undefined,
+    items: expense.items.map((item, index) => ({ ...item, amount: adjusted.net[index] })),
+    tax: addAmount(expense.tax, Math.max(adjusted.receiptDelta, 0)),
+    discount: addAmount(expense.discount, Math.max(-adjusted.receiptDelta, 0)) };
 }
 
 function itemWeights(item: DraftItem, members: { id: string }[], memberWeights?: Record<string, number>): { memberIndexes: number[]; weights: number[] } {
@@ -702,13 +779,13 @@ function exactItemWeights(expense: AllocatedAmounts, members: { id: string }[]):
 function receiptTieOrder(expense: AllocatedAmounts, members: { id: string }[]): number[] {
   const ids = [...new Set([...expense.items.flatMap(item => item.members), ...members.map(member => member.id)])];
   const order = members.map(member => ids.indexOf(member.id));
-  return (expense.adjustmentAllocation === 'rotating-remainder' || expense.adjustmentAllocation === 'native-minor-units') ? rotatedTieOrder(order, expense.id) : order;
+  return (expense.adjustmentAllocation === 'rotating-remainder' || nativeMinorRule(expense.adjustmentAllocation)) ? rotatedTieOrder(order, expense.id) : order;
 }
 
 const roundsOnReceiptTotal = (expense: Pick<Expense, 'adjustmentAllocation'>) =>
-  expense.adjustmentAllocation === 'receipt-total' || (expense.adjustmentAllocation === 'rotating-remainder' || expense.adjustmentAllocation === 'native-minor-units');
+  expense.adjustmentAllocation === 'receipt-total' || (expense.adjustmentAllocation === 'rotating-remainder' || nativeMinorRule(expense.adjustmentAllocation));
 const rotationKey = (expense: Pick<AllocatedAmounts, 'adjustmentAllocation' | 'id'>) =>
-  (expense.adjustmentAllocation === 'rotating-remainder' || expense.adjustmentAllocation === 'native-minor-units') ? expense.id ?? '' : undefined;
+  (expense.adjustmentAllocation === 'rotating-remainder' || nativeMinorRule(expense.adjustmentAllocation)) ? expense.id ?? '' : undefined;
 
 /** Weights for rounding the whole receipt once, including tax, tip and discount. */
 function receiptWeights(expense: AllocatedAmounts, members: { id: string }[]): bigint[] {
@@ -721,8 +798,9 @@ function receiptWeights(expense: AllocatedAmounts, members: { id: string }[]): b
 }
 
 /** Item assignments and proportional adjustments are always calculated in receipt currency first. */
-export function shares(expense: AllocatedAmounts, members: { id: string }[]): number[] {
-  if (expense.items.some(item => item.amount === null)) throw new LedgerValidationError('Enter every item amount before calculating shares');
+export function shares(entry: AllocatedAmounts, members: { id: string }[]): number[] {
+  if (entry.items.some(item => item.amount === null)) throw new LedgerValidationError('Enter every item amount before calculating shares');
+  const expense = netAdjusted(entry);
   if (expense.percentages !== undefined) return percentageShares(total(expense), expense.percentages, members, rotationKey(expense));
   if (roundsOnReceiptTotal(expense)) {
     const amount = total(expense);
@@ -782,7 +860,7 @@ export function expenseTotal(expense: Expense | Draft, baseCurrency: Currency): 
   let converted = expense.bankAmount !== undefined ? expense.bankAmount
     : expense.currency === baseCurrency ? original
       : expense.fx ? convertAmount(original, expense.fx.rate) : undefined;
-  if (expense.adjustmentAllocation==='native-minor-units') {
+  if (nativeMinorRule(expense.adjustmentAllocation)) {
     if (original % currencyQuantum(expense.currency)) throw new LedgerValidationError(`${expense.currency} receipt totals must be whole currency units`);
     const quantum=currencyQuantum(baseCurrency);
     if (expense.bankAmount!==undefined && expense.bankAmount%quantum) throw new LedgerValidationError(`${baseCurrency} bank charges must be whole currency units`);
@@ -794,8 +872,9 @@ export function expenseTotal(expense: Expense | Draft, baseCurrency: Currency): 
   return converted;
 }
 
-export function expenseShares(expense: Expense | Draft, members: { id: string }[], baseCurrency: Currency): number[] {
-  const quantum=expense.adjustmentAllocation==='native-minor-units' ? currencyQuantum(baseCurrency) : 1;
+export function expenseShares(entry: Expense | Draft, members: { id: string }[], baseCurrency: Currency): number[] {
+  const expense = netAdjusted(entry);
+  const quantum=nativeMinorRule(expense.adjustmentAllocation) ? currencyQuantum(baseCurrency) : 1;
   if (expense.percentages !== undefined) return percentageShares(expenseTotal(expense, baseCurrency)/quantum, expense.percentages, members, rotationKey(expense)).map(value=>value*quantum);
   if (roundsOnReceiptTotal(expense)) {
     if (expense.items.some(item => item.amount === null)) throw new LedgerValidationError('Enter every item amount before calculating shares');
@@ -805,6 +884,18 @@ export function expenseShares(expense: Expense | Draft, members: { id: string }[
   const originalShares = shares(expense, members);
   const convertedTotal = expenseTotal(expense, baseCurrency);
   return allocate(convertedTotal, originalShares.some(Boolean) ? originalShares : members.map(() => 1));
+}
+
+/**
+ * Why a stored payment cannot be counted, or null (R08). Every reader that
+ * settles a trip uses this one rule, so an invalid payment makes the trip's
+ * balances unavailable instead of being counted in one view and not another.
+ */
+export function paymentError(payment: Payment, members: readonly { id: string }[]): string | null {
+  if (!Number.isSafeInteger(payment.amount) || payment.amount <= 0 || payment.amount > MAX_AMOUNT
+    || payment.from === payment.to || !members.some(member => member.id === payment.from)
+    || !members.some(member => member.id === payment.to)) return 'Review an invalid recorded payment';
+  return null;
 }
 
 export function balances(trip: Trip): number[] {
@@ -817,9 +908,10 @@ export function balances(trip: Trip): number[] {
     result[payerIndex] = addAmount(result[payerIndex], expenseTotal(expense, trip.currency));
   }
   for (const payment of trip.payments) {
+    const invalid = paymentError(payment, trip.members);
+    if (invalid) throw new LedgerValidationError(invalid);
     const fromIndex = trip.members.findIndex(member => member.id === payment.from);
     const toIndex = trip.members.findIndex(member => member.id === payment.to);
-    if (fromIndex < 0 || toIndex < 0) throw new Error('Unknown payment member');
     result[fromIndex] = addAmount(result[fromIndex], payment.amount);
     result[toIndex] = addAmount(result[toIndex], -payment.amount);
   }
@@ -863,9 +955,8 @@ export function travellerFinancialPreview(trip: Trip, memberId: string): Travell
       if (expense.payer === memberId) paidUpfront = addAmount(paidUpfront, expenseTotal(expense, trip.currency));
     }
     for (const payment of trip.payments) {
-      if (!Number.isSafeInteger(payment.amount) || payment.amount <= 0 || payment.amount > MAX_AMOUNT
-        || payment.from === payment.to || !trip.members.some(member => member.id === payment.from)
-        || !trip.members.some(member => member.id === payment.to)) throw new Error('Review an invalid recorded payment');
+      const invalid = paymentError(payment, trip.members);
+      if (invalid) throw new Error(invalid);
       if (payment.from === memberId) paymentsSent = addAmount(paymentsSent, payment.amount);
       if (payment.to === memberId) paymentsReceived = addAmount(paymentsReceived, payment.amount);
     }

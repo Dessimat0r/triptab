@@ -46,7 +46,7 @@ export default function AccountSecurity({
         const p=notificationPreferenceSchema.parse(await preference.json());
         if (active) {
           setSessions(a.sessions);
-          setPreferences(p);
+          setPreferences({ ...DEFAULT_NOTIFICATION_PREFERENCES, ...p });
           setReady(true);
         }
       })
@@ -167,6 +167,20 @@ export default function AccountSecurity({
               }
             />
             {uiText('Allow settlement reminders')}
+          </label>
+          <label className="insights-check">
+            <input
+              type="checkbox"
+              checked={preferences.receiptReady}
+              disabled={busy || !ready}
+              onChange={(event) =>
+                setPreferences({
+                  ...preferences,
+                  receiptReady: event.target.checked,
+                })
+              }
+            />
+            {uiText('Receipt ready notifications')}
           </label>
           <button className="quiet" disabled={busy || !ready}>
             {uiText('Save notification preferences')}

@@ -1,0 +1,14 @@
+# second pass, final tree, npm run lint
+
+
+
+/home/user/triptab/components/trip-app.tsx
+   692:7   warning  Do not use `location.assign()` to navigate to internal Next.js pages. Use `redirect()` in the render phase, or `useRouter().push()` in Client Components' event handlers instead. See: https://nextjs.org/docs/messages/no-location-assign-relative-destination                          @next/next/no-location-assign-relative-destination
+   816:6   warning  React Hook useEffect has a missing dependency: 'scanReceiptFile'. Either include it or remove the dependency array                                                                                                                                                                       react-hooks/exhaustive-deps
+  2235:33  warning  Using `<img>` could result in slower LCP and higher bandwidth. Consider using `<Image />` from `next/image` or a custom image loader to automatically optimize images. This may incur additional usage or cost from your provider. See: https://nextjs.org/docs/messages/no-img-element  @next/next/no-img-element
+
+/home/user/triptab/docs/audit/evidence-second-pass/mcp-bankamount.test.ts
+  5:10  warning  'shares' is defined but never used  @typescript-eslint/no-unused-vars
+
+✖ 4 problems (0 errors, 4 warnings)
+

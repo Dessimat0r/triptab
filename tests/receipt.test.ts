@@ -669,7 +669,7 @@ test('Undo preserves the photo and trusted historical shares even after travelle
 
 const offlineSource=transpileWithSharedImports(await readFile(new URL('../app/api/offline-expenses/route.ts',import.meta.url),'utf8'),{compilerOptions:{module:ModuleKind.ESNext,target:ScriptTarget.ES2022}}).outputText.replace("'@/lib/store'",JSON.stringify(storeUrl)).replace("'@/lib/model'",JSON.stringify(new URL('../lib/model.ts',import.meta.url).href));
 const offlineRoute=await import(dataUrl(offlineSource)) as typeof import('../app/api/offline-expenses/route');
-function offlineRequest(accountId=actor,entry=expense('')) {const {receiptId,...value}=entry;void receiptId;return new Request('https://triptab.test/api/offline-expenses',{method:'POST',headers:{...provider(),'origin':'https://triptab.test','content-type':'application/json'},body:JSON.stringify({accountId,tripId:'trip-1',expense:value})});}
+function offlineRequest(accountId=actor,entry=expense('')) {const {receiptId,...value}=entry;void receiptId;return new Request('https://triptab.test/api/offline-expenses',{method:'POST',headers:{...provider(),'X-TripTab-Financial-Format':'2','origin':'https://triptab.test','content-type':'application/json'},body:JSON.stringify({accountId,tripId:'trip-1',expense:value})});}
 test('offline append retries concurrent financial writes without overwriting them and stable IDs are idempotent',async()=>{
   const {database}=await storage();let state=await store.readLedger(actor);
   database.beforeWriteBatch=async()=>{const fresh=await store.readLedger(actor);fresh.data.trips[0].expenses=[{...expense(''),receiptId:undefined,id:'other-writer'}];await store.writeLedger(actor,fresh.data,fresh.revision);};

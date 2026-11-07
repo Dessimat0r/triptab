@@ -1,5 +1,6 @@
 import { sha256Hex } from './data-utils';
 import { activityStatements, type ActivityChange, type ActivitySource } from './audit';
+import { AuthError, requestWriteAuthorizationSql, requestWriteAuthorized, type RequestWriteAuthorization } from './auth';
 
 /** D1 owns receipt lifecycle; R2 object deletion is idempotent and retriable. */
 export class ReceiptLifecycleError extends Error {
@@ -12,6 +13,20 @@ type AuditActor = { id: string; displayName: string };
 type ImageMetadata = { contentType: string; sizeBytes: number; sha256: string };
 type ReceiptReason = 'upload-started' | 'upload-complete' | 'receipt-detached' | 'image-deletion' | 'orphan-expired' | 'upload-failed' | 'cleanup-retry' | 'image-deleted';
 type ReceiptMutation = { statement: D1PreparedStatement; change: ActivityChange };
+/**
+ * F2: a person's own upload or deletion also carries the credential that admitted
+ * the request into the statement that admits the write (database time), so a
+ * request still in flight when they sign out, expire or are deleted writes nothing.
+ * Maintenance and system sweeps pass no authorization and are unaffected.
+ */
+const requestFence = (authorization: RequestWriteAuthorization | undefined, user: string) => authorization
+  ? (() => { const guard = requestWriteAuthorizationSql(authorization, user); return { sql: ` AND ${guard.condition}`, bindings: guard.bindings as (string | number)[] }; })()
+  : { sql: '', bindings: [] as (string | number)[] };
+async function refuseIfSignedOut(database: D1Database, authorization: RequestWriteAuthorization | undefined, user: string) {
+  if (authorization && !await requestWriteAuthorized(database, authorization, user)) {
+    throw new AuthError('Your sign-in changed before this finished. Sign in again and try once more.', 401);
+  }
+}
 const systemActor: AuditActor = { id: 'system', displayName: 'TripTab' };
 const key = (owner: string, id: string) => `${encodeURIComponent(owner)}/${id}`;
 const access = `(r.owner = ? OR t.owner = ? OR EXISTS (SELECT 1 FROM memberships m WHERE m.trip_id = t.id AND m.user_id = ?))`;
@@ -66,7 +81,8 @@ async function tripAllowed(database: D1Database, user: string, tripId: string) {
 }
 
 /** Reserve a quota slot and its audit trail before writing image bytes. */
-export async function reserveReceipt(database: D1Database, user: string, tripId: string, id: string, now = new Date().toISOString(), image: ImageMetadata = { contentType: '', sizeBytes: 0, sha256: '' }) {
+export async function reserveReceipt(database: D1Database, user: string, tripId: string, id: string, now = new Date().toISOString(), image: ImageMetadata = { contentType: '', sizeBytes: 0, sha256: '' }, authorization?: RequestWriteAuthorization) {
+  const fence = requestFence(authorization, user);
   const { actor, revision } = await auditContext(database, user);
   const row: ReceiptRow = { id, owner: user, trip_id: tripId, created_at: now, state: 'pending', content_type: image.contentType, size_bytes: image.sizeBytes, sha256: image.sha256, legacy_cleanup_after: '' };
   const statement = database.prepare(`
@@ -75,15 +91,17 @@ export async function reserveReceipt(database: D1Database, user: string, tripId:
       AND (t.owner = ? OR EXISTS (SELECT 1 FROM memberships m WHERE m.trip_id = t.id AND m.user_id = ?))
       AND ${identity}
       AND (SELECT COUNT(*) FROM receipts WHERE owner = ?) < ?
-      AND (SELECT COUNT(*) FROM receipts WHERE trip_id = t.id) < ?
-  `).bind(id, user, now, image.contentType, image.sizeBytes, image.sha256, tripId, user, user, user, user, user, RECEIPT_LIMITS.perUser, RECEIPT_LIMITS.perTrip);
+      AND (SELECT COUNT(*) FROM receipts WHERE trip_id = t.id) < ?${fence.sql}
+  `).bind(id, user, now, image.contentType, image.sizeBytes, image.sha256, tripId, user, user, user, user, user, RECEIPT_LIMITS.perUser, RECEIPT_LIMITS.perTrip, ...fence.bindings);
   if (!await commitReceiptChanges(database, [{ statement, change: change(row, 'create', null, snapshot(row, 'upload-started', actor)) }], actor, revision, 'web')) {
+    await refuseIfSignedOut(database, authorization, user);
     if (!await tripAllowed(database, user, tripId)) throw new ReceiptLifecycleError('You no longer have access to this trip.', 403);
     throw new ReceiptLifecycleError(`Receipt storage limit reached (${RECEIPT_LIMITS.perUser} per account, ${RECEIPT_LIMITS.perTrip} per holiday). Remove unused receipts and try again.`, 409);
   }
 }
 
-export async function activateReceipt(database: D1Database, user: string, tripId: string, id: string) {
+export async function activateReceipt(database: D1Database, user: string, tripId: string, id: string, authorization?: RequestWriteAuthorization) {
+  const fence = requestFence(authorization, user);
   const row = await database.prepare("SELECT * FROM receipts WHERE id = ? AND owner = ? AND trip_id = ? AND state = 'pending'").bind(id, user, tripId).first<ReceiptRow>();
   if (!row) throw new ReceiptLifecycleError('The upload or your trip access changed. Try uploading again.', 409);
   const { actor, revision } = await auditContext(database, user);
@@ -91,15 +109,17 @@ export async function activateReceipt(database: D1Database, user: string, tripId
   const statement = database.prepare(`UPDATE receipts AS r SET state = 'active', created_at = ? WHERE ${baseline}
     AND EXISTS (SELECT 1 FROM trips t WHERE t.id = r.trip_id
       AND (t.owner = ? OR EXISTS (SELECT 1 FROM memberships m WHERE m.trip_id = t.id AND m.user_id = ?)))
-    AND ${identity}`).bind(next.created_at, ...baselineValues(row), user, user, user, user);
+    AND ${identity}${fence.sql}`).bind(next.created_at, ...baselineValues(row), user, user, user, user, ...fence.bindings);
   if (!await commitReceiptChanges(database, [{ statement, change: change(row, 'update', snapshot(row, 'upload-started', actor), snapshot(next, 'upload-complete', actor)) }], actor, revision, 'web')) {
+    await refuseIfSignedOut(database, authorization, user);
     throw new ReceiptLifecycleError('The upload or your trip access changed. Try uploading again.', 409);
   }
 }
 
 /** Mark only live, unreferenced rows; the financial CAS also checks this state. */
-export async function markRemovedReceipts(database: D1Database, user: string, ids: string[], options: { reason?: ReceiptReason; source?: ActivitySource } = {}) {
+export async function markRemovedReceipts(database: D1Database, user: string, ids: string[], options: { reason?: ReceiptReason; source?: ActivitySource; authorization?: RequestWriteAuthorization } = {}) {
   if (!ids.length) return 0;
+  const fence = requestFence(options.authorization, user);
   const rows = await database.prepare(`SELECT r.* FROM receipts r JOIN trips t ON t.id = r.trip_id
     WHERE r.state = 'active' AND r.id IN (SELECT value FROM json_each(?)) AND ${access} AND ${unreferenced} AND ${identity}`)
     .bind(JSON.stringify([...new Set(ids)]), user, user, user, user, user).all<ReceiptRow>();
@@ -108,8 +128,8 @@ export async function markRemovedReceipts(database: D1Database, user: string, id
   const reason = options.reason || 'receipt-detached';
   return commitReceiptChanges(database, rows.results.map(row => ({
     statement: database.prepare(`UPDATE receipts AS r SET state = 'deleting' WHERE ${baseline}
-      AND EXISTS (SELECT 1 FROM trips t WHERE t.id = r.trip_id AND ${access} AND ${unreferenced}) AND ${identity}`)
-      .bind(...baselineValues(row), user, user, user, user, user),
+      AND EXISTS (SELECT 1 FROM trips t WHERE t.id = r.trip_id AND ${access} AND ${unreferenced}) AND ${identity}${fence.sql}`)
+      .bind(...baselineValues(row), user, user, user, user, user, ...fence.bindings),
     change: change(row, 'update', snapshot(row, 'upload-complete'), snapshot({ ...row, state: 'deleting' }, reason, actor)),
   })), actor, revision, options.source || 'web');
 }
@@ -245,28 +265,30 @@ async function abandonUpload(database: D1Database, bucket: R2Bucket, user: strin
   await purgeDeletingReceipts(database, bucket, user);
 }
 
-export async function storeReceipt(database: D1Database, bucket: R2Bucket, user: string, tripId: string, id: string, bytes: Uint8Array<ArrayBuffer>, contentType: string) {
+export async function storeReceipt(database: D1Database, bucket: R2Bucket, user: string, tripId: string, id: string, bytes: Uint8Array<ArrayBuffer>, contentType: string, authorization?: RequestWriteAuthorization) {
   const now = new Date().toISOString();
   const image = { contentType, sizeBytes: bytes.byteLength, sha256: await sha256Hex(bytes) };
-  await reserveReceipt(database, user, tripId, id, now, image);
+  await reserveReceipt(database, user, tripId, id, now, image, authorization);
   try {
     await bucket.put(key(user, id), bytes, { httpMetadata: { contentType } });
-    await activateReceipt(database, user, tripId, id);
+    await activateReceipt(database, user, tripId, id, authorization);
   } catch (error) {
     await abandonUpload(database, bucket, user, tripId, id, now, image).catch(() => {
       console.warn('TripTab receipt cleanup needs a retry.');
     });
-    if (error instanceof ReceiptLifecycleError) throw error;
+    // A withdrawn sign-in stays a 401; the abandoned upload above is cleaned up either way.
+    if (error instanceof ReceiptLifecycleError || error instanceof AuthError) throw error;
     throw new ReceiptLifecycleError('Receipt storage is temporarily unavailable. Try again.', 503);
   }
 }
 
-export async function deleteReceipt(database: D1Database, bucket: R2Bucket, user: string, id: string) {
+export async function deleteReceipt(database: D1Database, bucket: R2Bucket, user: string, id: string, authorization?: RequestWriteAuthorization) {
   const row = await database.prepare(`SELECT r.* FROM receipts r JOIN trips t ON t.id = r.trip_id
     WHERE r.id = ? AND ${access} AND ${identity}`).bind(id, user, user, user, user, user).first<ReceiptRow>();
   if (!row) throw new ReceiptLifecycleError('This receipt is unavailable.', 404);
   if (row.state === 'pending') throw new ReceiptLifecycleError('This receipt is still uploading. Try again shortly.', 409);
-  if (row.state === 'active' && !await markRemovedReceipts(database, user, [id], { reason: 'image-deletion' })) {
+  if (row.state === 'active' && !await markRemovedReceipts(database, user, [id], { reason: 'image-deletion', authorization })) {
+    await refuseIfSignedOut(database, authorization, user);
     throw new ReceiptLifecycleError('This receipt is still attached to an expense or draft. Remove it from the receipt entry before deleting the image.', 409);
   }
   await purgeDeletingReceipts(database, bucket, user);

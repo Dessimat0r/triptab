@@ -3,6 +3,7 @@ import test from 'node:test';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
+import { pythonCommand } from './python-command';
 
 test('final packaging excludes migrations only for an independently verified backup Worker', async () => {
   const script = String.raw`
@@ -39,7 +40,8 @@ with tempfile.TemporaryDirectory() as directory:
   assert hashlib.sha256(path.read_bytes()).hexdigest()==before
 print('Safe backup packaging verified.')
 `;
-  const { stdout } = await promisify(execFile)('python3', ['-c', script], {
+  const python = pythonCommand();
+  const { stdout } = await promisify(execFile)(python.file, [...python.args, '-c', script], {
     cwd: fileURLToPath(new URL('../', import.meta.url)),
     env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' },
     timeout: 15_000,

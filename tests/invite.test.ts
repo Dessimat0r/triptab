@@ -8,6 +8,7 @@ import { pathToFileURL } from 'node:url';
 import { ModuleKind, ScriptTarget } from 'typescript';
 import { performAuthAction } from '../lib/auth';
 import type { Trip } from '../lib/model';
+const declared = { 'X-TripTab-Financial-Format': '2' }; // R01: the current bundle declares the money format on these requests
 
 // Same native SQLite/D1 transaction harness as store.test.ts: only Worker
 // bindings and external notification delivery are replaced. All auth, invite,
@@ -85,10 +86,10 @@ function provider(user: keyof typeof users) {
   return { 'oai-authenticated-user-id': users[user], 'oai-authenticated-user-email': `${user}@example.com` };
 }
 function get(query: string, user: keyof typeof users | null = 'bob') {
-  return route.GET(new Request(`https://triptab.test/api/invite?${query}`, { headers: user ? provider(user) : {} }));
+  return route.GET(new Request(`https://triptab.test/api/invite?${query}`, { headers: { ...declared, ...(user ? provider(user) : {}) } }));
 }
 function post(body: Record<string, unknown>, user: keyof typeof users | null = 'owner', extra: Record<string, string> = {}) {
-  return route.POST(new Request('https://triptab.test/api/invite', { method: 'POST', headers: { ...(user ? provider(user) : {}), origin: 'https://triptab.test', 'content-type': 'application/json', ...extra }, body: JSON.stringify(body) }));
+  return route.POST(new Request('https://triptab.test/api/invite', { method: 'POST', headers: { ...declared, ...(user ? provider(user) : {}), origin: 'https://triptab.test', 'content-type': 'application/json', ...extra }, body: JSON.stringify(body) }));
 }
 async function json<T = Record<string, unknown>>(response: Response) { return await response.json() as T; }
 type Created = { url: string; expiresAt: string; invitationId: string; revision: number };
@@ -585,7 +586,7 @@ test('invitation account association enforces the stored UTF8 trip limit before 
     // is placed near the hard storage cap without inventing a new client write.
     database.sqlite.prepare('UPDATE trips SET data=? WHERE id=?').run(JSON.stringify(trip), 'trip-1');
     const headers = { 'oai-authenticated-user-id': accountId, 'oai-authenticated-user-email': accountEmail };
-    const info = await json<Preview>(await route.GET(new Request('https://triptab.test/api/invite?token=' + token(invitation), { headers })));
+    const info = await json<Preview>(await route.GET(new Request('https://triptab.test/api/invite?token=' + token(invitation), { headers: { ...declared, ...headers } })));
     assert.match(info.historySnapshot, /^[a-f0-9]{64}$/);
     const before = {
       trip: database.sqlite.prepare('SELECT data FROM trips WHERE id=?').get('trip-1')?.data,
@@ -736,9 +737,9 @@ test('standalone email/password accounts can confirm and join without any ChatGP
   const authRequest = new Request('https://triptab.test/api/auth', { headers: { 'cf-connecting-ip': '203.0.113.2' } });
   const account = await performAuthAction(authRequest, { action: 'register', email: 'native@example.com', password: 'native suitcase 2026', displayName: 'My own profile' }, database.asD1());
   const cookie = account.cookie!.split(';')[0]; const invitation = await create('b', 'native@example.com');
-  const nativeGet = await route.GET(new Request('https://triptab.test/api/invite?token=' + token(invitation), { headers: { cookie } }));
+  const nativeGet = await route.GET(new Request('https://triptab.test/api/invite?token=' + token(invitation), { headers: { ...declared, cookie } }));
   assert.equal(nativeGet.status, 200); const info = await json<Preview>(nativeGet);
-  const accepted = await route.POST(new Request('https://triptab.test/api/invite', { method: 'POST', headers: { cookie, origin: 'https://triptab.test', 'content-type': 'application/json' }, body: JSON.stringify({ mode: 'accept', token: token(invitation), acceptHistory: true, historySnapshot: info.historySnapshot }) }));
+  const accepted = await route.POST(new Request('https://triptab.test/api/invite', { method: 'POST', headers: { ...declared, cookie, origin: 'https://triptab.test', 'content-type': 'application/json' }, body: JSON.stringify({ mode: 'accept', token: token(invitation), acceptHistory: true, historySnapshot: info.historySnapshot }) }));
   assert.equal(accepted.status, 200); assert.equal(account.state.emailVerified, false);
   assert.equal(database.sqlite.prepare("SELECT user_id FROM memberships WHERE member_id='b'").get()?.user_id, account.state.profile!.id);
   assert.equal(database.sqlite.prepare('SELECT display_name FROM profiles WHERE id=?').get(account.state.profile!.id)?.display_name, 'My own profile');
