@@ -593,6 +593,11 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
   if (options.operation !== undefined && (!isOperationFence(options.operation) || !scoped)) throw new Error('Invalid receipt operation save');
   const operationCommit = options.operation ? operationCommitSql(options.operation, id) : undefined;
   const requestCommit = options.authorization ? requestWriteAuthorizationSql(options.authorization, id) : undefined;
+  // Request/operation fences capture the actual authentication method. A
+  // password session remains valid when an old provider ID is remapped; only
+  // provider-authenticated writes should follow that provider mapping.
+  const legacyIdentity = requestCommit || operationCommit ? { condition: '1', bindings: [] }
+    : { condition: 'NOT EXISTS (SELECT 1 FROM auth_links WHERE oai_user_id = ? AND user_id <> ?)', bindings: [id, id] };
   const tripIds = ledger.trips.map(trip => trip.id);
   const tripIdsJson = JSON.stringify(tripIds);
   // D1 batches read one transactional snapshot. Reject future as well as stale
@@ -760,7 +765,7 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
     db().prepare("INSERT OR IGNORE INTO sync_state (id, revision, last_write) VALUES (1, 0, '')"),
     db().prepare(`UPDATE sync_state SET revision = revision + 1, last_write = ?
       WHERE id = 1 AND (${scopeGate})
-        AND NOT EXISTS (SELECT 1 FROM auth_links WHERE oai_user_id = ? AND user_id <> ?)
+        AND ${legacyIdentity.condition}
         AND NOT EXISTS (SELECT 1 FROM json_each(?) ids JOIN trips t ON t.id = ids.value
           WHERE t.owner <> ? AND NOT EXISTS (SELECT 1 FROM memberships m WHERE m.trip_id = t.id AND m.user_id = ?))
         AND NOT EXISTS (SELECT 1 FROM json_each(?) ref LEFT JOIN receipts r ON r.id = json_extract(ref.value, '$.id')
@@ -776,7 +781,7 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
           WHERE t.revision <> expected.value)
         ${operationCommit ? `AND ${operationCommit.gate}` : ''}
         ${requestCommit ? `AND ${requestCommit.condition}` : ''}
-    `).bind(marker, ...scopeBindings, id, id, tripIdsJson, id, id, JSON.stringify(receiptReferences), JSON.stringify(conversationAuthors), id,
+    `).bind(marker, ...scopeBindings, ...legacyIdentity.bindings, tripIdsJson, id, id, JSON.stringify(receiptReferences), JSON.stringify(conversationAuthors), id,
       JSON.stringify(preimages), JSON.stringify(options.tripRevisions ?? {}), ...(operationCommit?.gateBindings ?? []), ...(requestCommit?.bindings ?? [])),
   ];
   // R12: the operation's completion commits with the proposal, or not at all.

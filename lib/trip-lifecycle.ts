@@ -24,7 +24,7 @@ export type DeletedBill = { id: string; name: string; deletedAt: string; restore
 type Actor = { id: string; displayName: string; authorization?: RequestWriteAuthorization };
 const actorWriteGuard = (actor: Actor) => actor.authorization
   ? requestWriteAuthorizationSql(actor.authorization, actor.id)
-  : { condition: '1', bindings: [] };
+  : { condition: identity, bindings: [actor.id, actor.id] };
 async function explainActorRefusal(database: D1Database, actor: Actor) {
   if (actor.authorization && !await requestWriteAuthorized(database, actor.authorization, actor.id)) {
     throw new AuthError('Your sign-in changed before this action finished. Sign in again and review your changes.', 401);
@@ -113,8 +113,8 @@ export async function setTripArchived(database: D1Database, actor: Actor, rawTri
   if (archived) {
     const results = await database.batch([
       database.prepare(`INSERT INTO trip_archives (user_id, trip_id, archived_at) SELECT ?, ?, ?
-        WHERE EXISTS (SELECT 1 FROM trips t WHERE t.id = ? AND ${access}) AND ${identity} AND ${authorization.condition}
-        ON CONFLICT(user_id, trip_id) DO NOTHING`).bind(actor.id, id, new Date().toISOString(), id, actor.id, actor.id, actor.id, actor.id, ...authorization.bindings),
+        WHERE EXISTS (SELECT 1 FROM trips t WHERE t.id = ? AND ${access}) AND ${authorization.condition}
+        ON CONFLICT(user_id, trip_id) DO NOTHING`).bind(actor.id, id, new Date().toISOString(), id, actor.id, actor.id, ...authorization.bindings),
       audit,
     ]);
     if (!results[0].meta.changes) await explainActorRefusal(database, actor);
@@ -125,8 +125,8 @@ export async function setTripArchived(database: D1Database, actor: Actor, rawTri
   const limit = bill ? MAX_OPEN_BILLS : MAX_OPEN_HOLIDAYS;
   const sameKind = `(SELECT COUNT(*) FROM trips o WHERE o.id IN (${OPEN_TRIP_IDS}) AND ${bill ? "json_extract(o.data, '$.kind') = 'bill'" : "COALESCE(json_extract(o.data, '$.kind'), 'holiday') <> 'bill'"})`;
   const results = await database.batch([
-    database.prepare(`DELETE FROM trip_archives WHERE user_id = ? AND trip_id = ? AND ${identity}
-      AND ${sameKind} < ? AND ${authorization.condition}`).bind(actor.id, id, actor.id, actor.id, ...openTripBindings(actor.id), limit, ...authorization.bindings),
+    database.prepare(`DELETE FROM trip_archives WHERE user_id = ? AND trip_id = ?
+      AND ${sameKind} < ? AND ${authorization.condition}`).bind(actor.id, id, ...openTripBindings(actor.id), limit, ...authorization.bindings),
     audit,
   ]);
   if (!results[0].meta.changes) await explainActorRefusal(database, actor);
@@ -140,8 +140,8 @@ export async function setTripArchived(database: D1Database, actor: Actor, rawTri
 /** Advance the shared save token so ledgers loaded before this change must refresh. */
 function advanceRevision(database: D1Database, actor: Actor, marker: string, condition: string, bindings: unknown[]) {
   const authorization = actorWriteGuard(actor);
-  return database.prepare(`UPDATE sync_state SET revision = revision + 1, last_write = ? WHERE id = 1 AND ${identity} AND ${condition} AND ${authorization.condition}`)
-    .bind(marker, actor.id, actor.id, ...bindings, ...authorization.bindings);
+  return database.prepare(`UPDATE sync_state SET revision = revision + 1, last_write = ? WHERE id = 1 AND ${condition} AND ${authorization.condition}`)
+    .bind(marker, ...bindings, ...authorization.bindings);
 }
 async function ensureSyncState(database: D1Database) {
   await database.prepare("INSERT OR IGNORE INTO sync_state (id, revision, last_write) VALUES (1, 0, '')").run();

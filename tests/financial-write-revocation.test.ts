@@ -105,3 +105,17 @@ test('N03: request fences preserve session precedence, reject forgery and use da
   database.sqlite.prepare("UPDATE profiles SET deleted_at=? WHERE id='provider-account'").run(now);
   assert.equal(await requestWriteAuthorized(database.asD1(), providerFence, 'provider-account'), false);
 });
+
+test('N03: a valid password session still saves when its old provider ID is mapped to another account', async () => {
+  const f = await createReceiptOperationWorker();
+  try {
+    await f.createAccount({ id: 'new-provider-account', name: 'Other', email: 'new-provider@example.test' });
+    await f.database.prepare('INSERT INTO auth_links(oai_user_id,user_id,created_at) VALUES(?,?,?)').bind(f.owner.id, 'new-provider-account', new Date().toISOString()).run();
+    assert.equal((await f.request('/api/ledger')).status, 200, 'the password session remains authenticated as its original account');
+    const snapshot = await f.readLedger();
+    snapshot.data.trips.find(trip => trip.id === f.tripId)!.drafts[0].title = 'My authorised edit';
+    const response = await f.request('/api/ledger', { method: 'POST', body: JSON.stringify(snapshot) });
+    assert.equal(response.status, 200, await response.text());
+    assert.equal((await f.currentDraft()).title, 'My authorised edit');
+  } finally { await f.dispose(); }
+});
