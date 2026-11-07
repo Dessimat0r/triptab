@@ -143,3 +143,47 @@ test('F-05: Activity and People include archived trips, read-only, and can leave
   await expect(view.locator('.activity-row')).toHaveCount(1);
   await expect(view.locator('.activity-row')).toContainText('Hotel');
 });
+
+// F-05 (audit reconciliation): Activity can be narrowed to a date range, and a
+// bill has the same search and filters as a holiday.
+test('F-05: Activity\'s From and To dates narrow the list, inclusive', async ({ page }) => {
+  const taxi = { ...holiday.expenses[0], id: 'taxi', title: 'Taxi', date: '2026-11-05', items: [{ id: 'fare', name: 'Fare', amount: 2000, members: ['h-gary', 'h-sam'] }] };
+  await fixtures(page, { trips: [{ ...holiday, expenses: [holiday.expenses[0], taxi] }] });
+  await page.goto('/expenses');
+  await page.getByRole('button', { name: 'Open holidays', exact: true }).click();
+  await page.getByRole('button', { name: 'Activity and people', exact: true }).click();
+  const view = page.getByRole('dialog', { name: 'Activity and people' });
+  await expect(view.locator('.activity-row')).toHaveCount(2);
+  await view.getByLabel('From date').fill('2026-11-05');
+  await expect(view.locator('.activity-row')).toHaveCount(1);
+  await expect(view.locator('.activity-row')).toContainText('Taxi');
+  await view.getByLabel('From date').fill('');
+  await view.getByLabel('To date').fill('2026-11-01');
+  await expect(view.locator('.activity-row')).toHaveCount(1);
+  await expect(view.locator('.activity-row')).toContainText('Hotel');
+  await view.getByLabel('From date').fill('2026-11-02');
+  await view.getByLabel('To date').fill('2026-11-04');
+  await expect(view.locator('.activity-row')).toHaveCount(0);
+  await expect(view).toContainText('Nothing matches these filters.');
+});
+
+test('F-05: a bill has its own search and filters; no match offers Clear filters', async ({ page }) => {
+  const line = (id: string, title: string, amount: number) => ({ id, title, date: '2026-11-06', time: '20:00', timezone: 'Europe/London', currency: 'GBP' as const,
+    payer: 'd-gary', tax: 0, tip: 0, discount: 0, items: [{ id: `${id}-item`, name: title, amount, members: ['d-gary', 'd-pat'] }] });
+  const bill: Trip = { ...dinner([{ id: 'd-gary', name: 'Gary', userId: 'gary' }, { id: 'd-pat', name: 'Pat' }]),
+    expenses: [line('pizza', 'Pizza', 2400), line('wine', 'Wine', 1800), line('dessert', 'Dessert', 900)] };
+  await fixtures(page, { trips: [holiday, bill] });
+  await page.goto('/expenses');
+  await page.getByRole('button', { name: 'Open holidays', exact: true }).click();
+  await page.getByRole('button', { name: /^Dinner/ }).click();
+  await expect(page.locator('.expense-open')).toHaveCount(3);
+  const search = page.getByRole('searchbox', { name: 'Search expenses' });
+  await search.fill('pizza');
+  await expect(page.locator('.expense-open')).toHaveCount(1);
+  await expect(page.locator('.expense-open')).toContainText('Pizza');
+  await search.fill('sushi');
+  await expect(page.locator('.expense-open')).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: 'No matching expenses' })).toBeVisible();
+  await page.locator('.expense-list').getByRole('button', { name: 'Clear filters' }).click();
+  await expect(page.locator('.expense-open')).toHaveCount(3);
+});
