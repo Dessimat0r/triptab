@@ -17,6 +17,7 @@ async function fixtures(page: Page) {
   });
   let data: Ledger = structuredClone({ trips: [holiday, bill] }), revision = 1;
   const actions: string[] = [], archives: Trip[] = [archived];
+  let scans = 0, photoUploads = 0;
   await page.route('**/api/**', async route => {
     const request = route.request(), url = new URL(request.url()), path = url.pathname;
     let json: unknown = { events: [], notifications: [], items: [], invitations: [] };
@@ -36,9 +37,10 @@ async function fixtures(page: Page) {
       } else json = { trips: archives.map(trip => ({ id: trip.id, name: trip.name, kind: (trip as Trip & { kind?: 'bill' }).kind, currency: trip.currency, travellers: trip.members.length, owner: true, archivedAt: '2026-10-10T21:00:00Z' })) };
     }
     if (path === '/api/trip-language') json = { accountId: 'bill-owner', tripId: url.searchParams.get('tripId'), revision: 1, preferences: { readingLanguage: 'en', primaryVersion: 'reading', itemVersions: {} } };
-    if (path === '/api/receipt' && request.method() === 'POST') json = { receiptId: 'bill-photo' };
+    if (path === '/api/receipt' && request.method() === 'POST') json = { receiptId: `bill-photo-${++photoUploads}` };
     if (path === '/api/receipt' && request.method() === 'GET') return route.fulfill({ contentType: 'image/png', path: pathPhoto });
     if (path === '/api/receipt/process') {
+      scans++;
       const { tripId, draftId } = request.postDataJSON(); const current = data.trips.find(trip => trip.id === tripId)!; const draft = current.drafts.find(draft => draft.id === draftId)!;
       Object.assign(draft, { title: 'Scanned euro dinner', currency: 'EUR', status: 'review', date: '2026-10-10', time: '19:00', timezone: 'Europe/Lisbon', source: 'ai', items: [{ id: 'scan-line', name: 'Food', amount: 4800, members: current.members.map(member => member.id) }], receiptScan: { version: 1, printedCurrency: 'EUR', printedTotal: 4800, status: 'matched', warnings: [] } });
       json = { data, revision: ++revision };
@@ -47,7 +49,7 @@ async function fixtures(page: Page) {
     if (path === '/api/receipt/ai-status') json = { configured: true, connected: true, provider: 'api', eligible: true, manageable: false, siwcAvailable: false };
     await route.fulfill({ json, headers: path === '/api/ledger' ? { 'X-TripTab-Account': 'bill-owner' } : {} });
   });
-  return { ledger: () => data, actions, archives };
+  return { ledger: () => data, actions, archives, scans: () => scans, photoUploads: () => photoUploads };
 }
 async function selectBill(page: Page) {
   await page.getByRole('button', { name: 'Open holidays', exact: true }).click();
@@ -105,6 +107,47 @@ for (const width of [320, 390]) {
     expect(balances(created)).toEqual([3600, -1200, -1200, -1200]); await fits(page);
   });
 }
+test('[P1] custom bill accepts a gallery image without scanning, preserving an image-only bill at 320px', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 844 }); const state = await fixtures(page); await page.goto('/expenses');
+  await page.getByRole('button', { name: 'Open holidays', exact: true }).click();
+  await page.getByRole('button', { name: 'Split a bill', exact: true }).click();
+  const chooser = page.waitForEvent('filechooser');
+  await page.getByRole('dialog', { name: 'Split a bill' }).getByRole('button', { name: 'Choose image' }).click();
+  await (await chooser).setFiles(pathPhoto);
+  await expect(page.getByRole('textbox', { name: 'Amount', exact: true })).toBeVisible();
+  await expect.poll(() => state.ledger().trips.at(-1)?.billPhotoId).toBe('bill-photo-1');
+  const created = state.ledger().trips.at(-1)!;
+  expect(created.kind).toBe('bill');
+  expect(created.drafts).toHaveLength(0);
+  expect(created.expenses).toHaveLength(0);
+  expect(state.scans()).toBe(0);
+  await expect(page.getByRole('button', { name: 'Close editor' })).toBeEnabled();
+  await page.getByRole('button', { name: 'Close editor' }).click();
+  await expect(page.getByRole('img', { name: 'Image attached to this bill' })).toBeVisible();
+  expect(state.actions).not.toContain('discard');
+  await fits(page);
+});
+
+test('[P1] an existing bill can add, replace and remove a photo without changing any money', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 }); const state = await fixtures(page); await page.goto('/expenses'); await selectBill(page);
+  const chooser = page.waitForEvent('filechooser');
+  await page.getByRole('button', { name: 'Choose image', exact: true }).click();
+  await (await chooser).setFiles(pathPhoto);
+  await expect.poll(() => state.ledger().trips.find(value => value.id === 'dinner')?.billPhotoId).toBe('bill-photo-1');
+  await expect(page.getByRole('img', { name: 'Image attached to this bill' })).toBeVisible();
+  const camera = page.waitForEvent('filechooser');
+  await page.getByRole('button', { name: 'Take photo', exact: true }).click();
+  await (await camera).setFiles(pathPhoto);
+  await expect.poll(() => state.ledger().trips.find(value => value.id === 'dinner')?.billPhotoId).toBe('bill-photo-2');
+  await page.getByRole('button', { name: 'Remove image', exact: true }).click();
+  await expect.poll(() => state.ledger().trips.find(value => value.id === 'dinner')?.billPhotoId).toBeUndefined();
+  await expect(page.getByRole('img', { name: 'Image attached to this bill' })).toHaveCount(0);
+  expect(state.ledger().trips.find(value => value.id === 'dinner')!.expenses).toEqual(bill.expenses);
+  expect(state.ledger().trips.find(value => value.id === 'dinner')!.drafts).toHaveLength(0);
+  expect(state.scans()).toBe(0);
+  await fits(page);
+});
+
 test('[P2] closing an empty new bill discards it and returns to the previous holiday', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 }); const state = await fixtures(page); await page.goto('/expenses');
   await page.getByRole('button', { name: 'Open holidays', exact: true }).click(); await page.getByRole('button', { name: 'Split a bill', exact: true }).click();
