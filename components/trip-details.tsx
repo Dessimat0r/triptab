@@ -2,7 +2,7 @@
 import { t as uiText } from "@/lib/ui-language";
 
 
-import { useEffect, useId, useRef, useState } from "react";
+import { useLayoutEffect, useId, useRef, useState } from "react";
 import PagedList from "./paged-list";
 import { Check } from "lucide-react";
 import { validCalendarDate } from "@/lib/dates";
@@ -45,7 +45,10 @@ export function TravellerName({ trip, member, index, busy, onSave }: {
   // Saving disables the row and a saved name removes Save, so focus would fall to
   // <body>. Return it to the name field once the row is editable again.
   const refocus = useRef(false);
-  useEffect(() => { if (refocus.current && !locked) { refocus.current = false; input.current?.focus(); } });
+  // A passive effect from an earlier edit can run after submit sets this ref,
+  // but before the locked render commits. It would consume the request too
+  // early, then disabling the input loses focus. Run with the committed DOM.
+  useLayoutEffect(() => { if (refocus.current && !locked) { refocus.current = false; input.current?.focus(); } });
   return <form ref={form} className="traveller-name-form" data-entry-id={member.id} tabIndex={-1} onSubmit={async event => {
     event.preventDefault();
     if (locked) return;
