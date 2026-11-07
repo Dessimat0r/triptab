@@ -1,5 +1,8 @@
 # Independent audit N01–N05: verification of #79 and the gaps it left
 
+> **Status update (final pass).** This file records the verification pass on #79 and is kept as review evidence, not release content. Since it was written: the reminder fix it describes is part of the release branch; **F1** (invitation limits), **N05** (optional receipt-ready notifications, migration `0018`) and **F2** (receipt upload/delete and display-name fence) were implemented with tests; the "open product decision" for N05 below is superseded by the owner's policy; F3 to F6 remain documented follow-ups. See `MERGE-READINESS.md`, "Final pass before merge".
+
+
 Status: **draft for independent re-review. Not merged, not deployed, no production data or migration touched, no paid inference.**
 Stacked on #79 (`ef3acf9`); this branch adds tests, one fix and this report.
 
