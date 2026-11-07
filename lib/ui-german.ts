@@ -264,6 +264,7 @@ export const GERMAN_UI: Readonly<Record<string, string>> = {
   Notifications: 'Benachrichtigungen',
   'Browser notifications': 'Browserbenachrichtigungen',
   'Allow settlement reminders': 'Zahlungserinnerungen erlauben',
+  'Receipt ready notifications': 'Benachrichtigungen, wenn ein Beleg bereit ist',
   'Only expenses I’m involved in': 'Nur Ausgaben mit meiner Beteiligung',
   'Daily summary': 'Tägliche Zusammenfassung',
   'As activity happens': 'Bei neuen Aktivitäten',

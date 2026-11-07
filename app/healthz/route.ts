@@ -11,7 +11,7 @@ export async function GET() {
       e.sequence, m.message_data, t.receipt_link_version, t.revision,
       ai.id, ai.user_id, ai.provider, ai.api_key_encrypted, pc.credentials, pt.transaction_data, lp.user_id, lp.trip_id, lp.data, lp.revision
       ,ac.email_verified_at,et.purpose,ta.archived_at,rh.until,os.session_id,os.user_agent,
-      pr.deleted_at,pr.ui_language,np.scope,np.delivery,np.reminders,nd.updates,sr.sent_at,rp.receipt_id,
+      pr.deleted_at,pr.ui_language,np.scope,np.delivery,np.reminders,np.receipt_ready,nd.updates,sr.sent_at,rp.receipt_id,
       ro.operation_key,ro.status,ro.attempt_id,ro.lease_until,
       ro.request_json,ro.grant_kind,ro.grant_ref,ro.grant_expires_at,ro.provider,ro.provider_started_at,ro.auto_resumes
       FROM auth_credentials ac CROSS JOIN auth_email_tokens et CROSS JOIN trip_archives ta

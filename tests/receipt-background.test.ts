@@ -252,45 +252,5 @@ test('R07 kill switch: unset, empty or "on" keeps the runner on', async () => {
   } finally { await fixture.dispose(); }
 });
 
-// F-11: "Ready to review", for the person who started the reading.
-const ownerNotifications = async (fixture: Fixture) => (await fixture.database.prepare('SELECT title, body FROM notifications WHERE user_id = ? ORDER BY created_at')
-  .bind(fixture.owner.id).all<{ title: string; body: string }>()).results;
-const settle = () => new Promise(resolve => setTimeout(resolve, 300));
-
-test('F-11: a reading finished in the background tells the person who started it that it is ready to review', async () => {
-  const fixture = await createReceiptOperationWorker();
-  try {
-    const inline = await cutOff(fixture);
-    await settle();
-    const before = (await ownerNotifications(fixture)).length;
-    assert.equal((await fixture.tick()).stored, 1);
-    await fixture.waitFor(async () => (await ownerNotifications(fixture)).length === before + 1, 'the ready notification');
-    const ready = (await ownerNotifications(fixture)).at(-1)!;
-    assert.equal(ready.title, 'Receipt ready to review');
-    assert.match(ready.body, /^TripTab finished reading Café in Operations holiday\. Review it before saving\.$/);
-    assert.doesNotMatch(ready.body, /£|250|350|Coffee|Pastry/, 'no amounts or line items');
-    await fixture.control('/__test/provider', { release: true });
-    assert.equal((await inline.abandoned).status, 409);
-  } finally { await fixture.dispose(); }
-});
-
-test('F-11: a reading returned to a connected page sends no notification; "no notifications" is respected for background ones', async () => {
-  const fixture = await createReceiptOperationWorker();
-  try {
-    const before = (await ownerNotifications(fixture)).length;
-    assert.equal((await fixture.process(await fixture.processBody())).status, 200);
-    await settle();
-    assert.equal((await ownerNotifications(fixture)).length, before, 'the page that asked shows the result itself');
-  } finally { await fixture.dispose(); }
-  const quiet = await createReceiptOperationWorker();
-  try {
-    await quiet.database.prepare("INSERT INTO notification_preferences(user_id,scope) VALUES (?,'none')").bind(quiet.owner.id).run();
-    const inline = await cutOff(quiet);
-    const before = (await ownerNotifications(quiet)).length;
-    assert.equal((await quiet.tick()).stored, 1);
-    await settle();
-    assert.equal((await ownerNotifications(quiet)).length, before);
-    await quiet.control('/__test/provider', { release: true });
-    await inline.abandoned;
-  } finally { await quiet.dispose(); }
-});
+// N05 replaced the F-11 notice tests that were here: the receipt-ready notice is now an opt-in
+// preference (default off), decided from persisted operation state. See receipt-ready-notification.test.ts.
