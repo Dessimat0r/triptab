@@ -30,7 +30,9 @@ const receiptBackgroundResume = process.env.RECEIPT_BACKGROUND_RESUME?.trim();
 const localBindingConfig = {
   main: backupOnly ? "./build/backup-worker.ts" : "./build/sites-worker.ts",
   vars: { RECEIPT_AI_OWNER_EMAIL: receiptAIOwnerEmail, ...(receiptBackgroundResume ? { RECEIPT_BACKGROUND_RESUME: receiptBackgroundResume } : {}) },
-  compatibility_flags: ["nodejs_compat"],
+  // The pinned date predates Cloudflare's request.signal default. F-11 uses
+  // that signal to notify a browser whose receipt finishes after disconnect.
+  compatibility_flags: ["nodejs_compat", "enable_request_signal"],
   // Cloudflare-compatible output declares UTC maintenance every 15 minutes and
   // (R07) a per-minute resume of interrupted receipt readings, matched by
   // RECEIPT_RESUME_CRON in build/sites-worker.ts. Sites' production deployment

@@ -66,6 +66,13 @@ const workerSource = compile(await readFile(new URL('../build/sites-worker.ts', 
 const worker = (await import(dataUrl(workerSource)) as { default: {
   scheduled(controller: ScheduledController, env: unknown, ctx: unknown): Promise<void>;
 } }).default;
+
+test('N05: the pinned Worker configuration explicitly enables browser disconnect signals', async () => {
+  const config = await readFile(new URL('../vite.config.ts', import.meta.url), 'utf8');
+  const flags = config.match(/compatibility_flags:\s*\[([^\]]+)\]/)?.[1] ?? '';
+  assert.match(flags, /["']enable_request_signal["']/, 'the pinned pre-2026-11-17 date does not enable request.signal by default');
+  assert.match(flags, /["']nodejs_compat["']/);
+});
 const scheduledTime = Date.parse('2026-10-04T13:00:00Z');
 function dispatch(env: unknown) {
   const pending: Promise<unknown>[] = [];
