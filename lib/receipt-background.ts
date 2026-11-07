@@ -51,6 +51,7 @@ export async function runReceiptOperationTick(environment: ReceiptBackgroundEnvi
       const source = await loadOperationSource(candidate.userId, candidate.request, { imageVersion: candidate.request.imageVersion });
       if (source.answered) throw new ReceiptAIAccessError('This question was already answered.', 409, 'already-answered');
       await executeOperation({ userId: candidate.userId, request: candidate.request, source, fence: operationFence(claim), log, signal,
+        notifyWhenStored: () => true,
         credential: async () => {
           const connection = await receiptAICredential(database, environment, candidate.userId, { signal });
           // The person asked for a reading paid by one credential kind; never
