@@ -91,3 +91,17 @@ test('R06: the claim statements run on Miniflare D1 with every migration applied
     assert.equal((await claimOperation(flow.db as never, source, 'carol')).owned, false);
   } finally { await flow.dispose(); }
 });
+
+test('R12: only a successful claim issues a commit fence; copies and data are not fences', async () => {
+  const { instances: [one], close } = await shared();
+  try {
+    const { isOperationFence, operationCommitSql, operationFence } = await import('../lib/receipt-operations');
+    const claim = await claimOperation(d1(one), source, 'alice');
+    assert(claim.owned);
+    assert.equal(isOperationFence(operationFence(claim)), true);
+    for (const value of [{ key: claim.key, attemptId: claim.attemptId }, JSON.parse(JSON.stringify(claim.fence)), { ...claim.fence }, null, 'processing'])
+      assert.equal(isOperationFence(value), false);
+    assert.throws(() => operationCommitSql({ key: claim.key, attemptId: claim.attemptId }), /Untrusted receipt operation/);
+    assert.throws(() => operationFence({ ...claim, fence: { key: claim.key, attemptId: claim.attemptId } }), /Not an owned receipt operation/);
+  } finally { await close(); }
+});

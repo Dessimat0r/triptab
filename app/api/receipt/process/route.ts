@@ -7,7 +7,7 @@ import { applyReceiptTranscription, consumeReceiptProcessBudget, processReceiptI
 import { readTripLanguagePreferences } from '@/lib/trip-language-preferences';
 import { processReceiptQuestion, applyReceiptQuestion } from '@/lib/receipt-assistant';
 import { financialFormatRefusal } from '@/lib/financial-format';
-import { claimOperation, finishOperation, holdsOperation, type Claim } from '@/lib/receipt-operations';
+import { claimOperation, finishOperation, operationFence, type Claim } from '@/lib/receipt-operations';
 
 export const dynamic = 'force-dynamic';
 const id = z.string().min(1).max(100);
@@ -128,13 +128,14 @@ export async function POST(request: Request) {
           imageIds: values.receiptId ? [values.receiptId] : [],
         });
         currentTrip.drafts[currentTrip.drafts.findIndex(value => value.id === proposal.id)] = proposal;
-        // R06: a superseded attempt (its claim was taken over after its lease
-        // ran out) never commits; the newer attempt owns the result.
-        if (!await holdsOperation(database, held.key, held.attemptId)) throw new RequestError('Another reading of this receipt took over. Refresh to see its result.', 409);
+        // R06/R12: a superseded attempt (its claim was taken over after its
+        // lease ran out) never commits; the newer attempt owns the result.
+        // Ownership is decided inside the commit's own D1 transaction, which
+        // also records the operation as stored, so no takeover can land
+        // between a check and the write.
         try {
-          const saved = await writeLedger(profile.id, { trips: [currentTrip] }, latest.revision, { source: 'web', tripSnapshot, processing: true });
+          const saved = await writeLedger(profile.id, { trips: [currentTrip] }, latest.revision, { source: 'web', tripSnapshot, operation: operationFence(held) });
           const savedDraft = saved.data.trips.find(value => value.id === trip.id)?.drafts.find(value => value.id === draft.id);
-          await finishOperation(database, held.key, held.attemptId, 'stored');
           logOperation('native-proposal-stored', started, {
             status: savedDraft?.receiptScan?.status, lineCount: savedDraft?.items.length ?? 0, revision: saved.revision });
           return Response.json({ ...saved, draft: savedDraft }, { headers: { 'Cache-Control': 'private, no-store' } });

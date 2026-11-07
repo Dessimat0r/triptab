@@ -1,0 +1,25 @@
+# R12 before: tests/receipt-commit-ownership.test.ts against the reviewed head 2e8bbc8 production code
+# (only lib/store.ts, lib/receipt-operations.ts and app/api/receipt/process/route.ts reverted to 2e8bbc8; Node 24.22.1, Linux, Miniflare D1/R2)
+✖ R12: an attempt taken over after its checks but before its commit writes nothing; the new owner stores the only proposal (1343.638207ms)
+✔ R12 control: the current owner, paused at the same point, commits its proposal and records completion atomically (1016.401863ms)
+✔ R12: a person editing the receipt before the commit wins; the reading writes nothing and its operation fails (1032.442585ms)
+✔ R12: a commit that fails leaves no proposal and a failed operation; an explicit retry stores one proposal (984.314018ms)
+✖ R12: if the Worker is lost right after the commit, the proposal and its completed operation agree, and a retry spends nothing (1037.044404ms)
+✔ R12: overlapping identical requests still make one provider call and store one proposal (954.196853ms)
+ℹ tests 6
+ℹ suites 0
+ℹ pass 4
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 7798.497435
+✖ failing tests:
+✖ R12: an attempt taken over after its checks but before its commit writes nothing; the new owner stores the only proposal (1343.638207ms)
+  AssertionError [ERR_ASSERTION]: the superseded attempt is refused, not 200
+✖ R12: if the Worker is lost right after the commit, the proposal and its completed operation agree, and a retry spends nothing (1037.044404ms)
+  AssertionError [ERR_ASSERTION]: completion was recorded in the same transaction as the proposal
+
+# Assertion values:
+#   takeover case: status actual 200, expected 409 (superseded attempt's proposal was written)
+#   loss-after-commit case: operation status actual 'failed', expected 'stored' (proposal stored, operation claimable again)
