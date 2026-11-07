@@ -57,6 +57,8 @@ jobs:
 
   browser:
     runs-on: ubuntu-24.04
+    env:
+      TRIPTAB_PREVIOUS_URL: http://127.0.0.1:8898
     # Playwright's image already holds every browser and OS library for the
     # locked Playwright version, so no packages come from the Ubuntu mirror,
     # whose speed varies per runner. Keep the tag equal to the locked
@@ -92,8 +94,38 @@ jobs:
             echo "::error file=.github/workflows/ci.yml::Update the browser job's container image to mcr.microsoft.com/playwright:v${locked}-noble with its digest."
             exit 1
           }
+      # R01 must run against an actual incompatible bundle. Keep this known
+      # historical version pinned after the feature reaches main as well.
+      - name: Check out the previous financial client
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: 01be219b2675ab6018d4090bf042e51400030eec
+          path: .previous-client
+          persist-credentials: false
+      - name: Isolate the previous client from the current build
+        run: |
+          test ! -e "$RUNNER_TEMP/triptab-previous-client"
+          mv -- .previous-client "$RUNNER_TEMP/triptab-previous-client"
+      - name: Install the previous client's locked dependencies
+        working-directory: ${{ runner.temp }}/triptab-previous-client
+        run: npm run install:ci
+      - name: Build the previous client
+        working-directory: ${{ runner.temp }}/triptab-previous-client
+        run: npm run build
       - name: Build
         run: npm run build
+      - name: Start the previous client locally
+        working-directory: ${{ runner.temp }}/triptab-previous-client
+        run: |
+          node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js dev \
+            --config dist/server/wrangler.json --local --persist-to .wrangler/ci-previous \
+            --ip 127.0.0.1 --inspector-port 0 --port 8898 > "$RUNNER_TEMP/triptab-previous.log" 2>&1 &
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent "$TRIPTAB_PREVIOUS_URL/" > /dev/null; then exit 0; fi
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/triptab-previous.log"
+          exit 1
       - name: Check production browser layouts
         # Retain the measured two-worker default for each complete engine suite.
         run: npm run test:layout -- --project=${{ matrix.browser }}
