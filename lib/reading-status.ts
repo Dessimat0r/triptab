@@ -11,7 +11,15 @@ import type { Draft } from './model';
  * Browser storage is a convenience only: if it is unavailable the row simply
  * shows its saved status, as before.
  */
-export const READING_LIMIT_MS = 120_000; // the server stops at 90 s; allow for the final save
+/**
+ * R07: how long a reading may still finish on the server: the browser
+ * request's lease (120 s), up to one per-minute background tick, then one
+ * background attempt's lease (360 s), plus a minute of slack. Checked against
+ * the server's constants in tests/reading-status.test.ts. A reading that
+ * failed earlier also shows as reading until then; its proposal, if any,
+ * replaces the status as soon as it arrives.
+ */
+export const READING_LIMIT_MS = 600_000;
 const PREFIX = 'triptab:reading:';
 
 type Entry = { tripId: string; startedAt: number; fingerprint: string };

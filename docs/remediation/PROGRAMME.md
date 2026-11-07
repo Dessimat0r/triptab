@@ -1,12 +1,27 @@
 # TripTab approved remediation programme
 
-Owner brief and evidence baseline: **TripTab Functionality, Usability and Financial Accuracy Audit, 6 November 2026**, audited commit `48de3f9`. Decisions D01 to D08 and the additional owner decisions govern this programme.
+Owner brief and evidence baseline: **TripTab Functionality, Usability and Financial Accuracy Audit, 6 November 2026**, audited commit `48de3f9`. Decisions D01 to D08 (recorded below) and the additional owner decisions govern this programme. Reconciliation of the findings and acceptance tests against the audit: [`AUDIT-RECONCILIATION.md`](AUDIT-RECONCILIATION.md).
 
 This record describes implementation evidence. It is not approval to release. No merge, deployment or production migration is authorised. Status updated 6 November 2026 (follow-ups #71 to #74 added).
 
 ## Independent release review corrections (R01 to R11)
 
 The independent release review found one P0, seven P1 and three P2 defects in the combined stack. Corrections and their evidence are in [`CORRECTIONS.md`](CORRECTIONS.md) (branch `claude/new-session-kf3m0k`, draft PR #77). That file's closure matrix and status changes supersede the rows below where they differ. The stack is still **not approved for release**; the gates listed there remain open.
+
+## Owner decisions D01 to D08 (recorded 7 November 2026)
+
+D01 to D08 are the eight "Decisions for the product owner" in section E of the audit (*TripTab Functionality, Usability and Financial Accuracy Audit*, 6 November 2026, commit `48de3f9`). The audit gives the questions and its recommendations, not the answers. On 7 November 2026, in the Claude Code session for PR #78, the owner adopted the recommended option for all eight. For D07 and D08 the audit listed options without a recommendation, so the option already built was adopted. This records decisions; it is not a review of the implementation.
+
+| # | Question | Decision | Implementation evidence | Gap |
+| --- | --- | --- | --- | --- |
+| D01 | Default BOGOF split | Spread the saving over the promotion's items in proportion to printed price (equal prices share equally); "give it all to one item" available | `lib/adjustments.ts` (proportional default, D01); the editor's "Split between items manually" allocation can put the whole saving on one item; `adjustments.test.ts`, `adjustment-preview.test.ts`, `browser/discounts.spec.ts` | None known. "All to one item" is reached through the manual split, not a one-tap option |
+| D02 | Unexplained total differences | Block saving unless reconciled, or "Save anyway" with a typed reason that is stored | `lib/receipt-scan.ts` (server save gate requires a written reason; `RECEIPT_DIFFERENCE_ERROR`); `receipt-scan.test.ts` | None known |
+| D03 | Adding people to bills | Connected means sharing any holiday or bill; connected people are added directly, with a way to leave | `lib/trip-lifecycle.ts` `listConnections` (ownership and memberships, never names) and direct add; Leave (#67, #72); `connected-bills.test.ts` | Privacy review (open in the closure tracker) |
+| D04 | Activity and People views | Totals per person and per currency; never netted across bills or holidays | `lib/personal-activity.ts` (per currency, never netted); `personal-activity.test.ts` | None known |
+| D05 | Delete rights | Any member can edit and delete, with notifications and Undo; show who added and who paid, and tell both about a deletion | `components/trip-app.tsx` `requestDeleteExpense` (confirmation when it matters financially or someone else paid); Undo and History restore. Creator (7 Nov 2026): taken from the earliest "create" event in the trip's history (`lib/store.ts` `expenseCreators`), never from the client and with no growth in the stored ledger; the editor shows "Added by … · paid by …" (`/api/expense-creator`, access-checked, account-bound); changes and deletions notify the creator as involved. `expense-creator.test.ts`, `browser/resilience.spec.ts` | Expenses older than history show no creator. A restore with the same ID keeps the original creator |
+| D06 | Swipe gestures | Swipe is a shortcut only, always alongside a visible ⋯ menu | #66, #71: ⋯ menus on expense, payment, draft and drawer rows, swipe on touch | Real-phone swipe check (device gate) |
+| D07 | Bills and the open limit | A separate bill limit (100 open bills, 50 open holidays) with friendly messages; nothing archived automatically | `lib/model.ts` / `validateLedger` limits; `phase-7-notes.md` F-17 (D07); `resilience.test.ts` | None known |
+| D08 | Several payers per expense | Later: explicitly deferred until the core remediation ships | F-12 deferred (`phase-7-notes.md`) | Future programme |
 
 ## Owner decisions, 6 November 2026 (after the follow-ups)
 
@@ -49,7 +64,7 @@ Statuses: Unresolved, Already fixed and verified, In progress, Implemented and t
 | F-08 concurrent-edit merge | P0 (owner) | 2 | Implemented and tested | [#63](https://github.com/Dessimat0r/triptab/pull/63) `118d6b0` | Field-level three-way merge, 500-run property test, production handlers, two-account store test, browser clash choice | Two-browser test against a local Worker; review |
 | F-09 duplicate warnings | P1 | 7 | Implemented and tested | [#68](https://github.com/Dessimat0r/triptab/pull/68) `6a969e3` | Exact, near and false-positive cases; browser Save anyway / Open existing | Review |
 | F-10 promotion extraction and evaluation | P0/P1 | 3 | In progress | #64 | Prompt, schema and mapping; corpus contradiction resolved; BOGOF, multibuy, percentage and loyalty receipts added; prompt and corpus kept consistent | **Blocked:** live model evaluation needs credentials and paid calls |
-| F-11 durable reading | P1 | 4 | Implemented and tested | #65; [#74](https://github.com/Dessimat0r/triptab/pull/74) `0d3bcd4` | A disconnected request still stores the proposal once, kept alive by `waitUntil`; a retry is idempotent. #74: draft rows show Reading receipt… after a reload, then fill in; Reading didn't finish after the limit | iPhone Safari and PWA lock test |
+| F-11 durable reading | P1 | 4 | Implemented and locally tested; hosted lifecycle unverified, accepted by the owner on 7 Nov 2026 with a kill switch (R07, R12: see CORRECTIONS.md second pass) | #65; [#74](https://github.com/Dessimat0r/triptab/pull/74) `0d3bcd4` | A disconnected request still stores the proposal once, kept alive by `waitUntil`; a retry is idempotent. #74: draft rows show Reading receipt… after a reload, then fill in; Reading didn't finish after the limit | iPhone Safari and PWA lock test |
 | F-12 several payers | Deferred | — | Explicitly deferred | — | D08 | Future programme |
 | F-13 settled-expense warnings | P1 (owner) | 5 | Implemented and tested | #66 | Audit numbers: delete means "Gary pays Sam £10.00", change to £30 means "Sam pays Gary £5.00"; payments unchanged | Review |
 | F-14 Undo | P1/P2 | 5 | Implemented and tested | #66; [#73](https://github.com/Dessimat0r/triptab/pull/73) `db384ff`; [#75](https://github.com/Dessimat0r/triptab/pull/75) `aab47f1` | 30 seconds, visible over forms, restores the same entry. #73: Restore receipt draft from History. #75: a deleted bill can be restored with its photos for 30 days (Undo, plus Recently deleted), then is removed; hidden from every access check | Undo banner for the drawer delete path (#71) when the two are integrated; review |

@@ -1,0 +1,14 @@
+# R13 before: tests/browser/resilience.spec.ts from 2e8bbc8, run on 2026-11-07 (Chromium 1243, Linux, Node 24.22.1), F-09 repeated 3x
+  ✘  1 [chromium] › tests/browser/zz-r13-before.spec.ts:36:1 › F-09: entering the same restaurant bill again warns; Open existing saves nothing, Save anyway saves (5.8s)
+  ✘  2 [chromium] › tests/browser/zz-r13-before.spec.ts:36:1 › F-09: entering the same restaurant bill again warns; Open existing saves nothing, Save anyway saves (5.8s)
+  ✘  3 [chromium] › tests/browser/zz-r13-before.spec.ts:36:1 › F-09: entering the same restaurant bill again warns; Open existing saves nothing, Save anyway saves (5.7s)
+    Error: expect(locator).toContainText(expected) failed
+    Expected substring: "“Pizza Express” for £45.20"
+    Error: element(s) not found
+    Error: expect(locator).toContainText(expected) failed
+    Expected substring: "“Pizza Express” for £45.20"
+    Error: element(s) not found
+    Error: expect(locator).toContainText(expected) failed
+    Expected substring: "“Pizza Express” for £45.20"
+    Error: element(s) not found
+  3 failed

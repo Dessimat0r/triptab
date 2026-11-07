@@ -1,3 +1,109 @@
+# Review corrections R15 and R16 (7 November 2026)
+
+The independent review of PR #78 at `99e4437` (`PR-78-REVIEW.md`, supplied by the owner) requested changes for two reproduced defects in the execution grant introduced by `555ecf2`. Both are corrected on this branch and reproduced first. The reviewer's own `review-evidence/adversarial.test.ts` and `make-adversarial.mjs` were not available here; the journeys were rebuilt from the review's description as maintained regressions in `tests/receipt-grant-revocation.test.ts`.
+
+| # | Pri | Defect | Correction | Before (at `99e4437`) | After |
+| --- | --- | --- | --- | --- | --- |
+| R15 | P1 | A ChatGPT grant was accepted when `grant_ref = user_id` without a link, bypassing normal authentication's rule that a legacy identity (profile ID = provider ID) with a password and no link is disconnected. Unlinking ChatGPT did not revoke a background reading's grant | One canonical predicate, `providerAuthenticatesAsSql` (`lib/receipt-operations.ts`), mirrors `authSnapshot`/`providerIdentity`: a link to the account, or the legacy fallback only when no link exists for that provider and the account has no password; account present and not deleted. Grant creation (`lib/auth.ts` `executionGrant`), the pre-spend checks and the commit gate all use it | Legacy unlink: background `resumed 1, stored 1, failed 0` while the ledger returned 401 for the old identity. **Also found:** remapping the provider identity to another account let the background attempt call the provider again (2 calls) | Both refused before any provider call, with no proposal, revision or history change and no retry. Controls pass before and after: separate IDs unlinked (refused), legitimate unlinked legacy and self-linked legacy (stored), session precedence (session grant survives unlinking ChatGPT), account deletion. A truth table (3 link states × password × same/different ID × deleted) shows the grant rule equals `resolveIdentity` in every case |
+| R16 | P2 | Commit-time expiry compared deadlines with a JavaScript time captured before save preparation, so a session or grant that expired during preparation still passed | Every deadline in the owner condition is compared with the database's time inside the statement (`DB_NOW_MS`, `DB_NOW_ISO`: SQLite `julianday('now')` and `strftime(...,'now')`, fixed within one step). The pre-spend checks (`operationAuthorized`, `startProviderCall`) use the same condition and therefore the same clock. Lease and claim selection keep the Worker's time; they decide who may try, not whether the attempt may act | Session expiring during the commit pause: **200**, stored, history +1. Grant expiring after inference: **200**, stored | Both **409**, nothing written, operation failed. Controls at the same pause: an unexpired owner commits; a removed grant is refused |
+
+Evidence: `correction-evidence/r15-r16-before.log`, `r15-r16-after.log`. Residual, unchanged: a ChatGPT grant cannot observe whether the platform's own ChatGPT sign-in is still active; it ends with unlinking, remapping, account deletion or the 30-minute expiry. Database and Worker clocks may differ slightly; the grant's 30-minute deadline is set from the Worker's clock and enforced on the database's.
+
+---
+
+# Second correction pass: R12, R07, R13 and R14 (7 November 2026)
+
+**Status: corrected for independent review. Not release-ready.** R07 is implemented and locally proven; its hosted lifecycle is unverified and was **accepted by the owner without that test** (record below). The other release gates at the end of this section remain open. No merge, deployment, hosted resource, production data change, production migration or paid model call was made. Branch `claude/new-session-cus6bc`, draft PR #78, based on #77 (`2e8bbc8`) so its diff shows only this pass. #69 and #77 remain review vehicles; the original implementation branches were not rewritten.
+
+## Provenance and limits
+
+- **Refreshed on 7 November 2026:** main `01be219`, #77 head `2e8bbc8` (merge base `01be219`); no newer commits on either or on the other open PRs (#59, #63 to #76).
+- **The reviewer's local evidence was not available here.** `C:/Users/garyo/triptab-corrections-review-20261107/` (CORRECTIONS-REVIEW.md, `recheck-evidence/`, `make-independent-checks.mjs`, `store-adversarial.test.ts`, `receipt-route-race.test.ts`, the Chromium/WebKit/clock/teardown logs) and the 6 November review folder exist only on the reviewer's Windows host. Each finding was taken from the brief's self-contained description and **reproduced independently here before it was fixed**; comparing these reproductions with the reviewer's logs remains an open check.
+- **Runtime contract verified from source.** `developers.cloudflare.com` is refused by this environment's proxy, so the current pages were read from Cloudflare's documentation source (`cloudflare/cloudflare-docs`, `src/content/docs/workers/runtime-apis/context.mdx` and `workers/platform/limits.mdx`, production branch, fetched 7 November 2026): `waitUntil` extends execution "for up to 30 seconds after the response is sent or the client disconnects"; Cron Trigger and Queue consumer invocations may run 15 minutes.
+- **Platform capability inspected:** `.openai/hosting.json` and the vendored Sites plugin declare D1, R2 and MCP only. No Queue, Workflow or Durable Object binding is available to this Site. Cron is (the build already declared one); whether Sites activates Worker Cron triggers in production is unverified (as before).
+- **Environment:** Linux, Node 24.22.1 (official tarball, SHA-256 checked), Chromium 1243 via `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` with Playwright 1.62.1. WebKit cannot be downloaded here; it ran in CI's pinned Playwright container (Linux). Neither environment is evidence for the reviewer's Windows host.
+
+## Commits
+
+| Commit | Finding | Summary |
+| --- | --- | --- |
+| `f2e1e0b` | R12 | Ownership and completion decided inside writeLedger's commit transaction; trusted operation fence |
+| `555ecf2` | R07 | Durable job (migration 0017), execution grant, shared work module, background runner on Cron |
+| `2c7a34e` | R07 | Follow-up: the Worker entry must not export a constant (found by the browser preview) |
+| `adb059f` | R13 | Fixture date pinned; next-day control |
+| `690dabb` | R14 | Ordered teardown; persisted payment journey |
+| `571630f` | R14 | Follow-up: conditional reads forwarded without validators (found by CI WebKit) |
+
+Plus this documentation commit. For cherry-picking: R12 and R07 belong with #74/#65 after `740f82c` (R06/R07 claims); R13 with #68; R14 with the R01 commit `b99b8a3` (#64).
+
+## Closure matrix
+
+| # | Pri | Status | Correction | Regression evidence | Before | Residual |
+| --- | --- | --- | --- | --- | --- | --- |
+| R12 | P1 | **Corrected (reproduced and fixed)** | A successful claim issues an operation fence (a WeakSet-registered object; no request body, MCP argument or JSON value can be one). `writeLedger` takes the fence instead of the old `processing` flag, requires it with a scoped receipt save, adds "this attempt owns the running operation and its grant is live" to the guarded `sync_state` UPDATE that admits the whole write, and marks the operation stored in the same batch, conditional on that write. The route no longer checks or completes separately. All other checks unchanged; person saves unaffected | `receipt-commit-ownership.test.ts`: production process/ledger/upload routes on Miniflare D1/R2, the commit batch paused after every pre-write check (`helpers/workers-shim.ts`) so a real second request takes over exactly there. Takeover before commit (409, zero ledger/history/revision change, B stores the only proposal); current-owner control at the same pause; a person's edit wins; commit failure then retry; loss right after commit; overlapping requests make one provider call; forged fences refused. Unit: only claims issue fences | `r12-before.log`: superseded attempt got **200** and its proposal was stored; loss after commit left the proposal stored but the operation **failed** (claimable again) | A takeover after the lease still means both attempts reached the provider (documented) |
+| R07 | P1 | **Implemented and locally proven. Owner-accepted risk: hosted behaviour unverified** (7 Nov 2026; kill switch added) | See "Background receipt completion" in `docs/operations.md`. The operation row is the durable job (0017). The claim stores the request's identifiers and an execution grant (server-side session ID or trusted ChatGPT identity; 30 min; never a cookie or token). A per-minute Cron (`* * * * *`, plus every 15-minute maintenance run) resumes an attempt whose lease ran out without an outcome, once, with server-held credentials, rechecking source, photo version, membership, grant and credential kind before spending, and committing through R12's fence. Failed operations, persistence conflicts and refused commits are never retried; the client's "stalled" threshold covers the background window | `receipt-background.test.ts` (20 cases, production routes and runner on Miniflare D1/R2, mocked provider): cut-off reading completes with no browser request while its background inference is held long; reconnect gets 202, spends nothing; the late attempt writes nothing; duplicate runner deliveries plus a person's retry give one resume and one proposal; 11 revocation/credential cases before the attempt spend nothing and are not retried; 4 during it are not committed; failed readings never resumed; resumes bounded; connected readings need no runner. Scheduler, health and reading-status tests | `r07-before.log`: with R12 only, operation stays `running` and the draft `waiting` after the lease, no runner | **Hosted lifecycle unverified** (Sites Cron activation, a real long disconnect, iPhone/PWA). **Crash-window spend:** provider requests are `store: false`, so a call accepted for a cut-off attempt cannot be retrieved and the resume pays once more (at most once per operation). Removing it needs provider-side stored responses (owner privacy decision) |
+| R13 | P2 | **Corrected (reproduced and fixed)** | One fixture-day constant; every case pins the browser clock to midday on it (timers run). New control: the same bill on the next day saves with no warning. `lib/duplicates.ts` unchanged | `resilience.spec.ts` F-09 and the control 12/12 over six repeats | `r13-before.log`: F-09 failed 3/3 on 7 November | None known |
+| R14 | P2 | **Corrected; WebKit confirmation in CI** | `withFlow()`: mark closing (new routed requests aborted on purpose), drain in-flight handlers, close the page, then dispose the Worker; handler errors are not suppressed. The current-bundle test records the £3.75 payment through the real route and checks the persisted payment, unchanged expense, empty settlements, one revision and one POST 200. Conditional reads are forwarded without validators because Playwright cannot fulfil a 304 | Chromium with a real previous-main preview: 12/12 over three repeats; full suites below | `r14.log`: the reviewed spec passes 8/8 on Chromium; an evidence-only spec (`r14-mechanism.spec.ts.txt`) gets "Cannot use disposed instance" with the old order and none with the new. CI WebKit then caught the 304 defect in the new journey (`571630f`) | Windows WebKit not rerun |
+
+## Verification on the final tree
+
+Linux, Node 24.22.1, 7 November 2026. Logs: `correction-evidence/second-pass-*.log`.
+
+| Check | Result |
+| --- | --- |
+| Units (`npm test`) | **1,475 / 1,475 passed**, 0 skipped (baseline here 1,442) |
+| Types (`tsc --noEmit`) | Passed |
+| Lint | 0 errors, 4 warnings (the same pre-existing four; none in changed files) |
+| Production build | Passed |
+| Chromium, full suite, local, with `TRIPTAB_PREVIOUS_URL` = separately built main `01be219` | **243 / 243 passed, 0 skipped** (at `690dabb`; `571630f` changes only the forwarding helper, rerun 12/12) |
+| CI (GitHub Actions run 42368152067, Playwright 1.62.1 container, Linux) at `c6751bc` | All checks green: quality, regression, **WebKit 240 passed / 3 skipped / 0 failed**, Chromium 240 passed / 3 skipped (the skips are the previous-bundle tests, which need a main preview; they passed locally above). Earlier, at `690dabb`, WebKit was 239 passed / 1 failed (the 304 defect, fixed in `571630f`) |
+
+Financial outcomes required to be preserved are asserted by unchanged, passing tests: BOGOF 300/300/150 → 450 and shares 375/75 or 150/300 (`adjustments`, `receipt-ai-promotions`, `adjustment-ownership`, `browser/discounts`, `browser/cached-client`); fixed £2 then 50% → £4 (`adjustment-preview`, `browser/discounts`); human allocations surviving native and MCP rescans (`adjustment-ownership`, `mcp`); old rules unchanged (`model`, `financial-format`); cached clients fail closed (`financial-format`, `browser/cached-client`); £20 settled with £10 then deleted reopens £10 and £30 reopens £5 (`settlement-impact`). Account-state privacy, unsaved adjustments, archived review, line-order merge and the no-op membership trigger keep their R02/R04/R09/R10/R11 tests, all passing. F-12 and F-19 stay deferred.
+
+**WebKit investigation.** Not possible on the reviewer's host from here. In CI WebKit at `690dabb` and again at `c6751bc`, every receipt-layout, empty-bill close, R03 save and reconciliation-exception case passed; the only failure was the new journey's 304. The intermittent `expense-layout 1024×768 receipt` failure (run 42310528517) did not recur in this pass's runs and is not root-caused; it stays a gate. No retries, skips or weakened assertions were added.
+
+## Owner risk acceptance: R07 without the hosted test (7 November 2026)
+
+**Decision.** On 7 November 2026 the repository owner, in the Claude Code session that produced this branch, chose to proceed without the hosted R07 verification and asked for a kill switch and this record. This supersedes the brief's instruction to keep R07 blocked, and only that instruction. It is a risk acceptance, **not** a verification: nothing below has been observed on Sites. The decision was given in that session; it has no separate signature, and the owner may countersign it in review.
+
+**What is accepted as unverified on the hosted Site:**
+- whether Sites activates the `* * * * *` and `*/15 * * * *` Cron triggers;
+- whether a reading cut off after a real disconnect is resumed and stored, including the iPhone Safari and PWA lock-and-resume cases;
+- whether the execution grant (session ID or trusted ChatGPT identity) and server-held credentials behave on Sites as they do in Miniflare;
+- the 30-second post-disconnect limit as it applies on Sites (taken from Cloudflare's documentation source, not observed).
+
+**Why the downside is bounded (from the code and local tests, not hosted observation):**
+- If the triggers never run, interrupted readings behave as in the reviewed candidate: they wait for the person to read again. Nothing breaks and nothing is spent.
+- If grant or credential checks behave differently on Sites, the background attempt fails before the provider call or is refused inside the commit: no ledger write.
+- Extra spend is at most one provider call per interrupted operation (`MAX_AUTO_RESUMES = 1`), within the existing processing budget.
+- R12's commit fencing does not depend on Cron and is fully covered by local tests.
+
+**Conditions that still apply:**
+1. Migration 0017 ships with 0014 to 0016 (and the production-sized copy gate stays open); without it receipt processing fails and `/healthz` is unavailable.
+2. The kill switch `RECEIPT_BACKGROUND_RESUME=off` (runbook: "Background receipt completion") is the response to any of the warning signs listed there.
+3. The rule against rolling back below the financial-format boundary is unchanged.
+4. The hosted procedure stays recommended as a post-release check; the shortest useful version is the per-minute trigger appearing in Workers logs plus one reading with the browser closed showing `native-processing-resumed` then `native-proposal-stored`.
+
+**Kill-switch evidence (local):** `receipt-background.test.ts` adds two cases: with the variable `off`, `OFF`, `false`, `0` or `disabled` the runner reads, writes and spends nothing, leaves the operation exactly as the platform left it, and a person's own retry still stores one proposal; unset, empty or `on` keeps it on, and typos turn it off. Units 1,477/1,477. A build with the variable set carries it into `dist/server/wrangler.json`; the default build does not.
+
+## Migration, configuration and rollback
+
+- **0017** adds nullable columns and an index to `receipt_operations`; no data change. Apply after 0014 to 0016 on the production-sized copy (gate below). `/healthz` requires it.
+- **Cron:** the build now declares `*/15 * * * *` and `* * * * *`. Sites must activate both; with only the 15-minute trigger, interrupted readings finish up to 15 minutes later.
+- **No new secret.** The runner uses the existing `RECEIPT_AI_TOKEN_KEY` and stored plan connections. One optional variable: `RECEIPT_BACKGROUND_RESUME` (the kill switch; unset means on).
+- **Rollback:** code below this pass with 0017 applied is schema-safe (columns ignored) but loses R12's atomic fence and R07's resume. The earlier rule stands: never roll back below the financial-format boundary once scoped records exist.
+
+## Release gates still open
+
+1. Original-document reconciliation. **Partly done (7 November 2026):** the owner supplied the November audit, and D01 to D08 are now recorded in `PROGRAMME.md` (recommended options adopted; D05's missing creator was added the same day, from history, `correction-evidence/d05.log`). The finding-by-finding and acceptance-test reconciliation is in [`AUDIT-RECONCILIATION.md`](AUDIT-RECONCILIATION.md): no conflict with the audit's expectations and no financial outcome affected, with gaps listed there; gaps 1 to 5 were addressed the same day (ready notification, restore-path tests, Activity date and bill filters, two-account acceptance runs for 4, 7, 8 and 9, and an inbox name field), see its update section. Still open: comparing these reproductions with the reviewer's `recheck-evidence`.
+2. Independent review of R01 to R14 and every implementation PR.
+3. Production-representative D1 migration and restore through 0014 to 0017; the encrypted POSIX recovery drill; Sites migration atomicity and all-traffic rollout.
+4. **R07 hosted: accepted by the owner without verification (see above).** Still recommended after release: the shortest check (per-minute trigger in the logs, one closed-browser reading resumed and stored). Still open as a decision: provider-side stored responses, if the crash-window spend is not acceptable.
+5. Authorized live AI evaluation (F-10); physical devices.
+6. WebKit: the intermittent CI receipt-layout case and the reviewer's Windows-host failures.
+
+---
+
 # Corrections to the independent release review (R01 to R11)
 
 **Status: corrected candidate for independent review. Not approved for release.** No merge, deployment, production migration, production data change or paid model call was made. Merging and release stay separate owner actions, and the gates at the end remain open.

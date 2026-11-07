@@ -12,7 +12,8 @@ export async function GET() {
       ai.id, ai.user_id, ai.provider, ai.api_key_encrypted, pc.credentials, pt.transaction_data, lp.user_id, lp.trip_id, lp.data, lp.revision
       ,ac.email_verified_at,et.purpose,ta.archived_at,rh.until,os.session_id,os.user_agent,
       pr.deleted_at,pr.ui_language,np.scope,np.delivery,np.reminders,nd.updates,sr.sent_at,rp.receipt_id,
-      ro.operation_key,ro.status,ro.attempt_id,ro.lease_until
+      ro.operation_key,ro.status,ro.attempt_id,ro.lease_until,
+      ro.request_json,ro.grant_kind,ro.grant_ref,ro.grant_expires_at,ro.provider,ro.provider_started_at,ro.auto_resumes
       FROM auth_credentials ac CROSS JOIN auth_email_tokens et CROSS JOIN trip_archives ta
       CROSS JOIN receipt_restore_holds rh CROSS JOIN auth_sessions os CROSS JOIN profiles pr
       CROSS JOIN notification_preferences np CROSS JOIN notification_digests nd
@@ -32,7 +33,9 @@ export async function GET() {
       'activity_events_expense_after_source_draft_idx', 'current_receipt_links_expense_idx',
       'current_receipt_links_source_idx', 'current_receipt_links_receipt_idx',
       'receipt_history_links_entity_idx', 'receipt_history_links_expense_idx',
-      'receipt_history_links_source_idx', 'receipt_history_links_receipt_idx'];
+      'receipt_history_links_source_idx', 'receipt_history_links_receipt_idx',
+      // R07 (0017): the background runner's scan of interrupted readings.
+      'receipt_operations_resume_idx'];
     const indexes = await db().prepare(`SELECT name FROM sqlite_master WHERE type = 'index' AND name IN (${receiptHistoryIndexes.map(() => '?').join(',')})`)
       .bind(...receiptHistoryIndexes).all<{ name: string }>();
     if (indexes.results.length !== receiptHistoryIndexes.length) throw Error('Missing receipt history migration');

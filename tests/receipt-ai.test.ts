@@ -1029,11 +1029,21 @@ function reset() {
 const budgetDatabase = new DatabaseSync(':memory:');
 budgetDatabase.exec('CREATE TABLE auth_rate_limits(key_hash TEXT PRIMARY KEY,window_start INTEGER NOT NULL,attempts INTEGER NOT NULL)');
 // R06: the production claim table, from its migration.
-budgetDatabase.exec((await readFile(new URL('../drizzle/0016_receipt_operations.sql', import.meta.url), 'utf8')).replaceAll('--> statement-breakpoint', ''));
+for (const migration of ['0016_receipt_operations.sql', '0017_receipt_operation_jobs.sql'])
+  budgetDatabase.exec((await readFile(new URL('../drizzle/' + migration, import.meta.url), 'utf8')).replaceAll('--> statement-breakpoint', ''));
+// R07: the execution-grant tables the operation fence reads, with the owner's live session.
+budgetDatabase.exec(`CREATE TABLE profiles(id TEXT PRIMARY KEY, deleted_at TEXT NOT NULL DEFAULT '');
+  CREATE TABLE auth_sessions(token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL, expires_at TEXT NOT NULL, session_id TEXT NOT NULL DEFAULT '');
+  CREATE TABLE auth_links(oai_user_id TEXT PRIMARY KEY, user_id TEXT NOT NULL);
+  CREATE TABLE auth_credentials(user_id TEXT PRIMARY KEY);`);
+budgetDatabase.prepare('INSERT INTO profiles(id) VALUES (?)').run(owner);
+budgetDatabase.prepare("INSERT INTO auth_sessions(token_hash,user_id,expires_at,session_id) VALUES ('hash',?,'9999-12-31T00:00:00.000Z','route-session')").run(owner);
 class BoundaryRequestError extends Error { constructor(message: string, readonly status = 400) { super(message); } }
+class BoundarySupersededError extends BoundaryRequestError { constructor() { super('Another reading of this receipt took over. Refresh to see its result.', 409); } }
+class BoundaryUnauthorizedError extends BoundaryRequestError { constructor() { super('Your sign-in changed before this reading finished, so nothing was saved.', 409); } }
 class BoundaryAccessError extends Error { constructor(message: string, readonly status = 403, readonly code = 'credential_denied') { super(message); } }
 const store = {
-  RequestError: BoundaryRequestError,
+  RequestError: BoundaryRequestError, OperationSupersededError: BoundarySupersededError, OperationUnauthorizedError: BoundaryUnauthorizedError,
   sameOrigin(request: Request) { if (request.headers.get('origin') !== new URL(request.url).origin) throw new BoundaryRequestError('Invalid origin', 403); },
   async ensureProfile() { state.profileChecks++; return { id: state.actorChanged && state.profileChecks > 1 ? 'changed-account' : state.profileId }; },
   async readBoundedBody(request: Request, maximum: number) { const bytes = new Uint8Array(await request.arrayBuffer()); if (bytes.length > maximum) throw new BoundaryRequestError('Too large', 413); return bytes; },
@@ -1047,14 +1057,20 @@ const store = {
   db() { return { prepare(sql: string) { return { bind(...values: (string | number)[]) { return {
     async first() { return budgetDatabase.prepare(sql).get(...values) ?? null; }, async run() { return budgetDatabase.prepare(sql).run(...values); },
   }; } }; } }; },
-  async writeLedger(actor: string, data: Ledger, revision: number, options: { source: string; tripSnapshot?: Trip }) {
+  async writeLedger(actor: string, data: Ledger, revision: number, options: { source: string; tripSnapshot?: Trip; operation?: { key: string; attemptId: string } }) {
     assert.equal(actor, owner); state.writeAttempts++; state.beforeWrite?.();
+    // R12 boundary model: production decides ownership and records completion
+    // inside the commit transaction (tests/receipt-commit-ownership.test.ts
+    // exercises that on D1). This single-threaded stand-in is atomic likewise.
+    const owns = (fence: { key: string; attemptId: string }) => !!budgetDatabase.prepare("SELECT 1 FROM receipt_operations WHERE operation_key=? AND attempt_id=? AND status='running'").get(fence.key, fence.attemptId);
+    if (options.operation && !owns(options.operation)) throw new BoundarySupersededError();
     if (options.tripSnapshot) {
       const current = state.data.trips.find(trip => trip.id === options.tripSnapshot!.id);
       if (!state.metadataAllowed || state.actorChanged || !state.imagePresent || state.imageVersion !== 'original-image' || JSON.stringify(current) !== JSON.stringify(options.tripSnapshot)) throw new Error('CONFLICT');
       data = { trips: state.data.trips.map(trip => data.trips.find(value => value.id === trip.id) ?? trip) };
     } else if (revision !== state.revision) throw new Error('CONFLICT');
     state.data = validateLedger(data, { previous: state.data }); state.revision++; state.writes++; state.savedSources.push(options.source);
+    if (options.operation) budgetDatabase.prepare("UPDATE receipt_operations SET status='stored' WHERE operation_key=? AND attempt_id=?").run(options.operation.key, options.operation.attemptId);
     return { data: structuredClone(state.data), revision: state.revision };
   },
   failure(error: unknown) { return Response.json({ error: error instanceof Error ? error.message : 'Failure' }, { status: error instanceof BoundaryRequestError ? error.status : error instanceof Error && error.message === 'CONFLICT' ? 409 : 400 }); },
@@ -1068,6 +1084,15 @@ Object.defineProperty(globalThis, Symbol.for('triptab.receipt-ai-route-store'), 
 Object.defineProperty(globalThis, Symbol.for('triptab.receipt-ai-route-access'), { value: credentialAccess, configurable: true });
 const storeUrl = dataUrl(`const store=globalThis[Symbol.for('triptab.receipt-ai-route-store')];\n${Object.keys(store).map(name => `export const ${name}=store.${name};`).join('\n')}`);
 const accessUrl = dataUrl(`const access=globalThis[Symbol.for('triptab.receipt-ai-route-access')];\n${Object.keys(credentialAccess).map(name => `export const ${name}=access.${name};`).join('\n')}`);
+const languageUrl = dataUrl('export const readTripLanguagePreferences=async()=>({preferences:{readingLanguage:"en"},revision:0});');
+// The operation's work module (shared by the route and the background runner), on the same boundaries.
+const workCode = transpileWithSharedImports(await readFile(new URL('../lib/receipt-operation-work.ts', import.meta.url), 'utf8'), { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
+  .replace("'./store'", JSON.stringify(storeUrl)).replace("'./receipt-ai-access'", JSON.stringify(accessUrl))
+  .replace("'./receipt-ai'", JSON.stringify(new URL('../lib/receipt-ai.ts', import.meta.url).href))
+  .replace("'./receipt-assistant'", JSON.stringify(new URL('../lib/receipt-assistant.ts', import.meta.url).href))
+  .replace("'./trip-language-preferences'", JSON.stringify(languageUrl))
+  .replace("'./notifications'", JSON.stringify(dataUrl("export const notifyMember=async()=>{};")));
+const grantUrl = dataUrl("export const executionGrant=async()=>({kind:'session',ref:'route-session'});");
 const routeSource = await readFile(new URL('../app/api/receipt/process/route.ts', import.meta.url), 'utf8');
 const routeCode = transpileWithSharedImports(routeSource, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
   .replace("'cloudflare:workers'", JSON.stringify(dataUrl("export const env={}; export const waitUntil=promise=>{(globalThis[Symbol.for('triptab.wait-until')]??=[]).push(promise);};")))
@@ -1075,7 +1100,7 @@ const routeCode = transpileWithSharedImports(routeSource, { compilerOptions: { m
   .replace("'@/lib/receipt-ai'", JSON.stringify(new URL('../lib/receipt-ai.ts', import.meta.url).href))
   .replace("'@/lib/receipt-assistant'", JSON.stringify(new URL('../lib/receipt-assistant.ts', import.meta.url).href))
   .replace("'@/lib/receipt-operations'", JSON.stringify(new URL('../lib/receipt-operations.ts', import.meta.url).href))
-  .replace("'@/lib/trip-language-preferences'", JSON.stringify(dataUrl('export const readTripLanguagePreferences=async()=>({preferences:{readingLanguage:"en"},revision:0});')))
+  .replace("'@/lib/receipt-operation-work'", JSON.stringify(dataUrl(workCode))).replace("'@/lib/auth'", JSON.stringify(grantUrl))
   .replace("'zod'", JSON.stringify(import.meta.resolve('zod')));
 const route = await import(dataUrl(routeCode)) as { POST(request: Request): Promise<Response> };
 const requestBody = { tripId: trip.id, draftId: draft.id, receiptId: 'photo' };
@@ -1482,7 +1507,12 @@ async function heldRequest() {
   const response = route.POST(declaredRequest('https://triptab.test/api/receipt/process', { method: 'POST',
     headers: { origin: 'https://triptab.test', 'content-type': 'application/json' }, body: JSON.stringify(body) }));
   globalThis.fetch = held as typeof fetch;
-  while (!state.providerCalls) await new Promise(resolve => setTimeout(resolve, 1));
+  const started = Date.now();
+  while (!state.providerCalls) {
+    // Fail fast with the route's answer instead of waiting forever if the request never reaches the provider.
+    if (Date.now() - started > 10_000) { globalThis.fetch = originalFetch; throw new Error(`The held request never reached the provider: ${(await Promise.race([response.then(value => value.text()), Promise.resolve('still pending')]))}`); }
+    await new Promise(resolve => setTimeout(resolve, 1));
+  }
   globalThis.fetch = originalFetch;
   return { response, release, body };
 }

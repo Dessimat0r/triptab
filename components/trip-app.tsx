@@ -326,6 +326,7 @@ export default function Home({ children }: { children: ReactNode }) {
     [statement, setStatement] = useState(""),
     [savedNotice, setSavedNotice] = useState<{ title: string; at: number } | null>(null),
     [undoNotice, setUndoNotice] = useState<UndoNotice | null>(null),
+    [expenseCreator, setExpenseCreator] = useState<{ accountId: string; tripId: string; expenseId: string; name: string | null } | null>(null),
     [deletedBill, setDeletedBill] = useState<{ tripId: string; name: string; at: number; accountId: string } | null>(null),
     [archivedReview, setArchivedReview] = useState<{ tripId: string; expenseId: string; accountId: string } | null>(null),
     [summaryOpen, setSummaryOpen] = useState(false),
@@ -1524,11 +1525,12 @@ export default function Home({ children }: { children: ReactNode }) {
       const body = await response.json() as { error?: string; receiptId: string };
       if (signal?.aborted || !isReceiptSessionCurrent(session, tripId, accountId, false)) return false;
       if (!response.ok) throw Error(body.error || "Unable to upload this receipt.");
-      const draft: Draft = { id: uid(), currency: trip.currency, title: file.name, source: "manual", receiptId: body.receiptId,
+      const typedName = context.name?.trim().slice(0, 200);
+      const draft: Draft = { id: uid(), currency: trip.currency, title: typedName || file.name, source: "manual", receiptId: body.receiptId,
         items: [], tax: 0, tip: 0, discount: 0,
         location: context.location, locationHint: context.locationHint,
         ...(context.notes?.trim() ? { conversation: [{ id: uid(), role: "user" as const, text: context.notes.trim(), createdAt: new Date().toISOString() }] } : {}),
-        fieldSources: { title: "default", currency: "default", date: "default", time: "default", timezone: "default", payer: "default", tax: "default", tip: "default", discount: "default", ...(context.location ? { location: "user" as const } : {}) },
+        fieldSources: { title: typedName ? "user" : "default", currency: "default", date: "default", time: "default", timezone: "default", payer: "default", tax: "default", tip: "default", discount: "default", ...(context.location ? { location: "user" as const } : {}) },
         payer: trip.members.find(member => member.userId === accountId)?.id || trip.members[0].id, status: "waiting" };
       if (signal?.aborted || (onSaving && !onSaving())) return false;
       if (!await updateTrip({ ...trip, drafts: [...trip.drafts, draft] })) return false;
@@ -1819,6 +1821,22 @@ export default function Home({ children }: { children: ReactNode }) {
     setCaptureNotes("");
     setEditing({ ...expense, adjustmentAllocation: CURRENT_CALCULATION_RULE, expenseId: undefined });
   }
+  // D05: who added the saved expense being edited, from the trip's history.
+  // Bound to the account, trip and expense it was read for (R02).
+  const editingSavedId = editing && trip?.expenses.some(value => value.id === editing.id) ? editing.id : undefined;
+  useEffect(() => {
+    const accountId = profile?.id, tripId = trip?.id, expenseId = editingSavedId;
+    if (!accountId || !tripId || !expenseId) return;
+    const controller = new AbortController();
+    void fetch(`/api/expense-creator?${new URLSearchParams({ tripId, expenseId })}`, { cache: "no-store", signal: controller.signal })
+      .then(response => response.ok ? response.json() as Promise<{ accountId?: string; tripId?: string; expenseId?: string; name?: string | null }> : null)
+      .then(value => {
+        if (!value || value.accountId !== accountId || value.tripId !== tripId || value.expenseId !== expenseId) return;
+        setExpenseCreator({ accountId, tripId, expenseId, name: typeof value.name === "string" ? value.name : null });
+      })
+      .catch(() => { /* The line is informational; History still names the author. */ });
+    return () => controller.abort();
+  }, [profile?.id, trip?.id, editingSavedId]);
   // F-18: keep a new manual expense in this browser until it is saved or
   // closed, so a killed app or tab can offer to resume it. Receipt entries
   // already have a saved draft; existing expenses are on the server.
@@ -2315,7 +2333,16 @@ export default function Home({ children }: { children: ReactNode }) {
     if (isBill(trip) && section !== "history") return <BillView trip={trip} busy={saving || loading} calculationError={calculationError} due={due} onStatement={setStatement} onPayment={suggestion => void openPayment(suggestion)} onArchive={archiveBill}
       receipts={<>
         {trip.expenses.length >= 3 && breakdown && <SpendingBreakdownPanel breakdown={breakdown} members={trip.members} currency={trip.currency} category={expenseFilter.category} onCategory={category => setExpenseFilter({ ...expenseFilter, category })} filtered={expenseFilterActive(expenseFilter)} />}
-        <div className="panel expense-list">{trip.expenses.length ? <PagedList {...page("expenses", 20)} noun={uiText("expenses")} items={trip.expenses} itemKey={e => e.id} renderItem={renderExpenseRow} /> : <p className="empty">{uiText("No receipts yet")}</p>}</div>
+        {/* F-05: bills get the same search and filters as holidays; the breakdown's categories filter this list too. */}
+        {trip.expenses.length > 1 && <ExpenseFilterBar filter={expenseFilter} onChange={setExpenseFilter} members={trip.members} shown={visibleExpenses.length} total={trip.expenses.length} />}
+        <div className="panel expense-list">{trip.expenses.length && !visibleExpenses.length ? (
+          <div className="empty">
+            <Receipt size={30} />
+            <h3>{uiText("No matching expenses")}</h3>
+            <p>{uiText("Try another search, or clear the filters to see all ")}{trip.expenses.length}{uiText(" expenses.")}</p>
+            <button className="quiet" onClick={() => setExpenseFilter({ ...NO_EXPENSE_FILTER, sort: expenseFilter.sort })}>{uiText("Clear filters")}</button>
+          </div>
+        ) : trip.expenses.length ? <PagedList {...page(expenseFilterActive(expenseFilter) || expenseFilter.sort !== "recent" ? `expenses:${canonicalJson(expenseFilter)}` : "expenses", 20)} noun={uiText("expenses")} items={visibleExpenses} itemKey={e => e.id} renderItem={renderExpenseRow} /> : <p className="empty">{uiText("No receipts yet")}</p>}</div>
         {trip.drafts.length > 0 && <div className="panel"><PagedList {...page("drafts", 10)} noun={uiText("receipt drafts")} items={[...trip.drafts].reverse()} itemKey={d => d.id} renderItem={renderDraftRow} /></div>}
       </>}
       payments={trip.payments.length > 0 && <><h2>{uiText("Recorded payments")}</h2><div className="panel"><PagedList {...page("payments", 5)} noun={uiText("payments")} items={[...trip.payments].reverse()} itemKey={p => p.id} renderItem={renderPaymentRow} /></div></>} />;
@@ -3614,6 +3641,14 @@ export default function Home({ children }: { children: ReactNode }) {
               </section>}
               {!editorConflict && !!mergeNotice?.length && <p className="notification-status merge-notice" role="status">{uiText("Another traveller changed this expense while you were editing. Their changes were added to your edits: ")}{mergeNotice.map(label => uiText(label)).join(", ")}</p>}
               {undoNotice && undoNotice.tripId === trip.id && undoNotice.accountId === profile?.id && undoBanner(undoNotice)}
+              {(() => {
+                // D05: any member may edit or delete, so say who added a saved expense and who paid.
+                const saved = trip.expenses.find(expense => expense.id === editing.id);
+                const creator = saved && expenseCreator?.accountId === profile?.id && expenseCreator?.tripId === trip.id && expenseCreator?.expenseId === saved.id
+                  ? expenseCreator.name : undefined;
+                const payer = saved ? trip.members.find(member => member.id === saved.payer)?.name : undefined;
+                return creator && payer ? <p className="footnote expense-provenance">{uiText("Added by {creator} · paid by {payer}", { creator, payer })}</p> : null;
+              })()}
               <div className="editor-footer" ref={editorFooterRef}>
                 <div className="expense-save-announcement sr-only" role="alert" aria-atomic="true">{saveAnnouncement && <span key={saveAnnouncement.id}>{saveAnnouncement.message}</span>}</div>
                 <SaveChecklist key={editing.id} blockers={visibleBlockers} attempted={saveAttempted}

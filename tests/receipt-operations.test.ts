@@ -17,7 +17,8 @@ async function shared() {
   const folder = await mkdtemp(path.join(tmpdir(), 'triptab-operations-'));
   const file = path.join(folder, 'd1.sqlite');
   const setup = new DatabaseSync(file);
-  setup.exec((await readFile(new URL('../drizzle/0016_receipt_operations.sql', import.meta.url), 'utf8')).replaceAll('--> statement-breakpoint', ''));
+  for (const migration of ['0016_receipt_operations.sql', '0017_receipt_operation_jobs.sql'])
+    setup.exec((await readFile(new URL('../drizzle/' + migration, import.meta.url), 'utf8')).replaceAll('--> statement-breakpoint', ''));
   const instances = [new DatabaseSync(file), new DatabaseSync(file), new DatabaseSync(file)];
   return { setup, instances, close: async () => { for (const db of [setup, ...instances]) db.close(); await rm(folder, { recursive: true, force: true }); } };
 }
@@ -90,4 +91,18 @@ test('R06: the claim statements run on Miniflare D1 with every migration applied
     assert.equal(await finishOperation(flow.db as never, owner.key, owner.attemptId, 'stored'), true);
     assert.equal((await claimOperation(flow.db as never, source, 'carol')).owned, false);
   } finally { await flow.dispose(); }
+});
+
+test('R12: only a successful claim issues a commit fence; copies and data are not fences', async () => {
+  const { instances: [one], close } = await shared();
+  try {
+    const { isOperationFence, operationCommitSql, operationFence } = await import('../lib/receipt-operations');
+    const claim = await claimOperation(d1(one), source, 'alice');
+    assert(claim.owned);
+    assert.equal(isOperationFence(operationFence(claim)), true);
+    for (const value of [{ key: claim.key, attemptId: claim.attemptId }, JSON.parse(JSON.stringify(claim.fence)), { ...claim.fence }, null, 'processing'])
+      assert.equal(isOperationFence(value), false);
+    assert.throws(() => operationCommitSql({ key: claim.key, attemptId: claim.attemptId }, 'alice'), /Untrusted receipt operation/);
+    assert.throws(() => operationFence({ ...claim, fence: { key: claim.key, attemptId: claim.attemptId } }), /Not an owned receipt operation/);
+  } finally { await close(); }
 });

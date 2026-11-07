@@ -4036,5 +4036,11 @@
     "Puedes restaurar una cuenta eliminada y sus fotos de recibos durante 30 días; después se elimina definitivamente. Las cuentas que otra cuenta de usuario puede abrir deben archivarse.",
     "Vous pouvez restaurer une note supprimée et ses photos de reçus pendant 30 jours ; ensuite, elle est supprimée définitivement. Les notes qu’un autre compte peut ouvrir doivent être archivées.",
     "Du kannst eine gelöschte Rechnung und ihre Belegfotos 30 Tage lang wiederherstellen; danach wird sie endgültig entfernt. Rechnungen, die ein anderes Konto öffnen kann, müssen stattdessen archiviert werden."
+  ],
+  [
+    "Added by {creator} · paid by {payer}",
+    "Añadido por {creator} · pagado por {payer}",
+    "Ajouté par {creator} · payé par {payer}",
+    "Hinzugefügt von {creator} · bezahlt von {payer}"
   ]
 ]

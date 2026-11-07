@@ -1,0 +1,22 @@
+# R15/R16 before: tests/receipt-grant-revocation.test.ts against the reviewed head 99e4437 (truth-table case omitted: it imports the new predicate). Node 24.22.1, Linux, Miniflare D1/R2, mocked provider.
+✖ R15: unlinking ChatGPT on a legacy account (profile ID = provider ID, password, self-link) revokes its background grant before any spend (1633.520316ms)
+✔ R15: unlinking while the browser's own reading is still at the provider means its result is not saved (1280.201024ms)
+✔ R15 control: separate profile and provider IDs, unlinked: refused the same way (1343.036961ms)
+✔ R15 positive controls: a legitimate unlinked legacy account and a self-linked legacy account still finish in the background (1481.68662ms)
+✔ R15: a live TripTab session takes precedence over provider headers when the grant is made (1313.946834ms)
+✖ R15: remapping the provider identity to another account, or deleting the account, revokes the grant (1271.149263ms)
+✖ R16: a session that expires while the commit is pending is expired at the commit: 409 and nothing written (4458.680071ms)
+✖ R16: a grant that expires after inference, while the commit is pending, is expired at the commit: 409 and nothing written (4382.699261ms)
+✔ R16 controls at the same pause: an unexpired owner commits; a removed grant does not (2336.504229ms)
+ℹ tests 9
+ℹ pass 5
+ℹ fail 4
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+    actual: [ 1, 1, 0 ],
+    expected: [ 1, 0, 1 ],
+  AssertionError [ERR_ASSERTION]: no further provider call
+    actual: 2,
+    expected: 1,
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+    actual: 200,
+    expected: 409,

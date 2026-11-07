@@ -2,6 +2,7 @@ import { encodeBase64url as base64url, decodeBase64url, sha256Hex, encodeHex as 
 // Authentication is independent of ChatGPT. Provider headers are supplied by the
 // Sites gateway; browser sessions are opaque tokens and are stored only hashed.
 import { accountAuditStatement } from './audit';
+import { DB_NOW_ISO, providerAuthenticatesAsSql } from './receipt-operations';
 import { emailLink, passwordResetEmail, verificationEmail, type Mailer } from './email';
 import { isUiLanguage } from './ui-language';
 const SESSION_LIFETIME = 30 * 24 * 60 * 60 * 1000;
@@ -114,6 +115,32 @@ export async function sessionIdentity(request: Request, database: D1Database): P
   // Session-only callers cannot fall back to provider headers or create a
   // profile. They share precedence rules without reading account flags.
   return (await authSnapshot(request, database, null, {}, false))?.identity ?? null;
+}
+/**
+ * R07: the execution grant for work done on this person's behalf after their
+ * request ends. It names the server-side session that authenticated the
+ * request (its stable session ID, never the cookie, token or token hash), or
+ * the trusted ChatGPT identity when no TripTab session is in use. Background
+ * work and its commit stop as soon as that session is signed out, expires or
+ * is revoked, the ChatGPT link changes, or the account is deleted. Precedence
+ * matches resolveIdentity: a live session wins over provider headers.
+ */
+export async function executionGrant(request: Request, database: D1Database, userId: string): Promise<{ kind: 'session' | 'chatgpt'; ref: string } | null> {
+  const token = sessionToken(request);
+  if (token) {
+    const row = await database.prepare(`SELECT s.session_id FROM auth_sessions s JOIN profiles p ON p.id=s.user_id AND p.deleted_at=''
+      WHERE s.token_hash=? AND s.user_id=? AND s.expires_at>${DB_NOW_ISO} AND s.session_id<>''`)
+      .bind(await hashToken(token), userId).first<{ session_id: string }>();
+    if (row) return { kind: 'session', ref: row.session_id };
+  }
+  const signedOut = (request.headers.get('cookie') || '').split(';').some(value => value.trim() === `${SIGNED_OUT_COOKIE}=1`);
+  const provider = signedOut ? null : trustedChatGPTIdentity(request);
+  if (!provider) return null;
+  // R15: the same canonical rule that validates the grant later, so a grant is
+  // never created for an identity that would not authenticate as this account.
+  const linked = await database.prepare(`SELECT ${providerAuthenticatesAsSql('identity.provider_id', 'identity.account_id')} AS ok
+    FROM (SELECT ? AS provider_id, ? AS account_id) identity`).bind(provider.id, userId).first<{ ok: number }>();
+  return linked?.ok ? { kind: 'chatgpt', ref: provider.id } : null;
 }
 export async function resolveIdentity(request: Request, options: { allowSession?: boolean } = {}, database: D1Database): Promise<AuthIdentity> {
   const snapshot = await authSnapshot(request, database, trustedChatGPTIdentity(request), options, false);

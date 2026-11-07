@@ -1,0 +1,26 @@
+// Evidence-only Playwright spec behind r14.log (2). Copy into tests/browser/ as a .spec.ts to rerun.
+import { expect, test } from '@playwright/test';
+import { createReceiptFlowWorker } from '../helpers/receipt-flow-worker';
+// A page request is in flight when teardown starts.
+for (const order of ['old: dispose while the page is active', 'new: stop, drain, close page, dispose'] as const) test(order, async ({ page }) => {
+  const flow = await createReceiptFlowWorker();
+  const errors: string[] = []; const inflight = new Set<Promise<unknown>>(); let closing = false;
+  let arrived!: () => void; const reached = new Promise<void>(resolve => { arrived = resolve; });
+  await page.route('**/api/**', async route => {
+    if (closing) return route.abort('aborted');
+    const task = (async () => {
+      arrived(); await new Promise(resolve => setTimeout(resolve, 300)); // the Worker is still answering
+      try { const response = await flow.worker.dispatchFetch(flow.origin + '/api/ledger', { headers: { cookie: `tt_session=${flow.sessionToken}` } } as never);
+        await route.fulfill({ status: response.status, body: Buffer.from(await response.arrayBuffer()) }); }
+      catch (error) { errors.push(String((error as Error).message).slice(0, 120)); await route.abort().catch(() => {}); }
+    })();
+    inflight.add(task); await task; inflight.delete(task);
+  });
+  await page.goto('/expenses');
+  await page.evaluate(() => { void fetch('/api/ledger'); });
+  await reached;
+  if (order.startsWith('old')) { await flow.dispose(); await Promise.allSettled([...inflight]); }
+  else { closing = true; while (inflight.size) await Promise.allSettled([...inflight]); await page.close(); await flow.dispose(); }
+  console.log(`${order}: handler errors = ${JSON.stringify(errors)}`);
+  expect(errors).toEqual([]);
+});
