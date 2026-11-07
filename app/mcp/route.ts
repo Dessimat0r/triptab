@@ -4,7 +4,7 @@ import { receiptExpenseIconSchema, receiptExpenseIconJsonSchema, nextSuggestedIc
 import { languageSchema, receiptLanguageSchema, itemTranslationsSchema, RECEIPT_LANGUAGES } from '@/lib/receipt-languages';
 import { readTripLanguagePreferences } from '@/lib/trip-language-preferences';
 import { readLedger, writeLedger, bucket, receiptKey, receiptAccess, ensureProfile, db } from '@/lib/store';
-import { hashToken, resolveIdentity } from '@/lib/auth';
+import { hashToken, resolveIdentity, identityWriteAuthorization, type RequestWriteAuthorization } from '@/lib/auth';
 import { notifyReceiptReply } from '@/lib/notifications';
 import { draftSchema, tripSchema, draftUnitsSchema, receiptQuantitySchema, CURRENCIES, type Currency, type Trip, type Ledger, type Draft, type Expense } from '@/lib/model';
 import { receiptMemorySchema, type ReceiptMemory } from '@/lib/receipt-context';
@@ -550,10 +550,12 @@ export async function POST(request: Request) {
     // browser cookie and an authenticated provider header are both present.
     let user: string;
     let providerId: string;
+    let authorization: RequestWriteAuthorization;
     try {
       const identity = await resolveIdentity(request, { allowSession: false }, db());
       user = identity.id;
       providerId = identity.chatgptId ?? identity.id;
+      authorization = identityWriteAuthorization(identity);
     }
     catch { throw new RpcError(-32001, 'Connect ChatGPT to use TripTab’s AI tools. Manual features work with your TripTab account.', 401); }
     await consumeToolBudget(providerId);
@@ -587,7 +589,7 @@ export async function POST(request: Request) {
         } else {
           if (values.revision !== ledger.revision) throw new Error('Your ledger changed. Read get_receipt_context again before updating this receipt memory.');
           draft.memory = values.memory;
-          const saved = await writeLedger(user, ledger.data, ledger.revision, { source: 'chatgpt' });
+          const saved = await writeLedger(user, ledger.data, ledger.revision, { source: 'chatgpt', authorization });
           const savedTrip = saved.data.trips.find(value => value.id === trip.id)!;
           result = await receiptContext(saved, savedTrip, savedTrip.drafts.find(value => value.id === draft.id)!, 'draft', user);
           logReceiptTool('memory-write', { tripId: trip.id, draftId: draft.id, revision: saved.revision });
@@ -632,7 +634,7 @@ export async function POST(request: Request) {
             createdAt: new Date().toISOString(), replyTo: question.id,
             ...(question.itemId ? { itemId: question.itemId } : {}),
           }];
-          result = toolLedger(await writeLedger(user, ledger.data, ledger.revision, { source: 'chatgpt' }), values.tripId);
+          result = toolLedger(await writeLedger(user, ledger.data, ledger.revision, { source: 'chatgpt', authorization }), values.tripId);
           // Queue only after the reply commits. Idempotent retries above never
           // send another alert, and notification failures cannot undo a reply.
           await notifyReceiptReply(values.tripId, user, question.authorMemberId, question.itemId ? 'item' : 'receipt', {
@@ -671,7 +673,7 @@ export async function POST(request: Request) {
             members: values.travellers.map((name, index) => ({ id: crypto.randomUUID(), name: index === 0 ? profile.displayName.slice(0, 50) : name })),
             expenses: [], drafts: [], payments: [],
           };
-          const saved = await writeLedger(user, { trips: [...ledger.data.trips, holiday] }, ledger.revision, { source: 'chatgpt' });
+          const saved = await writeLedger(user, { trips: [...ledger.data.trips, holiday] }, ledger.revision, { source: 'chatgpt', authorization });
           result = { trip_id: tripId, ...toolLedger(saved, tripId) };
         }
       } else {
@@ -865,7 +867,7 @@ export async function POST(request: Request) {
           delete draft.receiptScan.missingTotalAcknowledgement;
         }
         if (index < 0) trip.drafts.push(draft); else trip.drafts[index] = draft;
-        const saved = await writeLedger(user, ledger.data, ledger.revision, { source: 'chatgpt' });
+        const saved = await writeLedger(user, ledger.data, ledger.revision, { source: 'chatgpt', authorization });
         result = toolLedger(saved, args.trip_id);
         logReceiptTool('draft-write', { tripId: trip.id, draftId: draft.id, receiptId: draft.receiptId, revision: saved.revision });
       }

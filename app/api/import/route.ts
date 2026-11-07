@@ -1,5 +1,6 @@
 import {
   ensureProfile,
+  profileWriteAuthorization,
   failure,
   readBoundedBody,
   readLedger,
@@ -38,6 +39,7 @@ export async function POST(request: Request) {
           { trips: [...fresh.data.trips, trip] },
           fresh.revision,
           {
+            authorization: profileWriteAuthorization(actor),
             preserveCalculationRules: true,
             ownerMemberIds: { [trip.id]: body.memberId },
           },

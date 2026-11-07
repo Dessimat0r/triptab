@@ -1,4 +1,4 @@
-import { db, readLedgerSnapshot, writeLedger, writeTrips, sameOrigin, failure, readBoundedBody, ensureProfile } from '@/lib/store';
+import { db, readLedgerSnapshot, writeLedger, writeTrips, sameOrigin, failure, readBoundedBody, ensureProfile, profileWriteAuthorization } from '@/lib/store';
 import { ledgerEtagForSnapshot, ledgerTagMatches, readLedgerFreshness } from '@/lib/ledger-freshness';
 import { financialFormatRefusal } from '@/lib/financial-format';
 
@@ -56,8 +56,8 @@ export async function POST(r: Request) {
     // F-16: a save that names its trips' revisions conflicts only on those trips.
     // Older clients still send the whole ledger against the global revision.
     const { data, revision, revisions, freshness } = fields.tripRevisions !== undefined
-      ? await writeTrips(profile.id, fields.data, fields.tripRevisions)
-      : await writeLedger(profile.id, fields.data, fields.revision, { includeFreshness: true });
+      ? await writeTrips(profile.id, fields.data, fields.tripRevisions, { authorization: profileWriteAuthorization(profile) })
+      : await writeLedger(profile.id, fields.data, fields.revision, { includeFreshness: true, authorization: profileWriteAuthorization(profile) });
     const etag = await ledgerEtagForSnapshot(freshness);
     return Response.json({ data, revision, revisions }, { headers: { 'Cache-Control': 'private, no-store', ETag: etag,
       'X-Ledger-Revision': String(revision), 'X-TripTab-Account': profile.id } });

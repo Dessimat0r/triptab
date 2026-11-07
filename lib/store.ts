@@ -5,7 +5,7 @@ import { ZodError } from 'zod';
 import { isBill, LedgerValidationError, parseLedgerStructure, parseStoredTrip, validateLedger, type Ledger, type Expense, type Draft, type Payment, type ReceiptMessage, type Trip } from './model';
 import type { LedgerFreshness } from './ledger-freshness';
 import { activityNotification, notifyMembers } from './notifications';
-import { AuthError, resolveIdentity, readAuthContext } from './auth';
+import { AuthError, resolveIdentity, readAuthContext, identityWriteAuthorization, requestWriteAuthorizationSql, requestWriteAuthorized, type RequestWriteAuthorization } from './auth';
 import { ReceiptLifecycleError } from './receipt-lifecycle';
 import { activityStatements, type ActivityEntity, type ActivitySource, type ActivityChange, type ActivityEvent } from './audit';
 import { assertReceiptActivityVersion, receiptActivityScope, resolveReceiptActivityFamily, validateReceiptActivityScope, ReceiptScopeChangedError, ReceiptScopeSizeError, type ReceiptActivityScope } from './activity-scope';
@@ -278,10 +278,20 @@ export async function ensureProfile(request: Request, options: { allowSession?: 
   // Multi-step bootstrap still rechecks the snapshot after its guarded write.
   if (!identity || identity.id !== state.profile.id) throw new Error('UNAUTHORIZED');
   const profile = state.profile;
-  return { id: profile.id, email: profile.email, displayName: profile.displayName, createdAt: profile.createdAt,
+  const result: Profile = { id: profile.id, email: profile.email, displayName: profile.displayName, createdAt: profile.createdAt,
     authMethod: identity.kind === 'session' ? 'password' : 'chatgpt', hasPassword: state.hasPassword,
     chatgptConnected: state.chatgptLinked, chatgptAvailable: state.chatgptAvailable,
     emailVerified: state.emailVerified,uiLanguage:profile.uiLanguage };
+  profileWriteAuthorizations.set(result, identityWriteAuthorization(identity));
+  return result;
+}
+
+const profileWriteAuthorizations = new WeakMap<Profile, RequestWriteAuthorization>();
+/** Kept outside the public profile so token hashes never enter API responses. */
+export function profileWriteAuthorization(profile: Profile): RequestWriteAuthorization {
+  const authorization = profileWriteAuthorizations.get(profile);
+  if (!authorization) throw new Error('UNAUTHORIZED');
+  return authorization;
 }
 
 type LedgerSnapshot = { data: Ledger; revision: number; revisions: Record<string, number>; freshness: LedgerFreshness };
@@ -566,9 +576,9 @@ async function expenseCreatorMembers(tripId: string, expenseIds: string[]) {
   return (rows.results ?? []).map(row => row.member_id);
 }
 
-export async function writeLedger(id: string, data: unknown, revision: unknown, options: { source?: ActivitySource; includeFreshness: true; tripSnapshot?: Trip; preserveCalculationRules?: boolean; operation?: OperationFence; ownerMemberIds?: Record<string,string>; tripRevisions?: Record<string, number> }): Promise<LedgerSnapshot>;
-export async function writeLedger(id: string, data: unknown, revision: unknown, options?: { source?: ActivitySource; includeFreshness?: false; tripSnapshot?: Trip; preserveCalculationRules?: boolean; operation?: OperationFence; ownerMemberIds?: Record<string,string>; tripRevisions?: Record<string, number> }): Promise<{ data: Ledger; revision: number; revisions: Record<string, number> }>;
-export async function writeLedger(id: string, data: unknown, revision: unknown, options: { source?: ActivitySource; includeFreshness?: boolean; tripSnapshot?: Trip; preserveCalculationRules?: boolean; operation?: OperationFence; ownerMemberIds?: Record<string,string>; tripRevisions?: Record<string, number> } = {}) {
+export async function writeLedger(id: string, data: unknown, revision: unknown, options: { authorization?: RequestWriteAuthorization; source?: ActivitySource; includeFreshness: true; tripSnapshot?: Trip; preserveCalculationRules?: boolean; operation?: OperationFence; ownerMemberIds?: Record<string,string>; tripRevisions?: Record<string, number> }): Promise<LedgerSnapshot>;
+export async function writeLedger(id: string, data: unknown, revision: unknown, options?: { authorization?: RequestWriteAuthorization; source?: ActivitySource; includeFreshness?: false; tripSnapshot?: Trip; preserveCalculationRules?: boolean; operation?: OperationFence; ownerMemberIds?: Record<string,string>; tripRevisions?: Record<string, number> }): Promise<{ data: Ledger; revision: number; revisions: Record<string, number> }>;
+export async function writeLedger(id: string, data: unknown, revision: unknown, options: { authorization?: RequestWriteAuthorization; source?: ActivitySource; includeFreshness?: boolean; tripSnapshot?: Trip; preserveCalculationRules?: boolean; operation?: OperationFence; ownerMemberIds?: Record<string,string>; tripRevisions?: Record<string, number> } = {}) {
   // Parse bounded structure first. New financial rules are applied after access
   // checks, with trusted stored snapshots allowing unchanged legacy entries to
   // remain available until their owner explicitly repairs them.
@@ -582,6 +592,7 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
   // that attempt still owns the operation.
   if (options.operation !== undefined && (!isOperationFence(options.operation) || !scoped)) throw new Error('Invalid receipt operation save');
   const operationCommit = options.operation ? operationCommitSql(options.operation, id) : undefined;
+  const requestCommit = options.authorization ? requestWriteAuthorizationSql(options.authorization, id) : undefined;
   const tripIds = ledger.trips.map(trip => trip.id);
   const tripIdsJson = JSON.stringify(tripIds);
   // D1 batches read one transactional snapshot. Reject future as well as stale
@@ -764,8 +775,9 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
         AND NOT EXISTS (SELECT 1 FROM json_each(?) expected JOIN trips t ON t.id = expected.key
           WHERE t.revision <> expected.value)
         ${operationCommit ? `AND ${operationCommit.gate}` : ''}
+        ${requestCommit ? `AND ${requestCommit.condition}` : ''}
     `).bind(marker, ...scopeBindings, id, id, tripIdsJson, id, id, JSON.stringify(receiptReferences), JSON.stringify(conversationAuthors), id,
-      JSON.stringify(preimages), JSON.stringify(options.tripRevisions ?? {}), ...(operationCommit?.gateBindings ?? [])),
+      JSON.stringify(preimages), JSON.stringify(options.tripRevisions ?? {}), ...(operationCommit?.gateBindings ?? []), ...(requestCommit?.bindings ?? [])),
   ];
   // R12: the operation's completion commits with the proposal, or not at all.
   if (operationCommit) statements.push(db().prepare(operationCommit.complete).bind(...operationCommit.completeBindings(marker)));
@@ -788,6 +800,9 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
   statements.push(...activityStatements(db(), changes, { id, displayName: profile?.display_name || 'Traveller' }, marker, scoped ? 'current' : revision + 1, options.source));
   const results = await db().batch(statements);
   if (!results[1].meta.changes) {
+    if (options.authorization && !await requestWriteAuthorized(db(), options.authorization, id)) {
+      throw new AuthError('Your sign-in changed before this save finished. Sign in again and review your changes.', 401);
+    }
     // Name a lost operation separately: retrying it can never succeed.
     if (options.operation && !await holdsOperation(db(), options.operation.key, options.operation.attemptId)) throw new OperationSupersededError();
     if (options.operation && !await operationAuthorized(db(), options.operation, id)) throw new OperationUnauthorizedError();
@@ -823,7 +838,7 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
  * A real conflict (the same trip changed) still returns CONFLICT, which the
  * client resolves with its three-way merge (#63).
  */
-export async function writeTrips(id: string, data: unknown, tripRevisions: unknown, options: { source?: ActivitySource } = {}): Promise<LedgerSnapshot> {
+export async function writeTrips(id: string, data: unknown, tripRevisions: unknown, options: { authorization?: RequestWriteAuthorization; source?: ActivitySource } = {}): Promise<LedgerSnapshot> {
   const posted = parseLedgerStructure(data).trips;
   if (!tripRevisions || typeof tripRevisions !== 'object' || Array.isArray(tripRevisions)) throw new RequestError('Send each trip’s revision.');
   const expected = tripRevisions as Record<string, unknown>;
@@ -840,7 +855,7 @@ export async function writeTrips(id: string, data: unknown, tripRevisions: unkno
     const merged = { trips: [...current.data.trips.map(trip => byId.get(trip.id) ?? trip), ...posted.filter(trip => !current.data.trips.some(value => value.id === trip.id))] };
     const gate = Object.fromEntries(posted.flatMap(trip => expected[trip.id] === undefined ? [] : [[trip.id, expected[trip.id] as number]]));
     try {
-      return await writeLedger(id, merged, current.revision, { source: options.source, includeFreshness: true, tripRevisions: gate });
+      return await writeLedger(id, merged, current.revision, { source: options.source, authorization: options.authorization, includeFreshness: true, tripRevisions: gate });
     } catch (error) {
       // Another trip changed between the read and the commit: take its new copy and try again.
       if (!(error instanceof Error) || error.message !== 'CONFLICT') throw error;

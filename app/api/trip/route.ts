@@ -1,4 +1,4 @@
-import { bucket, db, ensureProfile, failure, readBoundedBody, RequestError, sameOrigin } from '@/lib/store';
+import { bucket, db, ensureProfile, profileWriteAuthorization, failure, readBoundedBody, RequestError, sameOrigin } from '@/lib/store';
 import { notifyMember, notifyMembers } from '@/lib/notifications';
 import { purgeDeletedTripReceipts } from '@/lib/receipt-lifecycle';
 import { financialFormatRefusal } from '@/lib/financial-format';
@@ -44,7 +44,7 @@ export async function POST(request: Request) {
     }
     if (!body || typeof body !== 'object' || Array.isArray(body)) throw new RequestError('Send valid holiday details.');
     const details = body as Record<string, unknown>;
-    const actor = { id: profile.id, displayName: profile.displayName };
+    const actor = { id: profile.id, displayName: profile.displayName, authorization: profileWriteAuthorization(profile) };
     const respond = (value: Record<string, unknown>) => Response.json(value, { headers: PRIVATE_HEADERS });
     switch (details.action) {
       case 'archive':

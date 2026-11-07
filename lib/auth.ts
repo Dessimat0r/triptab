@@ -103,6 +103,47 @@ type ProfileStateRow = ProfileRow & { has_password: number; chatgpt_linked: numb
 type ProviderStateRow = { [Key in keyof ProfileStateRow]: ProfileStateRow[Key] | null } & { linked_user_id: string | null; legacy_disconnected: number };
 type AuthSnapshot = { identity: AuthIdentity; row: ProfileStateRow | null };
 
+/** Server-issued permission carried from authentication to the final write. */
+export type RequestWriteAuthorization = Readonly<{ userId: string; kind: 'session' | 'chatgpt'; ref: string }>;
+const issuedWriteAuthorizations = new WeakSet<object>();
+const identityWriteAuthorizations = new WeakMap<AuthIdentity, RequestWriteAuthorization>();
+
+async function rememberWriteAuthorization(request: Request, identity: AuthIdentity) {
+  const token = identity.kind === 'session' ? sessionToken(request) : null;
+  if (identity.kind === 'session' && !token) throw new Error('UNAUTHORIZED');
+  const authorization = Object.freeze({ userId: identity.id, kind: identity.kind,
+    ref: token ? await hashToken(token) : identity.chatgptId ?? identity.id });
+  issuedWriteAuthorizations.add(authorization);
+  identityWriteAuthorizations.set(identity, authorization);
+}
+
+/** A request body or a reconstructed identity cannot manufacture this fence. */
+export function identityWriteAuthorization(identity: AuthIdentity): RequestWriteAuthorization {
+  const authorization = identityWriteAuthorizations.get(identity);
+  if (!authorization) throw new Error('UNAUTHORIZED');
+  return authorization;
+}
+
+/** Evaluated in the statement that admits the transaction, using database time. */
+export function requestWriteAuthorizationSql(authorization: RequestWriteAuthorization, userId: string) {
+  if (!issuedWriteAuthorizations.has(authorization) || authorization.userId !== userId) throw new Error('UNAUTHORIZED');
+  return authorization.kind === 'session' ? {
+    condition: `EXISTS (SELECT 1 FROM auth_sessions write_session JOIN profiles write_profile
+      ON write_profile.id=write_session.user_id AND write_profile.deleted_at=''
+      WHERE write_session.token_hash=? AND write_session.user_id=? AND write_session.expires_at>${DB_NOW_ISO})`,
+    bindings: [authorization.ref, userId],
+  } : {
+    condition: `EXISTS (SELECT 1 FROM (SELECT ? AS provider_id, ? AS account_id) write_identity
+      WHERE ${providerAuthenticatesAsSql('write_identity.provider_id', 'write_identity.account_id')})`,
+    bindings: [authorization.ref, userId],
+  };
+}
+
+export async function requestWriteAuthorized(database: D1Database, authorization: RequestWriteAuthorization, userId: string) {
+  const guard = requestWriteAuthorizationSql(authorization, userId);
+  return !!(await database.prepare(`SELECT ${guard.condition} AS ok`).bind(...guard.bindings).first<{ ok: number }>())?.ok;
+}
+
 function providerIdentity(provider: AuthIdentity, row: ProviderStateRow): AuthIdentity | null {
   if (row.deleted_at) return null;
   if (row.linked_user_id !== null) {
@@ -145,6 +186,7 @@ export async function executionGrant(request: Request, database: D1Database, use
 export async function resolveIdentity(request: Request, options: { allowSession?: boolean } = {}, database: D1Database): Promise<AuthIdentity> {
   const snapshot = await authSnapshot(request, database, trustedChatGPTIdentity(request), options, false);
   if (!snapshot) throw new Error('UNAUTHORIZED');
+  await rememberWriteAuthorization(request, snapshot.identity);
   return snapshot.identity;
 }
 async function authSnapshot(request: Request, database: D1Database, provider: AuthIdentity | null, options: { allowSession?: boolean }, accountFlags = true): Promise<AuthSnapshot | null> {
@@ -232,6 +274,7 @@ export async function readAuthContext(request: Request, database: D1Database, op
     if (!snapshot?.row || snapshot.identity.id !== id) throw new Error('UNAUTHORIZED');
   }
   const { identity, row } = snapshot;
+  await rememberWriteAuthorization(request, identity);
   const hasPassword = !!row.has_password;
   const chatgptLinked = !!row.chatgpt_linked || identity.kind === 'chatgpt';
   // Either the provider vouches for the profile address, or its holder opened

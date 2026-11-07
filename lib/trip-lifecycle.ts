@@ -1,5 +1,6 @@
 import { accountAuditStatement, activityStatements, type ActivityChange } from './audit';
 import { isBill, MAX_OPEN_BILLS, MAX_OPEN_HOLIDAYS, type Trip } from './model';
+import { AuthError, requestWriteAuthorizationSql, requestWriteAuthorized, type RequestWriteAuthorization } from './auth';
 
 /** Holiday archive, leave, ownership transfer and deletion (audit F-23). */
 export class TripLifecycleError extends Error {
@@ -20,7 +21,15 @@ const RESTORE_MS = BILL_RESTORE_DAYS * 24 * 60 * 60 * 1000;
  */
 export const deletedOwner = (owner: string) => `deleted:${owner}`;
 export type DeletedBill = { id: string; name: string; deletedAt: string; restoreUntil: string };
-type Actor = { id: string; displayName: string };
+type Actor = { id: string; displayName: string; authorization?: RequestWriteAuthorization };
+const actorWriteGuard = (actor: Actor) => actor.authorization
+  ? requestWriteAuthorizationSql(actor.authorization, actor.id)
+  : { condition: '1', bindings: [] };
+async function explainActorRefusal(database: D1Database, actor: Actor) {
+  if (actor.authorization && !await requestWriteAuthorized(database, actor.authorization, actor.id)) {
+    throw new AuthError('Your sign-in changed before this action finished. Sign in again and review your changes.', 401);
+  }
+}
 
 /** Holidays in an account's open list. Archived holidays stay accessible elsewhere. */
 export const OPEN_TRIP_IDS = `SELECT id FROM trips WHERE owner = ? UNION SELECT trip_id FROM memberships WHERE user_id = ?
@@ -100,13 +109,15 @@ export async function setTripArchived(database: D1Database, actor: Actor, rawTri
   const holidayName = String(trip.name ?? '').slice(0, 100);
   const audit = accountAuditStatement(database, { userId: actor.id, actorName: actor.displayName, entityType: 'trip', entityId: id,
     action: 'update', before: { archived: !archived, holidayName }, after: { archived, holidayName } });
+  const authorization = actorWriteGuard(actor);
   if (archived) {
-    await database.batch([
+    const results = await database.batch([
       database.prepare(`INSERT INTO trip_archives (user_id, trip_id, archived_at) SELECT ?, ?, ?
-        WHERE EXISTS (SELECT 1 FROM trips t WHERE t.id = ? AND ${access}) AND ${identity}
-        ON CONFLICT(user_id, trip_id) DO NOTHING`).bind(actor.id, id, new Date().toISOString(), id, actor.id, actor.id, actor.id, actor.id),
+        WHERE EXISTS (SELECT 1 FROM trips t WHERE t.id = ? AND ${access}) AND ${identity} AND ${authorization.condition}
+        ON CONFLICT(user_id, trip_id) DO NOTHING`).bind(actor.id, id, new Date().toISOString(), id, actor.id, actor.id, actor.id, actor.id, ...authorization.bindings),
       audit,
     ]);
+    if (!results[0].meta.changes) await explainActorRefusal(database, actor);
     return { archived };
   }
   // Restoring keeps each kind within its own open-list limit (F-17).
@@ -115,9 +126,10 @@ export async function setTripArchived(database: D1Database, actor: Actor, rawTri
   const sameKind = `(SELECT COUNT(*) FROM trips o WHERE o.id IN (${OPEN_TRIP_IDS}) AND ${bill ? "json_extract(o.data, '$.kind') = 'bill'" : "COALESCE(json_extract(o.data, '$.kind'), 'holiday') <> 'bill'"})`;
   const results = await database.batch([
     database.prepare(`DELETE FROM trip_archives WHERE user_id = ? AND trip_id = ? AND ${identity}
-      AND ${sameKind} < ?`).bind(actor.id, id, actor.id, actor.id, ...openTripBindings(actor.id), limit),
+      AND ${sameKind} < ? AND ${authorization.condition}`).bind(actor.id, id, actor.id, actor.id, ...openTripBindings(actor.id), limit, ...authorization.bindings),
     audit,
   ]);
+  if (!results[0].meta.changes) await explainActorRefusal(database, actor);
   if (!results[0].meta.changes && await database.prepare('SELECT 1 FROM trip_archives WHERE user_id = ? AND trip_id = ?').bind(actor.id, id).first()) {
     throw new TripLifecycleError(bill ? `You already have ${MAX_OPEN_BILLS} open bills. Remove one from your list before restoring another.`
       : `You already have ${MAX_OPEN_HOLIDAYS} open holidays. Archive one before restoring another.`, 409);
@@ -127,8 +139,9 @@ export async function setTripArchived(database: D1Database, actor: Actor, rawTri
 
 /** Advance the shared save token so ledgers loaded before this change must refresh. */
 function advanceRevision(database: D1Database, actor: Actor, marker: string, condition: string, bindings: unknown[]) {
-  return database.prepare(`UPDATE sync_state SET revision = revision + 1, last_write = ? WHERE id = 1 AND ${identity} AND ${condition}`)
-    .bind(marker, actor.id, actor.id, ...bindings);
+  const authorization = actorWriteGuard(actor);
+  return database.prepare(`UPDATE sync_state SET revision = revision + 1, last_write = ? WHERE id = 1 AND ${identity} AND ${condition} AND ${authorization.condition}`)
+    .bind(marker, actor.id, actor.id, ...bindings, ...authorization.bindings);
 }
 async function ensureSyncState(database: D1Database) {
   await database.prepare("INSERT OR IGNORE INTO sync_state (id, revision, last_write) VALUES (1, 0, '')").run();
@@ -164,7 +177,10 @@ export async function leaveTrip(database: D1Database, actor: Actor, rawTripId: u
     ...activityStatements(database, [{ tripId: id, entityType: 'member', entityId: member.id, action: 'update',
       before: { ...member, userId: actor.id }, after: unlinked }], actor, marker, 'current'),
   ]);
-  if (!results[0].meta.changes) throw new TripLifecycleError(tripMessage(trip, 'This holiday changed while you were leaving. Refresh and try again.'), 409);
+  if (!results[0].meta.changes) {
+    await explainActorRefusal(database, actor);
+    throw new TripLifecycleError(tripMessage(trip, 'This holiday changed while you were leaving. Refresh and try again.'), 409);
+  }
   return { tripName: trip.name, kind: trip.kind, memberName: member.name };
 }
 
@@ -189,7 +205,10 @@ export async function transferTripOwnership(database: D1Database, actor: Actor, 
     ...activityStatements(database, [{ tripId: id, entityType: 'trip', entityId: id, action: 'update',
       before: { ...summary(trip), ownerId: actor.id }, after: summary(next) }], actor, marker, 'current'),
   ]);
-  if (!results[0].meta.changes) throw new TripLifecycleError(tripMessage(trip, 'This holiday or its travellers changed. Refresh and try again.'), 409);
+  if (!results[0].meta.changes) {
+    await explainActorRefusal(database, actor);
+    throw new TripLifecycleError(tripMessage(trip, 'This holiday or its travellers changed. Refresh and try again.'), 409);
+  }
   return { tripName: trip.name, kind: trip.kind, ownerId: target.user_id, memberName: trip.members.find(member => member.id === rawMemberId)?.name || 'A traveller' };
 }
 
@@ -239,7 +258,10 @@ async function deleteTripRecord(database: D1Database, actor: Actor, rawTripId: u
       database.prepare(`UPDATE trips SET owner = ?, data = json_set(data, '$.deletion', json(?)) WHERE id = ? AND ${marked}`)
         .bind(deletedOwner(actor.id), JSON.stringify(deletion), id, marker),
     ]);
-    if (!results[0].meta.changes) throw new TripLifecycleError(tripMessage(trip, 'Another traveller joined or the holiday changed. Refresh and try again.'), 409);
+    if (!results[0].meta.changes) {
+      await explainActorRefusal(database, actor);
+      throw new TripLifecycleError(tripMessage(trip, 'Another traveller joined or the holiday changed. Refresh and try again.'), 409);
+    }
     return { tripName: trip.name, restorable: true };
   }
   const results = await database.batch([
@@ -256,7 +278,10 @@ async function deleteTripRecord(database: D1Database, actor: Actor, rawTripId: u
     database.prepare(`DELETE FROM trip_archives WHERE trip_id = ? AND ${marked}`).bind(id, marker),
     database.prepare(`DELETE FROM trips WHERE id = ? AND ${marked}`).bind(id, marker),
   ]);
-  if (!results[0].meta.changes) throw new TripLifecycleError(discard ? discardError : tripMessage(trip, 'Another traveller joined or the holiday changed. Refresh and try again.'), 409);
+  if (!results[0].meta.changes) {
+    await explainActorRefusal(database, actor);
+    throw new TripLifecycleError(discard ? discardError : tripMessage(trip, 'Another traveller joined or the holiday changed. Refresh and try again.'), 409);
+  }
   return { tripName: trip.name, restorable: false };
 }
 
@@ -303,6 +328,7 @@ export async function restoreDeletedBill(database: D1Database, actor: Actor, raw
       after: { ...summary(trip), restored: true, travellerCount: trip.members.length, expenseCount: trip.expenses.length, paymentCount: trip.payments.length } }], actor, marker, 'current'),
   ]);
   if (!results[0].meta.changes) {
+    await explainActorRefusal(database, actor);
     if (await database.prepare('SELECT 1 FROM trips WHERE id = ? AND owner = ?').bind(id, deletedOwner(actor.id)).first()) {
       throw new TripLifecycleError(`You already have ${MAX_OPEN_BILLS} open bills. Remove one from your list before restoring another.`, 409);
     }
@@ -366,28 +392,41 @@ export async function addConnectedMember(database: D1Database, actor: Actor, raw
     database.prepare(`UPDATE trips SET data = ? WHERE id = ? AND ${marked}`).bind(JSON.stringify(next), id, marker),
     ...activityStatements(database, [{ tripId: id, entityType: 'member', entityId: member.id, action: 'update', before: { ...member }, after: linked }], actor, marker, 'current'),
   ]);
-  if (!results[0].meta.changes) throw new TripLifecycleError('This bill or that person changed, or they are already on it. Refresh and try again.', 409);
+  if (!results[0].meta.changes) {
+    await explainActorRefusal(database, actor);
+    throw new TripLifecycleError('This bill or that person changed, or they are already on it. Refresh and try again.', 409);
+  }
   return { tripName: trip.name, memberId: member.id, memberName: member.name, accountName: profile.display_name };
 }
 
 /** Remove deleted bills for good: one by its owner now, or every expired one (scheduled). */
-function purgeStatements(database: D1Database, id: string, owner: string, data: string, now: string) {
-  const still = 'EXISTS (SELECT 1 FROM trips WHERE id = ? AND owner = ? AND data = ?)';
-  const guard = [id, owner, data];
+function purgeStatements(database: D1Database, id: string, owner: string, data: string, now: string, actor?: Actor) {
+  // A user-requested purge checks permission once at transaction admission,
+  // then every side effect follows that marker. Expiry between statements
+  // must never remove photos without removing the tombstone (or vice versa).
+  const marker = crypto.randomUUID();
+  const unchanged = 'EXISTS (SELECT 1 FROM trips WHERE id = ? AND owner = ? AND data = ?)';
+  const still = actor ? marked : unchanged;
+  const guard = actor ? [marker] : [id, owner, data];
   return [
+    ...(actor ? [advanceRevision(database, actor, marker, unchanged, [id, owner, data])] : []),
     database.prepare(`INSERT OR IGNORE INTO receipt_object_purges (receipt_id, owner, created_at)
       SELECT id, owner, ? FROM receipts WHERE trip_id = ? AND ${still}`).bind(now, id, ...guard),
     database.prepare(`DELETE FROM receipts WHERE trip_id = ? AND ${still}`).bind(id, ...guard),
     database.prepare(`DELETE FROM trip_language_preferences WHERE trip_id = ? AND ${still}`).bind(id, ...guard),
-    database.prepare(`DELETE FROM trips WHERE id = ? AND owner = ? AND data = ?`).bind(...guard),
+    database.prepare(`DELETE FROM trips WHERE id = ? AND ${still}`).bind(id, ...guard),
   ];
 }
 export async function purgeDeletedBill(database: D1Database, actor: Actor, rawTripId: unknown) {
   const id = tripId(rawTripId), owner = deletedOwner(actor.id);
   const row = await database.prepare('SELECT data FROM trips WHERE id = ? AND owner = ?').bind(id, owner).first<{ data: string }>();
   if (!row) throw new TripLifecycleError('This bill was already removed.', 404);
-  const results = await database.batch(purgeStatements(database, id, owner, row.data, new Date().toISOString()));
-  if (!results[3].meta.changes) throw new TripLifecycleError('This bill changed. Refresh and try again.', 409);
+  await ensureSyncState(database);
+  const results = await database.batch(purgeStatements(database, id, owner, row.data, new Date().toISOString(), actor));
+  if (!results.at(-1)!.meta.changes) {
+    await explainActorRefusal(database, actor);
+    throw new TripLifecycleError('This bill changed. Refresh and try again.', 409);
+  }
   return { tripName: String((JSON.parse(row.data) as Trip).name ?? '') };
 }
 export async function purgeExpiredDeletedBills(database: D1Database, options: { now?: number; limit?: number } = {}) {
