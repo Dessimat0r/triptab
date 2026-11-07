@@ -35,6 +35,9 @@ let snapshotCalls = 0;
 const boundary = {
   db: () => database,
   ensureProfile: async () => { if (!authenticated) throw Error('UNAUTHORIZED'); return { id: 'bob' }; },
+  // This suite substitutes persistence to inspect freshness reads; the real
+  // request-fence SQL is exercised in financial-write-revocation.test.ts.
+  profileWriteAuthorization: () => ({ kind: 'session', userId: 'bob', ref: 'freshness-fixture' }),
   readLedgerSnapshot: async () => {
     snapshotCalls++;
     const versions = sqlite.prepare(`SELECT t.id,t.receipt_link_version AS dataVersion,COALESCE(MAX(e.sequence),0) AS latest FROM trips t
@@ -54,7 +57,7 @@ const boundary = {
   failure: () => Response.json({ error: 'Sign in' }, { status: 401, headers: { 'Cache-Control': 'private, no-store' } }),
 };
 Object.defineProperty(globalThis, Symbol.for('triptab.freshness-boundary'), { value: boundary, configurable: true });
-const boundaryUrl = 'data:text/javascript;base64,' + Buffer.from(`const boundary=globalThis[Symbol.for('triptab.freshness-boundary')]; export const {db,ensureProfile,readLedgerSnapshot,writeLedger,writeTrips,sameOrigin,readBoundedBody,failure}=boundary;`).toString('base64');
+const boundaryUrl = 'data:text/javascript;base64,' + Buffer.from(`const boundary=globalThis[Symbol.for('triptab.freshness-boundary')]; export const {db,ensureProfile,profileWriteAuthorization,readLedgerSnapshot,writeLedger,writeTrips,sameOrigin,readBoundedBody,failure}=boundary;`).toString('base64');
 const route = transpileWithSharedImports(await readFile(new URL('../app/api/ledger/route.ts', import.meta.url), 'utf8'), { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
   .replace("'@/lib/store'", JSON.stringify(boundaryUrl))
   .replace("'@/lib/ledger-freshness'", JSON.stringify(new URL('../lib/ledger-freshness.ts', import.meta.url).href));
