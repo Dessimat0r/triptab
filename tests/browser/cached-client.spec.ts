@@ -58,7 +58,11 @@ async function forward(page: Page, flow: Flow, gate: Gate, options: { declare?: 
   await page.route('**/api/**', route => routed(gate, route, async () => {
     const request = route.request(), url = new URL(request.url());
     const headers: Record<string, string> = {};
-    for (const [name, value] of Object.entries(request.headers())) if (!['host', 'content-length', 'cookie'].includes(name)) headers[name] = value;
+    // Playwright cannot fulfil a 304, so the app's conditional ledger reads
+    // (If-None-Match) and any browser revalidation are forwarded without their
+    // validators: the Worker answers in full and the app treats it as a fresh
+    // read. These tests are about money, not the 304 path (covered elsewhere).
+    for (const [name, value] of Object.entries(request.headers())) if (!['host', 'content-length', 'cookie', 'if-none-match', 'if-modified-since'].includes(name)) headers[name] = value;
     headers.cookie = `tt_session=${flow.sessionToken}`;
     if (headers.origin) headers.origin = flow.origin;
     if (options.declare) headers[FINANCIAL_FORMAT_HEADER.toLowerCase()] = String(FINANCIAL_FORMAT);
