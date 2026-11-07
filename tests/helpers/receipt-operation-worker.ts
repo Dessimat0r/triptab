@@ -35,10 +35,11 @@ export async function createReceiptOperationWorker(options: { kind?: 'bill'; bin
       import * as receipt from './app/api/receipt/route.ts';
       import * as process from './app/api/receipt/process/route.ts';
       import * as tripRoute from './app/api/trip/route.ts';
+      import * as authRoute from './app/api/auth/route.ts';
       import { hooks } from ${JSON.stringify(shim)};
       import { readLedger as storedLedger, writeLedger } from './lib/store.ts';
       ${hasBackground ? "import * as background from './lib/receipt-background.ts';" : 'const background = undefined;'}
-      const routes = { '/api/ledger': ledger, '/api/receipt': receipt, '/api/receipt/process': process, '/api/trip': tripRoute };
+      const routes = { '/api/ledger': ledger, '/api/receipt': receipt, '/api/receipt/process': process, '/api/trip': tripRoute, '/api/auth': authRoute };
       export default {
         async fetch(request, env, ctx) {
           const url = new URL(request.url);
@@ -163,10 +164,71 @@ export async function createReceiptOperationWorker(options: { kind?: 'bill'; bin
     const forgedSave = async (operation: unknown) => (await worker.dispatchFetch(`${origin}/__test/forged-save`, { method: 'POST',
       body: JSON.stringify({ userId: owner.id, tripId, operation }) })).json() as Promise<{ saved: boolean; error?: string }>;
     const tick = async (now = Date.now()) => (await worker.dispatchFetch(`${origin}/__test/tick?now=${now}`)).json() as Promise<{ resumed: number; skipped: number; stored: number; failed: number; disabled: boolean }>;
+    /**
+     * Any identity: a TripTab session cookie, the trusted ChatGPT headers Sites
+     * adds (synthetic here, as in the other native-flow tests), both, or none.
+     */
+    type Identity = { sessionToken?: string; provider?: { id: string; email?: string } };
+    const requestAs = (identity: Identity, path: string, init: RequestInit & { body?: string | Uint8Array } = {}) => {
+      const headers = new Headers(init.headers);
+      if (identity.sessionToken) headers.set('cookie', `tt_session=${identity.sessionToken}`);
+      if (identity.provider) {
+        headers.set('oai-authenticated-user-id', identity.provider.id);
+        if (identity.provider.email) headers.set('oai-authenticated-user-email', identity.provider.email);
+      }
+      headers.set(FINANCIAL_FORMAT_HEADER, String(FINANCIAL_FORMAT));
+      if (!['GET', 'HEAD'].includes(init.method ?? 'GET')) {
+        headers.set('origin', origin); headers.set('sec-fetch-site', 'same-origin');
+        if (!headers.has('content-type')) headers.set('content-type', 'application/json');
+      }
+      return worker.dispatchFetch(new URL(path, origin).href, { ...init, headers } as never);
+    };
+    /** An account seeded directly: profile, optional password, provider link and live session. */
+    const createAccount = async (account: { id: string; email: string; name: string; password?: boolean; link?: { providerId: string }; session?: boolean }) => {
+      const token = randomBytes(32).toString('base64url'), created = new Date().toISOString();
+      await database.batch([
+        database.prepare('INSERT INTO profiles(id,email,display_name,created_at) VALUES(?,?,?,?)').bind(account.id, account.email, account.name, created),
+        ...(account.password ? [database.prepare('INSERT INTO auth_credentials(user_id,email,password_hash,password_salt,iterations,created_at) VALUES(?,?,?,?,?,?)')
+          .bind(account.id, account.email, 'synthetic-hash', 'synthetic-salt', 1, created)] : []),
+        ...(account.link ? [database.prepare('INSERT INTO auth_links(oai_user_id,user_id,created_at) VALUES(?,?,?)').bind(account.link.providerId, account.id, created)] : []),
+        ...(account.session ? [database.prepare('INSERT INTO auth_sessions(token_hash,user_id,expires_at,created_at,session_id) VALUES(?,?,?,?,?)')
+          .bind(createHash('sha256').update(token).digest('hex'), account.id, new Date(Date.now() + 30 * 60_000).toISOString(), created, `${account.id}-session`)] : []),
+      ]);
+      return { sessionToken: account.session ? token : undefined };
+    };
+    /** A holiday owned by this identity with one saved photo and its waiting draft, through production routes. */
+    const seedReading = async (identity: Identity, holidayId: string, payer = 'me') => {
+      const read = async () => {
+        const response = await requestAs(identity, '/api/ledger');
+        if (!response.ok) throw new Error(`ledger read ${response.status} ${await response.text()}`);
+        return response.json() as Promise<{ data: Ledger; revision: number }>;
+      };
+      const write = async (snapshot: { data: Ledger; revision: number }) => {
+        const response = await requestAs(identity, '/api/ledger', { method: 'POST', body: JSON.stringify(snapshot) });
+        if (!response.ok) throw new Error(`ledger write ${response.status} ${await response.text()}`);
+      };
+      const start = await read();
+      await write({ revision: start.revision, data: { trips: [...start.data.trips, { id: holidayId, name: `Holiday ${holidayId}`, currency: 'GBP',
+        members: [{ id: payer, name: 'Me' }, { id: 'friend', name: 'Friend' }], expenses: [], drafts: [], payments: [] }] } });
+      const photo = await requestAs(identity, `/api/receipt?tripId=${holidayId}`, { method: 'POST', headers: { 'content-type': 'image/png' }, body: receiptFlowImage });
+      if (!photo.ok) throw new Error(`upload ${photo.status} ${await photo.text()}`);
+      const { receiptId: photoId } = await photo.json() as { receiptId: string };
+      const withTrip = await read();
+      withTrip.data.trips.find(trip => trip.id === holidayId)!.drafts.push({ id: `${holidayId}-draft`, receiptId: photoId, title: '', currency: 'GBP', payer,
+        status: 'waiting', items: [], tax: 0, tip: 0, discount: 0 });
+      await write(withTrip);
+      const body = async () => {
+        const draft = (await read()).data.trips.find(trip => trip.id === holidayId)!.drafts.find(value => value.id === `${holidayId}-draft`)!;
+        return JSON.stringify({ tripId: holidayId, draftId: draft.id, receiptId: draft.receiptId, draftHash: await sha256Hex(canonicalJson(draft)) });
+      };
+      const trip = async () => (await database.prepare('SELECT data, revision FROM trips WHERE id=?').bind(holidayId).first<{ data: string; revision: number }>())!;
+      const history = async () => Number((await database.prepare('SELECT COUNT(*) AS n FROM activity_events WHERE trip_id=?').bind(holidayId).first<{ n: number }>())!.n);
+      return { body, read, trip, history, process: async (init: RequestInit = {}) => requestAs(identity, '/api/receipt/process', { ...init, method: 'POST', body: await body() }) };
+    };
     const historyCount = async () => Number((await database.prepare("SELECT COUNT(*) AS n FROM activity_events WHERE trip_id=?").bind(tripId).first<{ n: number }>())!.n);
     const tripRow = async () => (await database.prepare('SELECT data, revision FROM trips WHERE id=?').bind(tripId).first<{ data: string; revision: number }>())!;
     return { worker, database, origin, owner, sessionId, tripId, receiptId, request, readLedger, saveLedger, control, currentDraft,
-      processBody, process, operations, waitFor, tick, forgedSave, historyCount, tripRow,
+      processBody, process, operations, waitFor, tick, forgedSave, historyCount, tripRow, requestAs, createAccount, seedReading, sessionToken,
       // Release anything held (a failed assertion can leave a paused commit or
       // provider call) before disposing, so teardown never waits on them.
       dispose: async () => {
