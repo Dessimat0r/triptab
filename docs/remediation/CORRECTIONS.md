@@ -43,11 +43,11 @@ Linux, Node 24.22.1, 7 November 2026. Logs: `correction-evidence/second-pass-*.l
 | Lint | 0 errors, 4 warnings (the same pre-existing four; none in changed files) |
 | Production build | Passed |
 | Chromium, full suite, local, with `TRIPTAB_PREVIOUS_URL` = separately built main `01be219` | **243 / 243 passed, 0 skipped** (at `690dabb`; `571630f` changes only the forwarding helper, rerun 12/12) |
-| CI (GitHub Actions, Playwright container) | See PR #78 checks for the head; at `690dabb` WebKit was 239 passed / 1 failed (the 304 defect, fixed in `571630f`) / 3 skipped (previous-bundle tests need a preview) |
+| CI (GitHub Actions run 42368152067, Playwright 1.62.1 container, Linux) at `c6751bc` | All checks green: quality, regression, **WebKit 240 passed / 3 skipped / 0 failed**, Chromium 240 passed / 3 skipped (the skips are the previous-bundle tests, which need a main preview; they passed locally above). Earlier, at `690dabb`, WebKit was 239 passed / 1 failed (the 304 defect, fixed in `571630f`) |
 
 Financial outcomes required to be preserved are asserted by unchanged, passing tests: BOGOF 300/300/150 → 450 and shares 375/75 or 150/300 (`adjustments`, `receipt-ai-promotions`, `adjustment-ownership`, `browser/discounts`, `browser/cached-client`); fixed £2 then 50% → £4 (`adjustment-preview`, `browser/discounts`); human allocations surviving native and MCP rescans (`adjustment-ownership`, `mcp`); old rules unchanged (`model`, `financial-format`); cached clients fail closed (`financial-format`, `browser/cached-client`); £20 settled with £10 then deleted reopens £10 and £30 reopens £5 (`settlement-impact`). Account-state privacy, unsaved adjustments, archived review, line-order merge and the no-op membership trigger keep their R02/R04/R09/R10/R11 tests, all passing. F-12 and F-19 stay deferred.
 
-**WebKit investigation.** Not possible on the reviewer's host from here. In CI WebKit at `690dabb`, every receipt-layout, empty-bill close, R03 save and reconciliation-exception case passed; the only failure was the new journey's 304. The intermittent `expense-layout 1024×768 receipt` failure (run 42310528517) did not recur in this pass's runs and is not root-caused; it stays a gate. No retries, skips or weakened assertions were added.
+**WebKit investigation.** Not possible on the reviewer's host from here. In CI WebKit at `690dabb` and again at `c6751bc`, every receipt-layout, empty-bill close, R03 save and reconciliation-exception case passed; the only failure was the new journey's 304. The intermittent `expense-layout 1024×768 receipt` failure (run 42310528517) did not recur in this pass's runs and is not root-caused; it stays a gate. No retries, skips or weakened assertions were added.
 
 ## Migration, configuration and rollback
 
