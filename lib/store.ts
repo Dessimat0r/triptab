@@ -5,7 +5,7 @@ import { ZodError } from 'zod';
 import { isBill, LedgerValidationError, parseLedgerStructure, parseStoredTrip, validateLedger, type Ledger, type Expense, type Draft, type Payment, type ReceiptMessage, type Trip } from './model';
 import type { LedgerFreshness } from './ledger-freshness';
 import { activityNotification, notifyMembers } from './notifications';
-import { AuthError, resolveIdentity, readAuthContext } from './auth';
+import { AuthError, resolveIdentity, readAuthContext, identityWriteAuthorization, requestWriteAuthorizationSql, requestWriteAuthorized, type RequestWriteAuthorization } from './auth';
 import { ReceiptLifecycleError } from './receipt-lifecycle';
 import { activityStatements, type ActivityEntity, type ActivitySource, type ActivityChange, type ActivityEvent } from './audit';
 import { assertReceiptActivityVersion, receiptActivityScope, resolveReceiptActivityFamily, validateReceiptActivityScope, ReceiptScopeChangedError, ReceiptScopeSizeError, type ReceiptActivityScope } from './activity-scope';
@@ -13,11 +13,20 @@ export { activityStatements, type ActivityEntity, type ActivitySource, type Acti
 import { receiptMemorySchema, type ReceiptMemory } from './receipt-context';
 import { receiptAliasIdentity, ReceiptMemoryOwnershipError, validateReceiptMemoryOwnership } from './receipt-memory-ownership';
 import { OPEN_TRIP_IDS, openTripBindings, TripLifecycleError } from './trip-lifecycle';
+import { holdsOperation, isOperationFence, operationAuthorized, operationCommitSql, type OperationFence } from './receipt-operations';
 
 export class RequestError extends Error {
   constructor(message: string, public readonly status = 400) {
     super(message);
   }
+}
+/** R12: this reading no longer owns its operation, so its result was not saved. */
+export class OperationSupersededError extends RequestError {
+  constructor() { super('Another reading of this receipt took over. Refresh to see its result.', 409); }
+}
+/** R07: the person's sign-in that authorized this reading ended, so its result was not saved. */
+export class OperationUnauthorizedError extends RequestError {
+  constructor() { super('Your sign-in changed before this reading finished, so nothing was saved. Open the receipt and read it again.', 409); }
 }
 
 export async function owner(request: Request) {
@@ -269,13 +278,23 @@ export async function ensureProfile(request: Request, options: { allowSession?: 
   // Multi-step bootstrap still rechecks the snapshot after its guarded write.
   if (!identity || identity.id !== state.profile.id) throw new Error('UNAUTHORIZED');
   const profile = state.profile;
-  return { id: profile.id, email: profile.email, displayName: profile.displayName, createdAt: profile.createdAt,
+  const result: Profile = { id: profile.id, email: profile.email, displayName: profile.displayName, createdAt: profile.createdAt,
     authMethod: identity.kind === 'session' ? 'password' : 'chatgpt', hasPassword: state.hasPassword,
     chatgptConnected: state.chatgptLinked, chatgptAvailable: state.chatgptAvailable,
     emailVerified: state.emailVerified,uiLanguage:profile.uiLanguage };
+  profileWriteAuthorizations.set(result, identityWriteAuthorization(identity));
+  return result;
 }
 
-type LedgerSnapshot = { data: Ledger; revision: number; freshness: LedgerFreshness };
+const profileWriteAuthorizations = new WeakMap<Profile, RequestWriteAuthorization>();
+/** Kept outside the public profile so token hashes never enter API responses. */
+export function profileWriteAuthorization(profile: Profile): RequestWriteAuthorization {
+  const authorization = profileWriteAuthorizations.get(profile);
+  if (!authorization) throw new Error('UNAUTHORIZED');
+  return authorization;
+}
+
+type LedgerSnapshot = { data: Ledger; revision: number; revisions: Record<string, number>; freshness: LedgerFreshness };
 /** The exact visible snapshot, without parsing or rewriting historical data. */
 function visibleStoredTrip(row: StoredTrip, links?: ReadonlyMap<string, MembershipRow>): Trip {
   const trip = { ...JSON.parse(row.data), ownerId: row.owner } as Trip;
@@ -289,14 +308,14 @@ function visibleStoredTrip(row: StoredTrip, links?: ReadonlyMap<string, Membersh
 
 /** Body, revision and optional freshness metadata from the same D1 transaction. */
 export async function readLedgerSnapshot(id: string): Promise<LedgerSnapshot>;
-export async function readLedgerSnapshot(id: string, options: { includeFreshness: false }): Promise<{ data: Ledger; revision: number }>;
+export async function readLedgerSnapshot(id: string, options: { includeFreshness: false }): Promise<{ data: Ledger; revision: number; revisions: Record<string, number> }>;
 export async function readLedgerSnapshot(id: string, options: { includeFreshness?: boolean } = {}) {
   // Drive these reads from the indexed owner/member ID sets rather than scanning
   // every trip (or every membership) in the database. Archived holidays stay
   // accessible but are not part of the editable ledger or its 50-holiday limit.
   const visibleIds = OPEN_TRIP_IDS;
   const results = await db().batch([
-    db().prepare(`SELECT t.id, t.owner, t.data${options.includeFreshness === false ? '' : `, t.receipt_link_version AS dataVersion,
+    db().prepare(`SELECT t.id, t.owner, t.data, t.revision AS tripRevision${options.includeFreshness === false ? '' : `, t.receipt_link_version AS dataVersion,
       COALESCE((SELECT e.sequence FROM activity_events e WHERE e.trip_id = t.id ORDER BY e.sequence DESC LIMIT 1), 0) AS latest`}
       FROM trips t WHERE t.id IN (${visibleIds}) ORDER BY t.id`).bind(...openTripBindings(id)),
     db().prepare('SELECT COALESCE((SELECT revision FROM sync_state WHERE id = 1), 0) AS revision'),
@@ -310,22 +329,40 @@ export async function readLedgerSnapshot(id: string, options: { includeFreshness
     const members = linksByTrip.get(link.trip_id) || new Map<string, MembershipRow>();
     members.set(link.member_id, link); linksByTrip.set(link.trip_id, members);
   }
-  const rows = results[0].results as (StoredTrip & { latest: number; dataVersion: number })[];
+  const rows = results[0].results as (StoredTrip & { latest: number; dataVersion: number; tripRevision: number })[];
   const trips = rows.map(row => visibleStoredTrip(row, linksByTrip.get(row.id)));
   const revision = (results[1].results as { revision: number }[])[0]?.revision || 0;
-  const result = { data: { trips }, revision };
+  // F-16: each trip's own revision, so a client can save one trip without
+  // conflicting with other people's changes to other trips.
+  const revisions = Object.fromEntries(rows.map(row => [row.id, Number(row.tripRevision) || 0]));
+  const result = { data: { trips }, revision, revisions };
   return options.includeFreshness === false ? result : { ...result,
     freshness: { versions: rows.map(row => ({ id: row.id, latest: row.latest, dataVersion: row.dataVersion })), links } };
 }
 
-export async function readLedger(id: string): Promise<{ data: Ledger; revision: number }> {
-  const { data, revision } = await readLedgerSnapshot(id, { includeFreshness: false });
-  return { data, revision };
+export async function readLedger(id: string): Promise<{ data: Ledger; revision: number; revisions: Record<string, number> }> {
+  const { data, revision, revisions } = await readLedgerSnapshot(id, { includeFreshness: false });
+  return { data, revision, revisions };
 }
 
 export async function tripAccess(user: string, tripId: string): Promise<boolean> {
   const row = await db().prepare('SELECT 1 AS allowed FROM trips t WHERE t.id = ? AND (t.owner = ? OR EXISTS (SELECT 1 FROM memberships m WHERE m.trip_id = t.id AND m.user_id = ?))').bind(tripId, user, user).first();
   return !!row;
+}
+
+/** Read-only, paged source for discrepancy inspection, including archived trips.
+ * SQL restricts every row before its financial JSON is decoded. */
+export async function readReceiptAuditTrips(user: string, options: { after?: string; tripId?: string; limit?: number } = {}) {
+  const limit = options.limit ?? 25;
+  if (!Number.isInteger(limit) || limit < 1 || limit > 50 || [options.after, options.tripId].some(value => value !== undefined && (!value || value.length > 100))) throw new RequestError('Choose a valid receipt audit page.');
+  if (options.tripId && !await tripAccess(user, options.tripId)) throw new RequestError('Receipt audit not found.', 404);
+  const result = await db().prepare(`SELECT t.id, t.data FROM trips t WHERE t.id > ?
+    AND (t.owner = ? OR EXISTS (SELECT 1 FROM memberships m WHERE m.trip_id = t.id AND m.user_id = ?))
+    AND (? IS NULL OR t.id = ?) ORDER BY t.id LIMIT ?`)
+    .bind(options.after ?? '', user, user, options.tripId ?? null, options.tripId ?? null, limit + 1).all<{ id: string; data: string }>();
+  const rows = result.results.slice(0, limit);
+  return { trips: rows.map(row => parseStoredTrip(JSON.parse(row.data))),
+    nextCursor: result.results.length > limit ? rows.at(-1)!.id : null };
 }
 
 export async function receiptAccess(user: string, id: string): Promise<{ owner: string; tripId: string } | null> {
@@ -514,9 +551,34 @@ async function validateTripReceiptMemory(trip: Trip, previous: Trip | undefined,
   return changed;
 }
 
-export async function writeLedger(id: string, data: unknown, revision: unknown, options: { source?: ActivitySource; includeFreshness: true; tripSnapshot?: Trip; preserveCalculationRules?: boolean; ownerMemberIds?: Record<string,string> }): Promise<LedgerSnapshot>;
-export async function writeLedger(id: string, data: unknown, revision: unknown, options?: { source?: ActivitySource; includeFreshness?: false; tripSnapshot?: Trip; preserveCalculationRules?: boolean; ownerMemberIds?: Record<string,string> }): Promise<{ data: Ledger; revision: number }>;
-export async function writeLedger(id: string, data: unknown, revision: unknown, options: { source?: ActivitySource; includeFreshness?: boolean; tripSnapshot?: Trip; preserveCalculationRules?: boolean; ownerMemberIds?: Record<string,string> } = {}) {
+/**
+ * D05: who added each expense. Any member may edit or delete an expense, so
+ * TripTab names who added it: the actor of its earliest "create" event in the
+ * trip's append-only history, which no client can set or change. An exactly
+ * restored expense keeps its original creator. Expenses older than history
+ * have none. Bounded and indexed (activity_events_trip_entity_idx).
+ */
+export async function expenseCreators(tripId: string, expenseIds: string[]): Promise<Map<string, { actorId: string; actorName: string }>> {
+  if (!expenseIds.length) return new Map();
+  const rows = await db().prepare(`SELECT e.entity_id, e.actor_id, e.actor_name FROM activity_events e
+    WHERE e.trip_id = ? AND e.entity_type = 'expense' AND e.action = 'create' AND e.entity_id IN (SELECT value FROM json_each(?))
+      AND NOT EXISTS (SELECT 1 FROM activity_events older WHERE older.trip_id = e.trip_id AND older.entity_type = 'expense'
+        AND older.entity_id = e.entity_id AND older.action = 'create' AND older.sequence < e.sequence)`)
+    .bind(tripId, JSON.stringify(expenseIds.slice(0, 200))).all<{ entity_id: string; actor_id: string; actor_name: string }>();
+  return new Map((rows.results ?? []).map(row => [row.entity_id, { actorId: row.actor_id, actorName: row.actor_name }]));
+}
+/** The current traveller IDs, on this trip, of the accounts that added these expenses. */
+async function expenseCreatorMembers(tripId: string, expenseIds: string[]) {
+  const accounts = [...new Set([...(await expenseCreators(tripId, expenseIds)).values()].map(creator => creator.actorId))];
+  if (!accounts.length) return [];
+  const rows = await db().prepare('SELECT member_id FROM memberships WHERE trip_id = ? AND user_id IN (SELECT value FROM json_each(?))')
+    .bind(tripId, JSON.stringify(accounts)).all<{ member_id: string }>();
+  return (rows.results ?? []).map(row => row.member_id);
+}
+
+export async function writeLedger(id: string, data: unknown, revision: unknown, options: { authorization?: RequestWriteAuthorization; source?: ActivitySource; includeFreshness: true; tripSnapshot?: Trip; preserveCalculationRules?: boolean; operation?: OperationFence; ownerMemberIds?: Record<string,string>; tripRevisions?: Record<string, number> }): Promise<LedgerSnapshot>;
+export async function writeLedger(id: string, data: unknown, revision: unknown, options?: { authorization?: RequestWriteAuthorization; source?: ActivitySource; includeFreshness?: false; tripSnapshot?: Trip; preserveCalculationRules?: boolean; operation?: OperationFence; ownerMemberIds?: Record<string,string>; tripRevisions?: Record<string, number> }): Promise<{ data: Ledger; revision: number; revisions: Record<string, number> }>;
+export async function writeLedger(id: string, data: unknown, revision: unknown, options: { authorization?: RequestWriteAuthorization; source?: ActivitySource; includeFreshness?: boolean; tripSnapshot?: Trip; preserveCalculationRules?: boolean; operation?: OperationFence; ownerMemberIds?: Record<string,string>; tripRevisions?: Record<string, number> } = {}) {
   // Parse bounded structure first. New financial rules are applied after access
   // checks, with trusted stored snapshots allowing unchanged legacy entries to
   // remain available until their owner explicitly repairs them.
@@ -525,6 +587,17 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
   checkLedgerSize(ledger);
   const scoped = options.tripSnapshot;
   if (scoped && (ledger.trips.length !== 1 || ledger.trips[0].id !== scoped.id)) throw new Error('Invalid scoped receipt save');
+  // R12: a reading's own write carries its trusted operation fence (never a
+  // client value), is always a scoped receipt save, and commits only while
+  // that attempt still owns the operation.
+  if (options.operation !== undefined && (!isOperationFence(options.operation) || !scoped)) throw new Error('Invalid receipt operation save');
+  const operationCommit = options.operation ? operationCommitSql(options.operation, id) : undefined;
+  const requestCommit = options.authorization ? requestWriteAuthorizationSql(options.authorization, id) : undefined;
+  // Request/operation fences capture the actual authentication method. A
+  // password session remains valid when an old provider ID is remapped; only
+  // provider-authenticated writes should follow that provider mapping.
+  const legacyIdentity = requestCommit || operationCommit ? { condition: '1', bindings: [] }
+    : { condition: 'NOT EXISTS (SELECT 1 FROM auth_links WHERE oai_user_id = ? AND user_id <> ?)', bindings: [id, id] };
   const tripIds = ledger.trips.map(trip => trip.id);
   const tripIdsJson = JSON.stringify(tripIds);
   // D1 batches read one transactional snapshot. Reject future as well as stale
@@ -559,6 +632,8 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
     const stored = existing.get(trip.id);
     const links = linkedRows.results.filter(row => row.trip_id === trip.id);
     if (stored) {
+      // A stale copy of a bill deleted on another device must not overwrite it.
+      if (stored.owner.startsWith('deleted:')) throw new RequestError(`“${trip.name}” was deleted. Refresh to continue.`, 409);
       if (stored.owner !== id && !links.some(link => link.user_id === id)) throw new RequestError('You do not have access to this trip.', 403);
       // The receipt worker captured readLedger's visible raw representation.
       // Its snapshot must be compared in that same representation, before Zod
@@ -652,7 +727,11 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
       }
     }
   }
-  ledger = validateLedger(ledger, { previous: { trips: validationPrevious }, source: !options.source || options.source === 'web' ? 'web' : 'mcp', preserveCalculationRules: options.preserveCalculationRules });
+  // R05: a person's write takes control of a discount proposal they changed;
+  // a reading's own write (processing) and assistant writes never do.
+  const personWrite = (!options.source || options.source === 'web') && !options.operation;
+  ledger = validateLedger(ledger, { previous: { trips: validationPrevious }, source: !options.source || options.source === 'web' ? 'web' : 'mcp',
+    preserveCalculationRules: options.preserveCalculationRules, claimEditedProposals: personWrite });
   checkLedgerSize(ledger);
   // Diff the final validated representation, so accepted normalization of new
   // fields and every explicit legacy repair have accurate history snapshots.
@@ -686,7 +765,7 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
     db().prepare("INSERT OR IGNORE INTO sync_state (id, revision, last_write) VALUES (1, 0, '')"),
     db().prepare(`UPDATE sync_state SET revision = revision + 1, last_write = ?
       WHERE id = 1 AND (${scopeGate})
-        AND NOT EXISTS (SELECT 1 FROM auth_links WHERE oai_user_id = ? AND user_id <> ?)
+        AND ${legacyIdentity.condition}
         AND NOT EXISTS (SELECT 1 FROM json_each(?) ids JOIN trips t ON t.id = ids.value
           WHERE t.owner <> ? AND NOT EXISTS (SELECT 1 FROM memberships m WHERE m.trip_id = t.id AND m.user_id = ?))
         AND NOT EXISTS (SELECT 1 FROM json_each(?) ref LEFT JOIN receipts r ON r.id = json_extract(ref.value, '$.id')
@@ -698,11 +777,17 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
           WHERE (json_extract(prior.value, '$.owner') IS NULL AND t.id IS NOT NULL)
             OR (json_extract(prior.value, '$.owner') IS NOT NULL
               AND (t.id IS NULL OR t.owner IS NOT json_extract(prior.value, '$.owner'))))
-    `).bind(marker, ...scopeBindings, id, id, tripIdsJson, id, id, JSON.stringify(receiptReferences), JSON.stringify(conversationAuthors), id,
-      JSON.stringify(preimages)),
+        AND NOT EXISTS (SELECT 1 FROM json_each(?) expected JOIN trips t ON t.id = expected.key
+          WHERE t.revision <> expected.value)
+        ${operationCommit ? `AND ${operationCommit.gate}` : ''}
+        ${requestCommit ? `AND ${requestCommit.condition}` : ''}
+    `).bind(marker, ...scopeBindings, ...legacyIdentity.bindings, tripIdsJson, id, id, JSON.stringify(receiptReferences), JSON.stringify(conversationAuthors), id,
+      JSON.stringify(preimages), JSON.stringify(options.tripRevisions ?? {}), ...(operationCommit?.gateBindings ?? []), ...(requestCommit?.bindings ?? [])),
   ];
+  // R12: the operation's completion commits with the proposal, or not at all.
+  if (operationCommit) statements.push(db().prepare(operationCommit.complete).bind(...operationCommit.completeBindings(marker)));
   for (const trip of ledger.trips) {
-    statements.push(db().prepare('INSERT INTO trips (id, owner, data) SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND last_write = ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data WHERE EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND last_write = ?) AND (trips.owner = ? OR EXISTS (SELECT 1 FROM memberships m WHERE m.trip_id = trips.id AND m.user_id = ?))').bind(trip.id, trip.ownerId!, JSON.stringify(trip), marker, marker, id, id));
+    statements.push(db().prepare('INSERT INTO trips (id, owner, data) SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND last_write = ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data WHERE trips.data <> excluded.data AND EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND last_write = ?) AND (trips.owner = ? OR EXISTS (SELECT 1 FROM memberships m WHERE m.trip_id = trips.id AND m.user_id = ?))').bind(trip.id, trip.ownerId!, JSON.stringify(trip), marker, marker, id, id));
   }
   for (const trip of newTrips) {
     statements.push(db().prepare('INSERT INTO memberships (trip_id, user_id, member_id) SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM sync_state WHERE id = 1 AND last_write = ?)').bind(trip.id, id, ownerMembers.get(trip.id)!, marker));
@@ -719,18 +804,69 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
     .bind(restoreUntil,JSON.stringify(removedReceiptIds),marker));
   statements.push(...activityStatements(db(), changes, { id, displayName: profile?.display_name || 'Traveller' }, marker, scoped ? 'current' : revision + 1, options.source));
   const results = await db().batch(statements);
-  if (!results[1].meta.changes) throw new Error('CONFLICT');
+  if (!results[1].meta.changes) {
+    if (options.authorization && !await requestWriteAuthorized(db(), options.authorization, id)) {
+      throw new AuthError('Your sign-in changed before this save finished. Sign in again and review your changes.', 401);
+    }
+    // Name a lost operation separately: retrying it can never succeed.
+    if (options.operation && !await holdsOperation(db(), options.operation.key, options.operation.attemptId)) throw new OperationSupersededError();
+    if (options.operation && !await operationAuthorized(db(), options.operation, id)) throw new OperationUnauthorizedError();
+    throw new Error('CONFLICT');
+  }
   // The one-minute photo hold commits with the deletion. Undo can reattach an
   // active image before bounded scheduled maintenance removes its last copy.
   for (const trip of changedTrips) {
-    const notification = activityNotification(profile?.display_name || 'A traveller', changes.filter(change => change.tripId === trip.id), { tripName: trip.name, kind: trip.kind });
+    const tripChangeList = changes.filter(change => change.tripId === trip.id);
+    const notification = activityNotification(profile?.display_name || 'A traveller', tripChangeList, { tripName: trip.name, kind: trip.kind });
     if (!notification) continue;
-    await notifyMembers(trip.id, id, notification.title, notification.body, changes.filter(change=>change.tripId===trip.id).some(change=>['trip','member','invite'].includes(change.entityType)) ? undefined : [...new Set(changes.filter(change=>change.tripId===trip.id).flatMap(change=>[change.before,change.after].flatMap(value=>value ? [value.payer,value.from,value.to,...Object.keys(value.percentages as object || {}),...(Array.isArray(value.items)?value.items.flatMap((item:{members?:string[]})=>item.members||[]):[])] : [])).filter((value):value is string=>typeof value==='string'))]).catch(() => {
+    const everyone = tripChangeList.some(change=>['trip','member','invite'].includes(change.entityType));
+    const involved = everyone ? undefined : [...new Set(tripChangeList.flatMap(change=>[change.before,change.after].flatMap(value=>value ? [value.payer,value.from,value.to,...Object.keys(value.percentages as object || {}),...(Array.isArray(value.items)?value.items.flatMap((item:{members?:string[]})=>item.members||[]):[])] : [])).filter((value):value is string=>typeof value==='string'))];
+    // D05: whoever added a changed or deleted expense is involved in it too,
+    // even if they neither paid nor share it. Taken from history, not the JSON.
+    if (involved) {
+      const expenseIds = [...new Set(tripChangeList.filter(change => change.entityType === 'expense').map(change => change.entityId))];
+      if (expenseIds.length) involved.push(...await expenseCreatorMembers(trip.id, expenseIds).catch(() => []));
+    }
+    await notifyMembers(trip.id, id, notification.title, notification.body, involved).catch(() => {
       console.warn('TripTab could not queue a holiday update notification.');
     });
   }
   // Omitted trips remain available: ledger saves never delete shared records.
   return options.includeFreshness ? readLedgerSnapshot(id) : readLedger(id);
+}
+
+/**
+ * F-16: save only the trips a person changed, checked against each trip's own
+ * revision. Other people's saves to other trips no longer make this one
+ * conflict: the server takes the latest copy of every untouched trip and runs
+ * the same whole-ledger validation, history and notifications as writeLedger.
+ * A real conflict (the same trip changed) still returns CONFLICT, which the
+ * client resolves with its three-way merge (#63).
+ */
+export async function writeTrips(id: string, data: unknown, tripRevisions: unknown, options: { authorization?: RequestWriteAuthorization; source?: ActivitySource } = {}): Promise<LedgerSnapshot> {
+  const posted = parseLedgerStructure(data).trips;
+  if (!tripRevisions || typeof tripRevisions !== 'object' || Array.isArray(tripRevisions)) throw new RequestError('Send each trip’s revision.');
+  const expected = tripRevisions as Record<string, unknown>;
+  if (Object.keys(expected).length > posted.length || Object.values(expected).some(value => typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0)
+    || Object.keys(expected).some(tripId => !posted.some(trip => trip.id === tripId))) throw new RequestError('Send each trip’s revision.');
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const current = await readLedgerSnapshot(id, { includeFreshness: false });
+    const byId = new Map(posted.map(trip => [trip.id, trip]));
+    for (const trip of posted) {
+      const open = current.data.trips.some(value => value.id === trip.id);
+      if (open && expected[trip.id] === undefined) throw new RequestError('Send each trip’s revision.');
+      if (open && current.revisions[trip.id] !== expected[trip.id]) throw new Error('CONFLICT');
+    }
+    const merged = { trips: [...current.data.trips.map(trip => byId.get(trip.id) ?? trip), ...posted.filter(trip => !current.data.trips.some(value => value.id === trip.id))] };
+    const gate = Object.fromEntries(posted.flatMap(trip => expected[trip.id] === undefined ? [] : [[trip.id, expected[trip.id] as number]]));
+    try {
+      return await writeLedger(id, merged, current.revision, { source: options.source, authorization: options.authorization, includeFreshness: true, tripRevisions: gate });
+    } catch (error) {
+      // Another trip changed between the read and the commit: take its new copy and try again.
+      if (!(error instanceof Error) || error.message !== 'CONFLICT') throw error;
+    }
+  }
+  throw new Error('CONFLICT');
 }
 
 export function failure(e: unknown) {

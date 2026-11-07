@@ -222,20 +222,34 @@ export async function receiptAIStatus(request: Request, profile: Account, databa
 }
 export async function getReceiptAIAccess(request: Request, profile: Account, database: D1Database, environment: ReceiptAIEnvironment) {
   await assertCurrentAccount(request, profile, database);
-  const state = await accessState(request, profile, database, environment);
-  if (!state.secret) throw new ReceiptAIAccessError('Receipt processing has not been configured by the site owner yet.', 503, 'not_configured');
-  if (state.row?.provider === 'siwc') {
+  return receiptAICredential(database, environment, profile.id, { signal: request.signal });
+}
+/**
+ * R07: the credential for one receipt operation, without a browser request.
+ * The shared API key is decrypted from D1 with the deployment secret; a SIWC
+ * plan token is the person's own stored, server-refreshed connection. Callers
+ * must already have authorized the person: the route by their live request,
+ * the background runner by the operation's execution grant. A removed key, a
+ * disabled or disconnected plan, or a missing secret fails here, before any
+ * provider call.
+ */
+export async function receiptAICredential(database: D1Database, environment: ReceiptAIEnvironment, userId: string, options: { signal?: AbortSignal } = {}) {
+  const secret = tokenKey(environment);
+  const row = secret ? await settings(database) : null;
+  if (!secret) throw new ReceiptAIAccessError('Receipt processing has not been configured by the site owner yet.', 503, 'not_configured');
+  if (row?.provider === 'siwc') {
     if (environment.CHATGPT_PLAN_ENABLED !== 'true') throw new ReceiptAIAccessError('SIWC plan processing is disabled. Ask the site owner to select API key in receipt AI settings.', 503, 'siwc_disabled');
     try {
-      const access = await chatGPTPlanAccessToken(database, profile.id, environment, { signal: request.signal });
-      return { ...access, provider: 'siwc' as const };
+      const access = await chatGPTPlanAccessToken(database, userId, environment, { signal: options.signal });
+      return { ...access, provider: 'siwc' as const, settingsOwnerId: row.user_id, settingsVersion: row.version };
     } catch (error) {
       if (error instanceof ChatGPTPlanError) throw new ReceiptAIAccessError(error.message, error.status, error.code);
       throw error;
     }
   }
-  if (!state.row?.api_key_encrypted) throw new ReceiptAIAccessError('The site owner needs to add the shared OpenAI API key before receipts can be read automatically.', 503, 'not_connected');
-  return { accessToken: await decryptedKey(state.row.api_key_encrypted, state.row.user_id, state.secret), model: environment.OPENAI_RECEIPT_MODEL || DEFAULT_RECEIPT_MODEL, provider: 'api' as const };
+  if (!row?.api_key_encrypted) throw new ReceiptAIAccessError('The site owner needs to add the shared OpenAI API key before receipts can be read automatically.', 503, 'not_connected');
+  return { accessToken: await decryptedKey(row.api_key_encrypted, row.user_id, secret), model: environment.OPENAI_RECEIPT_MODEL || DEFAULT_RECEIPT_MODEL, provider: 'api' as const,
+    settingsOwnerId: row.user_id, settingsVersion: row.version };
 }
 async function setupBudget(database: D1Database, userId: string) {
   const now = Date.now(), window = 60_000;

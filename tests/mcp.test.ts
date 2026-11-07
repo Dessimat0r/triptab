@@ -159,6 +159,7 @@ ${Object.keys(mockStore).map(name => `export const ${name} = store.${name};`).jo
 `).toString('base64');
 const authUrl = 'data:text/javascript;base64,' + Buffer.from(`
 export const resolveIdentity = globalThis[Symbol.for('triptab.mcp-test-auth')].resolveIdentity;
+export const identityWriteAuthorization = identity => ({ userId: identity.id, kind: identity.kind, ref: identity.chatgptId ?? identity.id });
 export { hashToken } from ${JSON.stringify(new URL('../lib/auth.ts', import.meta.url).href)};
 `).toString('base64');
 const notificationsUrl = 'data:text/javascript;base64,' + Buffer.from(`

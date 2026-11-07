@@ -1,0 +1,29 @@
+# R07 after: tests/receipt-background.test.ts on the corrected tree (Node 24.22.1 Linux, Miniflare D1/R2, mocked provider)
+✔ R07: a reading cut off after a disconnect completes in the background with no browser request; a reconnect reuses it; the late attempt writes nothing (1805.61546ms)
+✔ R07: duplicate runner deliveries and a person's concurrent retry produce one resume, one provider call and one proposal (1314.756298ms)
+✔ R07: sign-out (the session is revoked) before the background attempt: it spends nothing, writes nothing and is not retried (1273.259195ms)
+✔ R07: session expiry before the background attempt: it spends nothing, writes nothing and is not retried (1146.343384ms)
+✔ R07: account deleted before the background attempt: it spends nothing, writes nothing and is not retried (1225.750792ms)
+✔ R07: grant expired before the background attempt: it spends nothing, writes nothing and is not retried (1274.061998ms)
+✔ R07: holiday archived before the background attempt: it spends nothing, writes nothing and is not retried (1279.746878ms)
+✔ R07: holiday deleted before the background attempt: it spends nothing, writes nothing and is not retried (1211.628073ms)
+✔ R07: bill deleted (restorable for 30 days) before the background attempt: it spends nothing, writes nothing and is not retried (1292.832859ms)
+✔ R07: draft edited by a person before the background attempt: it spends nothing, writes nothing and is not retried (1295.523833ms)
+✔ R07: shared key removed before the background attempt: it spends nothing, writes nothing and is not retried (1424.741526ms)
+✔ R07: processing switched to a plan that is not enabled before the background attempt: it spends nothing, writes nothing and is not retried (1340.64791ms)
+✔ R07: a different credential kind than the person started with before the background attempt: it spends nothing, writes nothing and is not retried (1307.49003ms)
+✔ R07: sign-out (the session is revoked) while the background attempt is reading: its result is not committed and no paid retry follows (1390.10805ms)
+✔ R07: account deleted while the background attempt is reading: its result is not committed and no paid retry follows (1347.260504ms)
+✔ R07: holiday archived while the background attempt is reading: its result is not committed and no paid retry follows (1290.080935ms)
+✔ R07: draft edited by a person while the background attempt is reading: its result is not committed and no paid retry follows (1275.630648ms)
+✔ R07: a reading that failed (provider error) is left for the person to retry; the runner never retries it (1116.801853ms)
+✔ R07: a resumed attempt that is itself cut off is not resumed again; the operation ends as interrupted (1293.545214ms)
+✔ R07: a connected reading needs no runner, and a running lease is never resumed early (1215.605465ms)
+ℹ tests 20
+ℹ suites 0
+ℹ pass 20
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 27683.938474

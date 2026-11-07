@@ -1,5 +1,6 @@
 import {
   ensureProfile,
+  profileWriteAuthorization,
   failure,
   readBoundedBody,
   readLedger,
@@ -56,7 +57,7 @@ export async function POST(request: Request) {
           actor.id,
           { trips: [{ ...trip, expenses: [expense, ...trip.expenses] }] },
           fresh.revision,
-          { preserveCalculationRules: true },
+          { preserveCalculationRules: true, authorization: profileWriteAuthorization(actor) },
         );
         return Response.json(
           { saved: true, receiptId: expense.receiptId },

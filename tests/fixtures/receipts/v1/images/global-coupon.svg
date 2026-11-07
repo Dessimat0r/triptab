@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="640" height="300" viewBox="0 0 640 300">
-<title>Global coupon applied once</title>
+<title>A receipt-wide coupon is one receipt-wide discount, applied once</title>
 <defs><filter id="obscured"><feGaussianBlur stdDeviation="2.5"/></filter></defs>
 <rect width="640" height="300" fill="#fff"/>
 <g fill="#111" font-family="monospace" font-size="22">

@@ -1,3 +1,4 @@
+import { declaredRequest } from './helpers/financial-request';
 import { transpileWithSharedImports } from './helpers/transpile';
 import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
@@ -108,7 +109,7 @@ async function storage(includeScopeIndexes = true) {
 }
 const ids = (page: Page) => new Set(page.events.map(value => value.id));
 const dinnerIds = new Set(['photo-old-created', 'expense-created', 'expense-updated', 'photo-current-created', 'pending-created', 'pending-ai-review', 'photo-pending-created', 'old-photo-purged', 'historic-draft-created', 'historic-draft-deleted', 'historic-photo-detached']);
-const request = (query: string, actor: keyof typeof tokens | null = 'joined') => new Request('https://triptab.test/api/activity?' + query, { headers: actor ? { cookie: 'tt_session=' + tokens[actor] } : {} });
+const request = (query: string, actor: keyof typeof tokens | null = 'joined') => declaredRequest('https://triptab.test/api/activity?' + query, { headers: actor ? { cookie: 'tt_session=' + tokens[actor] } : {} });
 async function page(query: string, actor: keyof typeof tokens | null = 'joined') { const response = await route.GET(request(query, actor)); assert.equal(response.status, 200); return await response.json() as Page; }
 
 test('receipt SQL binds one JSON context and validates internal scopes without interpolating IDs', () => {

@@ -1,0 +1,70 @@
+
+
+
+Running 3 tests using 2 workers
+
+
+
+
+[1/3] [chromium] › tests/browser/cached-client.spec.ts:70:3 › previous bundle (main 01be219) against the new server › the previous bundle shows no amounts or suggestions from the new server, and cannot record a payment
+
+
+
+[2/3] [chromium] › tests/browser/cached-client.spec.ts:56:3 › previous bundle (main 01be219) against the new server › control: without the boundary the previous bundle settles the BOGOF receipt at gross prices (£6.75, not £3.75)
+[3/3] [chromium] › tests/browser/cached-client.spec.ts:90:3 › previous bundle (main 01be219) against the new server › a previous bundle opened before the release keeps only its pre-release amounts, labelled, and its payment is refused
+  1) [chromium] › tests/browser/cached-client.spec.ts:70:3 › previous bundle (main 01be219) against the new server › the previous bundle shows no amounts or suggestions from the new server, and cannot record a payment 
+
+    Error: expect(locator).toContainText(expected) failed
+
+    Locator: getByRole('alert')
+    Expected substring: "TripTab has been updated. Reload this page to see current amounts. Nothing was saved."
+    Timeout: 5000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toContainText" with timeout 5000ms
+      - waiting for getByRole('alert')
+
+
+      75 |       for (const path of ['/balances', '/expenses']) {
+      76 |         await page.goto(path);
+    > 77 |         await expect(page.getByRole('alert')).toContainText(FINANCIAL_FORMAT_REFUSAL);
+         |                                               ^
+      78 |         for (const amount of ['£6.75', '£3.75', '£7.50', '£4.50', '£3.00', '£1.50']) await expect(page.locator('body')).not.toContainText(amount);
+      79 |         await expect(page.locator('body')).not.toContainText('Pringles');
+      80 |         await expect(page.getByRole('button', { name: /Record payment/ })).toHaveCount(0);
+        at /tmp/claude-0/-home-user-triptab/515433d0-bb30-53e4-accf-82f10631ed55/scratchpad/prefix/tests/browser/cached-client.spec.ts:77:47
+
+    Error Context: test-results/cached-client-previous-bun-49c32-and-cannot-record-a-payment-chromium/error-context.md
+
+
+  2) [chromium] › tests/browser/cached-client.spec.ts:90:3 › previous bundle (main 01be219) against the new server › a previous bundle opened before the release keeps only its pre-release amounts, labelled, and its payment is refused 
+
+    Error: expect(locator).toBeVisible() failed
+
+    Locator: getByText('Refresh failed. Showing the last loaded amounts.')
+    Expected: visible
+    Timeout: 5000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeVisible" with timeout 5000ms
+      - waiting for getByText('Refresh failed. Showing the last loaded amounts.')
+
+
+      117 |       const calls = await forward(page, flow);
+      118 |       await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+    > 119 |       await expect(page.getByText('Refresh failed. Showing the last loaded amounts.')).toBeVisible();
+          |                                                                                        ^
+      120 |       // It never received the discount record, so it cannot show a gross-price total for it.
+      121 |       await expect(page.locator('body')).not.toContainText('£6.75');
+      122 |       await expect(page.locator('body')).not.toContainText('Pringles');
+        at /tmp/claude-0/-home-user-triptab/515433d0-bb30-53e4-accf-82f10631ed55/scratchpad/prefix/tests/browser/cached-client.spec.ts:119:88
+
+    Error Context: test-results/cached-client-previous-bun-176bd--and-its-payment-is-refused-chromium/error-context.md
+
+
+  2 failed
+    [chromium] › tests/browser/cached-client.spec.ts:70:3 › previous bundle (main 01be219) against the new server › the previous bundle shows no amounts or suggestions from the new server, and cannot record a payment 
+    [chromium] › tests/browser/cached-client.spec.ts:90:3 › previous bundle (main 01be219) against the new server › a previous bundle opened before the release keeps only its pre-release amounts, labelled, and its payment is refused 
+  1 passed (11.6s)

@@ -1,3 +1,4 @@
+import { FINANCIAL_FORMAT, FINANCIAL_FORMAT_HEADER } from '../../lib/financial-format';
 import { createHash, randomBytes } from 'node:crypto';
 import { readFile, readdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
@@ -35,12 +36,14 @@ export async function createReceiptFlowWorker(options: { seedTrip?: boolean } = 
       import * as notifications from './app/api/notifications/route.ts';
       import * as push from './app/api/push/route.ts';
       import * as exports from './app/api/export/route.ts';
+      import * as expenseCreator from './app/api/expense-creator/route.ts';
+      import * as tripRoute from './app/api/trip/route.ts';
       import * as tripLanguage from './app/api/trip-language/route';
       import * as translate from './app/api/receipt/translate/route';
       const routes = { '/api/ledger': ledger, '/api/receipt': receipt, '/mcp': mcp,
         '/api/profile': profile, '/api/activity': activity, '/api/activity-entry': activityEntry, '/api/account-activity': accountActivity,
         '/api/receipt/ai-status': aiStatus, '/api/notifications': notifications, '/api/push': push,
-        '/api/trip-language':tripLanguage, '/api/receipt/translate':translate, '/api/export': exports };
+        '/api/trip-language':tripLanguage, '/api/receipt/translate':translate, '/api/export': exports, '/api/expense-creator': expenseCreator, '/api/trip': tripRoute };
       export default { async fetch(request) {
         const route = routes[new URL(request.url).pathname];
         const handler = route && route[request.method];
@@ -79,6 +82,8 @@ export async function createReceiptFlowWorker(options: { seedTrip?: boolean } = 
     const browserRequest = async (path: string, init: BrowserRequestInit = {}) => {
       const headers = new Headers(init.headers);
       headers.set('cookie', `tt_session=${sessionToken}`);
+      // A current bundle declares the money format it reads (R01).
+      headers.set(FINANCIAL_FORMAT_HEADER, String(FINANCIAL_FORMAT));
       if (!['GET', 'HEAD'].includes(init.method ?? 'GET')) {
         headers.set('origin', origin);
         headers.set('sec-fetch-site', 'same-origin');

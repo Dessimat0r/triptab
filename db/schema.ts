@@ -85,6 +85,8 @@ export const authRateLimits = sqliteTable('auth_rate_limits', {
 export const trips = sqliteTable('trips', {
   id: text('id').primaryKey(), owner: text('owner').notNull(), data: text('data').notNull(),
   receiptLinkVersion: integer('receipt_link_version').notNull().default(0),
+  // F-16 (migration 0014): advanced by triggers on data, owner and membership changes.
+  revision: integer('revision').notNull().default(0),
 }, table => [index('trips_owner_idx').on(table.owner)]);
 
 export const memberships = sqliteTable('memberships', {

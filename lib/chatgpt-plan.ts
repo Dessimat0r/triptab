@@ -250,7 +250,7 @@ export async function chatGPTPlanAccessToken(database: D1Database, userId: strin
   if (!row) throw new ChatGPTPlanError('Connect ChatGPT plan usage to read this receipt automatically.', 401, 'not_connected');
   let saved = await unseal<Credentials>(row.credentials, userId, 'tokens', config.key);
   if (!validCredentials(saved) || !saved.scopes.includes(PLAN_SCOPE) || !saved.scopes.includes('resource.invoke')) throw new ChatGPTPlanError('Authorize ChatGPT plan usage to process receipts.', 403, 'permission_required');
-  if (saved.expiresAt > Date.now() + 60_000) return { accessToken: saved.accessToken, model: config.model };
+  if (saved.expiresAt > Date.now() + 60_000) return { accessToken: saved.accessToken, model: config.model, connectionVersion: row.version };
   if (!saved.refreshToken) throw new ChatGPTPlanError('Reconnect ChatGPT to renew receipt processing.', 401, 'not_connected');
   const lease = Date.now() + 30_000;
   const locked = await database.prepare('UPDATE chatgpt_plan_connections SET refresh_until=? WHERE user_id=? AND version=? AND refresh_until<=? RETURNING version')
@@ -280,7 +280,7 @@ export async function chatGPTPlanAccessToken(database: D1Database, userId: strin
       .bind(await seal(saved, userId, 'tokens', config.key), userId, row.version, lease).first<{ version: number }>();
     if (!changed) throw new ChatGPTPlanError('The ChatGPT connection changed while it was renewing. Try again.', 409, 'connection_changed');
     if (!saved.scopes.includes(PLAN_SCOPE) || !saved.scopes.includes('resource.invoke')) throw new ChatGPTPlanError('ChatGPT plan permission is no longer enabled. Please reconnect.', 403, 'permission_required');
-    return { accessToken: saved.accessToken, model: config.model };
+    return { accessToken: saved.accessToken, model: config.model, connectionVersion: changed.version };
   } finally {
     await database.prepare('UPDATE chatgpt_plan_connections SET refresh_until=0 WHERE user_id=? AND version=? AND refresh_until=?').bind(userId, row.version, lease).run();
   }

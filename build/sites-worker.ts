@@ -33,10 +33,31 @@ export function secureResponse(request: Request, response: Response, development
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
+/** R07: resume receipt readings cut off after a disconnect (lib/receipt-background.ts). */
+// Not exported: every named export of a Worker entry module must be a handler.
+const RECEIPT_RESUME_CRON = "* * * * *";
+
+async function resumeReceiptOperations(env: Cloudflare.Env, scheduledTime: number) {
+  try {
+    const { runReceiptOperationTick } = await import("../lib/receipt-background");
+    await runReceiptOperationTick(env as never, { now: scheduledTime });
+  } catch {
+    // Each operation records its own outcome; a failure here leaves the
+    // interrupted operations for the next invocation. Never log resource values.
+    console.warn('TripTab could not resume interrupted receipt readings.');
+    throw new Error('TripTab could not resume interrupted receipt readings.');
+  }
+}
+
 const worker = {
   scheduled(controller: ScheduledController, env: Cloudflare.Env, ctx: ExecutionContext) {
     // Scheduled work receives bindings directly, without a visitor identity or
     // request-scoped connected-app access. Sites must activate the Cron trigger.
+    if (controller.cron === RECEIPT_RESUME_CRON) {
+      const task = resumeReceiptOperations(env, controller.scheduledTime);
+      ctx.waitUntil(task);
+      return task;
+    }
     const cleanup = async () => {
       try {
         const bindings = env as unknown as { DB?: D1Database; RECEIPTS?: R2Bucket };
@@ -45,8 +66,15 @@ const worker = {
         const { flushNotificationDigests } = await import('../lib/notifications');
         await flushNotificationDigests(bindings.DB, controller.scheduledTime);
         const result = await maintainSystemReceipts(bindings.DB, bindings.RECEIPTS, { now: controller.scheduledTime });
+        // F-14: bills deleted more than 30 days ago are removed for good; their
+        // photos join the purge queue handled on the next line.
+        const { purgeExpiredDeletedBills } = await import('../lib/trip-lifecycle');
+        await purgeExpiredDeletedBills(bindings.DB, { now: controller.scheduledTime });
         const purged = await purgeDeletedTripReceipts(bindings.DB, bindings.RECEIPTS, { now: controller.scheduledTime });
-        if (result.failed || purged.failed) throw new Error('Receipt cleanup needs a retry.');
+        // R07: also resume interrupted readings here, so they still finish if
+        // only this trigger is active on the host.
+        const resumed = await resumeReceiptOperations(env, controller.scheduledTime).then(() => true, () => false);
+        if (result.failed || purged.failed || !resumed) throw new Error('Receipt cleanup needs a retry.');
       } catch {
         // Database/provider exceptions can contain resource IDs or image keys.
         // Report failure to the scheduler without forwarding those values.

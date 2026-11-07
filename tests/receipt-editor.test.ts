@@ -7,10 +7,13 @@ import test from 'node:test';
 import { createSourceFile, isFunctionDeclaration, isJsxElement, isJsxAttribute, isJsxExpression, ModuleKind, ScriptKind, ScriptTarget, transpileModule } from 'typescript';
 import * as ts from 'typescript';
 import { equalFinancialValue, equalSavedValue } from '../lib/client-ledger';
+import { mergeExpenseEdits } from '../lib/expense-merge';
 import { buildReceiptPrompt } from '../lib/receipt-chatgpt';
-import { isBlankReceipt, isUnchangedInitialReceipt, matchingReceiptProposal, mayFillInitialReceipt, receiptEditableValue, receiptProposalEditor, receiptEditorTotal, type ReceiptEditor } from '../lib/receipt-processing';
-import { acknowledgeReceiptReview, receiptScanSaveError } from '../lib/receipt-scan';
+import { isBlankApartFromPersonalDetails, isBlankReceipt, isUnchangedInitialReceipt, matchingReceiptProposal, mayFillInitialReceipt, receiptEditableValue, receiptProposalEditor, receiptEditorTotal, type ReceiptEditor } from '../lib/receipt-processing';
+import { acknowledgeReceiptDifference, acknowledgeReceiptReview, RECEIPT_DIFFERENCE_ERROR, receiptScanSaveError } from '../lib/receipt-scan';
 import { expenseSaveBlockers, visibleExpenseBlockers } from '../lib/expense-readiness';
+import { findLikelyDuplicates } from '../lib/duplicates';
+import { financialFormatHeaders, refusedFinancialFormat } from '../lib/financial-format';
 import { isBill, CURRENT_CALCULATION_RULE, stampCalculationRules, tripMemberWeights, defaultParticipants, itemSchema, draftItemSchema, expenseSchema, itemSplitError, ledgerSchema, receiptSplitError, total, validateLedger, type Draft, type Expense, type ReceiptMessage, type Trip } from '../lib/model';
 
 // Execute the actual page handlers against a small state/persistence boundary.
@@ -20,7 +23,7 @@ const pageSource = await readFile(new URL('../components/trip-app.tsx', import.m
 const syntax = createSourceFile('page.tsx', pageSource, ScriptTarget.Latest, true, ScriptKind.TSX);
 const home = syntax.statements.find(statement => isFunctionDeclaration(statement) && statement.name?.text === 'Home');
 assert(home && isFunctionDeclaration(home) && home.body);
-const names = ['openExpense', 'openDraft', 'newExpense', 'keepExpenseEdits', 'editorIsCurrent', 'resetReceiptReview', 'closeReceiptEditor', 'isReceiptSessionCurrent', 'stageEditorReceiptPrompt', 'refreshReceiptAIStatus', 'prepareEditorReceipt', 'copyEditorReceiptPrompt', 'captureEditorReceipt', 'upload', 'processEditorReceipt', 'readEditorReceipt', 'sendReceiptQuestion', 'retryReceiptQuestion', 'setEditorPlace', 'reconcileEditorReceipt', 'storeEditorReceipt', 'submitExpense', 'reviewProcessedReceipt', 'reviewRestore', 'lookupFx'];
+const names = ['openExpense', 'openDraft', 'newExpense', 'reportEditorConflict', 'keepExpenseEdits', 'editorIsCurrent', 'resetReceiptReview', 'closeReceiptEditor', 'isReceiptSessionCurrent', 'stageEditorReceiptPrompt', 'refreshReceiptAIStatus', 'prepareEditorReceipt', 'copyEditorReceiptPrompt', 'captureEditorReceipt', 'upload', 'processEditorReceipt', 'readEditorReceipt', 'sendReceiptQuestion', 'retryReceiptQuestion', 'setEditorPlace', 'reconcileEditorReceipt', 'storeEditorReceipt', 'submitExpense', 'reviewProcessedReceipt', 'reviewRestore', 'lookupFx'];
 const declarations = [...syntax.statements, ...home.body.statements].filter(isFunctionDeclaration);
 const handlers = ['mergeReceiptConversation', 'hasPendingReceiptQuestions', ...names].map(name => {
   const declaration = declarations.find(statement => statement.name?.text === name);
@@ -50,7 +53,7 @@ const controllerSource = `return function createController(initial, boundary) {
   const receiptAIStatusRequest={current:0},receiptAIStatusInFlight={current:null};
   const updates = [], editorBaseline = {current:null};
   const latestSnapshot = {current:{data:{trips:[trip]},revision:0}};
-  const {isBill,firstBillExpense,isFirstBillReceipt,CURRENT_CALCULATION_RULE,stampCalculationRules,tripMemberWeights,defaultParticipants,canonicalJson,sha256Hex,itemSchema,draftItemSchema,expenseSchema,acknowledgeReceiptReview,expenseSaveBlockers,visibleExpenseBlockers,receiptScanSaveError,receiptEditorTotal,itemSplitError,receiptSplitError,total,equalFinancialValue,equalSavedValue,buildReceiptPrompt,isBlankReceipt,isUnchangedInitialReceipt,matchingReceiptProposal,mayFillInitialReceipt,receiptEditableValue,receiptProposalEditor} = boundary;
+  const {financialFormatHeaders,refusedFinancialFormat,findLikelyDuplicates,isBlankApartFromPersonalDetails,mergeExpenseEdits,isBill,firstBillExpense,isFirstBillReceipt,CURRENT_CALCULATION_RULE,stampCalculationRules,tripMemberWeights,defaultParticipants,canonicalJson,sha256Hex,itemSchema,draftItemSchema,expenseSchema,acknowledgeReceiptReview,expenseSaveBlockers,visibleExpenseBlockers,receiptScanSaveError,receiptEditorTotal,itemSplitError,receiptSplitError,total,equalFinancialValue,equalSavedValue,buildReceiptPrompt,isBlankReceipt,isUnchangedInitialReceipt,matchingReceiptProposal,mayFillInitialReceipt,receiptEditableValue,receiptProposalEditor} = boundary;
   const uid = boundary.uid, today = () => '2026-10-04', localTime = () => '12:00';
   const money = (amount, currency) => currency+' '+amount/100;
   const previewTotal = entry => total(entry);
@@ -73,13 +76,17 @@ const controllerSource = `return function createController(initial, boundary) {
   const setReceiptHandoffError = next => {receiptHandoffError=next};
   const setReceiptHandoffOpened = next => {receiptHandoffOpened=next};
   const setReceiptProcessing = next => {receiptProcessing=next};
+  // Per-draft reading status lives in browser storage; covered by tests/reading-status.test.ts.
+  const markReading = () => {}, clearReading = () => {}, setReadingTick = () => {};
   const setReceiptItemized = next => {receiptItemized=next};
   const setUploading = next => {uploading=next};
   const setReceiptAIConnecting = next => {receiptAIConnecting=next};
   const setView = next => {view=next}, setHelp = next => {help=next}, prepareReceiptImage = async file => file;
   const setReceiptHistoryOpen = next => {receiptHistoryOpen=next};
   const setRestoration = next => {restoration=next};
-  const setEditorConflict = next => {editorConflict=next};
+  const setEditorConflict = next => {editorConflict=next}, setAdjustmentDraft = () => {}, setScanFirst = () => {};
+  let mergeNotice = null; const setMergeNotice = next => {mergeNotice=next}, setMergeChoices = () => {};
+  const safeStorage = () => undefined, clearUnsavedEntry = () => {}, expenseDate = value => value;
   const setReferenceRate = next => {referenceRate=next};
   const setPaste = next => {paste=next};
   const setFxError = next => {fxError=next};
@@ -95,7 +102,7 @@ const controllerSource = `return function createController(initial, boundary) {
     return {trip:adopts?{...trip,currency:editing.currency}:trip,expense:adopts?{...editing,fx:undefined,bankAmount:undefined}:editing};
   }
   ${handlers.replaceAll('billEditorExpense || editing', 'billPreview().expense || editing').replaceAll('billEditorTrip || trip', 'billPreview().trip || trip')}
-  return {${names.join(',')},get editing(){return editing},get trip(){return trip},get blockers(){return editing?expenseSaveBlockers(editing,trip):[]},get error(){return error},get fxError(){return fxError},get fxLoading(){return fxLoading},get referenceRate(){return referenceRate},get updates(){return updates},get baseline(){return editorBaseline.current},get processed(){return processedReceipt},
+  return {${names.join(',')},get editing(){return editing},get trip(){return trip},get blockers(){return editing?expenseSaveBlockers(editing,trip):[]},get error(){return error},get conflictState(){return editorConflict},get mergeNotice(){return mergeNotice},get fxError(){return fxError},get fxLoading(){return fxLoading},get referenceRate(){return referenceRate},get updates(){return updates},get baseline(){return editorBaseline.current},get processed(){return processedReceipt},
     edit(next){editing={...editing,...next};activeReceiptEditor.current=editing},remote(next,revision=updates.length){trip=structuredClone(next);latestSnapshot.current={data:{trips:[trip]},revision}},
     get prompt(){return receiptPrompt},get handoffError(){return receiptHandoffError},get clipboard(){return clipboard},get requests(){return requests},get processing(){return receiptProcessing},get itemized(){return receiptItemized},get pending(){return receiptPending},get uploading(){return uploading},get connecting(){return receiptAIConnecting},
     network(next){network=next},clipboardUnavailable(){clipboardFailure=true},persistenceFailure(){failSave=true},persistenceRecovered(){failSave=false},
@@ -110,7 +117,7 @@ const controllerSource = `return function createController(initial, boundary) {
 const compiled = transpileModule(controllerSource, { compilerOptions: { module: ModuleKind.CommonJS, target: ScriptTarget.ES2022 } }).outputText;
 type Editing = ReceiptEditor;
 type Controller = {
-  openExpense(expense: Expense, resumeDraft?: boolean): void; openDraft(draft: Draft): void; newExpense(): void; keepExpenseEdits(): void;
+  openExpense(expense: Expense, resumeDraft?: boolean): void; openDraft(draft: Draft): void; newExpense(): void; keepExpenseEdits(choices?: Record<string, 'mine' | 'theirs'>): boolean; editorIsCurrent(): boolean; conflictState: { latest: Expense | null } | null; mergeNotice: string[] | null;
   editorIsCurrent(): boolean; resetReceiptReview(): void;
   storeEditorReceipt(entry: Editing, receiptId?: string, keepProposal?: boolean): Promise<Draft | null>;
   submitExpense(event: { preventDefault(): void }): Promise<void>;
@@ -129,7 +136,7 @@ type Controller = {
   restoring(): void; restoration: unknown;
 };
 const createController = new Function(compiled)() as (initial: Trip, boundary: object) => Controller;
-const controller = (trip: Trip) => createController(trip, { isBill, firstBillExpense, isFirstBillReceipt, canonicalJson, sha256Hex, uid: randomUUID, ledgerSchema, CURRENT_CALCULATION_RULE, stampCalculationRules, tripMemberWeights, defaultParticipants, itemSchema, draftItemSchema, expenseSchema, acknowledgeReceiptReview, expenseSaveBlockers, visibleExpenseBlockers, itemSplitError, receiptSplitError, total, validateLedger, equalFinancialValue, equalSavedValue, buildReceiptPrompt, isBlankReceipt, isUnchangedInitialReceipt, matchingReceiptProposal, mayFillInitialReceipt, receiptEditableValue, receiptProposalEditor, receiptEditorTotal, receiptScanSaveError });
+const controller = (trip: Trip) => createController(trip, { financialFormatHeaders, refusedFinancialFormat, findLikelyDuplicates, isBlankApartFromPersonalDetails, mergeExpenseEdits, isBill, firstBillExpense, isFirstBillReceipt, canonicalJson, sha256Hex, uid: randomUUID, ledgerSchema, CURRENT_CALCULATION_RULE, stampCalculationRules, tripMemberWeights, defaultParticipants, itemSchema, draftItemSchema, expenseSchema, acknowledgeReceiptReview, expenseSaveBlockers, visibleExpenseBlockers, itemSplitError, receiptSplitError, total, validateLedger, equalFinancialValue, equalSavedValue, buildReceiptPrompt, isBlankReceipt, isUnchangedInitialReceipt, matchingReceiptProposal, mayFillInitialReceipt, receiptEditableValue, receiptProposalEditor, receiptEditorTotal, receiptScanSaveError });
 const stamp = '2026-10-04T12:00:00Z';
 const question: ReceiptMessage = { id: 'question', role: 'user', text: 'Check the replacement image', createdAt: stamp };
 const reply: ReceiptMessage = { id: 'reply', role: 'assistant', replyTo: question.id, text: 'Reviewed replacement image', createdAt: stamp };
@@ -212,7 +219,7 @@ test('unrelated drafts are not attached and a concurrent posted financial change
   const noPending=fixture(); noPending.drafts=noPending.drafts.filter(d=>d.id==='unrelated'); const direct=controller(noPending); direct.openExpense(noPending.expenses[0]);
   assert.equal(direct.editing?.draftId,undefined); assert.equal(direct.editing?.receiptId,'old-photo');
   const initial=fixture(); const editor=controller(initial); editor.openExpense(initial.expenses[0]); const changed=structuredClone(initial); changed.expenses[0].payer='b'; editor.remote(changed);
-  await submit(editor); assert.match(editor.error,/changed while you were editing/); assert.equal(editor.updates.length,0); assert.equal(editor.editing?.receiptId,'replacement-photo');
+  await submit(editor); assert.match(editor.error,/Their changes were added to your edits/,'the stale save is blocked; the matching payer change merges'); assert.equal(editor.updates.length,0); assert.equal(editor.editing?.receiptId,'replacement-photo'); assert.equal(editor.editing?.payer,'b');
 });
 
 const financialFields = ['title','date','time','timezone','payer','receiptId','currency','fx','bankAmount','items','percentages','tax','tip','discount','source'] as const;
@@ -466,6 +473,29 @@ test('typing while native reading is pending preserves local values and offers t
   assert.equal(editor.editing!.payer,'b');assert(editor.processed);assert.equal(editor.processing,false);assert.equal(editor.trip.expenses.length,0);
 });
 
+test('F-07: a name typed while reading is kept and the items still fill in without a review step', async () => {
+  for (const when of ['before', 'during'] as const) {
+    const editor=controller(blankTrip());editor.newExpense();editor.aiConnected();
+    let release!:(value:unknown)=>void, started!:()=>void;
+    const pendingResponse=new Promise(resolve=>{release=resolve}),processingStarted=new Promise<void>(resolve=>{started=resolve});
+    editor.network(async url=>{
+      if(url.startsWith('/api/receipt?'))return response({receiptId:'new-photo'});
+      started();return pendingResponse;
+    });
+    // As userReceiptField does in the name field: provenance merges.
+    const typed = () => ({ title: 'Snacks for the train', fieldSources: { ...editor.editing!.fieldSources, title: 'user' as const } });
+    if (when === 'before') editor.edit(typed());
+    const captured=editor.captureEditorReceipt(receiptFile());await processingStarted;
+    if (when === 'during') editor.edit(typed());
+    release(response({data:{trips:[itemizedTrip(editor.trip)]},revision:2}));await captured;editor.reconcileEditorReceipt(editor.trip);
+    // The fill is confirmed on the next pass, after its values render.
+    editor.reconcileEditorReceipt(editor.trip);
+    assert.equal(editor.editing!.title,'Snacks for the train',`${when}: the typed name wins over the merchant`);
+    assert.deepEqual(editor.editing!.items.map(item=>item.name),['Dinner from image'],`${when}: items fill in`);
+    assert.equal(editor.processed,null,`${when}: no Review processed receipt step`);
+  }
+});
+
 test('a reading response from a previous account cannot apply its proposal', async () => {
   const editor=controller(blankTrip());editor.newExpense();editor.aiConnected();
   let release!:(value:unknown)=>void, started!:()=>void;
@@ -638,10 +668,16 @@ test('Save checks independent totals and explicit reviewed differences before po
   draft.receiptScan = {version: 1, printedTotal: 1201, printedCurrency: 'GBP', status: 'matched', warnings: []};
   const initial = fixture(draft); initial.expenses = [];
   const editor = controller(initial); editor.openDraft(draft);
+  // F-01: ordinary Save cannot accept a one-penny difference.
+  assert(editor.blockers.some(blocker => blocker.key === 'scan' && blocker.message === RECEIPT_DIFFERENCE_ERROR && blocker.target === 'expense-receipt-difference'));
+  await submit(editor); assert.equal(editor.trip.expenses.length, 0); assert.equal(editor.updates.length, 0);
+  editor.edit(acknowledgeReceiptDifference(editor.editing!, 'Printed total includes a one-penny rounding.'));
+  assert.equal(editor.blockers.length, 0);
   await submit(editor); assert.equal(editor.error, ''); assert.equal(editor.trip.expenses.length, 1);
   assert.equal(editor.updates.length, 1);
   assert.equal(editor.trip.expenses[0].items[0].amount, 1200);
   assert.equal(editor.trip.expenses[0].receiptScan?.printedTotal, 1201);
+  assert.equal(editor.trip.expenses[0].receiptScan?.acknowledgement?.reason, 'Printed total includes a one-penny rounding.');
 });
 
 test('receipt proposals replace defaults while preserving user-confirmed fields and clearing obsolete currency conversion', () => {
@@ -864,4 +900,41 @@ test('a suggestion-only proposal keeps the editor clean and carries through draf
   assert.equal(editor.error,'');
   assert.deepEqual(editor.trip.expenses[0].suggestedIcon,proposed.suggestedIcon);
   assert.deepEqual(editor.trip.expenses[0].icon,icon);
+});
+
+test('F-08 the production editor merges a newer amount into a name-only edit and saves both', async () => {
+  const dinner: Expense = { id: 'dinner', title: 'Dinner', date: '2026-11-06', time: '20:00', timezone: 'Europe/London', currency: 'GBP', payer: 'a',
+    items: [{ id: 'meal', name: 'Dinner', amount: 2000, members: ['a', 'b'] }], tax: 0, tip: 0, discount: 0 };
+  const initial = { ...fixture(), expenses: [dinner], drafts: [] };
+  const editor = controller(initial); editor.openExpense(editor.trip.expenses[0]);
+  editor.edit({ title: "Dinner at Rosa's" });
+  // Gary saves £30 meanwhile.
+  const remote = structuredClone(editor.trip); remote.expenses[0].items[0].amount = 3000; editor.remote(remote);
+  // Sam presses Save: the stale editor is detected and Gary's change is merged in, not overwritten.
+  await submit(editor);
+  assert.equal(editor.updates.length, 0, 'nothing is written from the stale form');
+  assert.match(editor.error, /Their changes were added to your edits/);
+  assert.equal(editor.conflictState, null);
+  assert.deepEqual(editor.mergeNotice, ['Price and sharing of Dinner']);
+  assert.equal(editor.editing?.title, "Dinner at Rosa's"); assert.equal(editor.editing?.items[0].amount, 3000);
+  await submit(editor);
+  assert.equal(editor.updates.length, 1);
+  assert.equal(editor.trip.expenses[0].title, "Dinner at Rosa's");
+  assert.equal(editor.trip.expenses[0].items[0].amount, 3000);
+});
+
+test('F-08 both amounts changed: Save stays blocked until a choice is made and nothing is stored', async () => {
+  const dinner: Expense = { id: 'dinner', title: 'Dinner', date: '2026-11-06', time: '20:00', timezone: 'Europe/London', currency: 'GBP', payer: 'a',
+    items: [{ id: 'meal', name: 'Dinner', amount: 2000, members: ['a', 'b'] }], tax: 0, tip: 0, discount: 0 };
+  const editor = controller({ ...fixture(), expenses: [dinner], drafts: [] }); editor.openExpense(editor.trip.expenses[0]);
+  editor.edit({ items: [{ ...dinner.items[0], amount: 2500 }] });
+  const remote = structuredClone(editor.trip); remote.expenses[0].items[0].amount = 3000; editor.remote(remote);
+  await submit(editor);
+  assert.equal(editor.updates.length, 0); assert.equal(editor.conflictState?.latest?.items[0].amount, 3000);
+  assert.equal(editor.keepExpenseEdits(), false, 'merging without a choice is refused');
+  await submit(editor); assert.equal(editor.updates.length, 0, 'stored amount stays at 3000 until a choice');
+  assert.equal(editor.trip.expenses[0].items[0].amount, 3000);
+  assert.equal(editor.keepExpenseEdits({ 'item:meal:financial': 'mine' }), true);
+  await submit(editor);
+  assert.equal(editor.updates.length, 1); assert.equal(editor.trip.expenses[0].items[0].amount, 2500);
 });

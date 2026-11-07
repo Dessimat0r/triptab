@@ -1,3 +1,4 @@
+import { applyAdjustments, type Adjustment } from './adjustments';
 import { equalSavedValue } from './client-ledger';
 import type { Draft, DraftItem, Expense, Trip } from './model';
 
@@ -15,13 +16,17 @@ export type InitialReceiptReview = {
 // Compare what the traveller can edit, independently of conversation, memory
 // and draft bookkeeping. Cosmetic icon choices are merged separately so they
 // do not prevent initial itemisation. An incoming proposal must not erase them.
+// Discount and charge records are money the person can edit (R04): an edit
+// to them alone must stop an automatic fill and lose a late-proposal race.
+// No records and an empty list are the same work.
 export function receiptEditableValue(entry: ReceiptEditor) {
   const { title, date, time, timezone, currency, payer, items, tax, tip, discount, percentages, fx, bankAmount, receiptScan, fieldSources, receiptLanguage, detectedLanguage, location, locationHint } = entry;
-  return { title, date, time, timezone, currency, payer, items, tax, tip, discount, percentages, fx, bankAmount, receiptScan, fieldSources, receiptLanguage, detectedLanguage, location, locationHint };
+  const adjustments = entry.adjustments?.length ? entry.adjustments : undefined;
+  return { title, date, time, timezone, currency, payer, items, tax, tip, discount, adjustments, percentages, fx, bankAmount, receiptScan, fieldSources, receiptLanguage, detectedLanguage, location, locationHint };
 }
 
 export function isBlankReceipt(entry: ReceiptEditor) {
-  return !entry.expenseId && !entry.title.trim() && !entry.tax && !entry.tip && !entry.discount
+  return !entry.expenseId && !entry.title.trim() && !entry.tax && !entry.tip && !entry.discount && !entry.adjustments?.length
     && entry.percentages === undefined && entry.fx === undefined && entry.bankAmount === undefined
     && entry.items.every(item => !item.name.trim() && !Object.values(item.translations ?? {}).some(value=>value?.text.trim()) && !item.amount && item.quantity === undefined && item.units === undefined && item.percentages === undefined);
 }
@@ -32,12 +37,43 @@ export function matchingReceiptProposal(trip: Trip, editor: ReceiptEditor) {
     && draft.receiptId === editor.receiptId && draft.expenseId === editor.expenseId) || null;
 }
 
+/**
+ * Descriptive details a person may type before or while a receipt is read
+ * (F-07). They stay theirs: receiptProposalEditor keeps every user-sourced
+ * value, so typing them does not stop the receipt filling in.
+ */
+const PERSONAL_DETAILS = ['title', 'date', 'time', 'timezone', 'payer', 'location'] as const;
+function withoutPersonalDetails(value: ReturnType<typeof receiptEditableValue>, editor: ReceiptEditor) {
+  const typed = PERSONAL_DETAILS.filter(field => editor.fieldSources?.[field] === 'user');
+  if (!typed.length) return value;
+  const sources = { ...value.fieldSources };
+  for (const field of typed) delete sources[field];
+  return { ...value, ...Object.fromEntries(typed.map(field => [field, undefined])), fieldSources: Object.keys(sources).length ? sources : undefined };
+}
+
+/** A new expense's first line follows a typed name; that copy is not receipt content. */
+export function withoutTypedName<T extends ReceiptEditor>(entry: T): T {
+  if (entry.fieldSources?.title !== 'user') return entry;
+  return { ...entry, title: '', items: entry.items.map((item, index) => {
+    if (index || item.name !== entry.title || item.fieldSources?.name !== 'user') return item;
+    const sources = { ...item.fieldSources }; delete sources.name;
+    const { fieldSources: dropped, ...rest } = item; void dropped;
+    return { ...rest, name: '', ...(Object.keys(sources).length ? { fieldSources: sources } : {}) };
+  }) };
+}
+
+/** A receipt is still blank when the only changes are personal details typed before the photo (F-07). */
+export function isBlankApartFromPersonalDetails(entry: ReceiptEditor, blank?: ReturnType<typeof receiptEditableValue>) {
+  const plain = withoutTypedName(entry);
+  return isBlankReceipt(plain) && (!blank || equalSavedValue(withoutPersonalDetails(blank, entry), withoutPersonalDetails(receiptEditableValue(plain), entry)));
+}
+
 export function isUnchangedInitialReceipt(initial: InitialReceiptReview | null, accountId: string, trip: Trip, editor: ReceiptEditor, draft: Draft) {
   return !!initial && initial.accountId === accountId && initial.tripId === trip.id
     && initial.editorId === editor.id && initial.draftId === draft.id && initial.receiptId === draft.receiptId
     && editor.draftId === draft.id && editor.receiptId === draft.receiptId
     && !editor.expenseId && !draft.expenseId && !trip.expenses.some(expense => expense.id === editor.id)
-    && equalSavedValue(initial.financial, receiptEditableValue(editor));
+    && equalSavedValue(withoutPersonalDetails(initial.financial, editor), withoutPersonalDetails(receiptEditableValue(editor), editor));
 }
 
 export function mayFillInitialReceipt(initial: InitialReceiptReview | null, accountId: string, trip: Trip, editor: ReceiptEditor, draft: Draft) {
@@ -58,9 +94,10 @@ export function receiptProposalEditor(editor: ReceiptEditor, draft: Draft): Rece
   return next;
 }
 
-export function receiptEditorTotal(entry: Pick<ReceiptEditor, 'items' | 'tax' | 'tip' | 'discount'>): number | null {
+export function receiptEditorTotal(entry: Pick<ReceiptEditor, 'items' | 'tax' | 'tip' | 'discount'> & { adjustments?: Adjustment[] }): number | null {
   if (entry.items.some(item => item.amount === null || !Number.isSafeInteger(item.amount))) return null;
-  const amount = entry.items.reduce((sum, item) => sum + item.amount!, 0) + entry.tax + entry.tip - entry.discount;
+  const adjusted = applyAdjustments(entry.items, entry.adjustments);
+  const amount = adjusted.net.reduce<number>((sum, value) => sum + value!, 0) + adjusted.receiptDelta + entry.tax + entry.tip - entry.discount;
   return Number.isSafeInteger(amount) ? amount : null;
 }
 

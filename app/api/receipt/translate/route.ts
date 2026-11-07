@@ -1,5 +1,7 @@
 import { env } from 'cloudflare:workers';
-import { db,ensureProfile,failure,readBoundedBody,readLedger,RequestError,sameOrigin } from '@/lib/store';
+import { db,ensureProfile,profileWriteAuthorization,failure,readBoundedBody,readLedger,RequestError,sameOrigin } from '@/lib/store';
+import { requestWriteAuthorized } from '@/lib/auth';
+import { receiptRequestGuard } from '@/lib/receipt-request-guard';
 import { getReceiptAIAccess,ReceiptAIAccessError,type ReceiptAIEnvironment } from '@/lib/receipt-ai-access';
 import { consumeReceiptProcessBudget,ReceiptAIError } from '@/lib/receipt-ai';
 import { languageRequestSchema,processLanguageRequest } from '@/lib/receipt-language-ai';
@@ -9,6 +11,7 @@ export async function POST(request:Request){try{
   if(request.headers.get('sec-fetch-site')==='cross-site')throw new RequestError('Open TripTab to translate item names.',403);
   if(request.headers.get('content-type')?.split(';')[0].trim().toLowerCase()!=='application/json')throw new RequestError('Send a JSON translation request.',415);
   const profile=await ensureProfile(request);
+  const authorization=profileWriteAuthorization(profile);
   let body:unknown;
   try{body=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(await readBoundedBody(request,150_000)));}
   catch(error){if(error instanceof RequestError)throw error;throw new RequestError('Invalid translation request.');}
@@ -24,8 +27,11 @@ export async function POST(request:Request){try{
   else{
     const database=db(),connection=await getReceiptAIAccess(request,profile,database,env as unknown as ReceiptAIEnvironment);
     await consumeReceiptProcessBudget(database,profile.id,{provider:connection.provider});
-    result=await processLanguageRequest(values,connection,{signal:AbortSignal.any([request.signal,AbortSignal.timeout(60_000)]),tripLanguage:trip?.receiptLanguage});
+    const beforeRequest=receiptRequestGuard({database,userId:profile.id,authorization,connection,tripId:trip?.id,
+      credential:()=>getReceiptAIAccess(request,profile,database,env as unknown as ReceiptAIEnvironment)});
+    result=await processLanguageRequest(values,connection,{signal:AbortSignal.any([request.signal,AbortSignal.timeout(60_000)]),tripLanguage:trip?.receiptLanguage,beforeRequest});
   }
+  if(!await requestWriteAuthorized(db(),authorization,profile.id))throw new RequestError('Your sign-in changed. Open this receipt again.',401);
   if((await ensureProfile(request)).id!==profile.id)throw new RequestError('Your account changed. Open this receipt again.',409);
   if(trip&&!(await readLedger(profile.id)).data.trips.some(value=>value.id===trip.id))throw new RequestError('Holiday access changed.',403);
   return Response.json({accountId:profile.id,tripId:values.tripId??null,...result as object},{headers:{'Cache-Control':'private, no-store'}});

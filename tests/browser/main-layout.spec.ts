@@ -130,9 +130,9 @@ test('pagination preserves tab counts, resets holiday scope and focuses the new 
   await page.getByRole('link', { name: 'Expenses' }).click();
   await expect(page.locator('.expense')).toHaveCount(24);
   await page.getByRole('button', { name: 'Open holidays' }).click();
-  await page.getByRole('button', { name: /Weekend in Porto/ }).click();
+  await page.getByRole('button', { name: /^Weekend in Porto/ }).click();
   await page.getByRole('button', { name: 'Open holidays' }).click();
-  await page.getByRole('button', { name: /A week in Lisbon/ }).click();
+  await page.getByRole('button', { name: /^A week in Lisbon/ }).click();
   await expect(page.locator('.expense')).toHaveCount(20);
 });
 test('drawer traps focus, closes on Escape and restores the opener', async ({ page }) => {
@@ -342,13 +342,26 @@ test('paged rows keep their row borders and lists contain only list items', asyn
 });
 
 test('saving a traveller name keeps focus in its row', async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 844 }); await fixtures(page); await page.goto('/travellers');
+  await page.setViewportSize({ width: 390, height: 844 }); await fixtures(page);
+  let data = { trips: [structuredClone(trip)] }, revision = 1, posts = 0;
+  // This fixture must acknowledge the actual saved name, rather than reply
+  // with the original Sam and accidentally test a successful-looking revert.
+  await page.route('**/api/ledger', route => {
+    if (route.request().method() === 'POST') {
+      data = route.request().postDataJSON().data; revision++; posts++;
+    }
+    return route.fulfill({ json: { data, revision }, headers: { 'X-TripTab-Account': 'audit-owner' } });
+  });
+  await page.goto('/travellers');
   const input = page.getByRole('textbox', { name: 'Traveller 2 name', exact: true });
   await input.fill('Samuel');
   await page.getByRole('button', { name: 'Save traveller 2 name', exact: true }).focus();
   await page.keyboard.press('Enter');
   await expect(page.getByRole('button', { name: 'Save traveller 2 name', exact: true })).toHaveCount(0);
   await expect(input).toBeFocused();
+  await expect(input).toHaveValue('Samuel');
+  expect(data.trips[0].members[1].name).toBe('Samuel');
+  expect(posts).toBe(1);
 });
 
 test('closing a dialog with the phone keyboard open returns focus to its opener', async ({ page }) => {

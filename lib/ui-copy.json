@@ -3844,5 +3844,203 @@
     "Revocada por el propietario de la cuenta",
     "Révoquée par le propriétaire de la note",
     "Vom Rechnungsinhaber widerrufen"
+  ],
+  [
+    "Other people have joined this bill with their accounts. Transfer it or archive it instead; only a bill nobody else can open can be deleted.",
+    "Otras personas se han unido a esta cuenta con sus cuentas de usuario. Transfiérela o archívala; solo se puede eliminar una cuenta que nadie más pueda abrir.",
+    "D’autres personnes ont rejoint cette note avec leur compte. Transférez-la ou archivez-la ; seule une note que personne d’autre ne peut ouvrir peut être supprimée.",
+    "Andere Teilnehmer sind dieser Rechnung mit ihren Konten beigetreten. Übertrage oder archiviere sie; nur eine Rechnung, die niemand sonst öffnen kann, kann gelöscht werden."
+  ],
+  [
+    "Another person joined or the bill changed. Refresh and try again.",
+    "Otra persona se unió o la cuenta cambió. Actualiza e inténtalo de nuevo.",
+    "Une autre personne a rejoint la note ou celle-ci a changé. Actualisez et réessayez.",
+    "Ein weiterer Teilnehmer ist beigetreten oder die Rechnung wurde geändert. Lade sie neu und versuche es erneut."
+  ],
+  [
+    "· on TripTab",
+    "· en TripTab",
+    "· sur TripTab",
+    "· bei TripTab"
+  ],
+  [
+    "People on TripTab you share a holiday or bill with",
+    "Personas en TripTab con las que compartes un viaje o una cuenta",
+    "Personnes sur TripTab avec qui vous partagez un voyage ou une note",
+    "Personen bei TripTab, mit denen du einen Urlaub oder eine Rechnung teilst"
+  ],
+  [
+    "Add {value0} (on TripTab)",
+    "Añadir a {value0} (en TripTab)",
+    "Ajouter {value0} (sur TripTab)",
+    "{value0} hinzufügen (bei TripTab)"
+  ],
+  [
+    "Open",
+    "Abrir",
+    "Ouvrir",
+    "Öffnen"
+  ],
+  [
+    "Holiday settings",
+    "Ajustes del viaje",
+    "Paramètres du voyage",
+    "Reiseeinstellungen"
+  ],
+  [
+    "Actions for {value0}",
+    "Acciones para {value0}",
+    "Actions pour {value0}",
+    "Aktionen für {value0}"
+  ],
+  [
+    "Delete payment",
+    "Eliminar pago",
+    "Supprimer le paiement",
+    "Zahlung löschen"
+  ],
+  [
+    "Remove from my list",
+    "Quitar de mi lista",
+    "Retirer de ma liste",
+    "Aus meiner Liste entfernen"
+  ],
+  [
+    "untitled receipt",
+    "recibo sin título",
+    "reçu sans titre",
+    "unbenannter Beleg"
+  ],
+  [
+    "Unable to change this holiday.",
+    "No se puede cambiar este viaje.",
+    "Impossible de modifier ce voyage.",
+    "Diese Reise kann nicht geändert werden."
+  ],
+  [
+    "Is {value0} the same person?",
+    "¿Es {value0} la misma persona?",
+    "{value0} est-il la même personne ?",
+    "Ist {value0} dieselbe Person?"
+  ],
+  [
+    "“{value0}” is already on this bill. Link them to {value1}’s TripTab account? They will see this bill only, and be told they were added.",
+    "«{value0}» ya está en esta cuenta. ¿Vincularlo a la cuenta de TripTab de {value1}? Solo verá esta cuenta y se le avisará de que se le ha añadido.",
+    "« {value0} » figure déjà sur cette note. Le lier au compte TripTab de {value1} ? Cette personne verra uniquement cette note et sera prévenue de son ajout.",
+    "„{value0}“ ist bereits auf dieser Rechnung. Mit dem TripTab-Konto von {value1} verknüpfen? Die Person sieht nur diese Rechnung und wird über das Hinzufügen informiert."
+  ],
+  [
+    "Link {value0}",
+    "Vincular a {value0}",
+    "Lier {value0}",
+    "{value0} verknüpfen"
+  ],
+  [
+    "{value0} was added and can now see this bill.",
+    "Se ha añadido a {value0}, que ya puede ver esta cuenta.",
+    "{value0} a été ajouté et peut maintenant voir cette note.",
+    "{value0} wurde hinzugefügt und kann diese Rechnung jetzt sehen."
+  ],
+  [
+    "Add someone on TripTab",
+    "Añadir a alguien de TripTab",
+    "Ajouter une personne sur TripTab",
+    "Jemanden auf TripTab hinzufügen"
+  ],
+  [
+    "People you already share a holiday or bill with. They can see this bill only, and can leave it.",
+    "Personas con las que ya compartes un viaje o una cuenta. Solo pueden ver esta cuenta y pueden salir de ella.",
+    "Personnes avec qui vous partagez déjà un voyage ou une note. Elles ne voient que cette note et peuvent la quitter.",
+    "Personen, mit denen du bereits eine Reise oder Rechnung teilst. Sie sehen nur diese Rechnung und können sie verlassen."
+  ],
+  [
+    " (archived)",
+    " (archivado)",
+    " (archivé)",
+    " (archiviert)"
+  ],
+  [
+    " · Archived",
+    " · Archivado",
+    " · Archivé",
+    " · Archiviert"
+  ],
+  [
+    "{value0} is archived. Restore it to settle up.",
+    "{value0} está archivado. Restáuralo para liquidar.",
+    "{value0} est archivé. Restaurez-le pour régler.",
+    "{value0} ist archiviert. Stelle es wieder her, um abzurechnen."
+  ],
+  [
+    "Include archived holidays and bills",
+    "Incluir viajes y cuentas archivados",
+    "Inclure les voyages et notes archivés",
+    "Archivierte Reisen und Rechnungen einbeziehen"
+  ],
+  [
+    "Restore receipt draft",
+    "Restaurar borrador del recibo",
+    "Restaurer le brouillon du reçu",
+    "Belegentwurf wiederherstellen"
+  ],
+  [
+    "This receipt draft is already back. Open it from Receipts.",
+    "Este borrador del recibo ya se ha restaurado. Ábrelo desde Recibos.",
+    "Ce brouillon de reçu est déjà restauré. Ouvrez-le depuis Reçus.",
+    "Dieser Belegentwurf ist bereits wiederhergestellt. Öffne ihn unter Belege."
+  ],
+  [
+    "Reading receipt…",
+    "Leyendo el recibo…",
+    "Lecture du reçu…",
+    "Beleg wird gelesen …"
+  ],
+  [
+    "Reading didn’t finish · open it to read again",
+    "La lectura no terminó · ábrelo para volver a leerlo",
+    "La lecture n’a pas abouti · ouvrez-le pour relancer la lecture",
+    "Lesen nicht abgeschlossen · öffne ihn, um ihn erneut zu lesen"
+  ],
+  [
+    "Recently deleted",
+    "Eliminados recientemente",
+    "Supprimés récemment",
+    "Kürzlich gelöscht"
+  ],
+  [
+    "Deleted bills can be restored with their receipt photos for 30 days.",
+    "Las cuentas eliminadas se pueden restaurar con sus fotos de recibos durante 30 días.",
+    "Les notes supprimées peuvent être restaurées avec leurs photos de reçus pendant 30 jours.",
+    "Gelöschte Rechnungen können 30 Tage lang mit ihren Belegfotos wiederhergestellt werden."
+  ],
+  [
+    "Deleted {value0} · can be restored until {value1}",
+    "Eliminada el {value0} · se puede restaurar hasta el {value1}",
+    "Supprimée le {value0} · restaurable jusqu’au {value1}",
+    "Gelöscht am {value0} · wiederherstellbar bis {value1}"
+  ],
+  [
+    "Delete for good",
+    "Eliminar definitivamente",
+    "Supprimer définitivement",
+    "Endgültig löschen"
+  ],
+  [
+    "Deleted the bill “{value0}”. You can restore it for 30 days from Archived holidays.",
+    "Se eliminó la cuenta «{value0}». Puedes restaurarla durante 30 días desde Viajes archivados.",
+    "La note « {value0} » a été supprimée. Vous pouvez la restaurer pendant 30 jours depuis Voyages archivés.",
+    "Die Rechnung „{value0}“ wurde gelöscht. Du kannst sie 30 Tage lang unter Archivierte Reisen wiederherstellen."
+  ],
+  [
+    "You can restore a deleted bill and its receipt photos for 30 days; after that it is removed for good. Bills another account can open must be archived instead.",
+    "Puedes restaurar una cuenta eliminada y sus fotos de recibos durante 30 días; después se elimina definitivamente. Las cuentas que otra cuenta de usuario puede abrir deben archivarse.",
+    "Vous pouvez restaurer une note supprimée et ses photos de reçus pendant 30 jours ; ensuite, elle est supprimée définitivement. Les notes qu’un autre compte peut ouvrir doivent être archivées.",
+    "Du kannst eine gelöschte Rechnung und ihre Belegfotos 30 Tage lang wiederherstellen; danach wird sie endgültig entfernt. Rechnungen, die ein anderes Konto öffnen kann, müssen stattdessen archiviert werden."
+  ],
+  [
+    "Added by {creator} · paid by {payer}",
+    "Añadido por {creator} · pagado por {payer}",
+    "Ajouté par {creator} · payé par {payer}",
+    "Hinzugefügt von {creator} · bezahlt von {payer}"
   ]
 ]

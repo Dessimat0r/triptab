@@ -1,0 +1,96 @@
+
+Running 4 tests using 2 workers
+
+[1/4] [chromium] › tests/browser/account-privacy.spec.ts:82:1 › R02: a delayed archive response for the previous account never appears after the switch
+[2/4] [chromium] › tests/browser/account-privacy.spec.ts:65:1 › R02: after a session switch the open Activity panel shows none of the previous account's archive, amounts or people
+[3/4] [chromium] › tests/browser/account-privacy.spec.ts:96:1 › R02: an archive whose membership is revoked while the panel is open disappears from it
+  1) [chromium] › tests/browser/account-privacy.spec.ts:82:1 › R02: a delayed archive response for the previous account never appears after the switch 
+
+    Error: expect(locator).not.toContainText(expected) failed
+
+    Locator: locator('body')
+    Expected substring: not "Secret spa"
+    Received string: "TripTab.BILLSBob lunchYou’re owed £6.00New holidaySplit a billActivity and people•••Your assistant, optionally.Link your ChatGPT identity in Your account. External ChatGPT or Codex receipt assistance also requires the TripTab tools to be enabled in that conversation. Manual entry always works.How to connect BBobbob@example.invalidBills / Bob lunchBUpdates automaticallyBILLBob lunch2 people · £12.00•••Refreshed 22:57Add receipt Scan receiptBillHistoryReceiptsDeleteLunchBob paid · 1 item1 Nov 2026 · 12:00 · Paid£12.00Edit splitYour share £6.00Who owes whatBobPaid £12.00 · share £6.00Is owed £6.00FinnPaid £0.00 · share £6.00Owes £6.00Settle upRecord paymentFinn pays Bob£6.00Mark paidCopy summaryTripTabShared bill ledger, saved securely.Activity and peopleActivityPeopleSearchHoliday or billAllBob lunchSecret spa (archived)PersonEveryoneOwed or owingAllI oweOwed to meInclude archived holidays and billsLunchBob lunch · Bill · 1 Nov 2026You paid£12.00Your share £6.00"
+    Timeout: 5000ms
+
+    Call log:
+      - Expect "not toContainText" with timeout 5000ms
+      - waiting for locator('body')
+        14 × locator resolved to <body>…</body>
+           - unexpected value "TripTab.BILLSBob lunchYou’re owed £6.00New holidaySplit a billActivity and people•••Your assistant, optionally.Link your ChatGPT identity in Your account. External ChatGPT or Codex receipt assistance also requires the TripTab tools to be enabled in that conversation. Manual entry always works.How to connect BBobbob@example.invalidBills / Bob lunchBUpdates automaticallyBILLBob lunch2 people · £12.00•••Refreshed 22:57Add receipt Scan receiptBillHistoryReceiptsDeleteLunchBob paid · 1 item1 Nov 2026 · 12:00 · Paid£12.00Edit splitYour share £6.00Who owes whatBobPaid £12.00 · share £6.00Is owed £6.00FinnPaid £0.00 · share £6.00Owes £6.00Settle upRecord paymentFinn pays Bob£6.00Mark paidCopy summaryTripTabShared bill ledger, saved securely.Activity and peopleActivityPeopleSearchHoliday or billAllBob lunchSecret spa (archived)PersonEveryoneOwed or owingAllI oweOwed to meInclude archived holidays and billsLunchBob lunch · Bill · 1 Nov 2026You paid£12.00Your share £6.00"
+
+
+      91 |   release();
+      92 |   await page.waitForTimeout(500);
+    > 93 |   for (const text of aliceSecrets) await expect(page.locator('body')).not.toContainText(text);
+         |                                                                           ^
+      94 | });
+      95 |
+      96 | test('R02: an archive whose membership is revoked while the panel is open disappears from it', async ({ page }) => {
+        at /home/user/triptab/tests/browser/account-privacy.spec.ts:93:75
+
+    Error Context: test-results/account-privacy-R02-a-dela-a7ff3-er-appears-after-the-switch-chromium/error-context.md
+
+
+[4/4] [chromium] › tests/browser/account-privacy.spec.ts:108:1 › R02: on a bill both accounts share, the Undo notice and open connection suggestions belong to the account that saw them
+  2) [chromium] › tests/browser/account-privacy.spec.ts:96:1 › R02: an archive whose membership is revoked while the panel is open disappears from it 
+
+    Error: expect(locator).not.toContainText(expected) failed
+
+    Locator: getByRole('dialog', { name: 'Activity and people' })
+    Expected substring: not "Massage"
+    Received string: "Activity and peopleActivityPeopleSearchHoliday or billAllAlice weekendSecret spa (archived)PersonEveryoneOwed or owingAllI oweOwed to meInclude archived holidays and billsTaxiAlice weekend · Bill · 1 Nov 2026You paid£20.00Your share £10.00MassageSecret spa · Bill · Archived · 1 Nov 2026You paid£98.76Your share £49.38"
+    Timeout: 5000ms
+
+    Call log:
+      - Expect "not toContainText" with timeout 5000ms
+      - waiting for getByRole('dialog', { name: 'Activity and people' })
+        14 × locator resolved to <section role="dialog" tabindex="-1" aria-modal="true" aria-labelledby="_r_3_-title" class="modal personal-activity">…</section>
+           - unexpected value "Activity and peopleActivityPeopleSearchHoliday or billAllAlice weekendSecret spa (archived)PersonEveryoneOwed or owingAllI oweOwed to meInclude archived holidays and billsTaxiAlice weekend · Bill · 1 Nov 2026You paid£20.00Your share £10.00MassageSecret spa · Bill · Archived · 1 Nov 2026You paid£98.76Your share £49.38"
+
+
+      101 |   state.archives.alice = [];
+      102 |   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+    > 103 |   await expect(view).not.toContainText('Massage');
+          |                          ^
+      104 |   await view.getByRole('tab', { name: 'People' }).click();
+      105 |   await expect(view).not.toContainText('Erin Private');
+      106 | });
+        at /home/user/triptab/tests/browser/account-privacy.spec.ts:103:26
+
+    Error Context: test-results/account-privacy-R02-an-arc-cc7d6--is-open-disappears-from-it-chromium/error-context.md
+
+
+  3) [chromium] › tests/browser/account-privacy.spec.ts:108:1 › R02: on a bill both accounts share, the Undo notice and open connection suggestions belong to the account that saw them 
+
+    Error: expect(locator).toHaveCount(expected) failed
+
+    Locator:  getByText('Deleted “Taxi”')
+    Expected: 0
+    Received: 1
+    Timeout:  5000ms
+
+    Call log:
+      - Expect "toHaveCount" with timeout 5000ms
+      - waiting for getByText('Deleted “Taxi”')
+        14 × locator resolved to 1 element
+           - unexpected value "1"
+
+
+      127 |   await expect(page.locator('body')).toContainText('Bob lunch');
+      128 |   await expect(page.locator('body')).not.toContainText('Carol Alicefriend');
+    > 129 |   await expect(page.getByText('Deleted “Taxi”')).toHaveCount(0);
+          |                                                  ^
+      130 |   await expect(page.getByRole('button', { name: /^Undo/ })).toHaveCount(0);
+      131 |   expect(state.ledgers.bob.find(trip => trip.id === 'alice-trip')!.expenses).toEqual([]);
+      132 | });
+        at /home/user/triptab/tests/browser/account-privacy.spec.ts:129:50
+
+    Error Context: test-results/account-privacy-R02-on-a-b-1c116-o-the-account-that-saw-them-chromium/error-context.md
+
+
+  3 failed
+    [chromium] › tests/browser/account-privacy.spec.ts:82:1 › R02: a delayed archive response for the previous account never appears after the switch 
+    [chromium] › tests/browser/account-privacy.spec.ts:96:1 › R02: an archive whose membership is revoked while the panel is open disappears from it 
+    [chromium] › tests/browser/account-privacy.spec.ts:108:1 › R02: on a bill both accounts share, the Undo notice and open connection suggestions belong to the account that saw them 
+  1 passed (13.6s)

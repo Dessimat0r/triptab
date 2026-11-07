@@ -2,6 +2,7 @@ import { encodeBase64url as base64url, decodeBase64url, sha256Hex, encodeHex as 
 // Authentication is independent of ChatGPT. Provider headers are supplied by the
 // Sites gateway; browser sessions are opaque tokens and are stored only hashed.
 import { accountAuditStatement } from './audit';
+import { DB_NOW_ISO, providerAuthenticatesAsSql } from './receipt-operations';
 import { emailLink, passwordResetEmail, verificationEmail, type Mailer } from './email';
 import { isUiLanguage } from './ui-language';
 const SESSION_LIFETIME = 30 * 24 * 60 * 60 * 1000;
@@ -102,6 +103,47 @@ type ProfileStateRow = ProfileRow & { has_password: number; chatgpt_linked: numb
 type ProviderStateRow = { [Key in keyof ProfileStateRow]: ProfileStateRow[Key] | null } & { linked_user_id: string | null; legacy_disconnected: number };
 type AuthSnapshot = { identity: AuthIdentity; row: ProfileStateRow | null };
 
+/** Server-issued permission carried from authentication to the final write. */
+export type RequestWriteAuthorization = Readonly<{ userId: string; kind: 'session' | 'chatgpt'; ref: string }>;
+const issuedWriteAuthorizations = new WeakSet<object>();
+const identityWriteAuthorizations = new WeakMap<AuthIdentity, RequestWriteAuthorization>();
+
+async function rememberWriteAuthorization(request: Request, identity: AuthIdentity) {
+  const token = identity.kind === 'session' ? sessionToken(request) : null;
+  if (identity.kind === 'session' && !token) throw new Error('UNAUTHORIZED');
+  const authorization = Object.freeze({ userId: identity.id, kind: identity.kind,
+    ref: token ? await hashToken(token) : identity.chatgptId ?? identity.id });
+  issuedWriteAuthorizations.add(authorization);
+  identityWriteAuthorizations.set(identity, authorization);
+}
+
+/** A request body or a reconstructed identity cannot manufacture this fence. */
+export function identityWriteAuthorization(identity: AuthIdentity): RequestWriteAuthorization {
+  const authorization = identityWriteAuthorizations.get(identity);
+  if (!authorization) throw new Error('UNAUTHORIZED');
+  return authorization;
+}
+
+/** Evaluated in the statement that admits the transaction, using database time. */
+export function requestWriteAuthorizationSql(authorization: RequestWriteAuthorization, userId: string) {
+  if (!issuedWriteAuthorizations.has(authorization) || authorization.userId !== userId) throw new Error('UNAUTHORIZED');
+  return authorization.kind === 'session' ? {
+    condition: `EXISTS (SELECT 1 FROM auth_sessions write_session JOIN profiles write_profile
+      ON write_profile.id=write_session.user_id AND write_profile.deleted_at=''
+      WHERE write_session.token_hash=? AND write_session.user_id=? AND write_session.expires_at>${DB_NOW_ISO})`,
+    bindings: [authorization.ref, userId],
+  } : {
+    condition: `EXISTS (SELECT 1 FROM (SELECT ? AS provider_id, ? AS account_id) write_identity
+      WHERE ${providerAuthenticatesAsSql('write_identity.provider_id', 'write_identity.account_id')})`,
+    bindings: [authorization.ref, userId],
+  };
+}
+
+export async function requestWriteAuthorized(database: D1Database, authorization: RequestWriteAuthorization, userId: string) {
+  const guard = requestWriteAuthorizationSql(authorization, userId);
+  return !!(await database.prepare(`SELECT ${guard.condition} AS ok`).bind(...guard.bindings).first<{ ok: number }>())?.ok;
+}
+
 function providerIdentity(provider: AuthIdentity, row: ProviderStateRow): AuthIdentity | null {
   if (row.deleted_at) return null;
   if (row.linked_user_id !== null) {
@@ -115,9 +157,36 @@ export async function sessionIdentity(request: Request, database: D1Database): P
   // profile. They share precedence rules without reading account flags.
   return (await authSnapshot(request, database, null, {}, false))?.identity ?? null;
 }
+/**
+ * R07: the execution grant for work done on this person's behalf after their
+ * request ends. It names the server-side session that authenticated the
+ * request (its stable session ID, never the cookie, token or token hash), or
+ * the trusted ChatGPT identity when no TripTab session is in use. Background
+ * work and its commit stop as soon as that session is signed out, expires or
+ * is revoked, the ChatGPT link changes, or the account is deleted. Precedence
+ * matches resolveIdentity: a live session wins over provider headers.
+ */
+export async function executionGrant(request: Request, database: D1Database, userId: string): Promise<{ kind: 'session' | 'chatgpt'; ref: string } | null> {
+  const token = sessionToken(request);
+  if (token) {
+    const row = await database.prepare(`SELECT s.session_id FROM auth_sessions s JOIN profiles p ON p.id=s.user_id AND p.deleted_at=''
+      WHERE s.token_hash=? AND s.user_id=? AND s.expires_at>${DB_NOW_ISO} AND s.session_id<>''`)
+      .bind(await hashToken(token), userId).first<{ session_id: string }>();
+    if (row) return { kind: 'session', ref: row.session_id };
+  }
+  const signedOut = (request.headers.get('cookie') || '').split(';').some(value => value.trim() === `${SIGNED_OUT_COOKIE}=1`);
+  const provider = signedOut ? null : trustedChatGPTIdentity(request);
+  if (!provider) return null;
+  // R15: the same canonical rule that validates the grant later, so a grant is
+  // never created for an identity that would not authenticate as this account.
+  const linked = await database.prepare(`SELECT ${providerAuthenticatesAsSql('identity.provider_id', 'identity.account_id')} AS ok
+    FROM (SELECT ? AS provider_id, ? AS account_id) identity`).bind(provider.id, userId).first<{ ok: number }>();
+  return linked?.ok ? { kind: 'chatgpt', ref: provider.id } : null;
+}
 export async function resolveIdentity(request: Request, options: { allowSession?: boolean } = {}, database: D1Database): Promise<AuthIdentity> {
   const snapshot = await authSnapshot(request, database, trustedChatGPTIdentity(request), options, false);
   if (!snapshot) throw new Error('UNAUTHORIZED');
+  await rememberWriteAuthorization(request, snapshot.identity);
   return snapshot.identity;
 }
 async function authSnapshot(request: Request, database: D1Database, provider: AuthIdentity | null, options: { allowSession?: boolean }, accountFlags = true): Promise<AuthSnapshot | null> {
@@ -205,6 +274,7 @@ export async function readAuthContext(request: Request, database: D1Database, op
     if (!snapshot?.row || snapshot.identity.id !== id) throw new Error('UNAUTHORIZED');
   }
   const { identity, row } = snapshot;
+  await rememberWriteAuthorization(request, identity);
   const hasPassword = !!row.has_password;
   const chatgptLinked = !!row.chatgpt_linked || identity.kind === 'chatgpt';
   // Either the provider vouches for the profile address, or its holder opened
@@ -470,8 +540,8 @@ async function releaseUnverifiedEmail(database: D1Database, email: string, claim
   const released = { sql: 'NOT EXISTS (SELECT 1 FROM auth_credentials WHERE user_id = ?)', bindings: [holder.user_id] };
   return [
     database.prepare(`DELETE FROM auth_credentials WHERE user_id = ? AND email = ? AND email_verified_at IS NULL AND created_at <= ?
-      AND NOT EXISTS (SELECT 1 FROM trips WHERE owner = ?) AND NOT EXISTS (SELECT 1 FROM memberships WHERE user_id = ?)
-      AND NOT EXISTS (SELECT 1 FROM receipts WHERE owner = ?)`).bind(holder.user_id, email, cutoff, holder.user_id, holder.user_id, holder.user_id),
+      AND NOT EXISTS (SELECT 1 FROM trips WHERE owner = ? OR owner = 'deleted:' || ?) AND NOT EXISTS (SELECT 1 FROM memberships WHERE user_id = ?)
+      AND NOT EXISTS (SELECT 1 FROM receipts WHERE owner = ?)`).bind(holder.user_id, email, cutoff, holder.user_id, holder.user_id, holder.user_id, holder.user_id),
     accountAuditStatement(database, { userId: holder.user_id, actorName: holder.display_name || 'Traveller', entityType: 'password', entityId: 'account',
       action: 'delete', before: { hasPassword: true, emailVerified: false }, after: { hasPassword: false, reason: 'unverified email claimed by its verified owner' }, source: 'system' }),
     database.prepare(`DELETE FROM auth_sessions WHERE user_id = ? AND ${released.sql}`).bind(holder.user_id, ...released.bindings),
@@ -582,12 +652,12 @@ async function linkChatGPT(request: Request, database: D1Database) {
   const results = await database.batch([database.prepare(`
     INSERT INTO auth_links (oai_user_id, user_id, created_at)
     SELECT ?, ?, ? WHERE ? = ? OR (
-      NOT EXISTS (SELECT 1 FROM trips WHERE owner = ?)
+      NOT EXISTS (SELECT 1 FROM trips WHERE owner = ? OR owner = 'deleted:' || ?)
       AND NOT EXISTS (SELECT 1 FROM memberships WHERE user_id = ?)
       AND NOT EXISTS (SELECT 1 FROM receipts WHERE owner = ?)
       AND NOT EXISTS (SELECT 1 FROM auth_credentials WHERE user_id = ?)
     ) ON CONFLICT(oai_user_id) DO NOTHING
-  `).bind(provider.id, local.id, new Date().toISOString(), provider.id, local.id, provider.id, provider.id, provider.id, provider.id),
+  `).bind(provider.id, local.id, new Date().toISOString(), provider.id, local.id, provider.id, provider.id, provider.id, provider.id, provider.id),
   accountAuditStatement(database, { userId: local.id, actorName: profile.display_name, entityType: 'chatgpt', entityId: 'account',
     action: 'create', before: { connected: false }, after: { connected: true } }, { sql: 'changes() > 0', bindings: [] })]);
   if (!results[0].meta.changes && !existing) {
