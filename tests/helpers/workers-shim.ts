@@ -37,6 +37,8 @@ function wrapDatabase(database: D1Database): D1Database {
     if (property === 'prepare') return (sql: string) => {
       if (sql.startsWith('INSERT OR IGNORE INTO sync_state')) commitPrepared = true;
       if (sql.trimStart().startsWith('INSERT INTO invites') || sql.trimStart().startsWith('DELETE FROM invites WHERE token_hash')) commitPrepared = true;
+      // A settlement reminder's final batch (a notification written for another traveller).
+      if (sql.trimStart().startsWith('INSERT INTO settlement_reminders')) commitPrepared = true;
       const statement = target.prepare(sql);
       const budget = sql.startsWith('INSERT INTO auth_rate_limits');
       const providerAdmission = sql.startsWith('UPDATE receipt_operations SET provider =');

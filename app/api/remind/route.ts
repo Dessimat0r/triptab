@@ -1,11 +1,13 @@
 import {
   db,
   ensureProfile,
+  profileWriteAuthorization,
   failure,
   readBoundedBody,
   RequestError,
   sameOrigin,
 } from '@/lib/store';
+import { AuthError, requestWriteAuthorizationSql, requestWriteAuthorized } from '@/lib/auth';
 import { parseStoredTrip, settlements } from '@/lib/model';
 import { notifyAccountPush } from '@/lib/notifications';
 import { formatMoney } from '@/lib/money-format';
@@ -69,6 +71,10 @@ export async function POST(request: Request) {
       throw new RequestError(
         'This traveller has turned off settlement reminders.',
       );
+    // N03: the reminder is written for another traveller on this requester's behalf,
+    // so the credential that admitted the request must still hold in the statement
+    // that admits the write (database time), not only when the request began.
+    const authorization = requestWriteAuthorizationSql(profileWriteAuthorization(actor), actor.id);
     const marker = crypto.randomUUID(),
       now = new Date().toISOString(),
       cutoff = new Date(Date.now() - 86400000).toISOString();
@@ -80,7 +86,7 @@ export async function POST(request: Request) {
     const result = await db().batch([
       db()
         .prepare(
-          `INSERT INTO settlement_reminders(trip_id,from_member,to_member,sent_at,marker) SELECT ?,?,?,?,? WHERE EXISTS(SELECT 1 FROM trips t WHERE t.id=? AND t.receipt_link_version=? AND (t.owner=? OR EXISTS(SELECT 1 FROM memberships m WHERE m.trip_id=t.id AND m.user_id=?))) AND EXISTS(SELECT 1 FROM memberships WHERE trip_id=? AND member_id=? AND user_id=?) AND NOT EXISTS(SELECT 1 FROM notification_preferences WHERE user_id=? AND reminders=0) AND NOT EXISTS(SELECT 1 FROM auth_links WHERE oai_user_id=? AND user_id<>?) AND EXISTS(SELECT 1 FROM profiles WHERE id=? AND deleted_at='')
+          `INSERT INTO settlement_reminders(trip_id,from_member,to_member,sent_at,marker) SELECT ?,?,?,?,? WHERE EXISTS(SELECT 1 FROM trips t WHERE t.id=? AND t.receipt_link_version=? AND (t.owner=? OR EXISTS(SELECT 1 FROM memberships m WHERE m.trip_id=t.id AND m.user_id=?))) AND EXISTS(SELECT 1 FROM memberships WHERE trip_id=? AND member_id=? AND user_id=?) AND NOT EXISTS(SELECT 1 FROM notification_preferences WHERE user_id=? AND reminders=0) AND NOT EXISTS(SELECT 1 FROM auth_links WHERE oai_user_id=? AND user_id<>?) AND EXISTS(SELECT 1 FROM profiles WHERE id=? AND deleted_at='') AND ${authorization.condition}
         ON CONFLICT(trip_id,from_member,to_member) DO UPDATE SET sent_at=excluded.sent_at,marker=excluded.marker WHERE settlement_reminders.sent_at<=?`,
         )
         .bind(
@@ -100,6 +106,7 @@ export async function POST(request: Request) {
           actor.id,
           actor.id,
           recipient.user_id,
+          ...authorization.bindings,
           cutoff,
         ),
       db()
@@ -117,6 +124,8 @@ export async function POST(request: Request) {
           marker,
         ),
     ]);
+    if (!result[0].meta.changes && !await requestWriteAuthorized(db(), profileWriteAuthorization(actor), actor.id))
+      throw new AuthError('Your sign-in changed before this reminder was sent. Sign in again.', 401);
     if (!result[0].meta.changes)
       throw new RequestError(
         'A reminder was already sent today, or the transfer changed. Refresh and try later.',
