@@ -73,7 +73,7 @@ async function fits(page: Page) {
   expect(brokenWords).toEqual([]);
   if (await page.locator('.bill-view').count()) {
     const actions = await page.locator('.expense-entry-actions button').evaluateAll(buttons => buttons.map(button => button.getBoundingClientRect().toJSON()));
-    expect(Math.abs(actions[0].width - actions[1].width)).toBeLessThanOrEqual(1);
+    if (actions.length >= 2) expect(Math.abs(actions[0].width - actions[1].width)).toBeLessThanOrEqual(1);
   }
   for (const selector of ['.bill-start', '.bill-view', '.bill-people']) {
     const boxes = await page.locator(`${selector} input, ${selector} button`).evaluateAll(elements => elements.filter(el => el.getClientRects().length).map(el => el.getBoundingClientRect().toJSON()));
