@@ -1,0 +1,15 @@
+# R14: Chromium (1243, Linux). The reviewer's failure was on Windows WebKit, which cannot be downloaded in this environment.
+# 1) Reviewed cached-client.spec.ts, current-bundle case, repeated 8x on Chromium:
+  8 passed (21.3s)
+#    (not reproduced on Chromium)
+# 2) Evidence-only spec (not committed): one page request in flight when teardown starts
+old: dispose while the page is active: handler errors = ["Cannot use disposed instance"]
+  ✘  1 [chromium] › tests/browser/zz-r14-mechanism.spec.ts:4:114 › old: dispose while the page is active (2.4s)
+new: stop, drain, close page, dispose: handler errors = []
+  ✓  2 [chromium] › tests/browser/zz-r14-mechanism.spec.ts:4:114 › new: stop, drain, close page, dispose (2.3s)
+  1 failed
+  1 passed (10.4s)
+# 3) Corrected spec (ordered teardown + persisted payment journey), Chromium:
+  ✓  5 [chromium] › tests/browser/cached-client.spec.ts:165:1 › the current bundle reads, totals and settles the BOGOF receipt from the new server, and records the correct payment (3.9s)
+  3 skipped
+  4 passed (8.8s)
