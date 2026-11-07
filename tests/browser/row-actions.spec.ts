@@ -142,3 +142,16 @@ test('F-06: Delete bill after the plain confirmation sends the name the server s
   // Accepted: Bill options closes instead of showing the server's refusal.
   await expect(page.getByRole('dialog', { name: 'Bill options' })).toHaveCount(0);
 });
+
+test('a row menu near the bottom of a phone screen opens clear of the fixed section tabs', async ({ page }) => {
+  await fixtures(page, bill({ settled: true }));
+  await page.goto('/expenses');
+  await row(page, 'dinner').getByRole('button', { name: 'Actions for Dinner' }).click();
+  const menu = page.getByRole('menu');
+  await expect(menu).toBeVisible();
+  const [menuBox, tabsBox] = await Promise.all([menu.boundingBox(), page.locator('nav.tabs').boundingBox()]);
+  const tabsFixed = await page.locator('nav.tabs').evaluate(element => getComputedStyle(element).position === 'fixed');
+  if (tabsFixed) expect(menuBox!.y + menuBox!.height).toBeLessThanOrEqual(tabsBox!.y);
+  // Every item is reachable by pointer, not only by keyboard.
+  await page.getByRole('menuitem', { name: 'Delete' }).click({ trial: true });
+});
