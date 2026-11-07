@@ -17,8 +17,9 @@
  * entries, so it never computes a gross-price suggestion, and it cannot
  * commit one either.
  *
- * Raising FINANCIAL_FORMAT for a later money format refuses this bundle the
- * same way, and this bundle clears its amounts when refused (fail closed).
+ * Only the exact format is accepted. Raising FINANCIAL_FORMAT for a later money
+ * format refuses this bundle the same way, and this bundle clears its amounts
+ * when refused (fail closed).
  */
 export const FINANCIAL_FORMAT = 2;
 export const FINANCIAL_FORMAT_HEADER = 'X-TripTab-Financial-Format';
@@ -33,12 +34,16 @@ export function requestFinancialFormat(request: Request): number {
 }
 
 /**
- * A 426 refusal for a client that cannot read the current money format, or
- * null when the request may proceed. Call it before authentication, storage
- * reads or inference so a refused client learns nothing and spends nothing.
+ * A 426 refusal for a client that does not declare exactly the money format this
+ * release implements, or null when the request may proceed. An older declaration
+ * cannot read the current records; a newer one (a bundle from a later release
+ * talking to this server, for example after a rollback) was built for rules this
+ * server does not implement, so it is refused too rather than trusted. Call it
+ * before authentication, storage reads or inference so a refused client learns
+ * nothing and spends nothing.
  */
 export function financialFormatRefusal(request: Request): Response | null {
-  if (requestFinancialFormat(request) >= FINANCIAL_FORMAT) return null;
+  if (requestFinancialFormat(request) === FINANCIAL_FORMAT) return null;
   const headers = { 'Cache-Control': 'private, no-store', [FINANCIAL_FORMAT_REQUIRED_HEADER]: String(FINANCIAL_FORMAT) };
   if (request.method === 'HEAD') return new Response(null, { status: FINANCIAL_FORMAT_STATUS, headers });
   return Response.json({ error: FINANCIAL_FORMAT_REFUSAL }, { status: FINANCIAL_FORMAT_STATUS, headers });

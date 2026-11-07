@@ -109,7 +109,7 @@ async function storage() {
   return database;
 }
 function request(query = '', actor: keyof typeof tokens | null = 'owner', headers: Record<string, string> = {}) {
-  return new Request(`https://triptab.test/api/export${query ? `?${query}` : ''}`, { headers: { ...(actor ? { cookie: `tt_session=${tokens[actor]}` } : {}), ...headers } });
+  return new Request(`https://triptab.test/api/export${query ? `?${query}` : ''}`, { headers: { 'X-TripTab-Financial-Format': '2', ...(actor ? { cookie: `tt_session=${tokens[actor]}` } : {}), ...headers } });
 }
 function parseCsv(input: string): string[][] {
   const rows: string[][] = [];

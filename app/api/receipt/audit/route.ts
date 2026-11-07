@@ -1,8 +1,12 @@
 import { ensureProfile, failure, readReceiptAuditTrips, RequestError } from '@/lib/store';
 import { auditHistoricalReceipts } from '@/lib/historical-receipt-audit';
+import { financialFormatRefusal } from '@/lib/financial-format';
 
 export const dynamic = 'force-dynamic';
 export async function GET(request: Request) {
+  // R01: the report carries stored and printed totals, so refuse before authentication or any read.
+  const refused = financialFormatRefusal(request);
+  if (refused) return refused;
   try {
     const profile = await ensureProfile(request);
     const params = new URL(request.url).searchParams;

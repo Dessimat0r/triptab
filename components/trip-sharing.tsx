@@ -8,6 +8,7 @@ import { Link, Copy, Users, Check } from "lucide-react";
 import { isBill, type Trip, type TravellerFinancialPreview } from "@/lib/model";
 import type { Profile } from "./account-panel";
 import { useConfirmation } from "./confirmation-dialog";
+import { financialFormatHeaders } from "@/lib/financial-format";
 
 type Invitation = {
   id: string; memberId: string; memberName: string; email: string | null; expiresAt: string;
@@ -40,7 +41,7 @@ export function TripSharing({ trip, profile, onChanged }: { trip: Trip; profile:
     const controller = new AbortController();
     listRequest.current = controller;
     try {
-      const response = await fetch(`/api/invite?mode=list&tripId=${encodeURIComponent(trip.id)}`, { cache: "no-store", signal: controller.signal });
+      const response = await fetch(`/api/invite?mode=list&tripId=${encodeURIComponent(trip.id)}`, { cache: "no-store", headers: financialFormatHeaders(), signal: controller.signal });
       const body = await response.json() as InvitationList;
       if (controller.signal.aborted || activeScope.current !== invitationKey) return;
       if (!response.ok) {
@@ -78,7 +79,7 @@ export function TripSharing({ trip, profile, onChanged }: { trip: Trip; profile:
     setBusy(true); setError(""); setCopied(false);
     try {
       const response = await fetch("/api/invite", {
-        method: "POST", headers: { "Content-Type": "application/json" },
+        method: "POST", headers: financialFormatHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ mode: "create", tripId: trip.id, memberId: target, email: inviteeEmail.trim() || undefined }),
       });
       const body = await response.json() as { url: string; invitationId: string; error?: string };
@@ -132,7 +133,7 @@ export function TripSharing({ trip, profile, onChanged }: { trip: Trip; profile:
               listRequest.current?.abort(); listRequest.current = null;
               setBusy(true); setError("");
               try {
-                const response = await fetch("/api/invite", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode: "revoke", tripId: trip.id, invitationId: invitation.id }) });
+                const response = await fetch("/api/invite", { method: "POST", headers: financialFormatHeaders({ "Content-Type": "application/json" }), body: JSON.stringify({ mode: "revoke", tripId: trip.id, invitationId: invitation.id }) });
                 const body = await response.json() as { error?: string };
                 if (!response.ok) throw Error(body.error || "Unable to revoke this invitation.");
                 if (linkId === invitation.id) { setLink(""); setLinkId(""); }
@@ -167,7 +168,7 @@ export function JoinTrip({ token, accountId, onJoined, onAuthenticate }: {
   const joinScope = useRef(token), infoRequest = useRef<AbortController | null>(null), joinBusy = useRef(busy);
   useLayoutEffect(() => { joinScope.current = token; joinBusy.current = busy; }, [token, busy]);
   const refreshInfo = useCallback(async (signal?: AbortSignal) => {
-    const response = await fetch("/api/invite?token=" + encodeURIComponent(token), { cache: "no-store", signal });
+    const response = await fetch("/api/invite?token=" + encodeURIComponent(token), { cache: "no-store", headers: financialFormatHeaders(), signal });
     const body = await response.json() as JoinInfo;
     if (signal?.aborted || joinScope.current !== token) return;
     if (!response.ok) {
@@ -217,7 +218,7 @@ export function JoinTrip({ token, accountId, onJoined, onAuthenticate }: {
         infoRequest.current?.abort(); infoRequest.current = null;
         setBusy(true); setError("");
         try {
-          const response = await fetch("/api/invite", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode: "accept", token, acceptHistory: true, historySnapshot: info.historySnapshot }) });
+          const response = await fetch("/api/invite", { method: "POST", headers: financialFormatHeaders({ "Content-Type": "application/json" }), body: JSON.stringify({ mode: "accept", token, acceptHistory: true, historySnapshot: info.historySnapshot }) });
           const body = await response.json() as { tripId?: string; error?: string };
           if (!response.ok) {
             if (response.status === 409) await refreshInfo();

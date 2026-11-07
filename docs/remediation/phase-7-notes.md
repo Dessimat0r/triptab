@@ -13,17 +13,22 @@ Audit baseline: TripTab Functionality, Usability and Financial Accuracy Audit, 6
 
 ## Investigated, not implemented here
 
-### F-16 global revision (high risk, needs a migration)
+### F-16 per-trip revisions (implemented in #76; migrations 0014 and 0015)
 
-Confirmed in `lib/store.ts`: every ledger write advances the single `sync_state` row (`UPDATE sync_state SET revision = revision + 1 … WHERE id = 1 AND revision = ?`) and every trip statement is guarded by that marker. Any save by any account therefore invalidates every other in-flight save; the client re-bases once and then asks the person to press Save again.
+This section originally recorded an investigation: every ledger write advanced the single `sync_state` row, so any save by any account invalidated every other open editor. It was left unimplemented pending owner approval of a migration. That approval was given and the work is complete in this release.
 
-Phase 2 (#63) makes that re-base safe (no change is lost), but does not remove the contention. The narrow fix needs:
+**Implemented**
 
-1. A migration adding `revision INTEGER NOT NULL DEFAULT 0` to `trips` (plus a backfill), and per-trip CAS in `writeLedger` (`UPDATE trips … WHERE id = ? AND revision = ?`) instead of the global row, with single-trip writes from the client.
-2. Invitation, lifecycle, receipt and MCP writers moved off `sync_state` consistently (all currently use `last_write` markers), or kept on both during a transition.
-3. A D1 backup first, per `docs/operations.md`.
+- Migration `0014` adds `trips.revision` (starts at 0, no backfill) and triggers that advance it on any change to a trip's data or owner, or to its memberships, so every writer keeps it current. Migration `0015` (R11) replaces its membership trigger with one that ignores updates that change nothing.
+- `writeTrips` and `writeLedger` in `lib/store.ts` take the revisions the client read (`tripRevisions`). The commit statement requires each named trip's revision to be unchanged, so a save conflicts only with a change to the same trip. A change to a different trip is merged and retried instead of being reported as a conflict.
+- Invitation, lifecycle, receipt and MCP writers keep their existing markers; the global `sync_state` revision still advances on every write and remains the freshness and compare-and-swap marker.
+- Older cached clients keep the whole-ledger save, which is unchanged.
+- `/healthz` reports unavailable until `0014` and `0015` are applied. Covered by the migration, readiness and concurrency tests, and the browser test `trip-revisions.spec.ts`.
 
-This crosses every writer and the release procedure, so it is a separate high-risk PR that needs owner approval of the migration. It is **blocked pending that approval**, not done.
+**Still outstanding (release procedure, not code)**
+
+- A D1 backup before applying, and a rehearsal of migrations `0014` to `0018` on a production-sized copy (`docs/operations.md`).
+- Review of the combined release candidate.
 
 ### F-19 several photos of one receipt
 

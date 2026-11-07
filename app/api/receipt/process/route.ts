@@ -72,7 +72,6 @@ export async function POST(request: Request) {
     const signal = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
     const work = executeOperation({ userId: profile.id, request: job, source, fence: operationFence(held), log: started, signal,
       credential: () => getReceiptAIAccess(request, profile, database, env as unknown as ReceiptAIEnvironment),
-      notifyWhenStored: () => request.signal.aborted,
       stillCurrent: async () => {
         if ((await ensureProfile(request)).id !== profile.id) throw new RequestError('Your signed-in account changed. Open this receipt again.', 409);
       } }).then(({ saved, savedDraft }) => Response.json({ ...saved, draft: savedDraft }, { headers: { 'Cache-Control': 'private, no-store' } }));

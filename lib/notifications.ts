@@ -410,7 +410,7 @@ async function sendPush(subscription: Subscription, timeoutMs = sendTimeoutMs, a
 }
 
 /** Current eligibility, evaluated in the inbox/digest write or just before push. */
-function notificationRecipient(tripId: string, user: string, involvedMembers: string[] | undefined, mode: 'inbox' | 'daily' | 'push') {
+function notificationRecipient(tripId: string, user: string, involvedMembers: string[] | undefined, mode: 'inbox' | 'daily' | 'push' | 'any', options: { receiptReady?: boolean } = {}) {
   const involved = involvedMembers === undefined ? null : JSON.stringify(involvedMembers);
   const delivery = "COALESCE(preference.delivery,'immediate')";
   return {
@@ -421,7 +421,8 @@ function notificationRecipient(tripId: string, user: string, involvedMembers: st
         AND (notification_trip.owner=recipient.id OR member.user_id IS NOT NULL)
         AND COALESCE(preference.scope,'all')<>'none'
         AND (COALESCE(preference.scope,'all')<>'involved' OR ? IS NULL OR member.member_id IN (SELECT value FROM json_each(?)))
-        AND ${mode === 'daily' ? `${delivery}='daily'` : mode === 'push' ? `${delivery} NOT IN ('daily','none')` : `${delivery}<>'daily'`})`,
+        ${options.receiptReady ? "AND COALESCE(preference.receipt_ready,0)=1" : ''}
+        AND ${mode === 'any' ? '1' : mode === 'daily' ? `${delivery}='daily'` : mode === 'push' ? `${delivery} NOT IN ('daily','none')` : `${delivery}<>'daily'`})`,
     bindings: [user, tripId, involved, involved],
   };
 }
@@ -534,6 +535,44 @@ export async function notifyReceiptReply(tripId: string, caller: string, authorM
     body: scope === 'item' ? 'ChatGPT or Codex answered your question about a receipt item.' : 'ChatGPT or Codex answered your receipt question.' };
   const delivery = deliverNotifications(tripId, caller, notification.title, notification.body, authorMemberId ?? null);
   try { waitUntil(delivery); } catch { await delivery; }
+}
+
+/**
+ * N05: the optional "Receipt ready" notice. It is decided only from persisted
+ * state: the operation row must say `stored` and belong to this person, and
+ * the person must currently be an active account with access to the trip and
+ * have switched the preference on (a missing row means off). Nothing here looks
+ * at the request, the browser or any disconnect signal.
+ *
+ * One operation gives at most one notice: the id is derived from the operation
+ * row (its key and the time it was first claimed), so a retry, a lease takeover,
+ * a background resume or a repeated callback inserts nothing. A new explicit
+ * reading is a new operation and so has its own notice. The text is fixed and
+ * names no receipt, merchant, holiday or amount. Everyone who has switched the
+ * preference on gets the inbox notice, including people on a daily summary or
+ * in-app-only delivery; the content-free push wake-up is sent only to people
+ * whose delivery is immediate. Failure is the caller's to ignore: the stored
+ * result never depends on this.
+ */
+export async function notifyReceiptReady(input: { userId: string; tripId: string; operationKey: string }) {
+  // Any delivery preference: the inbox row is the logical notice. Only the immediate push below depends on delivery.
+  const recipient = notificationRecipient(input.tripId, input.userId, undefined, 'any', { receiptReady: true });
+  const now = new Date().toISOString();
+  const row = await db().prepare(`INSERT OR IGNORE INTO notifications (id, user_id, title, body, url, created_at)
+    SELECT 'receipt-ready:' || o.operation_key || ':' || o.created_at, o.user_id,
+      CASE WHEN o.kind LIKE 'question:%' THEN 'Receipt reply ready' ELSE 'Receipt ready to review' END,
+      CASE WHEN o.kind LIKE 'question:%' THEN 'Open TripTab to read it.' ELSE 'Open TripTab to review it.' END, '/', ?
+    FROM receipt_operations o WHERE o.operation_key = ? AND o.user_id = ? AND o.trip_id = ? AND o.status = 'stored'
+      AND ${recipient.condition}
+    RETURNING id`).bind(now, input.operationKey, input.userId, input.tripId, ...recipient.bindings).first<{ id: string }>();
+  if (!row) return false;
+  await db().prepare('DELETE FROM notifications WHERE user_id = ? AND id NOT IN (SELECT id FROM notifications WHERE user_id = ? ORDER BY created_at DESC, id DESC LIMIT 100)')
+    .bind(input.userId, input.userId).run().catch(() => {});
+  // The push is a content-free wake-up, sent only if the person is still eligible at dispatch.
+  const push = notificationRecipient(input.tripId, input.userId, undefined, 'push', { receiptReady: true });
+  await notifyAccountPush(input.userId, async () => !!(await db().prepare(`SELECT ${push.condition} AS ok`).bind(...push.bindings).first<{ ok: number }>())?.ok)
+    .catch(() => {});
+  return true;
 }
 
 /** Account-only wakeup after an already committed in-app notification. */

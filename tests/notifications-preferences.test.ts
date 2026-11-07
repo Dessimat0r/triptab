@@ -71,6 +71,8 @@ async function reminder(database: SQLiteD1, actorId: string) {
         return {
           db: () => database.asD1(),
           ensureProfile: async () => ({ id: actorId, displayName: actorId }),
+          // The request fence itself is exercised end to end in audit-reminder-authorisation.test.ts.
+          profileWriteAuthorization: () => ({}),
           readBoundedBody: async (request: Request) =>
             new Uint8Array(await request.arrayBuffer()),
           RequestError,
@@ -86,6 +88,8 @@ async function reminder(database: SQLiteD1, actorId: string) {
         };
       if (name === '@/lib/model') return model;
       if (name === '@/lib/money-format') return money;
+      if (name === '@/lib/auth')
+        return { AuthError: RequestError, requestWriteAuthorizationSql: () => ({ condition: '1', bindings: [] }), requestWriteAuthorized: async () => true };
       if (name === '@/lib/notifications')
         return { notifyAccountPush: async () => {} };
       return require(name);

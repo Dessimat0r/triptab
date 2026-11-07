@@ -2,6 +2,8 @@
 import { useEffect, useState } from 'react';
 import type { ReceiptAuditFinding } from '@/lib/historical-receipt-audit';
 import { formatMoney } from '@/lib/money-format';
+import { financialFormatHeaders } from '@/lib/financial-format';
+import DownloadButton from './download-button';
 
 export default function ReceiptAuditPanel({ tripId, onReview }: { tripId: string; onReview: (id: string) => void }) {
   const [state, setState] = useState<{ tripId: string; findings?: ReceiptAuditFinding[]; error?: string }>();
@@ -9,7 +11,7 @@ export default function ReceiptAuditPanel({ tripId, onReview }: { tripId: string
   useEffect(() => {
     if (!open) return;
     const controller = new AbortController();
-    void fetch(`/api/receipt/audit?tripId=${encodeURIComponent(tripId)}`, { signal: controller.signal, cache: 'no-store' })
+    void fetch(`/api/receipt/audit?tripId=${encodeURIComponent(tripId)}`, { signal: controller.signal, cache: 'no-store', headers: financialFormatHeaders() })
       .then(async response => { const body = await response.json() as { error?: string; findings: ReceiptAuditFinding[] }; if (!response.ok) throw Error(body.error || 'Unable to inspect receipts.'); return body; })
       .then(body => setState({ tripId, findings: body.findings }))
       .catch(error => { if (!controller.signal.aborted) setState({ tripId, error: String(error.message || error) }); });
@@ -19,7 +21,7 @@ export default function ReceiptAuditPanel({ tripId, onReview }: { tripId: string
   return <details onToggle={event => setOpen(event.currentTarget.open)}>
     <summary>Historical receipt discrepancy report</summary>
     <p>This read-only report compares stored calculations with recorded receipt evidence. It never changes amounts, shares or payments. A suspicious line requires review against the photo.</p>
-    <a href={`/api/receipt/audit?tripId=${encodeURIComponent(tripId)}`} download="receipt-discrepancies.json">Download this report</a>
+    <DownloadButton url={`/api/receipt/audit?tripId=${encodeURIComponent(tripId)}`} fileName="receipt-discrepancies.json" label="Download this report" />
     {!current && open && <p role="status">Inspecting stored receipts…</p>}
     {current?.error && <p role="alert">{current.error}</p>}
     {current?.findings?.length === 0 && <p>No discrepancies found in the available evidence. Receipts without recorded totals cannot be verified.</p>}

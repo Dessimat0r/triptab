@@ -10,6 +10,7 @@ import {
 } from '@/lib/offline-store';
 import OfflineEntryEditor from './offline-entry-editor';
 import { prepareReceiptImage } from './receipt-capture';
+import { financialFormatHeaders, refusedFinancialFormat } from '@/lib/financial-format';
 
 export default function OfflineCapture({
   accountId,
@@ -94,8 +95,13 @@ export default function OfflineCapture({
         setMessage('Offline holiday details could not be refreshed.'),
       );
   }, [enabled, accountId, name, ledger]);
-  const sync = useCallback(async () => {
+  // R01: once the server has refused this bundle's money format (426), the bundle is out of date. Queued entries
+  // stay on this device and are not retried automatically (window focus and reconnect would only be refused again)
+  // until the page is reloaded, which brings the current bundle. A person pressing Sync still gets the explanation.
+  const stale = useRef(false);
+  const sync = useCallback(async (manual = false) => {
     if (running.current || !navigator.onLine) return;
+    if (stale.current && !manual) return;
     running.current = true;
     setBusy(true);
     setMessage('');
@@ -150,7 +156,7 @@ export default function OfflineCapture({
         if (current.current !== accountId) return;
         const response = await fetch('/api/offline-expenses', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: financialFormatHeaders({ 'Content-Type': 'application/json' }),
           body: JSON.stringify({
             accountId,
             tripId: queued.tripId,
@@ -164,6 +170,8 @@ export default function OfflineCapture({
           error?: string;
           receiptId?: string;
         };
+        if (refusedFinancialFormat(response)) stale.current = true;
+        // Any refusal, a 426 included, leaves this entry queued: it is deleted only after the server saved it.
         if (!response.ok)
           throw Error(body.error || 'The queued expense could not be synced.');
         await store.operation('queue', 'delete', queued.id);
@@ -292,7 +300,7 @@ export default function OfflineCapture({
           <button
             className="primary"
             disabled={busy}
-            onClick={() => void sync()}
+            onClick={() => void sync(true)}
           >
             {busy ? uiText('Syncing…') : uiText('Sync pending expenses')}
           </button>

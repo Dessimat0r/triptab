@@ -127,6 +127,13 @@
       "when": 1794560400000,
       "tag": "0017_receipt_operation_jobs",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "6",
+      "when": 1794646800000,
+      "tag": "0018_receipt_ready_preference",
+      "breakpoints": true
     }
   ]
 }

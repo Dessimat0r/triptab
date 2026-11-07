@@ -9,6 +9,7 @@ import { balances, isBill, type Trip } from '@/lib/model';
 import { formatMoney } from '@/lib/money-format';
 import type { ArchivedTrip, DeletedBill } from '@/lib/trip-lifecycle';
 import './trip-controls.css';
+import DownloadButton from './download-button';
 
 async function change(
   action: string,
@@ -352,12 +353,11 @@ export function ArchivedHolidays({
                   >
                     {uiText(trip.kind === 'bill' ? 'Restore bill' : 'Restore holiday')}
                   </button>
-                  <a
-                    className="quiet"
-                    href={`/api/export?scope=trip&format=json&receipts=1&tripId=${encodeURIComponent(trip.id)}`}
-                  >
-                    {uiText('Download JSON')}
-                  </a>
+                  <DownloadButton
+                    url={`/api/export?scope=trip&format=json&receipts=1&tripId=${encodeURIComponent(trip.id)}`}
+                    fileName="triptab-trip.json"
+                    label="Download JSON"
+                  />
                 </div>
               </article>
             )}

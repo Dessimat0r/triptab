@@ -1,6 +1,7 @@
 import { db, failure, owner, readActivity, RequestError } from '@/lib/store';
 import { expenseShares, expenseTotal, parseStoredTrip, total, type Trip } from '@/lib/model';
 import { tripLanguagePreferencesSchema } from '@/lib/receipt-languages';
+import { financialFormatRefusal } from '@/lib/financial-format';
 import { readAccountActivity } from '@/lib/audit';
 
 export const dynamic = 'force-dynamic';
@@ -115,6 +116,9 @@ async function activity(actor: string, tripId: string, before = Number.MAX_SAFE_
 }
 
 export async function GET(request: Request) {
+  // R01: an export carries ledger money, so a bundle that cannot read it receives nothing.
+  const refused = financialFormatRefusal(request);
+  if (refused) return refused;
   try {
     const url = new URL(request.url);
     const origin = request.headers.get('origin');

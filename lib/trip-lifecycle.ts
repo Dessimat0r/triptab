@@ -35,6 +35,25 @@ async function explainActorRefusal(database: D1Database, actor: Actor) {
 export const OPEN_TRIP_IDS = `SELECT id FROM trips WHERE owner = ? UNION SELECT trip_id FROM memberships WHERE user_id = ?
   EXCEPT SELECT trip_id FROM trip_archives WHERE user_id = ?`;
 export const openTripBindings = (user: string) => [user, user, user];
+/**
+ * F1: the open-list limit for the kind of trip being added to an account's list,
+ * as a condition that can sit inside the statement that admits the addition
+ * (so the count and the join cannot be separated by a concurrent change). One
+ * place holds the constants and the count: holidays and bills never share an allowance.
+ */
+export function openListGate(user: string, bill: boolean, verb: 'join' | 'restore' = 'join') {
+  const limit = bill ? MAX_OPEN_BILLS : MAX_OPEN_HOLIDAYS;
+  const count = `(SELECT COUNT(*) FROM trips o WHERE o.id IN (${OPEN_TRIP_IDS}) AND ${bill ? "json_extract(o.data, '$.kind') = 'bill'" : "COALESCE(json_extract(o.data, '$.kind'), 'holiday') <> 'bill'"})`;
+  return {
+    condition: `${count} < ?`,
+    bindings: [...openTripBindings(user), limit] as (string | number)[],
+    count: async (database: D1Database) => Number((await database.prepare(`SELECT ${count} AS n`).bind(...openTripBindings(user)).first<{ n: number }>())?.n ?? 0),
+    limit,
+    message: bill ? `You already have ${MAX_OPEN_BILLS} open bills. Remove one from your list before ${verb === 'join' ? 'joining' : 'restoring'} another.`
+      : `You already have ${MAX_OPEN_HOLIDAYS} open holidays. Archive one before ${verb === 'join' ? 'joining' : 'restoring'} another.`,
+  };
+}
+
 /** Holidays and bills this account can still open but has archived for itself (F-05). */
 const ARCHIVED_TRIP_IDS = `SELECT id FROM trips WHERE owner = ? UNION SELECT trip_id FROM memberships WHERE user_id = ?
   INTERSECT SELECT trip_id FROM trip_archives WHERE user_id = ?`;
