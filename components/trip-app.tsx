@@ -2332,7 +2332,16 @@ export default function Home({ children }: { children: ReactNode }) {
     if (isBill(trip) && section !== "history") return <BillView trip={trip} busy={saving || loading} calculationError={calculationError} due={due} onStatement={setStatement} onPayment={suggestion => void openPayment(suggestion)} onArchive={archiveBill}
       receipts={<>
         {trip.expenses.length >= 3 && breakdown && <SpendingBreakdownPanel breakdown={breakdown} members={trip.members} currency={trip.currency} category={expenseFilter.category} onCategory={category => setExpenseFilter({ ...expenseFilter, category })} filtered={expenseFilterActive(expenseFilter)} />}
-        <div className="panel expense-list">{trip.expenses.length ? <PagedList {...page("expenses", 20)} noun={uiText("expenses")} items={trip.expenses} itemKey={e => e.id} renderItem={renderExpenseRow} /> : <p className="empty">{uiText("No receipts yet")}</p>}</div>
+        {/* F-05: bills get the same search and filters as holidays; the breakdown's categories filter this list too. */}
+        {trip.expenses.length > 1 && <ExpenseFilterBar filter={expenseFilter} onChange={setExpenseFilter} members={trip.members} shown={visibleExpenses.length} total={trip.expenses.length} />}
+        <div className="panel expense-list">{trip.expenses.length && !visibleExpenses.length ? (
+          <div className="empty">
+            <Receipt size={30} />
+            <h3>{uiText("No matching expenses")}</h3>
+            <p>{uiText("Try another search, or clear the filters to see all ")}{trip.expenses.length}{uiText(" expenses.")}</p>
+            <button className="quiet" onClick={() => setExpenseFilter({ ...NO_EXPENSE_FILTER, sort: expenseFilter.sort })}>{uiText("Clear filters")}</button>
+          </div>
+        ) : trip.expenses.length ? <PagedList {...page(expenseFilterActive(expenseFilter) || expenseFilter.sort !== "recent" ? `expenses:${canonicalJson(expenseFilter)}` : "expenses", 20)} noun={uiText("expenses")} items={visibleExpenses} itemKey={e => e.id} renderItem={renderExpenseRow} /> : <p className="empty">{uiText("No receipts yet")}</p>}</div>
         {trip.drafts.length > 0 && <div className="panel"><PagedList {...page("drafts", 10)} noun={uiText("receipt drafts")} items={[...trip.drafts].reverse()} itemKey={d => d.id} renderItem={renderDraftRow} /></div>}
       </>}
       payments={trip.payments.length > 0 && <><h2>{uiText("Recorded payments")}</h2><div className="panel"><PagedList {...page("payments", 5)} noun={uiText("payments")} items={[...trip.payments].reverse()} itemKey={p => p.id} renderItem={renderPaymentRow} /></div></>} />;

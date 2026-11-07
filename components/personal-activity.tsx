@@ -23,6 +23,8 @@ export default function PersonalActivity({ ledger, accountId, refreshKey, onClos
   const id = useId();
   const [tab, setTab] = useState<"activity" | "people">("activity");
   const [search, setSearch] = useState(""), [place, setPlace] = useState(""), [person, setPerson] = useState(""), [direction, setDirection] = useState("");
+  // F-05: an optional date range (inclusive, calendar dates as saved on each entry).
+  const [from, setFrom] = useState(""), [to, setTo] = useState("");
   const [withArchived, setWithArchived] = useState(true);
   // R02: this account's own archive only, re-read on every refresh so a lost
   // membership disappears while the panel is open.
@@ -40,6 +42,7 @@ export default function PersonalActivity({ ledger, accountId, refreshKey, onClos
   const query = search.trim().toLocaleLowerCase();
   const shown = entries.filter(entry => (!place || entry.tripId === place) && (!person || entry.people.includes(person))
     && (!direction || entry.direction === direction)
+    && (!from || entry.date >= from) && (!to || entry.date <= to)
     && (!query || [entry.title, entry.tripName, ...entry.people.map(key => names.get(key) ?? "")].some(text => text.toLocaleLowerCase().includes(query))));
   const money = (amount: number | null | undefined, currency: string) => amount === null || amount === undefined ? uiText("Needs review") : formatMoney(amount, currency);
   return <ModalA11y className="overlay" onClose={onClose}>
@@ -59,6 +62,8 @@ export default function PersonalActivity({ ledger, accountId, refreshKey, onClos
             {peopleInEntries.map(key => <option key={key} value={key}>{names.get(key)}</option>)}</select></label>
           <label>{uiText("Owed or owing")}<select value={direction} onChange={event => setDirection(event.target.value)}><option value="">{uiText("All")}</option>
             <option value="i-owe">{uiText("I owe")}</option><option value="owed-to-me">{uiText("Owed to me")}</option></select></label>
+          <label>{uiText("From date")}<input type="date" value={from} max={to || undefined} onChange={event => setFrom(event.target.value)} /></label>
+          <label>{uiText("To date")}<input type="date" value={to} min={from || undefined} onChange={event => setTo(event.target.value)} /></label>
         </div>
         {!!archived?.length && <label className="checklabel"><input type="checkbox" checked={withArchived} onChange={event => { setWithArchived(event.target.checked); setPlace(""); }} />{uiText("Include archived holidays and bills")}</label>}
         {!shown.length ? <p className="footnote">{entries.length ? uiText("Nothing matches these filters.") : uiText("No expenses or payments involve you yet.")}</p>
