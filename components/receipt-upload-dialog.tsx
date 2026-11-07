@@ -7,13 +7,13 @@ import ModalA11y from "./modal-accessibility";
 import ReceiptLocationFields, { type ReceiptPlace } from "./receipt-location-fields";
 import "./receipt-upload.css";
 
-export type ReceiptUploadContext = ReceiptPlace & { notes?: string };
+export type ReceiptUploadContext = ReceiptPlace & { notes?: string; name?: string };
 export default function ReceiptUploadDialog({ busy, nativeAvailable, error, onClose, onCancel, onUpload }: {
   busy: boolean; nativeAvailable: boolean; error?: string; onClose: () => void; onCancel: () => void;
   onUpload: (file: File, context: ReceiptUploadContext, signal?: AbortSignal, onSaving?: () => boolean) => Promise<boolean>;
 }) {
-  const titleId = useId(), noteId = useId(), cameraId = useId(), galleryId = useId();
-  const [file, setFile] = useState<File | null>(null), [notes, setNotes] = useState("");
+  const titleId = useId(), noteId = useId(), nameId = useId(), cameraId = useId(), galleryId = useId();
+  const [file, setFile] = useState<File | null>(null), [notes, setNotes] = useState(""), [name, setName] = useState("");
   const [place, setPlace] = useState<ReceiptPlace>({}), [submitting, setSubmitting] = useState(false);
   const [localError, setLocalError] = useState("");
   const request = useRef<{ controller: AbortController; saving: boolean } | null>(null);
@@ -31,7 +31,7 @@ export default function ReceiptUploadDialog({ busy, nativeAvailable, error, onCl
     const { controller } = active; request.current = active;
     setFile(selected); setSubmitting(true); setLocalError("");
     try {
-      const saved = await onUpload(selected, { ...place, notes: notes.trim() || undefined }, controller.signal, () => {
+      const saved = await onUpload(selected, { ...place, notes: notes.trim() || undefined, name: name.trim() || undefined }, controller.signal, () => {
         if (request.current !== active || controller.signal.aborted) return false;
         // Lock synchronously before the draft POST, including handlers from an older render.
         active.saving = true; setPersisting(true); return true;
@@ -47,6 +47,9 @@ export default function ReceiptUploadDialog({ busy, nativeAvailable, error, onCl
   return <ModalA11y className="overlay" onClose={close}>
     <section className="modal receipt-upload-dialog" role="dialog" aria-modal="true" aria-labelledby={titleId} aria-busy={locked}>
       <div className="modalheading"><h2 id={titleId}>{uiText("Add a receipt")}</h2><button type="button" className="iconbutton" aria-label={uiText("Close receipt upload")} disabled={persisting} onClick={close}><X /></button></div>
+      {/* F-07: like every other way to scan, a name can be given first; a typed name always wins over the merchant. */}
+      <label htmlFor={nameId}>{uiText("Expense name")} <small>{uiText("optional")}</small></label>
+      <input id={nameId} value={name} maxLength={200} autoComplete="off" disabled={locked} placeholder={uiText("Name (optional)")} onChange={event => setName(event.target.value)} />
       <label htmlFor={noteId}>{uiText("Who bought what? ")}<small>{uiText("optional")}</small></label>
       <textarea id={noteId} autoComplete="off" rows={3} maxLength={4000} value={notes} disabled={locked} placeholder={uiText("In Bratislava. Gary had a decaf, I had a cappuccino. We each had 2 croissants.")} onChange={event => setNotes(event.target.value)} />
       <p className="footnote">{uiText("Use your own words, including nicknames. The assistant uses the holiday’s travellers and remembered context.")}</p>
