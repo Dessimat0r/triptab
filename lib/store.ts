@@ -541,6 +541,31 @@ async function validateTripReceiptMemory(trip: Trip, previous: Trip | undefined,
   return changed;
 }
 
+/**
+ * D05: who added each expense. Any member may edit or delete an expense, so
+ * TripTab names who added it: the actor of its earliest "create" event in the
+ * trip's append-only history, which no client can set or change. An exactly
+ * restored expense keeps its original creator. Expenses older than history
+ * have none. Bounded and indexed (activity_events_trip_entity_idx).
+ */
+export async function expenseCreators(tripId: string, expenseIds: string[]): Promise<Map<string, { actorId: string; actorName: string }>> {
+  if (!expenseIds.length) return new Map();
+  const rows = await db().prepare(`SELECT e.entity_id, e.actor_id, e.actor_name FROM activity_events e
+    WHERE e.trip_id = ? AND e.entity_type = 'expense' AND e.action = 'create' AND e.entity_id IN (SELECT value FROM json_each(?))
+      AND NOT EXISTS (SELECT 1 FROM activity_events older WHERE older.trip_id = e.trip_id AND older.entity_type = 'expense'
+        AND older.entity_id = e.entity_id AND older.action = 'create' AND older.sequence < e.sequence)`)
+    .bind(tripId, JSON.stringify(expenseIds.slice(0, 200))).all<{ entity_id: string; actor_id: string; actor_name: string }>();
+  return new Map((rows.results ?? []).map(row => [row.entity_id, { actorId: row.actor_id, actorName: row.actor_name }]));
+}
+/** The current traveller IDs, on this trip, of the accounts that added these expenses. */
+async function expenseCreatorMembers(tripId: string, expenseIds: string[]) {
+  const accounts = [...new Set([...(await expenseCreators(tripId, expenseIds)).values()].map(creator => creator.actorId))];
+  if (!accounts.length) return [];
+  const rows = await db().prepare('SELECT member_id FROM memberships WHERE trip_id = ? AND user_id IN (SELECT value FROM json_each(?))')
+    .bind(tripId, JSON.stringify(accounts)).all<{ member_id: string }>();
+  return (rows.results ?? []).map(row => row.member_id);
+}
+
 export async function writeLedger(id: string, data: unknown, revision: unknown, options: { source?: ActivitySource; includeFreshness: true; tripSnapshot?: Trip; preserveCalculationRules?: boolean; operation?: OperationFence; ownerMemberIds?: Record<string,string>; tripRevisions?: Record<string, number> }): Promise<LedgerSnapshot>;
 export async function writeLedger(id: string, data: unknown, revision: unknown, options?: { source?: ActivitySource; includeFreshness?: false; tripSnapshot?: Trip; preserveCalculationRules?: boolean; operation?: OperationFence; ownerMemberIds?: Record<string,string>; tripRevisions?: Record<string, number> }): Promise<{ data: Ledger; revision: number; revisions: Record<string, number> }>;
 export async function writeLedger(id: string, data: unknown, revision: unknown, options: { source?: ActivitySource; includeFreshness?: boolean; tripSnapshot?: Trip; preserveCalculationRules?: boolean; operation?: OperationFence; ownerMemberIds?: Record<string,string>; tripRevisions?: Record<string, number> } = {}) {
@@ -771,9 +796,18 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
   // The one-minute photo hold commits with the deletion. Undo can reattach an
   // active image before bounded scheduled maintenance removes its last copy.
   for (const trip of changedTrips) {
-    const notification = activityNotification(profile?.display_name || 'A traveller', changes.filter(change => change.tripId === trip.id), { tripName: trip.name, kind: trip.kind });
+    const tripChangeList = changes.filter(change => change.tripId === trip.id);
+    const notification = activityNotification(profile?.display_name || 'A traveller', tripChangeList, { tripName: trip.name, kind: trip.kind });
     if (!notification) continue;
-    await notifyMembers(trip.id, id, notification.title, notification.body, changes.filter(change=>change.tripId===trip.id).some(change=>['trip','member','invite'].includes(change.entityType)) ? undefined : [...new Set(changes.filter(change=>change.tripId===trip.id).flatMap(change=>[change.before,change.after].flatMap(value=>value ? [value.payer,value.from,value.to,...Object.keys(value.percentages as object || {}),...(Array.isArray(value.items)?value.items.flatMap((item:{members?:string[]})=>item.members||[]):[])] : [])).filter((value):value is string=>typeof value==='string'))]).catch(() => {
+    const everyone = tripChangeList.some(change=>['trip','member','invite'].includes(change.entityType));
+    const involved = everyone ? undefined : [...new Set(tripChangeList.flatMap(change=>[change.before,change.after].flatMap(value=>value ? [value.payer,value.from,value.to,...Object.keys(value.percentages as object || {}),...(Array.isArray(value.items)?value.items.flatMap((item:{members?:string[]})=>item.members||[]):[])] : [])).filter((value):value is string=>typeof value==='string'))];
+    // D05: whoever added a changed or deleted expense is involved in it too,
+    // even if they neither paid nor share it. Taken from history, not the JSON.
+    if (involved) {
+      const expenseIds = [...new Set(tripChangeList.filter(change => change.entityType === 'expense').map(change => change.entityId))];
+      if (expenseIds.length) involved.push(...await expenseCreatorMembers(trip.id, expenseIds).catch(() => []));
+    }
+    await notifyMembers(trip.id, id, notification.title, notification.body, involved).catch(() => {
       console.warn('TripTab could not queue a holiday update notification.');
     });
   }
