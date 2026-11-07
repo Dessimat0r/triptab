@@ -1,8 +1,14 @@
 import { expect, test, type Page } from '@playwright/test';
 import { validateLedger, type Expense, type Trip } from '../../lib/model';
 
+// R13: the duplicate rule (lib/duplicates.ts) compares the same day, and a new
+// entry defaults to the browser's today. Every case runs on the fixture's
+// date, so the result never depends on when the suite runs. Midday UTC keeps
+// it the same calendar day in any browser timezone within ±11 hours.
+const FIXTURE_DAY = '2026-11-06';
+const FIXTURE_NOW = new Date(`${FIXTURE_DAY}T12:00:00Z`);
 const members = [{ id: 'gary', name: 'Gary', userId: 'owner' }, { id: 'sam', name: 'Sam' }];
-const pizza: Expense = { id: 'pizza', title: 'Pizza Express', date: '2026-11-06', time: '19:00', timezone: 'Europe/London', currency: 'GBP', payer: 'sam',
+const pizza: Expense = { id: 'pizza', title: 'Pizza Express', date: FIXTURE_DAY, time: '19:00', timezone: 'Europe/London', currency: 'GBP', payer: 'sam',
   tax: 0, tip: 0, discount: 0, items: [{ id: 'pizza-item', name: 'Pizza Express', amount: 4520, members: ['gary', 'sam'] }] };
 const base: Trip = { id: 'res-trip', ownerId: 'owner', name: 'London', currency: 'GBP', members, expenses: [pizza], drafts: [], payments: [] };
 
@@ -32,6 +38,8 @@ async function enter(page: Page, name: string, amount: string) {
 }
 
 test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+// Only the clock's reading is set; timers keep running normally.
+test.beforeEach(async ({ page }) => { await page.clock.setSystemTime(FIXTURE_NOW); });
 
 test('F-09: entering the same restaurant bill again warns; Open existing saves nothing, Save anyway saves', async ({ page }) => {
   const state = await fixtures(page);
@@ -50,6 +58,19 @@ test('F-09: entering the same restaurant bill again warns; Open existing saves n
   await page.getByRole('dialog', { name: 'Possible duplicate' }).getByRole('button', { name: 'Save anyway' }).click();
   await expect(page.locator('.editor')).toHaveCount(0);
   expect(state.trip.expenses).toHaveLength(2);
+});
+
+test('F-09 control: the same bill entered on another day is not a duplicate and saves directly', async ({ page }) => {
+  // The rule stays same-day (lib/duplicates.ts); the warning above is not a broadened match.
+  await page.clock.setSystemTime(new Date(FIXTURE_NOW.getTime() + 24 * 60 * 60 * 1000));
+  const state = await fixtures(page);
+  await page.goto('/expenses');
+  await enter(page, 'Pizza Express', '45.20');
+  await page.getByRole('button', { name: 'Save expense', exact: true }).click();
+  await expect(page.locator('.editor')).toHaveCount(0);
+  await expect(page.getByRole('dialog', { name: 'Possible duplicate' })).toHaveCount(0);
+  expect(state.posts).toBe(1);
+  expect(state.trip.expenses.map(value => value.date).sort()).toEqual([FIXTURE_DAY, '2026-11-07']);
 });
 
 test('F-18: an unsaved expense survives a reload and can be resumed once', async ({ page }) => {
