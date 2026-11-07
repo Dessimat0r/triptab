@@ -1,5 +1,7 @@
 # TripTab approved remediation programme
 
+**Successor integration, 7 November 2026:** the current merge-preparation route and additional reproduced corrections are recorded in [MERGE-READINESS.md](MERGE-READINESS.md), with exact [replay provenance](MERGE-PROVENANCE.json). That route supersedes the historical merge order below. #69, #77 and #78 remain review vehicles and must not be merged. The successor requires independent review and exact-HEAD CI; production release gates remain open.
+
 Owner brief and evidence baseline: **TripTab Functionality, Usability and Financial Accuracy Audit, 6 November 2026**, audited commit `48de3f9`. Decisions D01 to D08 (recorded below) and the additional owner decisions govern this programme. Reconciliation of the findings and acceptance tests against the audit: [`AUDIT-RECONCILIATION.md`](AUDIT-RECONCILIATION.md).
 
 This record describes implementation evidence. It is not approval to release. No merge, deployment or production migration is authorised. Status updated 6 November 2026 (follow-ups #71 to #74 added).
