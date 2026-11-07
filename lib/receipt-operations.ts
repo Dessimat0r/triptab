@@ -206,15 +206,21 @@ export async function operationAuthorized(database: Database, fence: OperationFe
  * different credential kind than the person's request started with.
  */
 export type OperationCredential = { settingsOwnerId: string; settingsVersion: number; connectionVersion?: number };
-export async function startProviderCall(database: Database, fence: OperationFence, userId: string, provider: OperationProvider, now = Date.now(), credential?: OperationCredential) {
-  const credentialGate = credential ? `AND EXISTS (SELECT 1 FROM receipt_ai_settings setting WHERE setting.id='shared'
+/** Reused by durable receipt work and request-only receipt translation. */
+export function providerCredentialSql(credential: OperationCredential | undefined, userId: string, provider: OperationProvider) {
+  return {
+    condition: credential ? `EXISTS (SELECT 1 FROM receipt_ai_settings setting WHERE setting.id='shared'
     AND setting.user_id=? AND setting.version=? AND setting.provider=? AND (setting.provider<>'api' OR setting.api_key_encrypted IS NOT NULL))
-    ${provider === 'siwc' ? 'AND EXISTS (SELECT 1 FROM chatgpt_plan_connections plan WHERE plan.user_id=? AND plan.version=?)' : ''}` : '';
-  const credentialBindings = credential ? [credential.settingsOwnerId, credential.settingsVersion, provider,
-    ...(provider === 'siwc' ? [userId, credential.connectionVersion ?? -1] : [])] : [];
+    ${provider === 'siwc' ? 'AND EXISTS (SELECT 1 FROM chatgpt_plan_connections plan WHERE plan.user_id=? AND plan.version=?)' : ''}` : '1',
+    bindings: credential ? [credential.settingsOwnerId, credential.settingsVersion, provider,
+      ...(provider === 'siwc' ? [userId, credential.connectionVersion ?? -1] : [])] : [],
+  };
+}
+export async function startProviderCall(database: Database, fence: OperationFence, userId: string, provider: OperationProvider, now = Date.now(), credential?: OperationCredential) {
+  const credentialGate = providerCredentialSql(credential, userId, provider);
   const row = await database.prepare(`UPDATE receipt_operations SET provider = ?, provider_started_at = ?, updated_at = ?
-    WHERE operation_key = ? AND attempt_id = ? AND (provider IS NULL OR provider = ?) AND ${OWNER_CONDITION} ${credentialGate} RETURNING attempt_id`)
-    .bind(provider, now, now, fence.key, fence.attemptId, provider, ...ownerBindings(fence, userId), ...credentialBindings).first<{ attempt_id: string }>();
+    WHERE operation_key = ? AND attempt_id = ? AND (provider IS NULL OR provider = ?) AND ${OWNER_CONDITION} AND ${credentialGate.condition} RETURNING attempt_id`)
+    .bind(provider, now, now, fence.key, fence.attemptId, provider, ...ownerBindings(fence, userId), ...credentialGate.bindings).first<{ attempt_id: string }>();
   return !!row;
 }
 

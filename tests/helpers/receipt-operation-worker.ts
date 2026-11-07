@@ -49,10 +49,12 @@ export async function createReceiptOperationWorker(options: { kind?: 'bill'; bin
       import * as notifications from './app/api/notifications/route.ts';
       import * as receiptAudit from './app/api/receipt/audit/route.ts';
       import * as mcp from './app/mcp/route.ts';
+      import * as invite from './app/api/invite/route.ts';
+      import * as translate from './app/api/receipt/translate/route.ts';
       import { hooks } from ${JSON.stringify(shim)};
       import { readLedger as storedLedger, writeLedger } from './lib/store.ts';
       ${hasBackground ? "import * as background from './lib/receipt-background.ts';" : 'const background = undefined;'}
-      const routes = { '/api/ledger': ledger, '/api/receipt': receipt, '/api/receipt/process': process, '/api/trip': tripRoute, '/api/auth': authRoute, '/api/profile': profile, '/api/activity': activity, '/api/account-activity': accountActivity, '/api/export': exports, '/api/import': imports, '/api/offline-expenses': offline, '/api/receipt/ai-status': aiStatus, '/api/trip-language': tripLanguage, '/api/notifications': notifications, '/api/receipt/audit': receiptAudit, '/mcp': mcp };
+      const routes = { '/api/ledger': ledger, '/api/receipt': receipt, '/api/receipt/process': process, '/api/trip': tripRoute, '/api/auth': authRoute, '/api/profile': profile, '/api/activity': activity, '/api/account-activity': accountActivity, '/api/export': exports, '/api/import': imports, '/api/offline-expenses': offline, '/api/receipt/ai-status': aiStatus, '/api/trip-language': tripLanguage, '/api/notifications': notifications, '/api/receipt/audit': receiptAudit, '/mcp': mcp, '/api/invite': invite, '/api/receipt/translate': translate };
       export default {
         async fetch(request, env, ctx) {
           const url = new URL(request.url);
