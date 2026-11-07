@@ -17,7 +17,8 @@ async function shared() {
   const folder = await mkdtemp(path.join(tmpdir(), 'triptab-operations-'));
   const file = path.join(folder, 'd1.sqlite');
   const setup = new DatabaseSync(file);
-  setup.exec((await readFile(new URL('../drizzle/0016_receipt_operations.sql', import.meta.url), 'utf8')).replaceAll('--> statement-breakpoint', ''));
+  for (const migration of ['0016_receipt_operations.sql', '0017_receipt_operation_jobs.sql'])
+    setup.exec((await readFile(new URL('../drizzle/' + migration, import.meta.url), 'utf8')).replaceAll('--> statement-breakpoint', ''));
   const instances = [new DatabaseSync(file), new DatabaseSync(file), new DatabaseSync(file)];
   return { setup, instances, close: async () => { for (const db of [setup, ...instances]) db.close(); await rm(folder, { recursive: true, force: true }); } };
 }
@@ -101,7 +102,7 @@ test('R12: only a successful claim issues a commit fence; copies and data are no
     assert.equal(isOperationFence(operationFence(claim)), true);
     for (const value of [{ key: claim.key, attemptId: claim.attemptId }, JSON.parse(JSON.stringify(claim.fence)), { ...claim.fence }, null, 'processing'])
       assert.equal(isOperationFence(value), false);
-    assert.throws(() => operationCommitSql({ key: claim.key, attemptId: claim.attemptId }), /Untrusted receipt operation/);
+    assert.throws(() => operationCommitSql({ key: claim.key, attemptId: claim.attemptId }, 'alice'), /Untrusted receipt operation/);
     assert.throws(() => operationFence({ ...claim, fence: { key: claim.key, attemptId: claim.attemptId } }), /Not an owned receipt operation/);
   } finally { await close(); }
 });
