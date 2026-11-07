@@ -9,8 +9,12 @@ import {
   writeLedger,
 } from '@/lib/store';
 import { prepareImportedTrip } from '@/lib/import-ledger';
+import { financialFormatRefusal } from '@/lib/financial-format';
 import { isBill, MAX_OPEN_BILLS, MAX_OPEN_HOLIDAYS } from '@/lib/model';
 export async function POST(request: Request) {
+  // R01: an import writes ledger money, so an undeclared or other-format bundle is refused before parsing or writing.
+  const refused = financialFormatRefusal(request);
+  if (refused) return refused;
   try {
     sameOrigin(request);
     const actor = await ensureProfile(request);

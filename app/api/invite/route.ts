@@ -5,6 +5,7 @@ import { DB_NOW_ISO } from '@/lib/receipt-operations';
 import { joinedNotification, notifyMembers } from '@/lib/notifications';
 import { isBill, parseStoredTrip, travellerFinancialPreview, type Trip } from '@/lib/model';
 import { openListGate } from '@/lib/trip-lifecycle';
+import { financialFormatRefusal } from '@/lib/financial-format';
 
 export const dynamic = 'force-dynamic';
 const PRIVATE_HEADERS = { 'Cache-Control': 'private, no-store' };
@@ -148,6 +149,12 @@ async function listInvitations(tripId: string, profile: Profile) {
 }
 
 export async function GET(request: Request) {
+  // R01: the invitation preview carries the traveller's cost shares, payments and net balances. The invitation
+  // list (mode=list) carries no money and is not gated.
+  if (!new URL(request.url).searchParams.has('mode')) {
+    const refused = financialFormatRefusal(request);
+    if (refused) return refused;
+  }
   try {
     const profile = await ensureProfile(request);
     const params = new URL(request.url).searchParams;
@@ -384,6 +391,10 @@ async function acceptInvite(profile: Profile, body: Record<string, unknown>) {
 }
 
 export async function POST(request: Request) {
+  // R01: accepting reads and writes the invited trip's money (the traveller confirms its history), so every invitation
+  // write is refused for a bundle that cannot read it, before authentication, reads or writes.
+  const refused = financialFormatRefusal(request);
+  if (refused) return refused;
   try {
     try { sameOrigin(request); }
     catch { throw new RequestError('Invitation requests must come from TripTab.', 403); }

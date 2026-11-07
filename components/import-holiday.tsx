@@ -6,6 +6,7 @@ import ModalA11y from './modal-accessibility';
 import { previewImport, type ImportPreview } from '@/lib/import-ledger';
 import { tripSummary } from '@/lib/trip-insights';
 import { formatMoney } from '@/lib/money-format';
+import { financialFormatHeaders } from '@/lib/financial-format';
 export default function ImportHoliday({
   accountId,
   onClose,
@@ -79,7 +80,7 @@ export default function ImportHoliday({
               try {
                 const response = await fetch('/api/import', {
                   method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
+                  headers: financialFormatHeaders({ 'Content-Type': 'application/json' }),
                   body: JSON.stringify({ accountId, trip, memberId }),
                 });
                 const body = (await response.json()) as {

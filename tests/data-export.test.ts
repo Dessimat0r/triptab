@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+import { financialFormatHeaders } from '../lib/financial-format';
 import { createSourceFile, isFunctionDeclaration, isJsxAttribute, isJsxSelfClosingElement, ModuleKind, ScriptKind, ScriptTarget, transpileModule } from 'typescript';
 
+// The download handler runs in a sandbox below; give it the real declaration helper the component imports.
+Object.assign(globalThis, { financialFormatHeaders });
 const source = await readFile(new URL('../components/data-export.tsx', import.meta.url), 'utf8');
 const syntax = createSourceFile('data-export.tsx', source, ScriptTarget.Latest, true, ScriptKind.TSX);
 const component = syntax.statements.find(statement => isFunctionDeclaration(statement) && statement.name?.text === 'DataExport');
@@ -71,4 +74,12 @@ test('each mounted account export is keyed to the authenticated profile so switc
     }
     visit(ast); assert(keys.length); assert.ok(keys.every(key => /profile\??\.id/.test(key)), `${filename} must use the current account identity`);
   }
+});
+
+test('R01-A: every export download declares the money format the server requires', async () => {
+  const sent: Array<Record<string, string>> = [];
+  const reader = controller(async (_url, options) => { sent.push(options.headers as Record<string, string>); return new Response('download fixture'); });
+  await reader.download('account-activity', 'json');
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0]['X-TripTab-Financial-Format'], '2');
 });

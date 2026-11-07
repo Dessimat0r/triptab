@@ -24,6 +24,22 @@ test('R01: the format a request declares is read strictly, and anything unreadab
   assert.equal(financialFormatRefusal(request('1'))?.status, 426);
 });
 
+test('R01-E: only the exact supported format is accepted. Missing, invalid, older and newer declarations are all refused with 426 and the same headers', async () => {
+  const request = (value?: string, method = 'GET') => new Request('https://triptab.test/api/ledger', { method, ...(value === undefined ? {} : { headers: { [FINANCIAL_FORMAT_HEADER]: value } }) });
+  assert.equal(financialFormatRefusal(request(String(FINANCIAL_FORMAT))), null, 'the supported format proceeds');
+  assert.equal(financialFormatRefusal(request(` ${FINANCIAL_FORMAT} `)), null, 'surrounding spaces are tolerated, as before');
+  for (const value of [undefined, '', 'x', '0', '1', '3', '4', '9999', '2.0', '-2']) {
+    const refusal = financialFormatRefusal(request(value));
+    assert.equal(refusal?.status, 426, `declaration ${JSON.stringify(value)}`);
+    assert.equal(refusal?.headers.get('Cache-Control'), 'private, no-store');
+    assert.equal(refusal?.headers.get('X-TripTab-Financial-Format-Required'), String(FINANCIAL_FORMAT));
+    assert.deepEqual(await refusal!.clone().json(), { error: FINANCIAL_FORMAT_REFUSAL });
+  }
+  const head = financialFormatRefusal(request('3', 'HEAD'));
+  assert.equal(head?.status, 426);
+  assert.equal(await head!.text(), '', 'a HEAD refusal has no body');
+});
+
 test('R01: an undeclared (cached) bundle receives no ledger money and cannot write, while a current bundle reads the scoped record', async () => {
   const flow = await createReceiptFlowWorker();
   try {
@@ -96,7 +112,7 @@ test('R01: a reader refuses an entry saved under a calculation rule it does not 
 });
 
 test('R01: every client request that reads or writes ledger money declares the format', async () => {
-  const gated = /["'`]\/api\/(?:ledger|activity\?|receipt\/process|trip\?mode=archived-data)/;
+  const gated = /["'`]\/api\/(?:ledger|activity\?|receipt\/process|trip\?mode=archived-data|export|import|offline-expenses|invite|receipt\/audit)/;
   const offenders: string[] = [];
   for (const folder of ['components', 'hooks', 'lib']) {
     for (const name of await readdir(new URL(`../${folder}/`, import.meta.url), { recursive: true })) {
@@ -112,4 +128,21 @@ test('R01: every client request that reads or writes ledger money declares the f
   // Activity pages build their URL from the endpoint, so check that fetch directly.
   const activity = await readFile(new URL('../components/activity-panel.tsx', import.meta.url), 'utf8');
   assert.match(activity, /fetch\(url\.pathname \+ url\.search, \{[^}]*headers: financialFormatHeaders\(\)/);
+});
+
+test('R01: no client links straight to a money-bearing download, and the shared download helper declares the format', async () => {
+  // A plain link cannot send the declaration, so the server would refuse it.
+  const offenders: string[] = [];
+  for (const folder of ['components', 'app']) {
+    for (const name of await readdir(new URL(`../${folder}/`, import.meta.url), { recursive: true })) {
+      if (!/\.(tsx?|jsx?)$/.test(name) || name.startsWith('api/') || name.includes('/api/')) continue;
+      const source = await readFile(new URL(`../${folder}/${name}`, import.meta.url), 'utf8');
+      if (/href=\{?\s*[`"']\/api\/(?:export|receipt\/audit)/.test(source)) offenders.push(`${folder}/${name}`);
+    }
+  }
+  assert.deepEqual(offenders, []);
+  const helper = await readFile(new URL('../components/download-button.tsx', import.meta.url), 'utf8');
+  assert.match(helper, /headers: financialFormatHeaders\(\)/);
+  const offline = await readFile(new URL('../components/offline-capture.tsx', import.meta.url), 'utf8');
+  assert.match(offline, /refusedFinancialFormat\(response\)/);
 });
