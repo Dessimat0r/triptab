@@ -1,10 +1,10 @@
 import { canonicalJson, sha256Hex } from './data-utils';
 import { bucket, db, OperationSupersededError, OperationUnauthorizedError, readLedger, receiptAccess, receiptKey, RequestError, writeLedger } from './store';
 import { ReceiptAIAccessError } from './receipt-ai-access';
-import { applyReceiptTranscription, consumeReceiptProcessBudget, processReceiptImage, ReceiptAIError } from './receipt-ai';
+import { applyReceiptTranscription, consumeReceiptProcessBudget, processReceiptImage, ReceiptAIError, type ProviderRequestGuard } from './receipt-ai';
 import { readTripLanguagePreferences } from './trip-language-preferences';
 import { applyReceiptQuestion, processReceiptQuestion } from './receipt-assistant';
-import { holdsOperation, operationAuthorized, startProviderCall, type OperationFence, type OperationProvider, type OperationSource } from './receipt-operations';
+import { holdsOperation, operationAuthorized, startProviderCall, type OperationCredential, type OperationFence, type OperationProvider, type OperationSource } from './receipt-operations';
 import type { Draft, Ledger, Trip } from './model';
 import { notifyMember } from './notifications';
 
@@ -17,7 +17,9 @@ import { notifyMember } from './notifications';
  */
 export type ReceiptImage = { bytes: Uint8Array; mimeType: string; owner: string; version: string; size: number };
 export type LoadedSource = { ledger: { data: Ledger; revision: number }; trip: Trip; draft: Draft; image?: ReceiptImage; answered: boolean };
-export type ReceiptConnection = { accessToken: string; model?: string; provider: OperationProvider };
+export type ReceiptConnection = { accessToken: string; model?: string; provider: OperationProvider; settingsOwnerId?: string; settingsVersion?: number; connectionVersion?: number };
+const credentialFence = (connection: ReceiptConnection): OperationCredential | undefined => connection.settingsOwnerId && connection.settingsVersion !== undefined
+  ? { settingsOwnerId: connection.settingsOwnerId, settingsVersion: connection.settingsVersion, connectionVersion: connection.connectionVersion } : undefined;
 export type OperationLog = { attemptId: string; tripId: string; draftId: string; receiptId?: string; runner: 'request' | 'background' };
 
 export const errorCategory = (error: unknown) => error instanceof ReceiptAIError || error instanceof ReceiptAIAccessError ? error.code
@@ -113,11 +115,11 @@ export async function executeOperation(input: {
   if (refused) throw refused;
   const { preferences: { readingLanguage } } = await readTripLanguagePreferences(database, userId, trip.id);
   const connection = await input.credential();
-  if (!await startProviderCall(database, fence, userId, connection.provider)) {
+  if (!await startProviderCall(database, fence, userId, connection.provider, Date.now(), credentialFence(connection))) {
     throw await refusal(fence, userId) ?? new ReceiptAIAccessError('Receipt processing settings changed before this reading started. Read the receipt again.', 409, 'credentials_changed');
   }
   await consumeReceiptProcessBudget(database, userId, { provider: connection.provider });
-  const beforeRequest = async () => {
+  const beforeRequest: ProviderRequestGuard = async (_url, requestInit) => {
     if (signal.aborted) throw new RequestError('Receipt processing was cancelled or timed out. Your saved receipt is unchanged.', 408);
     // Quota consumption, credential/model preparation and model discovery can
     // yield. Recheck at the actual outbound boundary, including again after a
@@ -126,11 +128,17 @@ export async function executeOperation(input: {
     if (refused) throw refused;
     await input.stillCurrent?.();
     const currentConnection = await input.credential();
-    if (currentConnection.provider !== connection.provider || currentConnection.accessToken !== connection.accessToken || currentConnection.model !== connection.model) {
+    if (currentConnection.provider !== connection.provider || currentConnection.model !== connection.model
+      || connection.provider === 'api' && currentConnection.accessToken !== connection.accessToken) {
       throw new ReceiptAIAccessError('Receipt processing settings changed before this reading started. Read the receipt again.', 409, 'credentials_changed');
     }
+    // A normal plan-token refresh is supported. Use its current token, then
+    // fence that exact stored connection/settings version at final admission.
+    const headers = new Headers(requestInit.headers);
+    headers.set('Authorization', `Bearer ${currentConnection.accessToken}`);
+    requestInit.headers = headers;
     await currentSource();
-    if (!await startProviderCall(database, fence, userId, connection.provider)) {
+    if (!await startProviderCall(database, fence, userId, connection.provider, Date.now(), credentialFence(currentConnection))) {
       throw await refusal(fence, userId) ?? new ReceiptAIAccessError('Receipt processing settings changed before this reading started. Read the receipt again.', 409, 'credentials_changed');
     }
   };

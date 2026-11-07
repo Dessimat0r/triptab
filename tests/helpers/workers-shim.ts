@@ -18,6 +18,7 @@ type Hooks = {
   failNextCommit?: 'before' | 'after';
   commitBatches: number;
   pauseBeforeSpend?: boolean; atSpend?: boolean; releaseSpend?: boolean;
+  providerChecks?: number; pauseProviderAdmission?: number; atProviderAdmission?: boolean; releaseProviderAdmission?: boolean;
   provider: { calls: number; holdNext: number; held: number; release: boolean; output: unknown; fail?: number };
   detached: number;
 };
@@ -36,15 +37,25 @@ function wrapDatabase(database: D1Database): D1Database {
     if (property === 'prepare') return (sql: string) => {
       if (sql.startsWith('INSERT OR IGNORE INTO sync_state')) commitPrepared = true;
       const statement = target.prepare(sql);
-      if (sql.startsWith('INSERT INTO auth_rate_limits')) return new Proxy(statement, { get(target, property) {
+      const budget = sql.startsWith('INSERT INTO auth_rate_limits');
+      const providerAdmission = sql.startsWith('UPDATE receipt_operations SET provider =');
+      if (budget || providerAdmission) return new Proxy(statement, { get(target, property) {
         if (property === 'bind') return (...values: unknown[]) => {
           const bound = target.bind(...values);
           return new Proxy(bound, { get(target, property) {
             if (property === 'first') return async () => {
-              if (hooks.pauseBeforeSpend) {
+              if (budget && hooks.pauseBeforeSpend) {
                 hooks.pauseBeforeSpend = false; hooks.atSpend = true;
                 while (!hooks.releaseSpend) await sleep(5);
                 hooks.atSpend = false;
+              }
+              if (providerAdmission) {
+                hooks.providerChecks = (hooks.providerChecks ?? 0) + 1;
+                if (hooks.pauseProviderAdmission === hooks.providerChecks) {
+                  hooks.atProviderAdmission = true;
+                  while (!hooks.releaseProviderAdmission) await sleep(5);
+                  hooks.atProviderAdmission = false;
+                }
               }
               return target.first();
             };

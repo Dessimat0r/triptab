@@ -241,14 +241,15 @@ export async function receiptAICredential(database: D1Database, environment: Rec
     if (environment.CHATGPT_PLAN_ENABLED !== 'true') throw new ReceiptAIAccessError('SIWC plan processing is disabled. Ask the site owner to select API key in receipt AI settings.', 503, 'siwc_disabled');
     try {
       const access = await chatGPTPlanAccessToken(database, userId, environment, { signal: options.signal });
-      return { ...access, provider: 'siwc' as const };
+      return { ...access, provider: 'siwc' as const, settingsOwnerId: row.user_id, settingsVersion: row.version };
     } catch (error) {
       if (error instanceof ChatGPTPlanError) throw new ReceiptAIAccessError(error.message, error.status, error.code);
       throw error;
     }
   }
   if (!row?.api_key_encrypted) throw new ReceiptAIAccessError('The site owner needs to add the shared OpenAI API key before receipts can be read automatically.', 503, 'not_connected');
-  return { accessToken: await decryptedKey(row.api_key_encrypted, row.user_id, secret), model: environment.OPENAI_RECEIPT_MODEL || DEFAULT_RECEIPT_MODEL, provider: 'api' as const };
+  return { accessToken: await decryptedKey(row.api_key_encrypted, row.user_id, secret), model: environment.OPENAI_RECEIPT_MODEL || DEFAULT_RECEIPT_MODEL, provider: 'api' as const,
+    settingsOwnerId: row.user_id, settingsVersion: row.version };
 }
 async function setupBudget(database: D1Database, userId: string) {
   const now = Date.now(), window = 60_000;

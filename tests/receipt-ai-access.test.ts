@@ -143,7 +143,7 @@ test('verified owner saves a validated encrypted key, then uses it with its own 
   assert.equal(String(row(db)?.api_key_encrypted).includes(key), false);
   assert.equal(String(row(db)?.api_key_encrypted).startsWith('v1.'), true);
   const access = await getReceiptAIAccess(request(), owner, db.database, config);
-  assert.deepEqual(access, { accessToken: key, model: 'gpt-6.1-sol', provider: 'api' });
+  assert.deepEqual(access, { accessToken: key, model: 'gpt-6.1-sol', provider: 'api', settingsOwnerId: owner.id, settingsVersion: 1 });
   assert.equal((await receiptAIStatus(request(), owner, db.database, config)).connected, true);
   const audit = db.sqlite.prepare('SELECT after_data FROM account_activity_events WHERE entity_id=?').get('receipt-processing');
   assert.deepEqual(JSON.parse(String(audit?.after_data)), { keyConfigured: true, provider: 'api' });
@@ -160,7 +160,8 @@ test('all authenticated participants use the same server-only API key while only
     assert.equal(status.manageable, false); assert.equal(status.managementReason, 'account_restricted');
     assert.equal(status.reason, undefined);
     assert.doesNotMatch(JSON.stringify(status), /sk-test-|api_key_encrypted|owner-provider/);
-    assert.deepEqual(await getReceiptAIAccess(request(account), profile, db.database, config), { accessToken: key, model: 'gpt-6.1-sol', provider: 'api' });
+    assert.deepEqual(await getReceiptAIAccess(request(account), profile, db.database, config), { accessToken: key, model: 'gpt-6.1-sol', provider: 'api',
+      settingsOwnerId: before!.user_id, settingsVersion: before!.version });
     for (const body of [{ apiKey: replacement }, { provider: 'api' }, { provider: 'siwc' }]) {
       await assert.rejects(saveReceiptAISettings(request(account), profile, db.database, config, body, forbiddenFetch), { status: 403 });
     }

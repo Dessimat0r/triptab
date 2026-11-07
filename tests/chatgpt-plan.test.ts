@@ -127,7 +127,7 @@ test('approved plan authorization uses PKCE and nonce, stores encrypted tokens a
   assert.deepEqual(result, { returnTo: '/receipts?receiptDraft=saved-draft', result: 'connected' }); assert.deepEqual(calls, [tokenEndpoint, jwksEndpoint]);
   const rows = JSON.stringify(database.sqlite.prepare('SELECT * FROM chatgpt_plan_connections').all());
   assert(!rows.includes('access-fixture-secret')); assert(!rows.includes('refresh-fixture-secret')); assert(!rows.includes('owner@example.test'));
-  assert.deepEqual(await chatGPTPlanAccessToken(database.asD1(), owner.id, environment), { accessToken: 'access-fixture-secret', model: undefined });
+  assert.deepEqual(await chatGPTPlanAccessToken(database.asD1(), owner.id, environment), { accessToken: 'access-fixture-secret', model: undefined, connectionVersion: 1 });
   const audit = JSON.stringify(database.sqlite.prepare('SELECT * FROM account_activity_events').all());
   assert(audit.includes('planUsageEnabled')); assert(!audit.includes('fixture-secret')); assert(!audit.includes(start.authorize.searchParams.get('nonce')!));
 });

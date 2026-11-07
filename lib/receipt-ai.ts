@@ -212,11 +212,11 @@ async function boundedText(response: Response, limit = 1_000_000) {
 }
 
 /** Runs after all asynchronous preparation and immediately before each fetch. */
-export type ProviderRequestGuard = () => Promise<void>;
+export type ProviderRequestGuard = (url: string, request: RequestInit) => Promise<void>;
 async function requestProvider(url: string, init: RequestInit, fetcher: typeof fetch, beforeRequest?: ProviderRequestGuard) {
   // Keep authorisation errors outside the transport catch: they must remain
   // terminal refusals, rather than becoming a retryable provider outage.
-  await beforeRequest?.();
+  await beforeRequest?.(url, init);
   let response: Response;
   try { response = await fetcher(url, init); }
   catch {
