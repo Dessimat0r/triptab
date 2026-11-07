@@ -8,6 +8,7 @@ import {
   writeLedger,
 } from '@/lib/store';
 import { prepareImportedTrip } from '@/lib/import-ledger';
+import { isBill, MAX_OPEN_BILLS, MAX_OPEN_HOLIDAYS } from '@/lib/model';
 export async function POST(request: Request) {
   try {
     sameOrigin(request);
@@ -25,8 +26,12 @@ export async function POST(request: Request) {
           { tripId: trip.id },
           { headers: { 'Cache-Control': 'private, no-store' } },
         );
-      if (fresh.data.trips.length >= 50)
-        throw new RequestError('Archive a holiday before importing another.');
+      const bill = isBill(trip);
+      const limit = bill ? MAX_OPEN_BILLS : MAX_OPEN_HOLIDAYS;
+      if (fresh.data.trips.filter(value => isBill(value) === bill).length >= limit)
+        throw new RequestError(bill
+          ? `You already have ${MAX_OPEN_BILLS} open bills. Remove one from your list before importing another.`
+          : `You already have ${MAX_OPEN_HOLIDAYS} open holidays. Archive one before importing another.`);
       try {
         await writeLedger(
           actor.id,

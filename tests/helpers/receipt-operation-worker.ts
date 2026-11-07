@@ -36,10 +36,20 @@ export async function createReceiptOperationWorker(options: { kind?: 'bill'; bin
       import * as process from './app/api/receipt/process/route.ts';
       import * as tripRoute from './app/api/trip/route.ts';
       import * as authRoute from './app/api/auth/route.ts';
+      import * as profile from './app/api/profile/route.ts';
+      import * as activity from './app/api/activity/route.ts';
+      import * as accountActivity from './app/api/account-activity/route.ts';
+      import * as exports from './app/api/export/route.ts';
+      import * as imports from './app/api/import/route.ts';
+      import * as offline from './app/api/offline-expenses/route.ts';
+      import * as aiStatus from './app/api/receipt/ai-status/route.ts';
+      import * as tripLanguage from './app/api/trip-language/route.ts';
+      import * as notifications from './app/api/notifications/route.ts';
+      import * as receiptAudit from './app/api/receipt/audit/route.ts';
       import { hooks } from ${JSON.stringify(shim)};
       import { readLedger as storedLedger, writeLedger } from './lib/store.ts';
       ${hasBackground ? "import * as background from './lib/receipt-background.ts';" : 'const background = undefined;'}
-      const routes = { '/api/ledger': ledger, '/api/receipt': receipt, '/api/receipt/process': process, '/api/trip': tripRoute, '/api/auth': authRoute };
+      const routes = { '/api/ledger': ledger, '/api/receipt': receipt, '/api/receipt/process': process, '/api/trip': tripRoute, '/api/auth': authRoute, '/api/profile': profile, '/api/activity': activity, '/api/account-activity': accountActivity, '/api/export': exports, '/api/import': imports, '/api/offline-expenses': offline, '/api/receipt/ai-status': aiStatus, '/api/trip-language': tripLanguage, '/api/notifications': notifications, '/api/receipt/audit': receiptAudit };
       export default {
         async fetch(request, env, ctx) {
           const url = new URL(request.url);
@@ -238,3 +248,4 @@ export async function createReceiptOperationWorker(options: { kind?: 'bill'; bin
       } };
   } catch (error) { await worker.dispose(); throw error; }
 }
+
