@@ -6,6 +6,7 @@ import { readTripLanguagePreferences } from './trip-language-preferences';
 import { applyReceiptQuestion, processReceiptQuestion } from './receipt-assistant';
 import { holdsOperation, operationAuthorized, startProviderCall, type OperationFence, type OperationProvider, type OperationSource } from './receipt-operations';
 import type { Draft, Ledger, Trip } from './model';
+import { notifyMember } from './notifications';
 
 /**
  * One paid receipt operation's work (R06/R07/R12), shared by the browser
@@ -79,6 +80,12 @@ export async function executeOperation(input: {
   credential: () => Promise<ReceiptConnection>;
   /** The browser request's own account check; the background runner relies on the grant. */
   stillCurrent?: () => Promise<void>;
+  /**
+   * F-11: whether to tell the person who started this reading that it is ready.
+   * The background runner always does; a browser request does only once its
+   * client has gone (a connected page shows the result itself).
+   */
+  notifyWhenStored?: () => boolean;
   signal: AbortSignal;
 }) {
   const { userId, request, fence, signal } = input;
@@ -135,6 +142,18 @@ export async function executeOperation(input: {
       const savedDraft = saved.data.trips.find(value => value.id === trip.id)?.drafts.find(value => value.id === draft.id);
       logOperation('native-proposal-stored', input.log, {
         status: savedDraft?.receiptScan?.status, lineCount: savedDraft?.items.length ?? 0, revision: saved.revision });
+      // F-11: "Ready to review", to the reading's own account only (other
+      // members are told about the change by the save's usual notification).
+      // Preferences still apply. Best effort: a notification never fails the save.
+      if (context.callerMemberId && input.notifyWhenStored?.()) {
+        const savedTrip = saved.data.trips.find(value => value.id === trip.id);
+        const name = savedDraft?.title?.trim() || 'your receipt';
+        const place = savedTrip?.name ? ` in ${savedTrip.name}` : '';
+        await notifyMember(trip.id, userId, context.callerMemberId,
+          request.questionId ? 'Receipt chat reply ready' : 'Receipt ready to review',
+          request.questionId ? `TripTab answered your question about ${name}${place}.` : `TripTab finished reading ${name}${place}. Review it before saving.`)
+          .catch(() => { console.warn('TripTab could not queue a receipt-ready notification.'); });
+      }
       return { saved, savedDraft };
     } catch (error) {
       if (!(error instanceof Error) || error.message !== 'CONFLICT') throw error;

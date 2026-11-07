@@ -1090,7 +1090,8 @@ const workCode = transpileWithSharedImports(await readFile(new URL('../lib/recei
   .replace("'./store'", JSON.stringify(storeUrl)).replace("'./receipt-ai-access'", JSON.stringify(accessUrl))
   .replace("'./receipt-ai'", JSON.stringify(new URL('../lib/receipt-ai.ts', import.meta.url).href))
   .replace("'./receipt-assistant'", JSON.stringify(new URL('../lib/receipt-assistant.ts', import.meta.url).href))
-  .replace("'./trip-language-preferences'", JSON.stringify(languageUrl));
+  .replace("'./trip-language-preferences'", JSON.stringify(languageUrl))
+  .replace("'./notifications'", JSON.stringify(dataUrl("export const notifyMember=async()=>{};")));
 const grantUrl = dataUrl("export const executionGrant=async()=>({kind:'session',ref:'route-session'});");
 const routeSource = await readFile(new URL('../app/api/receipt/process/route.ts', import.meta.url), 'utf8');
 const routeCode = transpileWithSharedImports(routeSource, { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 } }).outputText
