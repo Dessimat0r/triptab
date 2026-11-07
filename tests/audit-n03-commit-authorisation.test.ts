@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createHash, randomBytes } from 'node:crypto';
 import { createReceiptOperationWorker } from './helpers/receipt-operation-worker';
+/** Structural: the harness returns Miniflare's Response, which differs from the DOM type. */
+type Reply = { status: number; text(): Promise<string>; json(): Promise<unknown> };
 
 /**
  * N03 verification (second independent pass). Production handlers, an isolated
@@ -52,7 +54,7 @@ async function prepared(f: Fixture, who: Identity, tripId: string, mode: Mode) {
   return { pending };
 }
 
-async function released(f: Fixture, held: { pending: Promise<Response> }) {
+async function released(f: Fixture, held: { pending: Promise<Reply> }) {
   const pending = held.pending;
   const batches = (await f.control('/__test/hooks')).commitBatches;
   await f.control('/__test/hooks', { proceed: true });

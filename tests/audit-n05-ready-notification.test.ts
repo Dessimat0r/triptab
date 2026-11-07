@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createReceiptOperationWorker } from './helpers/receipt-operation-worker';
+/** Structural: the harness returns Miniflare's Response, which differs from the DOM type. */
+type Reply = { status: number; text(): Promise<string>; json(): Promise<unknown> };
 
 /**
  * N05 verification: the parts of the receipt-ready notice that do not depend on
@@ -11,7 +13,7 @@ import { createReceiptOperationWorker } from './helpers/receipt-operation-worker
 type Fixture = Awaited<ReturnType<typeof createReceiptOperationWorker>>;
 const inbox = async (f: Fixture, user: string) => (await f.database.prepare('SELECT title,body FROM notifications WHERE user_id=? ORDER BY created_at').bind(user).all<{ title: string; body: string }>()).results;
 const settle = () => new Promise(resolve => setTimeout(resolve, 300));
-async function cutOff(f: Fixture, start: (body: string) => Promise<Response>) {
+async function cutOff(f: Fixture, start: (body: string) => Promise<Reply>) {
   const body = await f.processBody();
   await f.control('/__test/provider', { holdNext: 1, release: false });
   const abandoned = start(body);

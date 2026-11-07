@@ -30,7 +30,7 @@ async function seed(preferences?: { delivery?: string }) {
   database.sqlite.prepare('INSERT INTO memberships(trip_id,user_id,member_id) VALUES(?,?,?)').run(trip.id, 'alice', 'a');
   database.sqlite.prepare('INSERT INTO memberships(trip_id,user_id,member_id) VALUES(?,?,?)').run(trip.id, 'bob', 'b');
   database.sqlite.prepare('INSERT INTO push_subscriptions(endpoint,user_id,created_at,generation) VALUES(?,?,?,?)').run(endpoint, 'bob', now, 1);
-  if (preferences) database.sqlite.prepare('INSERT INTO notification_preferences(user_id,delivery) VALUES(?,?)').run('bob', preferences.delivery);
+  if (preferences) database.sqlite.prepare('INSERT INTO notification_preferences(user_id,delivery) VALUES(?,?)').run('bob', preferences.delivery ?? 'immediate');
   const key = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
   fixture.env.VAPID_PUBLIC_KEY = 'a'.repeat(87);
   fixture.env.VAPID_PRIVATE_KEY = JSON.stringify(await crypto.subtle.exportKey('jwk', key.privateKey));

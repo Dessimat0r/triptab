@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createReceiptOperationWorker } from './helpers/receipt-operation-worker';
 import { sha256Hex } from '../lib/data-utils';
+/** Structural: the harness returns Miniflare's Response, which differs from the DOM type. */
+type Reply = { status: number; text(): Promise<string>; json(): Promise<unknown> };
 
 /**
  * N04 verification, second pass. #79's tests cover six cutoffs during quota
@@ -13,7 +15,7 @@ import { sha256Hex } from '../lib/data-utils';
 type Fixture = Awaited<ReturnType<typeof createReceiptOperationWorker>>;
 const notifications = async (f: Fixture) => Number((await f.database.prepare('SELECT COUNT(*) AS n FROM notifications').first<{ n: number }>())!.n);
 const calls = async (f: Fixture) => (await f.control('/__test/provider')).calls;
-async function refusedAt(f: Fixture, disrupt: () => Promise<void>, start: () => Promise<Response>, options: { claimTaken?: boolean } = {}) {
+async function refusedAt(f: Fixture, disrupt: () => Promise<void>, start: () => Promise<Reply>, options: { claimTaken?: boolean } = {}) {
   await f.control('/__test/hooks', { pauseBeforeSpend: true, releaseSpend: false });
   const pending = start();
   await f.waitFor(async () => (await f.control('/__test/hooks')).atSpend === true, 'the quota step before the provider call');
