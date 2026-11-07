@@ -410,7 +410,7 @@ async function sendPush(subscription: Subscription, timeoutMs = sendTimeoutMs, a
 }
 
 /** Current eligibility, evaluated in the inbox/digest write or just before push. */
-function notificationRecipient(tripId: string, user: string, involvedMembers: string[] | undefined, mode: 'inbox' | 'daily' | 'push', options: { receiptReady?: boolean } = {}) {
+function notificationRecipient(tripId: string, user: string, involvedMembers: string[] | undefined, mode: 'inbox' | 'daily' | 'push' | 'any', options: { receiptReady?: boolean } = {}) {
   const involved = involvedMembers === undefined ? null : JSON.stringify(involvedMembers);
   const delivery = "COALESCE(preference.delivery,'immediate')";
   return {
@@ -422,7 +422,7 @@ function notificationRecipient(tripId: string, user: string, involvedMembers: st
         AND COALESCE(preference.scope,'all')<>'none'
         AND (COALESCE(preference.scope,'all')<>'involved' OR ? IS NULL OR member.member_id IN (SELECT value FROM json_each(?)))
         ${options.receiptReady ? "AND COALESCE(preference.receipt_ready,0)=1" : ''}
-        AND ${mode === 'daily' ? `${delivery}='daily'` : mode === 'push' ? `${delivery} NOT IN ('daily','none')` : `${delivery}<>'daily'`})`,
+        AND ${mode === 'any' ? '1' : mode === 'daily' ? `${delivery}='daily'` : mode === 'push' ? `${delivery} NOT IN ('daily','none')` : `${delivery}<>'daily'`})`,
     bindings: [user, tripId, involved, involved],
   };
 }
@@ -548,11 +548,15 @@ export async function notifyReceiptReply(tripId: string, caller: string, authorM
  * row (its key and the time it was first claimed), so a retry, a lease takeover,
  * a background resume or a repeated callback inserts nothing. A new explicit
  * reading is a new operation and so has its own notice. The text is fixed and
- * names no receipt, merchant, holiday or amount. Failure is the caller's to
- * ignore: the stored result never depends on this.
+ * names no receipt, merchant, holiday or amount. Everyone who has switched the
+ * preference on gets the inbox notice, including people on a daily summary or
+ * in-app-only delivery; the content-free push wake-up is sent only to people
+ * whose delivery is immediate. Failure is the caller's to ignore: the stored
+ * result never depends on this.
  */
 export async function notifyReceiptReady(input: { userId: string; tripId: string; operationKey: string }) {
-  const recipient = notificationRecipient(input.tripId, input.userId, undefined, 'inbox', { receiptReady: true });
+  // Any delivery preference: the inbox row is the logical notice. Only the immediate push below depends on delivery.
+  const recipient = notificationRecipient(input.tripId, input.userId, undefined, 'any', { receiptReady: true });
   const now = new Date().toISOString();
   const row = await db().prepare(`INSERT OR IGNORE INTO notifications (id, user_id, title, body, url, created_at)
     SELECT 'receipt-ready:' || o.operation_key || ':' || o.created_at, o.user_id,

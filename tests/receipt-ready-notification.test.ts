@@ -145,8 +145,8 @@ test('N05: an account deleted, or a member who left, while the reading was cut o
   }
 });
 
-test('N05: trip scope "none" and a daily summary suppress the notice; "in-app only" still records it in the inbox', async () => {
-  for (const [columns, expected] of [[{ scope: 'none' }, 0], [{ delivery: 'daily' }, 0], [{ delivery: 'none' }, 1], [{ scope: 'involved' }, 1]] as const) {
+test('N05: with the setting on, every delivery preference records one inbox notice; only trip scope "none" suppresses it', async () => {
+  for (const [columns, expected] of [[{ scope: 'none' }, 0], [{ delivery: 'daily' }, 1], [{ delivery: 'none' }, 1], [{ delivery: 'immediate' }, 1], [{ scope: 'involved' }, 1]] as const) {
     const f = await createReceiptOperationWorker();
     try {
       await setPreference(f, columns);

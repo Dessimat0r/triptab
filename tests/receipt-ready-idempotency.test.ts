@@ -7,9 +7,9 @@ import { transpileWithSharedImports } from './helpers/transpile';
 
 /** N05: notifyReceiptReady decides from persisted operation state and current eligibility, and inserts at most once per operation. */
 const asModule = (source: string) => 'data:text/javascript;base64,' + Buffer.from(source).toString('base64');
-const fixture = { database: null as SQLiteD1 | null };
+const fixture = { database: null as SQLiteD1 | null, env: {} as Record<string, string> };
 Object.assign(globalThis, { __triptabReceiptReady: fixture });
-const envModule = asModule('export const env={}; export const waitUntil=p=>p;');
+const envModule = asModule('export const env=globalThis.__triptabReceiptReady.env; export const waitUntil=p=>p;');
 const storeModule = asModule('export const db=()=>globalThis.__triptabReceiptReady.database; export class RequestError extends Error{};');
 const code = transpileWithSharedImports(await readFile(new URL('../lib/notifications.ts', import.meta.url), 'utf8'),
   { compilerOptions: { module: ModuleKind.ESNext, target: ScriptTarget.ES2022 }, sharedImportOverrides: { 'cloudflare:workers': envModule, './store': storeModule } }).outputText;
@@ -67,12 +67,30 @@ test('N05: missing preference row, preference off, and every loss of eligibility
     ['trip deleted', {}, "UPDATE trips SET owner='deleted:alice' WHERE id='trip'"],
     ['left the trip and no longer owns it', {}, "UPDATE trips SET owner='bob' WHERE id='trip'; DELETE FROM memberships WHERE user_id='alice'"],
     ['trip scope none', {}, "UPDATE notification_preferences SET scope='none'"],
-    ['daily summary', {}, "UPDATE notification_preferences SET delivery='daily'"],
   ] as Array<[string, { preference?: number | null }, string]>) {
     const { database, operation } = await seed(options); operation('op-1');
     if (change) database.sqlite.exec(change);
     assert.equal(await send('op-1'), false, name);
     assert.equal(rows(database).length, 0, name);
+  }
+});
+
+test('N05: with the setting on, daily-summary and in-app-only people get the inbox notice; only immediate delivery sends a push', async context => {
+  const key = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+  fixture.env.VAPID_PUBLIC_KEY = 'a'.repeat(87);
+  fixture.env.VAPID_PRIVATE_KEY = JSON.stringify(await crypto.subtle.exportKey('jwk', key.privateKey));
+  let pushes = 0;
+  (context.mock.method as unknown as (o: object, n: string, f: () => Promise<Response>) => void)(globalThis, 'fetch', async () => { pushes++; return new Response(null, { status: 201 }); });
+  for (const [delivery, expectedPushes] of [['immediate', 1], ['daily', 0], ['none', 0]] as const) {
+    pushes = 0;
+    const { database, operation } = await seed(); operation('op-1');
+    database.sqlite.prepare("UPDATE notification_preferences SET delivery=? WHERE user_id='alice'").run(delivery);
+    database.sqlite.prepare('INSERT INTO push_subscriptions(endpoint,user_id,created_at,generation) VALUES(?,?,?,?)').run('https://fcm.googleapis.com/fcm/send/alice-device', 'alice', new Date().toISOString(), 1);
+    assert.equal(await send('op-1'), true, delivery);
+    assert.equal(rows(database).length, 1, `${delivery}: one inbox notice`);
+    assert.equal(await send('op-1'), false, `${delivery}: a repeat adds nothing`);
+    assert.equal(rows(database).length, 1);
+    assert.equal(pushes, expectedPushes, `${delivery}: push wake-ups sent`);
   }
 });
 

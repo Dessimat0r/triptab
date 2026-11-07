@@ -15,6 +15,8 @@ Audit baseline: TripTab Functionality, Usability and Financial Accuracy Audit, 6
 
 ### F-16 global revision (high risk, needs a migration)
 
+> **Superseded.** This section records the investigation at the time of this PR (#68). F-16 was implemented afterwards in #76: migrations `0014` and `0015`, per-trip revisions in `lib/store.ts`, readiness checks and tests. That work is part of the release branch; see `CORRECTIONS.md`. The text below is kept as history and no longer describes the code.
+
 Confirmed in `lib/store.ts`: every ledger write advances the single `sync_state` row (`UPDATE sync_state SET revision = revision + 1 … WHERE id = 1 AND revision = ?`) and every trip statement is guarded by that marker. Any save by any account therefore invalidates every other in-flight save; the client re-bases once and then asks the person to press Save again.
 
 Phase 2 (#63) makes that re-base safe (no change is lost), but does not remove the contention. The narrow fix needs:
