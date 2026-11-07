@@ -133,7 +133,10 @@ export function operationFence(claim: Extract<Claim, { owned: true }>): Operatio
  * earlier, so a session or grant that expires while a save is being prepared
  * is expired when the commit runs. SQLite keeps 'now' fixed within one step.
  */
-export const DB_NOW_MS = "CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)";
+// Integer seconds plus the database's three fractional digits avoid the
+// Julian-day float rounding down by a millisecond at an expiry boundary.
+// SQLite keeps both 'now' evaluations identical within the guarded step.
+export const DB_NOW_MS = "(CAST(strftime('%s','now') AS INTEGER) * 1000 + CAST(substr(strftime('%f','now'),4,3) AS INTEGER))";
 export const DB_NOW_ISO = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
 
 /**
