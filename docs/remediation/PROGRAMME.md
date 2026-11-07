@@ -1,6 +1,6 @@
 # TripTab approved remediation programme
 
-Owner brief and evidence baseline: **TripTab Functionality, Usability and Financial Accuracy Audit, 6 November 2026**, audited commit `48de3f9`. Decisions D01 to D08 (recorded below) and the additional owner decisions govern this programme.
+Owner brief and evidence baseline: **TripTab Functionality, Usability and Financial Accuracy Audit, 6 November 2026**, audited commit `48de3f9`. Decisions D01 to D08 (recorded below) and the additional owner decisions govern this programme. Reconciliation of the findings and acceptance tests against the audit: [`AUDIT-RECONCILIATION.md`](AUDIT-RECONCILIATION.md).
 
 This record describes implementation evidence. It is not approval to release. No merge, deployment or production migration is authorised. Status updated 6 November 2026 (follow-ups #71 to #74 added).
 
