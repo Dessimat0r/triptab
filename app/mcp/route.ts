@@ -10,7 +10,7 @@ import { draftSchema, tripSchema, draftUnitsSchema, receiptQuantitySchema, CURRE
 import { receiptMemorySchema, type ReceiptMemory } from '@/lib/receipt-context';
 import { validateReceiptMemoryOwnership } from '@/lib/receipt-memory-ownership';
 import { mayRecognizeUnknownProvenance, reconcileReceiptScan, receiptScanFingerprint, mergeReceiptSourceLines, scanSourceSchema, sourceLineSchema, receiptScanWarningSchema, RECEIPT_SCAN_WARNING_CODES } from '@/lib/receipt-scan';
-import { billParticipantIds, equalItem } from '@/lib/default-split';
+import { defaultParticipantIds, equalItem, knownPurchaseDate } from '@/lib/default-split';
 
 export const dynamic = 'force-dynamic';
 
@@ -696,6 +696,8 @@ export async function POST(request: Request) {
         if (removedIds.some(id => !existing?.items.some(item => item.id === id))) throw new Error('Only an existing active item can be removed.');
         if (removedIds.some(id => incomingIds.includes(id))) throw new Error('Do not upsert and remove the same item.');
         const priorItems = existing?.items ?? [];
+        // New lines split between travellers present on the purchase date; an unknown date keeps everyone.
+        const defaultIds = existing?.splitMembers ?? defaultParticipantIds(trip, args.draft.metadataPatch?.date ?? args.draft.date ?? (existing && knownPurchaseDate(existing)));
         const mergedItems = incomingItems.map(item => {
           const previous = priorItems.find(value => value.id === item.id);
           const next = { name: '', amount: null, members: [] as string[], ...previous, ...item };
@@ -730,7 +732,7 @@ export async function POST(request: Request) {
             }
             if (protectAmount) next.amount = previous!.amount;
             if (protectQuantity) next.quantity = previous!.quantity;
-            next.members = previous?.members ?? existing?.splitMembers ?? billParticipantIds(trip);
+            next.members = previous?.members ?? defaultIds;
             next.percentages = previous?.percentages;
             next.units = previous?.units;
             next.fieldSources = {
@@ -749,9 +751,9 @@ export async function POST(request: Request) {
             };
             if (!Object.keys(next.fieldSources).length) next.fieldSources = undefined;
           }
-          if (recognition && (!previous || (!existing?.expenseId && !previous.members.length && !previous.percentages && !Object.keys(previous.units?.allocations ?? {}).length))) return equalItem(next, existing?.splitMembers ?? billParticipantIds(trip));
+          if (recognition && (!previous || (!existing?.expenseId && !previous.members.length && !previous.percentages && !Object.keys(previous.units?.allocations ?? {}).length))) return equalItem(next, defaultIds);
           if (!recognition && previous?.splitMode === 'default' && (item.members !== undefined || item.units !== undefined || item.percentages !== undefined)) return { ...next, splitMode: 'custom' as const };
-          if (!previous && !next.members.length) return equalItem(next, existing?.splitMembers ?? billParticipantIds(trip));
+          if (!previous && !next.members.length) return equalItem(next, defaultIds);
           return next;
         });
         const items = priorItems.filter(item => !removedIds.includes(item.id)).map(item => mergedItems.find(value => value.id === item.id) ?? item);

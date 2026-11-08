@@ -6,7 +6,7 @@ import { personControlled, adjustmentSchema, applyAdjustments, type Adjustment }
 import { CURRENCIES, CURRENT_CALCULATION_RULE, MAX_AMOUNT, MAX_UNITS, draftSchema, receiptQuantitySchema, total, type Currency, type Draft, type Trip } from './model';
 import { blankReceiptItem, mayRecognizeUnknownProvenance, mergeReceiptSourceLines, reconcileReceiptScan, type ReceiptScanWarning } from './receipt-scan';
 import { receiptChangesSchema, receiptChangesJsonSchema, applyReceiptChanges, receiptExpenseIconSchema, receiptExpenseIconJsonSchema, nextSuggestedIcon } from './receipt-proposals';
-import { billParticipantIds } from './default-split';
+import { billParticipantIds, defaultParticipantIds, knownPurchaseDate } from './default-split';
 
 export class ReceiptAIError extends Error {
   constructor(message: string, public readonly status = 502, public readonly code = 'receipt_processing_failed') {
@@ -598,8 +598,11 @@ export function applyReceiptTranscription(_trip: Trip, draft: Draft, transcripti
   });
   if (items.length > 200) throw new ReceiptAIError('This scan would exceed 200 receipt items. Existing items were preserved; check the receipt and retry with its saved item IDs.', 422);
   if (sourceLines.length > 1000 || uniqueWarnings.length > 1000) throw new ReceiptAIError('This receipt has reached its scan evidence limit. Your saved evidence is unchanged; review it before rescanning.', 422);
+  // New lines split between travellers present on the purchase date; an unknown date keeps everyone.
+  const fresh = new Set(updates.filter(item => !previousItems.some(previous => previous.id === item.id)).map(item => item.id));
+  const dated = draft.splitMembers ? items : items.map(item => fresh.has(item.id) && item.splitMode === 'default' ? { ...item, members: defaultParticipantIds(_trip, knownPurchaseDate({ date, fieldSources })) } : item);
   let proposal = draftSchema.parse({
-    ...draft, title, currency, date, time, items, ...adjustments, fieldSources,
+    ...draft, title, currency, date, time, items: dated, ...adjustments, fieldSources,
     ...(proposedAdjustments.length || draft.adjustments ? { adjustments: proposedAdjustments } : {}),
     suggestedIcon: nextSuggestedIcon(value.expenseIcon, draft.suggestedIcon),
     ...(value.detectedLanguage?{detectedLanguage:value.detectedLanguage}:{}),

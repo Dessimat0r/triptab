@@ -4,7 +4,7 @@ import BillView from "@/components/bill-view";
 import BillPeople from "@/components/bill-people";
 import BillStart, { type BillStartValues } from "@/components/bill-start";
 import { firstBillExpense, isFirstBillReceipt, type BillDefaults } from "@/lib/bills";
-import { billParticipantIds, defaultSplit, equalItem, updateDefaultParticipants } from "@/lib/default-split";
+import { billParticipantIds, defaultParticipantIds, defaultSplit, equalItem, followParticipants, knownPurchaseDate, updateDefaultParticipants } from "@/lib/default-split";
 import InterfaceLanguage from "@/components/interface-language";
 
 import { canonicalJson, sha256Hex } from "@/lib/data-utils";
@@ -397,10 +397,10 @@ export default function Home({ children }: { children: ReactNode }) {
     const previous = previousParticipants.current;
     previousParticipants.current = { tripId: trip?.id, ids: participantKey };
     if (!trip || previous.tripId !== trip.id || previous.ids === participantKey) return;
-    const before = JSON.parse(previous.ids || '[]') as string[], ids = billParticipantIds(trip);
+    const before = JSON.parse(previous.ids || '[]') as string[];
     setEditing(entry => {
       if (!entry || entry.expenseId || trip.expenses.some(expense => expense.id === entry.id)) return entry;
-      const selected = [...new Set([...(entry.splitMembers ?? before).filter(id => ids.includes(id)), ...ids.filter(id => !before.includes(id))])];
+      const selected = followParticipants(trip, before, entry.splitMembers, knownPurchaseDate(entry));
       return selected.length ? defaultSplit({ ...entry, splitMembers: selected }, selected) : entry;
     });
   }, [trip, participantKey]);
@@ -1143,7 +1143,7 @@ export default function Home({ children }: { children: ReactNode }) {
         ...(!draft.time && !existing?.time ? { time: "default" as const } : {}),
         ...(!draft.timezone && !existing?.timezone ? { timezone: "default" as const } : {}),
       },
-      items: draft.expenseId ? draft.items : defaultSplit(draft, draft.splitMembers ?? billParticipantIds(trip), true).items,
+      items: draft.expenseId ? draft.items : defaultSplit(draft, draft.splitMembers ?? defaultParticipantIds(trip, knownPurchaseDate(draft)), true).items,
     };
     setEditing(entry);
     // Inbox upload starts reading in the same continuation, before React's
@@ -1729,7 +1729,7 @@ export default function Home({ children }: { children: ReactNode }) {
             r.amount < 0
           )
             throw Error();
-          const members = r.members || (r.percentages ? Object.keys(r.percentages) : r.units ? Object.keys(r.units.allocations) : editing!.splitMembers ?? billParticipantIds(trip!));
+          const members = r.members || (r.percentages ? Object.keys(r.percentages) : r.units ? Object.keys(r.units.allocations) : editing!.splitMembers ?? defaultParticipantIds(trip!, knownPurchaseDate(editing!)));
           if (!Array.isArray(members) || members.some(id => !trip!.members.some(m => m.id === id))) throw Error();
           return itemSchema.parse({
             id: uid(),
@@ -3465,12 +3465,12 @@ export default function Home({ children }: { children: ReactNode }) {
                       </div></details>}
                     </div>
                     {!quickMode && editing.items.length > 1 && editing.percentages === undefined && <div className="bill-default-split">
-                      <ShareSplit legend="Split equally between" scope="bill defaults" keepOne members={trip.members} selected={editing.splitMembers ?? billParticipantIds(trip)} showMethods={false}
+                      <ShareSplit legend="Split equally between" scope="bill defaults" keepOne members={trip.members} selected={editing.splitMembers ?? defaultParticipantIds(trip, knownPurchaseDate(editing))} showMethods={false}
                         onChange={ids => setEditing(previous => previous && carryReviewAcknowledgements(previous, defaultSplit({ ...previous, splitMembers: ids }, ids, true)))} />
                       <p className="footnote">{uiText("Items split equally automatically. Open an item only to change its share.")}</p>
                     </div>}
                     {!quickMode && <button type="button" className="textbutton" disabled={saving || uploading || receiptProcessing} onClick={async () => {
-                      const ids = editing.splitMembers ?? billParticipantIds(trip);
+                      const ids = editing.splitMembers ?? defaultParticipantIds(trip, knownPurchaseDate(editing));
                       if (editing.items.some(item => item.splitMode !== 'default') && !await confirm({ title: 'Split all equally?', message: 'Replace customised item shares with equal shares between the selected people? Prices, quantities and discounts stay the same.', confirmLabel: 'Split all equally' })) return;
                       setEditing(previous => previous && carryReviewAcknowledgements(previous, { ...previous, percentages: undefined, items: previous.items.map(item => equalItem(item, ids)) }));
                     }}>{uiText("Split all equally")}</button>}
@@ -3587,7 +3587,7 @@ export default function Home({ children }: { children: ReactNode }) {
                                 id: uid(),
                                 name: "",
                                 amount: 0,
-                                members: editing.splitMembers ?? billParticipantIds(trip),
+                                members: editing.splitMembers ?? defaultParticipantIds(trip, knownPurchaseDate(editing)),
                                 splitMode: 'default',
                               },
                             ],

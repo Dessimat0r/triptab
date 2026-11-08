@@ -94,3 +94,35 @@ test('partial checkout retains readable lines; unreadable amounts still block po
   assert.equal(value.receiptScan?.status, 'incomplete');
   assert.match(receiptScanSaveError(value)!, /unreadable/);
 });
+
+// Holiday travellers have joining/leaving dates. A scanned line must default to the people present on the
+// purchase date, as a manually added expense does, so saving without touching shares never charges someone who had left.
+const holiday: Trip = { id: 'trip', ownerId: 'owner', name: 'Trip', currency: 'GBP', startDate: '2026-01-01', endDate: '2026-01-20',
+  members: [{ id: 'a', name: 'A' }, { id: 'b', name: 'B', leftOn: '2026-01-05' }, { id: 'c', name: 'C', joinedOn: '2026-01-08' }], expenses: [], payments: [], drafts: [] };
+const holidayDraft: Draft = { ...draft, id: 'h', payer: 'a', date: '2026-01-10' };
+const twoItems = (date: string | null): ReceiptTranscription => ({ ...checkout, date, printedTotal: 2000, items: [1000, 1000].map((amount, index) => ({ id: null, name: `Item ${index + 1}`, amount })) });
+
+test('a dated holiday scan excludes travellers who had left and includes those who had joined', () => {
+  const result = applyReceiptTranscription(holiday, { ...holidayDraft, fieldSources: { date: 'user' } }, twoItems('2026-01-10'));
+  assert(result.items.every(item => item.splitMode === 'default' && item.members.join() === 'a,c'));
+  const expense = { ...result, items: result.items.map(item => ({ ...item, amount: item.amount! })), date: '2026-01-10', time: '12:00', timezone: 'Europe/London' };
+  assert.deepEqual(shares(expense, holiday.members), [1000, 0, 1000]);
+});
+
+test('an undated scan, or a default recording date, keeps everyone who is not retired', () => {
+  const result = applyReceiptTranscription(holiday, { ...holidayDraft, date: '2026-01-10', fieldSources: { date: 'default' } }, twoItems(null));
+  assert(result.items.every(item => item.members.join() === 'a,b,c'));
+});
+
+test('bills have no join or leave dates, so their defaults are unchanged', () => {
+  assert.deepEqual(applyReceiptTranscription(trip, { ...draft, date: '2026-01-10', fieldSources: { date: 'user' } }, twoItems('2026-01-10')).items.map(item => item.members.join()), ['p0,p1,p2', 'p0,p1,p2']);
+});
+
+test('a traveller added to a holiday draft joins only the lines dated after they joined', () => {
+  const early = applyReceiptTranscription(holiday, { ...holidayDraft, date: '2026-01-03', fieldSources: { date: 'user' } }, twoItems('2026-01-03'));
+  assert(early.items.every(item => item.members.join() === 'a,b'));
+  const next = { ...holiday, members: [...holiday.members, { id: 'd', name: 'D', joinedOn: '2026-01-12' }], drafts: [early] };
+  assert(updateDefaultParticipants({ ...holiday, drafts: [early] }, next).drafts[0].items.every(item => item.members.join() === 'a,b'), 'D had not joined on 3 January');
+  const late = applyReceiptTranscription(holiday, { ...holidayDraft, date: '2026-01-15', fieldSources: { date: 'user' } }, twoItems('2026-01-15'));
+  assert(updateDefaultParticipants({ ...holiday, drafts: [late] }, { ...next, drafts: [late] }).drafts[0].items.every(item => item.members.join() === 'a,c,d'));
+});
