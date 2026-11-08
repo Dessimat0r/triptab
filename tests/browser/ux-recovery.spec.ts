@@ -76,12 +76,22 @@ for (const width of [320, 390, 1440]) test(`checkout without merchant/date: ten 
     const current = data.trips.find(value => value.id === bill.id)!;
     expect(current.expenses[0].items[0].members).toEqual([current.members[1].id]);
     expect(current.expenses[0].items.slice(1).every(item => item.members.length === 2)).toBe(true);
+    await page.getByRole('button', { name: 'Bill options', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'Bill options', exact: true }).click();
+    await page.getByRole('dialog', { name: 'Bill options' }).getByRole('button', { name: 'People', exact: true }).click();
+    await page.getByRole('textbox', { name: 'New person name' }).fill('Kim');
+    await page.getByRole('dialog', { name: 'People', exact: true }).getByRole('button', { name: 'Add', exact: true }).click();
+    await expect.poll(() => data.trips.find(value => value.id === bill.id)!.members.length).toBe(4);
+    const expanded = data.trips.find(value => value.id === bill.id)!;
+    expect(expanded.expenses[0].items[0].members).toEqual([current.members[1].id]);
+    expect(expanded.expenses[0].items.slice(1).every(item => item.members.includes(expanded.members[3].id))).toBe(true);
+    await page.getByRole('button', { name: 'Close people' }).click();
     await page.locator('.expense-open').click();
     await page.getByRole('button', { name: 'Split all equally', exact: true }).click();
     await page.getByRole('dialog', { name: 'Split all equally?' }).getByRole('button', { name: 'Split all equally', exact: true }).click();
     await page.getByRole('button', { name: 'Save expense', exact: true }).click();
     await expect(page.locator('.editor')).toHaveCount(0);
-    expect(data.trips.find(value => value.id === bill.id)!.expenses[0].items.every(item => item.members.length === 2 && item.splitMode === 'default')).toBe(true);
+    expect(data.trips.find(value => value.id === bill.id)!.expenses[0].items.every(item => item.members.length === 3 && item.splitMode === 'default')).toBe(true);
   }
 });
 

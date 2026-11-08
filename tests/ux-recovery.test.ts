@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { applyReceiptTranscription, receiptTranscriptionSchema, type ReceiptTranscription } from '../lib/receipt-ai';
-import { billParticipantIds, defaultSplit, equalItem, updateDraftParticipants } from '../lib/default-split';
+import { billParticipantIds, defaultSplit, equalItem, updateDefaultParticipants } from '../lib/default-split';
 import { shares, total, validateLedger, type Draft, type Trip } from '../lib/model';
 import { acknowledgeReceiptReview, receiptScanSaveError } from '../lib/receipt-scan';
 
@@ -52,7 +52,7 @@ test('participant changes and reset preserve exceptions, purchase evidence and B
   const updated = defaultSplit(result, ['p0', 'p1']);
   assert.deepEqual(updated.items.map(item => item.members), [['p0','p1'], ['p1'], ['p2'], ['p0','p1']]);
   const nextTrip = { ...trip, members: [...trip.members, { id: 'p3', name: 'Kim' }], drafts: [result] };
-  const changed = updateDraftParticipants({ ...trip, drafts: [result] }, nextTrip);
+  const changed = updateDefaultParticipants({ ...trip, drafts: [result] }, nextTrip);
   assert.deepEqual(changed.drafts[0].items[0].members, ['p0','p1','p2','p3']);
   assert.deepEqual(changed.drafts[0].items[1].members, ['p1']);
   const bogof = { ...updated, items: updated.items.map(item => ({ ...item, amount: item.amount! })), adjustments: [{ id: 'offer', kind: 'discount' as const, amount: 800, scope: { type: 'items' as const, itemIds: [updated.items[1].id] }, source: 'user' as const }] };
@@ -62,14 +62,29 @@ test('participant changes and reset preserve exceptions, purchase evidence and B
   assert.equal(shares(reset, trip.members).reduce((sum, amount) => sum + amount), 2001);
 });
 
-test('adding people never reallocates posted or settled obligations, or expense-update drafts', () => {
+test('adding people never reallocates settled/payment-backed obligations or expense-update drafts', () => {
   const result = applyReceiptTranscription(trip, draft, checkout);
   const expense = { ...result, currency: 'GBP' as const, items: result.items.map(item => ({ ...item, amount: item.amount! })), date: '2026-11-08', time: '12:00', timezone: 'Europe/London' };
   const previous = { ...trip, expenses: [expense], payments: [{ id: 'paid', from: 'p1', to: 'p0', amount: 934, date: '2026-11-08' }], drafts: [{ ...result, expenseId: expense.id }] };
-  const updated = updateDraftParticipants(previous, { ...previous, members: [...trip.members, { id: 'p3', name: 'Kim' }] });
+  const updated = updateDefaultParticipants(previous, { ...previous, members: [...trip.members, { id: 'p3', name: 'Kim' }] });
   assert.deepEqual(updated.expenses, previous.expenses);
   assert.deepEqual(updated.payments, previous.payments);
   assert.deepEqual(updated.drafts, previous.drafts);
+});
+
+test('adding people to an unpaid unsettled bill updates saved defaults, preserving custom shares', () => {
+  const result = applyReceiptTranscription(trip, draft, checkout);
+  result.items[1] = { ...result.items[1], members: ['p1'], splitMode: 'custom' };
+  const expense = { ...result, currency: 'GBP' as const, items: result.items.map(item => ({ ...item, amount: item.amount! })), date: '2026-11-08', time: '12:00', timezone: 'Europe/London' };
+  const previous: Trip = { ...trip, expenses: [expense] };
+  const changed = updateDefaultParticipants(previous, { ...previous, members: [...trip.members, { id: 'p3', name: 'Kim' }] });
+  assert.deepEqual(changed.expenses[0].items[0].members, ['p0','p1','p2','p3']);
+  assert.deepEqual(changed.expenses[0].items[1].members, ['p1']);
+  assert.equal(total(changed.expenses[0]), 2801);
+  const holiday = { ...previous, kind: undefined };
+  assert.deepEqual(updateDefaultParticipants(holiday, { ...holiday, members: changed.members }).expenses, previous.expenses);
+  const single: Trip = { ...previous, members: [trip.members[0]], expenses: [{ ...expense, items: expense.items.map(item => equalItem(item, ['p0'])) }] };
+  assert.deepEqual(updateDefaultParticipants(single, { ...single, members: trip.members }).expenses, single.expenses, 'already settled self-paid bill stays exact even without payment records');
 });
 
 test('partial checkout retains readable lines; unreadable amounts still block posting', () => {

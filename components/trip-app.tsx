@@ -4,7 +4,7 @@ import BillView from "@/components/bill-view";
 import BillPeople from "@/components/bill-people";
 import BillStart, { type BillStartValues } from "@/components/bill-start";
 import { firstBillExpense, isFirstBillReceipt, type BillDefaults } from "@/lib/bills";
-import { billParticipantIds, defaultSplit, equalItem, updateDraftParticipants } from "@/lib/default-split";
+import { billParticipantIds, defaultSplit, equalItem, updateDefaultParticipants } from "@/lib/default-split";
 import InterfaceLanguage from "@/components/interface-language";
 
 import { canonicalJson, sha256Hex } from "@/lib/data-utils";
@@ -894,7 +894,7 @@ export default function Home({ children }: { children: ReactNode }) {
   }
   async function updateTrip(next: Trip) {
     const previous = ledger.trips.find(value => value.id === next.id);
-    if (previous) next = updateDraftParticipants(previous, next);
+    if (previous) next = updateDefaultParticipants(previous, next);
     return save({
       trips: ledger.trips.map((t) => (t.id === next.id ? next : t)),
     });
