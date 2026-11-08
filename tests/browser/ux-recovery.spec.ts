@@ -96,8 +96,12 @@ for (const width of [320, 390, 1440]) test(`checkout without merchant/date: ten 
 });
 
 type Flow = Awaited<ReturnType<typeof createReceiptFlowWorker>>;
+type Gate = { closing: boolean; inflight: Set<Promise<unknown>> };
 async function routeWorker(page: Page, flow: Flow) {
+  const gate: Gate = { closing: false, inflight: new Set() };
   await page.route('**/api/**', async route => {
+    if (gate.closing) return route.abort('aborted');
+    const work = (async () => {
     const req = route.request(), url = new URL(req.url());
     const headers = Object.fromEntries(Object.entries(req.headers()).filter(([key]) => !['host','cookie','content-length','if-none-match','if-modified-since'].includes(key)));
     headers.cookie = `tt_session=${flow.sessionToken}`; if (headers.origin) headers.origin = flow.origin;
@@ -105,13 +109,28 @@ async function routeWorker(page: Page, flow: Flow) {
       body: ['GET','HEAD'].includes(req.method()) ? undefined : req.postDataBuffer() ?? undefined } as never);
     if (response.status === 404 && (await response.clone().text()) === 'Not found') return route.fulfill({ json: { events: [], notifications: [], people: [], items: [], invitations: [], trips: [] } });
     await route.fulfill({ status: response.status, headers: Object.fromEntries([...response.headers].filter(([key]) => !['content-encoding','content-length','set-cookie'].includes(key))), body: Buffer.from(await response.arrayBuffer()) });
+    })();
+    gate.inflight.add(work);
+    try { await work; } finally { gate.inflight.delete(work); }
   });
+  return gate;
+}
+async function closeWorker(page: Page, flow: Flow, gate?: Gate) {
+  if (gate) {
+    gate.closing = true;
+    while (gate.inflight.size) await Promise.allSettled([...gate.inflight]);
+  }
+  // Close the page before disposing the Worker, without unrouting a live
+  // fallback chain. This is the repository's established R14 teardown order.
+  await page.close();
+  await flow.dispose();
 }
 
 test.describe('bill deletion against production API, SQL, revision and audit code', () => {
   test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
   test('real touch swipe and keyboard menu both delete the right bill, persist after refresh, and Undo restores', async ({ page, browserName }, info) => {
     const flow = await createReceiptFlowWorker();
+    let gate: Gate | undefined;
     try {
       const snapshot = await flow.readLedger(), base = snapshot.data.trips[0];
       const bills: Trip[] = ['swipe','menu','photo'].map(id => ({ ...base, id: `ux-${id}`, kind: 'bill', name: `UX ${id}`, drafts: [], payments: [], expenses: [] }));
@@ -121,7 +140,7 @@ test.describe('bill deletion against production API, SQL, revision and audit cod
       const { receiptId } = await upload.json() as { receiptId: string };
       const before = await flow.readLedger(); before.data.trips.find(trip => trip.id === 'ux-photo')!.billPhotoId = receiptId;
       expect((await flow.browserRequest('/api/ledger', { method: 'POST', body: JSON.stringify(before) })).status).toBe(200);
-      await routeWorker(page, flow); await page.goto('/expenses');
+      gate = await routeWorker(page, flow); await page.goto('/expenses');
       await page.getByRole('button', { name: 'Open holidays', exact: true }).click();
       const row = page.locator('.bill-drawer-row').filter({ has: page.locator('[data-bill-id="ux-swipe"]') });
       const box = (await row.boundingBox())!, x = box.x + box.width - 35, y = box.y + box.height / 2;
@@ -156,10 +175,11 @@ test.describe('bill deletion against production API, SQL, revision and audit cod
       expect(history.results.map(event => event.trip_id)).toEqual(['ux-swipe','ux-menu','ux-photo']);
       expect((await flow.readLedger()).data.trips.some(trip => trip.id === base.id)).toBe(true);
       expect(await flow.database.prepare('SELECT id FROM receipts WHERE id=?').bind(receiptId).first()).toBeTruthy();
-    } finally { await page.unrouteAll({ behavior: 'wait' }); await flow.dispose(); }
+    } finally { await closeWorker(page, flow, gate); }
   });
   test('shared bill offers archive directly; a rejected delete keeps the bill and shows no success', async ({ page }) => {
     const flow = await createReceiptFlowWorker();
+    let gate: Gate | undefined;
     try {
       const snapshot = await flow.readLedger(), base = snapshot.data.trips[0];
       const shared: Trip = { ...base, id: 'ux-shared', kind: 'bill', name: 'UX shared' };
@@ -169,7 +189,7 @@ test.describe('bill deletion against production API, SQL, revision and audit cod
         flow.database.prepare('INSERT INTO profiles(id,email,display_name,created_at) VALUES(?,?,?,?)').bind('ux-sam','ux-sam@example.test','Sam',new Date().toISOString()),
         flow.database.prepare('INSERT INTO memberships(trip_id,user_id,member_id) VALUES(?,?,?)').bind(shared.id,'ux-sam','bob'),
       ]);
-      await routeWorker(page, flow);
+      gate = await routeWorker(page, flow);
       // Simulate an authoritative refusal, then a malformed success response.
       // Neither may remove a row or report a successful deletion.
       let malformed = false;
@@ -201,6 +221,6 @@ test.describe('bill deletion against production API, SQL, revision and audit cod
       expect(stored?.owner).toBe(flow.owner.id);
       expect(await flow.database.prepare('SELECT user_id FROM memberships WHERE trip_id=? AND user_id=?').bind(shared.id,'ux-sam').first()).toBeTruthy();
       await expect(page.locator('.saved-banner')).toHaveCount(0);
-    } finally { await page.unrouteAll({ behavior: 'wait' }); await flow.dispose(); }
+    } finally { await closeWorker(page, flow, gate); }
   });
 });
