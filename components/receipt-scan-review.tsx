@@ -86,8 +86,8 @@ export default function ReceiptScanReview({ entry, onChange, photo, children, co
         }} />)}</div>
       </details>}
     </div>;
-  if (compact && scan?.status === 'matched') return <section className="receipt-scan-review receipt-scan-review--compact">
-    {photo}<details><summary><strong>{uiText('Receipt totals match exactly')}</strong><b>{receiptMoney(calculated!, entry.currency)}</b></summary>{body}</details>
+  if (compact && scan?.status === 'matched' && calculated !== null) return <section className="receipt-scan-review receipt-scan-review--compact">
+    {photo}<details><summary><strong>{uiText('Receipt totals match exactly')}</strong><b>{receiptMoney(calculated, entry.currency)}</b></summary>{body}</details>
   </section>;
   return <section className="receipt-scan-review" aria-labelledby={titleId}>{photo}{body}</section>;
 }
