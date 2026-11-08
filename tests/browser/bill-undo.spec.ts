@@ -48,8 +48,7 @@ async function deleteDinner(page: Page) {
   await page.getByRole('button', { name: 'Open holidays', exact: true }).click();
   await page.getByRole('button', { name: /^Dinner/ }).click();
   await page.getByRole('button', { name: 'Bill options', exact: true }).click();
-  await page.getByText('Delete bill', { exact: true }).first().click();
-  await page.locator('.trip-controls').getByRole('button', { name: 'Delete bill' }).click();
+  await page.getByRole('menuitem', { name: 'Delete bill', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'Delete this bill?' });
   await expect(dialog).toContainText('You can restore it with its receipt photos for 30 days');
   await dialog.getByRole('button', { name: 'Delete bill' }).click();

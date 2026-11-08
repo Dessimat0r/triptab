@@ -4096,5 +4096,107 @@
     "Imagen compartida opcional. Añadirla no escanea un recibo ni modifica el reparto.",
     "Image partagée facultative. L’ajouter ne lance pas l’analyse d’un reçu et ne modifie pas la répartition.",
     "Optionales geteiltes Bild. Das Hinzufügen scannt keinen Beleg und ändert die Aufteilung nicht."
+  ],
+  [
+    "Attach image without scanning",
+    "Adjuntar imagen sin escanear",
+    "Joindre une image sans analyse",
+    "Bild ohne Auslesen anhängen"
+  ],
+  [
+    "Keep an image with a custom bill and enter the amount yourself.",
+    "Guarda una imagen con una cuenta personalizada e introduce el importe.",
+    "Conservez une image avec une addition personnalisée et saisissez le montant.",
+    "Hänge ein Bild an die eigene Rechnung an und gib den Betrag selbst ein."
+  ],
+  [
+    "Add a note for the split",
+    "Añadir una nota para el reparto",
+    "Ajouter une note pour le partage",
+    "Notiz zur Aufteilung hinzufügen"
+  ],
+  [
+    "Split notes",
+    "Notas del reparto",
+    "Notes de partage",
+    "Notizen zur Aufteilung"
+  ],
+  [
+    "Who bought what?",
+    "¿Quién compró qué?",
+    "Qui a acheté quoi ?",
+    "Wer hat was gekauft?"
+  ],
+  [
+    "Items split equally automatically. Change only the exceptions.",
+    "Los artículos se reparten por igual automáticamente. Cambia solo las excepciones.",
+    "Les articles sont partagés également par défaut. Modifiez seulement les exceptions.",
+    "Artikel werden automatisch gleich aufgeteilt. Ändere nur Ausnahmen."
+  ],
+  [
+    "Items split equally automatically. Open an item only to change its share.",
+    "Los artículos se reparten por igual automáticamente. Abre un artículo para cambiar su reparto.",
+    "Les articles sont partagés également par défaut. Ouvrez un article pour modifier son partage.",
+    "Artikel werden automatisch gleich aufgeteilt. Öffne einen Artikel, um seinen Anteil zu ändern."
+  ],
+  [
+    "Split equally between",
+    "Repartir por igual entre",
+    "Partager également entre",
+    "Gleichmäßig aufteilen zwischen"
+  ],
+  [
+    "Split all equally",
+    "Repartir todo por igual",
+    "Tout partager également",
+    "Alles gleich aufteilen"
+  ],
+  [
+    "Split options",
+    "Opciones de reparto",
+    "Options de partage",
+    "Aufteilungsoptionen"
+  ],
+  [
+    "Equal split",
+    "Reparto igual",
+    "Partage égal",
+    "Gleich aufgeteilt"
+  ],
+  [
+    "Split all equally?",
+    "¿Repartir todo por igual?",
+    "Tout partager également ?",
+    "Alles gleich aufteilen?"
+  ],
+  [
+    "Replace customised item shares with equal shares between the selected people? Prices, quantities and discounts stay the same.",
+    "¿Sustituir los repartos personalizados por partes iguales entre las personas seleccionadas? Los precios, cantidades y descuentos se mantienen.",
+    "Remplacer les parts personnalisées par des parts égales entre les personnes sélectionnées ? Les prix, quantités et réductions restent identiques.",
+    "Eigene Artikelanteile durch gleiche Anteile für die ausgewählten Personen ersetzen? Preise, Mengen und Rabatte bleiben erhalten."
+  ],
+  [
+    "Keep the shared bill’s records",
+    "Conservar los registros de la cuenta compartida",
+    "Conserver les données de l’addition partagée",
+    "Daten der geteilten Rechnung behalten"
+  ],
+  [
+    "Other people can open this bill. Its expenses, payments and history must stay available to them. Remove it from your list instead? This does not settle or change anyone’s balance.",
+    "Otras personas pueden abrir esta cuenta. Sus gastos, pagos e historial deben seguir disponibles. ¿Quieres quitarla de tu lista? Los saldos no cambian ni se liquidan.",
+    "D’autres personnes ont accès à cette addition. Ses dépenses, paiements et historique doivent rester disponibles. La retirer de votre liste ? Cela ne règle ni ne modifie aucun solde.",
+    "Andere Personen können diese Rechnung öffnen. Ausgaben, Zahlungen und Verlauf müssen für sie verfügbar bleiben. Stattdessen aus deiner Liste entfernen? Dadurch werden keine Salden beglichen oder geändert."
+  ],
+  [
+    "optional",
+    "opcional",
+    "facultatif",
+    "optional"
+  ],
+  [
+    "Purchase date not shown · added {value0}",
+    "Fecha de compra no visible · añadido el {value0}",
+    "Date d’achat non indiquée · ajouté le {value0}",
+    "Kaufdatum nicht angegeben · hinzugefügt am {value0}"
   ]
 ]

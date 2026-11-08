@@ -171,8 +171,8 @@ test('F-06: Delete bill after the plain confirmation sends the name the server s
       : route.fulfill({ json: { deleted: true } });
   });
   await page.goto('/expenses');
-  await page.getByRole('button', { name: 'Bill options', exact: true }).click();
-  await page.getByText('Delete bill', { exact: true }).first().click();
+  await page.getByRole('button', { name: 'Bill options', exact: true }).click(); await page.getByRole('menuitem', { name: 'Bill options', exact: true }).click();
+  await page.locator('.trip-controls > details > summary').filter({ hasText: /^Delete bill$/ }).click();
   await page.locator('.trip-controls').getByRole('button', { name: 'Delete bill' }).click();
   await page.getByRole('dialog', { name: 'Delete this bill?' }).getByRole('button', { name: 'Delete bill' }).click();
   await expect.poll(() => actions).toEqual([{ action: 'delete', tripId: 'rows-bill', memberId: '', confirmName: 'Coffee' }]);

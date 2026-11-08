@@ -21,8 +21,9 @@ async function change(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ action, tripId, ...extra }),
   });
-  const body = (await response.json()) as { error?: string };
+  const body = (await response.json()) as { error?: string; deleted?: boolean };
   if (!response.ok) throw Error(body.error || 'Unable to change this holiday.');
+  if ((action === 'delete' || action === 'discard') && body.deleted !== true) throw Error('Deletion was not confirmed. Refresh and try again.');
 }
 
 /** F-04: leaving never erases what someone owes; say what remains. */
@@ -45,7 +46,12 @@ export type TripAction = 'archive' | 'leave' | 'transfer' | 'delete';
  * paths ask the same questions. Returns false when the person cancels.
  */
 export async function runTripAction(trip: Trip, accountId: string | undefined, value: TripAction, confirm: Confirm,
-  extra: { memberId?: string; confirmName?: string } = {}): Promise<boolean> {
+  extra: { memberId?: string; confirmName?: string } = {}): Promise<TripAction | false> {
+  if (value === 'delete' && isBill(trip) && trip.members.some(member => member.userId && member.userId !== accountId)) {
+    if (!await confirm({ title: 'Keep the shared bill’s records', message: 'Other people can open this bill. Its expenses, payments and history must stay available to them. Remove it from your list instead? This does not settle or change anyone’s balance.', confirmLabel: 'Remove from my list' })) return false;
+    await change('archive', trip.id);
+    return 'archive';
+  }
   if (
     value === 'leave' &&
     !(await confirm({
@@ -67,16 +73,16 @@ export async function runTripAction(trip: Trip, accountId: string | undefined, v
   )
     return false;
   // F-06: a bill is deleted after one plain confirmation; typing the name is kept for holidays with entries.
-  if (value === 'delete' && isBill(trip) && (trip.expenses.length || trip.payments.length || trip.drafts.length) && !(await confirm({
+  if (value === 'delete' && isBill(trip) && !(await confirm({
     title: 'Delete this bill?',
     message: `Delete “${trip.name}” with ${trip.expenses.length} ${trip.expenses.length === 1 ? 'expense' : 'expenses'} and ${trip.payments.length} ${trip.payments.length === 1 ? 'payment' : 'payments'}? You can restore it with its receipt photos for 30 days from Archived holidays → Recently deleted; after that it is removed for good. To keep it but hide it, use Remove from my list.`,
     confirmLabel: 'Delete bill', destructive: true,
   }))) return false;
-  await change(value === 'delete' && isBill(trip) && !trip.expenses.length && !trip.payments.length && !trip.drafts.length && !trip.members.some(member => member.userId && member.userId !== accountId) ? 'discard' : value, trip.id, { memberId: extra.memberId || '',
+  await change(value, trip.id, { memberId: extra.memberId || '',
   // The plain confirmation above stands in for typing a bill's name; the
   // server still checks the name, so a bill is never deleted by accident.
   confirmName: value === 'delete' && isBill(trip) ? trip.name : extra.confirmName || '' });
-  return true;
+  return value;
 }
 
 export default function TripControls({
@@ -104,9 +110,9 @@ export default function TripControls({
     setSaving(true);
     setMessage('');
     try {
-      const restorable = value === 'delete' && isBill(trip) && !!(trip.expenses.length || trip.payments.length || trip.drafts.length);
-      if (!await runTripAction(trip, accountId, value, confirm, { memberId: owner, confirmName })) return;
-      if (restorable) onBillDeleted?.(trip);
+      const completed = await runTripAction(trip, accountId, value, confirm, { memberId: owner, confirmName });
+      if (!completed) return;
+      if (completed === 'delete' && isBill(trip)) onBillDeleted?.(trip);
       await onChanged();
       setMessage(
         value === 'transfer' ? 'Ownership transferred.' : isBill(trip) ? 'Bill updated.' : 'Holiday updated.',

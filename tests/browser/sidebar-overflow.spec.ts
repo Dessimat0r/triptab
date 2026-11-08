@@ -32,13 +32,13 @@ async function fixtures(page: Page, holidays = 3) {
 async function checkRows(page: Page, count: number) {
   const sidebar = page.locator('#holiday-sidebar');
   // Navigation rows only: a row may also carry a ⋯ actions button (F-06).
-  const rows = sidebar.locator('.tripnav button:not(.row-actions-trigger)');
+  const rows = sidebar.locator('.tripnav-row > button');
   await expect(rows).toHaveCount(count);
   const geometry = await sidebar.evaluate(element => ({
     drawerHeight: element.clientHeight,
     drawerScrollHeight: element.scrollHeight,
     listOverflow: [...element.querySelectorAll('.tripnav')].map(list => getComputedStyle(list).overflowY),
-    rowHeights: [...element.querySelectorAll('.tripnav button:not(.row-actions-trigger)')].map(button => button.getBoundingClientRect().height),
+    rowHeights: [...element.querySelectorAll('.tripnav-row > button')].map(button => button.getBoundingClientRect().height),
   }));
   expect(geometry.drawerScrollHeight).toBeGreaterThan(geometry.drawerHeight);
   expect(geometry.listOverflow).toEqual(['visible', 'visible']);
@@ -78,7 +78,7 @@ for (const viewport of [
     await expect(showAll).toBeInViewport({ ratio: 1 });
     await page.keyboard.press('Enter');
     await expect(showAll).toHaveCount(0);
-    const billRows = sidebar.locator('.bill-nav button:not(.row-actions-trigger)');
+    const billRows = sidebar.locator('.bill-nav .tripnav-row > button');
     await expect(billRows).toHaveCount(6);
     await checkRows(page, 9);
 

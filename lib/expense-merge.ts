@@ -41,7 +41,7 @@ const SPECIAL_KEYS = new Set(['items', 'conversation', 'fieldSources', 'receiptS
 const GROUPS: { key: string; label: string; fields: string[] }[] = [
   { key: 'when', label: 'Date and time', fields: ['date', 'time', 'timezone'] },
   { key: 'currency', label: 'Currency and conversion', fields: ['currency', 'fx', 'bankAmount'] },
-  { key: 'split-mode', label: 'Whole-receipt percentages', fields: ['percentages'] },
+  { key: 'split-mode', label: 'Bill participants and split', fields: ['percentages', 'splitMembers'] },
 ];
 const LABELS: Record<string, string> = {
   title: 'Name', payer: 'Paid by', tax: 'Added tax', tip: 'Tip / service', discount: 'Discount',

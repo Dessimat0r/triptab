@@ -63,7 +63,7 @@ test('native receipt HTTP journey uploads privately, stages AI evidence, refresh
     assert.equal(draft.status, 'review');
     assert.equal(draft.title, 'Printed receipt merchant');
     assert.equal(draft.items[1].amount, null);
-    assert.deepEqual(draft.items.map(item => item.members), [[], []]);
+    assert.deepEqual(draft.items.map(item => item.members), [['alice','bob'], ['alice','bob']]);
     assert.equal(draft.items[0].quantity?.total, 2);
     assert.equal(draft.receiptScan?.status, 'incomplete');
     assert.deepEqual(draft.receiptScan?.imageIds, [receiptId]);

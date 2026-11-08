@@ -54,7 +54,7 @@ function PrintedAmount({ label, value, onChange }: { label: string; value?: numb
  * Save confirms are listed once, under Check & save; who shares each line is
  * shown by the lines themselves.
  */
-export default function ReceiptScanReview({ entry, onChange, photo, children }: { entry: ReceiptEditor; onChange: (entry: ReceiptEditor) => void; photo?: ReactNode; children?: ReactNode }) {
+export default function ReceiptScanReview({ entry, onChange, photo, children, compact = false }: { entry: ReceiptEditor; onChange: (entry: ReceiptEditor) => void; photo?: ReactNode; children?: ReactNode; compact?: boolean }) {
   const titleId = useId();
   const scan = useMemo(() => entry.receiptScan && reconcileReceiptScan(entry), [entry]);
   if (!entry.receiptId && !entry.receiptScan) return null;
@@ -63,9 +63,7 @@ export default function ReceiptScanReview({ entry, onChange, photo, children }: 
   // A printed-total difference is explained and resolved once, under Check & save.
   const warnings = scan?.warnings.filter(warning => !warning.resolved && warning.code !== "unassigned-item" && !isDifference(warning.code) && !canConfirmReceiptWarning(entry, warning)) || [];
   const name = (itemId?: string) => entry.items.find(item => item.id === itemId)?.name || "Item needing review";
-  return <section className="receipt-scan-review" aria-labelledby={titleId}>
-    {photo}
-    <div className="receipt-scan-review-body">
+  const body = <div className="receipt-scan-review-body">
       <h4 id={titleId}>{!scan ? uiText("Receipt not processed yet") : scan.status === "matched" ? uiText("Receipt totals match exactly") : uiText("Receipt needs review")}</h4>
       {!scan && <p>{uiText("Your photo is stored. Uploading a photo or copying a prompt does not mean its items have been read.")}</p>}
       <dl className="receipt-scan-totals">
@@ -87,8 +85,11 @@ export default function ReceiptScanReview({ entry, onChange, photo, children }: 
           onChange({ ...entry, receiptScan: { ...scan, [field]: value, fieldSources: { ...scan.fieldSources, [field]: "user" }, acknowledgement: undefined } });
         }} />)}</div>
       </details>}
-    </div>
+    </div>;
+  if (compact && scan?.status === 'matched' && calculated !== null) return <section className="receipt-scan-review receipt-scan-review--compact">
+    {photo}<details><summary><strong>{uiText('Receipt totals match exactly')}</strong><b>{receiptMoney(calculated, entry.currency)}</b></summary>{body}</details>
   </section>;
+  return <section className="receipt-scan-review" aria-labelledby={titleId}>{photo}{body}</section>;
 }
 
 const isDifference = (code: string) => code === "total-mismatch" || code === "subtotal-mismatch";

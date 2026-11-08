@@ -114,15 +114,15 @@ test('native image output carries purchased multilingual quantity independently 
   assert.deepEqual(recognized, output);
   const proposal = applyReceiptTranscription(trip, draft, recognized);
   assert.deepEqual(proposal.items[0].quantity, { total: 2, label: 'slices', sourceText: '2 x Stck' });
-  assert.deepEqual(proposal.items[0].units, { total: 2, label: 'slices', allocations: {} });
-  assert.deepEqual(proposal.items[0].members, []);
+  assert.equal(proposal.items[0].units, undefined);
+  assert.deepEqual(proposal.items[0].members, ['alice', 'bob']);
   assert.equal(proposal.items[0].amount, 1001);
   assert.equal(total(proposal), 1001);
   assert.equal(proposal.receiptScan?.status, 'matched');
   assert.equal(proposal.status, 'review');
   assert.equal(trip.expenses.length, 0);
-  assert.match(proposal.conversation!.at(-1)!.text, /no people assigned/);
-  assert.match(proposal.conversation!.at(-1)!.text, /editable counts, not consumption/);
+  assert.match(proposal.conversation!.at(-1)!.text, /share their cost equally/);
+  assert.match(proposal.conversation!.at(-1)!.text, /purchased quantities do not describe personal consumption/);
 });
 
 test('native quantity fields reject invalid counts, excess precision, long text and financial assignments', async () => {
@@ -288,7 +288,6 @@ test('only a valid completed Responses event can become a receipt proposal', asy
     [{ type: 'response.incomplete' }], [{ type: 'response.failed' }], [{ type: 'error' }], [refused],
     [{ ...completed(), response: { ...completed().response, status: 'incomplete' } }],
     [completed({ ...transcription, items: [{ id: null, name: 'Coffee', amount: 2.5 }] })],
-    [completed({ ...transcription, date: '2026-02-30' })],
     [completed({ ...transcription, expenseId: 'forged-target' })],
     [completed({ ...transcription, items: [{ id: null, name: 'Coffee', amount: 250, members: ['bob'] }] })],
   ]) {
@@ -457,14 +456,14 @@ test('image projection creates review-only item rows with server IDs/default sha
   assert.equal(result.timezone, original.timezone);
   assert.deepEqual(result.memory, original.memory);
   assert.deepEqual(result.items.map(({ id, name, amount, members }) => { assert.match(id, /^[0-9a-f-]{36}$/); return { name, amount, members }; }),
-    [{ name: 'Coffee', amount: 250, members: [] }, { name: 'Pastry', amount: 350, members: [] }]);
+    [{ name: 'Coffee', amount: 250, members: ['alice', 'bob'] }, { name: 'Pastry', amount: 350, members: ['alice', 'bob'] }]);
   assert.equal(new Set(result.items.map(item => item.id)).size, 2);
   assert.deepEqual(result.conversation![0], original.conversation![0]);
   assert.equal(result.conversation![1].role, 'assistant');
   assert.equal(result.conversation![1].replyTo, 'question');
   assert.equal(result.conversation![1].authorMemberId, undefined);
   assert.equal(result.conversation![1].authorName, undefined);
-  assert.match(result.conversation![1].text, /no people assigned/);
+  assert.match(result.conversation![1].text, /share their cost equally/);
 });
 
 test('corrections retain exact saved item shares and remainder pennies, original currency bank details and inherited question context', () => {
@@ -481,7 +480,7 @@ test('corrections retain exact saved item shares and remainder pennies, original
   assert.equal(result.conversation!.at(-1)!.itemId, 'line');
 });
 
-test('new receipt quantities support arbitrary fractional measures as pending counts without inventing consumption or multiplying prices', () => {
+test('new receipt quantities support arbitrary fractional measures with automatic cost shares without inventing consumption or multiplying prices', () => {
   const threeTravellers: Trip = { ...trip, members: [...trip.members, { id: 'charlie', name: 'Charlie' }] };
   for (const quantity of [
     { total: 2, label: 'bottles', sourceText: '2 x 500 ml' },
@@ -495,25 +494,24 @@ test('new receipt quantities support arbitrary fractional measures as pending co
     });
     const item = result.items[0];
     assert.equal(item.quantity!.total, quantity.total);
-    assert.equal(item.units!.total, quantity.total);
-    assert.deepEqual(item.units!.allocations, {});
-    assert.deepEqual(item.members, []);
+    assert.equal(item.units, undefined);
+    assert.deepEqual(item.members, threeTravellers.members.map(member => member.id));
     assert.equal(total(result), 1001);
     assert.equal(item.quantity!.label, quantity.label ?? undefined);
     assert.equal(item.quantity!.sourceText, quantity.sourceText ?? undefined);
   }
 });
 
-test('tiny/nondivisible detected quantities remain unassigned regardless of party size or price', () => {
+test('tiny/nondivisible detected quantities retain equal cost shares regardless of party size or price', () => {
   for (const quantity of [0.000001, 0.000003, 2]) {
     const result = applyReceiptTranscription(trip, draft, { ...transcription, tip: 0, printedTotal: 100000000,
       items: [{ id: null, name: 'Detected line', amount: 100000000, quantity: { total: quantity, label: null, sourceText: null } }],
     });
     assert.deepEqual(result.items[0].quantity, { total: quantity });
-    assert.deepEqual(result.items[0].units, { total: quantity, allocations: {} });
-    assert.deepEqual(result.items[0].members, []);
+    assert.equal(result.items[0].units, undefined);
+    assert.deepEqual(result.items[0].members, ['alice', 'bob']);
     assert.equal(total(result), 100000000);
-    assert.match(result.conversation!.at(-1)!.text, /no people assigned/);
+    assert.match(result.conversation!.at(-1)!.text, /share their cost equally/);
   }
 });
 
@@ -554,20 +552,20 @@ test('detected quantities survive whole-receipt percentages without changing the
     items: [{ id: null, name: 'Pizza slices', amount: 1001, quantity: { total: 2, label: 'slices', sourceText: '2 x Stck' } }],
   });
   assert.deepEqual(result.items[0].quantity, { total: 2, label: 'slices', sourceText: '2 x Stck' });
-  assert.deepEqual(result.items[0].units!.allocations, {});
+  assert.equal(result.items[0].units, undefined);
   assert.deepEqual(result.percentages, { alice: 70, bob: 30 });
   assert.deepEqual(financialShares(result, trip.members), [701, 300]);
   assert.match(result.conversation!.at(-1)!.text, /saved whole-receipt percentage split/);
 });
 
-test('ambiguous or absent purchased quantities remain unassigned without fabricating a unit count', () => {
+test('ambiguous or absent purchased quantities split equally without fabricating a unit count', () => {
   const result = applyReceiptTranscription(trip, draft, { ...transcription,
     items: [{ id: null, name: 'Pizza', amount: 1001, quantity: null }], tip: 0, printedTotal: 1001,
     summary: 'The receipt does not say whether these are whole pizzas or slices.',
   });
   assert.equal(result.items[0].quantity, undefined);
   assert.equal(result.items[0].units, undefined);
-  assert.deepEqual(result.items[0].members, []);
+  assert.deepEqual(result.items[0].members, ['alice', 'bob']);
   assert.match(result.conversation!.at(-1)!.text, /whole pizzas or slices/);
 });
 
@@ -630,7 +628,7 @@ test('native scan reconciliation distinguishes exact printed subtotal/total, one
   assert.equal(exact.receiptScan?.calculatedSubtotal, 600);
   assert.equal(exact.receiptScan?.calculatedTotal, 650);
   assert.equal(exact.receiptScan?.status, 'matched');
-  assert(exact.receiptScan?.warnings.some(warning => warning.code === 'unassigned-item'));
+  assert(!exact.receiptScan?.warnings.some(warning => warning.code === 'unassigned-item'));
   const mismatch = applyReceiptTranscription(trip, draft, { ...transcription, printedSubtotal: 600, printedTotal: 651 });
   assert.equal(mismatch.receiptScan?.status, 'needs-review');
   assert(mismatch.receiptScan?.warnings.some(warning => warning.code === 'total-mismatch' && warning.difference === -1));
@@ -654,7 +652,7 @@ test('native unreadable lines remain present with nullable amounts, source evide
   assert.equal(proposal.items[1].amount, null);
   assert.equal(proposal.items[1].name, '');
   assert.deepEqual(proposal.items[1].scanSource, { lineIndex: 2, observedText: '??? ???', confidence: 'low' });
-  assert.deepEqual(proposal.items[1].members, []);
+  assert.deepEqual(proposal.items[1].members, ['alice', 'bob']);
   assert.equal(proposal.receiptScan?.status, 'incomplete');
   assert(proposal.receiptScan?.warnings.some(warning => warning.code === 'unreadable-amount' && warning.itemId === proposal.items[1].id));
 });

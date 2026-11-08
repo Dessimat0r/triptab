@@ -1,3 +1,4 @@
+import * as defaultSplit from '../lib/default-split';
 import * as financialFormat from '../lib/financial-format';
 import * as adjustmentPreview from '../lib/adjustment-preview';
 import assert from 'node:assert/strict';
@@ -97,6 +98,7 @@ function controller(trip: model.Trip, fetcher?: typeof fetch) {
     if (name === '@/lib/ui-language') return uiLanguage;
     if (name === 'react/jsx-runtime') return runtime;
     if (name === '@/components/trip-language-preferences') return {useTripLanguagePreferences:()=>({preferences:{readingLanguage:'en',primaryVersion:'reading',itemVersions:{}},ready:true,busy:false,error:'',save:async()=>true}),PersonalLanguageSettings:component};
+    if (name === '@/lib/default-split') return defaultSplit;
     if (name === '@/lib/model') return models;
     if (name === '@/lib/dates') return dates;
     if (name === '@/lib/client-ledger') return clientLedger;

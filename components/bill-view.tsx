@@ -27,7 +27,9 @@ export default function BillView({ trip, receipts, payments, calculationError, d
   }
   return <div className="bill-view">
     <div className="bill-receipts">
-      <section className="bill-photo-section" aria-label={uiText('Bill image')}>
+      <details className="bill-photo-section" open={trip.billPhotoId ? true : undefined}>
+        <summary>{uiText('Bill image')}{!trip.billPhotoId && <small> · {uiText('optional')}</small>}</summary>
+        <section aria-label={uiText('Bill image')}>
         <h2>{uiText('Bill image')}</h2>
         {trip.billPhotoId && <div className="bill-photo-preview">
           {/* Private, account-checked image endpoint; never fed to receipt scanning. */}
@@ -49,6 +51,7 @@ export default function BillView({ trip, receipts, payments, calculationError, d
         </div>
         <p className="footnote">{uiText('Optional shared image. Adding it does not scan a receipt or change the split.')}</p>
       </section>
+      </details>
       <h2>{uiText('Receipts')}</h2>{receipts}{payments}
     </div>
     <div className="bill-finances">

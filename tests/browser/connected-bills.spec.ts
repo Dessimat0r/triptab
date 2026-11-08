@@ -86,7 +86,7 @@ async function openPeople(page: Page) {
   await page.goto('/expenses');
   await page.getByRole('button', { name: 'Open holidays', exact: true }).click();
   await page.getByRole('button', { name: /^Dinner/ }).click();
-  await page.getByRole('button', { name: 'Bill options', exact: true }).click();
+  await page.getByRole('button', { name: 'Bill options', exact: true }).click(); await page.getByRole('menuitem', { name: 'Bill options', exact: true }).click();
   await page.getByRole('button', { name: 'People', exact: true }).click();
   return page.getByRole('dialog', { name: 'People', exact: true });
 }

@@ -1,6 +1,7 @@
 import { applyAdjustments, type Adjustment } from './adjustments';
 import { equalSavedValue } from './client-ledger';
 import type { Draft, DraftItem, Expense, Trip } from './model';
+import { defaultSplit } from './default-split';
 
 export type ReceiptEditor = Omit<Expense, 'items' | 'currency'> & { items: DraftItem[]; currency: Draft['currency']; draftId?: string; expenseId?: string };
 export type InitialReceiptReview = {
@@ -20,9 +21,9 @@ export type InitialReceiptReview = {
 // to them alone must stop an automatic fill and lose a late-proposal race.
 // No records and an empty list are the same work.
 export function receiptEditableValue(entry: ReceiptEditor) {
-  const { title, date, time, timezone, currency, payer, items, tax, tip, discount, percentages, fx, bankAmount, receiptScan, fieldSources, receiptLanguage, detectedLanguage, location, locationHint } = entry;
+  const { title, date, time, timezone, currency, payer, items, tax, tip, discount, percentages, splitMembers, fx, bankAmount, receiptScan, fieldSources, receiptLanguage, detectedLanguage, location, locationHint } = entry;
   const adjustments = entry.adjustments?.length ? entry.adjustments : undefined;
-  return { title, date, time, timezone, currency, payer, items, tax, tip, discount, adjustments, percentages, fx, bankAmount, receiptScan, fieldSources, receiptLanguage, detectedLanguage, location, locationHint };
+  return { title, date, time, timezone, currency, payer, items, tax, tip, discount, adjustments, percentages, splitMembers, fx, bankAmount, receiptScan, fieldSources, receiptLanguage, detectedLanguage, location, locationHint };
 }
 
 export function isBlankReceipt(entry: ReceiptEditor) {
@@ -91,7 +92,7 @@ export function receiptProposalEditor(editor: ReceiptEditor, draft: Draft): Rece
     Object.assign(next, { [field]: editor[field], fieldSources: { ...next.fieldSources, [field]: 'user' } });
   }
   if (next.currency !== editor.currency) { next.fx = undefined; next.bankAmount = undefined; }
-  return next;
+  return !draft.expenseId && next.splitMembers ? defaultSplit(next, next.splitMembers, true) : next;
 }
 
 export function receiptEditorTotal(entry: Pick<ReceiptEditor, 'items' | 'tax' | 'tip' | 'discount'> & { adjustments?: Adjustment[] }): number | null {

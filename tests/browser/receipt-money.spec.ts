@@ -96,7 +96,8 @@ async function two(browser: Browser, run: (f: Fixture, a: Page, b: Page) => Prom
 async function allocate(page: Page, second = false) {
     const choices = second ? [['Alice'], ['Bob'], ['Bob']] : [['Alice'], ['Alice'], ['Alice', 'Bob']];
     await expect(page.locator('.items > .item')).toHaveCount(3);
-    for (let i = 0; i < 3; i++)
+    for (let i = 0; i < 3; i++) {
+        await page.locator('.items > .item').nth(i).locator('.item-edit > summary').click();
         for (const name of ['Alice', 'Bob']) {
             const chip = page.locator('.items > .item').nth(i).locator('.personchips').getByRole('button', { name, exact: true });
             const wanted = choices[i].includes(name);
@@ -104,6 +105,7 @@ async function allocate(page: Page, second = false) {
                 await chip.click();
             await expect(chip).toHaveAttribute('aria-pressed', String(wanted));
         }
+    }
     await page.getByRole('combobox', { name: 'Paid by', exact: true }).selectOption(second ? 'alice' : 'bob');
 }
 const save = (page: Page) => page.locator('.editor-footer').getByRole('button', { name: /^(Confirm & save expense|Save expense)$/ });
@@ -113,6 +115,7 @@ test('Safari dialog focus does not scroll the receipt under a click; a covered i
         expect((await f.process(await f.processBody())).status).toBe(200);
         await page.goto(`/expenses?receiptDraft=op-draft&receiptTrip=${f.tripId}`);
         const dialog = page.locator('.editor');
+        await page.locator('.items > .item').first().locator('.item-edit > summary').click();
         const chip = page.locator('.items > .item').first().locator('.personchips').getByRole('button', { name: 'Alice', exact: true });
         await chip.scrollIntoViewIfNeeded();
         const before = await dialog.evaluate(element => {
@@ -123,7 +126,7 @@ test('Safari dialog focus does not scroll the receipt under a click; a covered i
         await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
         expect(await dialog.evaluate(element => element.scrollTop)).toBe(before);
         await chip.click();
-        await expect(chip).toHaveAttribute('aria-pressed', 'true');
+        await expect(chip).toHaveAttribute('aria-pressed', 'false');
 
         // Retain the original accessibility behaviour for actual inputs.
         await page.locator('.items > .item').nth(2).locator('.item-edit > summary').click();
@@ -147,6 +150,7 @@ test('footer focus reveal waits for pointer release before moving a covered inpu
         await page.locator('.item-edit').nth(2).evaluate(element => { (element as HTMLDetailsElement).open = true; });
         const input = page.getByRole('textbox', { name: 'Item 3 total', exact: true });
         await expect(input).toBeVisible();
+        await page.locator('.items > .item').first().locator('.item-edit > summary').click();
         const chip = page.locator('.items > .item').first().locator('.personchips').getByRole('button', { name: 'Alice', exact: true });
         await chip.scrollIntoViewIfNeeded();
         const box = (await chip.boundingBox())!;
