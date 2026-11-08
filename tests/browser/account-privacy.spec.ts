@@ -117,7 +117,7 @@ test('R02: on a bill both accounts share, the Undo notice and open connection su
   const confirm = page.getByRole('dialog').filter({ hasText: 'Delete expense?' });
   if (await confirm.isVisible({ timeout: 1000 }).catch(() => false)) await confirm.getByRole('button', { name: 'Delete expense' }).click();
   await expect(page.getByText('Deleted “Taxi”')).toBeVisible();
-  await page.getByRole('button', { name: /Bill options/ }).first().click();
+  await page.getByRole('button', { name: /Bill options/ }).first().click(); await page.getByRole('menuitem', { name: 'Bill options', exact: true }).click();
   await page.getByRole('dialog', { name: 'Bill options' }).getByRole('button', { name: 'People', exact: true }).click();
   await expect(page.locator('body')).toContainText('Carol Alicefriend');
   // Bob signs in elsewhere; the shared bill is still selected for him.

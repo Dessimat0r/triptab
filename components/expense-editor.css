@@ -1499,4 +1499,18 @@
 .tripnav-row > .row-actions { position: absolute; top: 0; bottom: 0; right: 0; display: flex; align-items: center; }
 .tripnav .row-actions-trigger { width: 40px; min-width: 40px; padding: 0; justify-content: center; border-radius: 10px; }
 .tripnav .row-actions-menu button { display: block; padding: 0 var(--space-3); font-weight: 500; font-size: inherit; }
+.bill-drawer-row { border-radius: 10px; }
+.bill-drawer-row .swipe-row-content { background: var(--paper); }
+.tripnav .swipe-row-delete { padding: 8px; justify-content: center; white-space: normal; font-size: 13px; color: #fff; background: #a12626; }
+.item-share-summary { margin: 0; padding: 0 var(--space-4) var(--space-2); font-size: var(--text-s); color: var(--muted); }
+.bill-split-options summary { padding: 10px 0; cursor: pointer; }
+.bill-default-split { margin-bottom: var(--space-3); }
+.receipt-scan-review--compact { align-items: start; padding: var(--space-3); }
+.receipt-scan-review--compact > details { min-width: 0; }
+.receipt-scan-review--compact > details > summary { min-height: 44px; cursor: pointer; }
+.receipt-scan-review--compact > details > summary strong { font-size: var(--text-s); }
+.receipt-scan-review--compact > details > summary b { display: block; }
+.editor .bill-purchase-fields > .fieldpair--keep { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.purchase-details-summary > button { flex-shrink: 0; white-space: nowrap; }
+.editor .modalheading > .expense-icon-trigger, .editor .modalheading > .iconbutton { flex-shrink: 0; min-width: 44px; min-height: 44px; }
 .payment-row-actions .row-actions { align-self: center; }

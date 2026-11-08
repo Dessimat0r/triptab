@@ -29,16 +29,16 @@ test('one scan may apply explicit saved guidance without multiplying printed pri
   assert.equal(result.items[2].amount,800); assert.deepEqual(result.location,{label:'Bratislava',source:'receipt'});
 });
 
-test('photo-only reading leaves all personal consumption unassigned and preserves printed quantities',()=>{
+test('photo-only reading defaults costs equally without inventing consumption and preserves printed quantities',()=>{
   const result=applyReceiptTranscription(trip,{...base,conversation:[]},{...scan,changes:null});
-  assert(result.items.every(item=>item.members.length===0));
-  assert.deepEqual(result.items[2].units?.allocations,{}); assert.equal(result.items[2].quantity?.total,4);
+  assert(result.items.every(item=>JSON.stringify(item.members)===JSON.stringify(['chris','gary'])));
+  assert.equal(result.items[2].units,undefined); assert.equal(result.items[2].quantity?.total,4);
 });
 
 test('unknown or inactive authors cannot turn scan guidance into financial shares',()=>{
   for(const author of [undefined,'removed-traveller']) {
     const result=applyReceiptTranscription(trip,{...base,conversation:base.conversation!.map(message=>({...message,authorMemberId:author}))},{...scan,changes:guidance()});
-    assert(result.items.every(item=>item.members.length===0)); assert.match(result.conversation!.at(-1)!.text,/Clarify who is speaking/);
+    assert(result.items.every(item=>JSON.stringify(item.members)===JSON.stringify(['chris','gary']))); assert.match(result.conversation!.at(-1)!.text,/Clarify who is speaking/);
   }
 });
 
@@ -47,13 +47,13 @@ test('recognition protects existing line allocations and receipt-wide percentage
   const result=applyReceiptTranscription(trip,old,{...scan,items:scan.items.map((item,index)=>({...item,id:old.items[index].id})),changes:guidance()});
   assert.deepEqual(result.items[0].members,['chris']); assert.deepEqual(result.items[2].units,old.items[2].units);
   const global=applyReceiptTranscription(trip,{...base,percentages:{chris:75,gary:25}},{...scan,changes:guidance()});
-  assert.deepEqual(global.percentages,{chris:75,gary:25}); assert(global.items.every(item=>item.members.length===0));
+  assert.deepEqual(global.percentages,{chris:75,gary:25}); assert(global.items.every(item=>item.splitMode==='default'));
 });
 
 test('consumption that disagrees with purchased count leaves affected shares unchanged and asks for review',()=>{
   const changes=guidance(); changes.items[2].units!.total=2; changes.items[2].units!.allocations=[{memberId:'chris',value:1},{memberId:'gary',value:1}];
   const result=applyReceiptTranscription(trip,base,{...scan,changes});
-  assert.deepEqual(result.items[2].members,[]); assert.deepEqual(result.items[2].units?.allocations,{});
+  assert.deepEqual(result.items[2].members,['chris','gary']); assert.equal(result.items[2].units,undefined);
   assert.equal(result.items[2].quantity?.total,4); assert.match(result.conversation!.at(-1)!.text,/quantities differ from the receipt/);
 });
 

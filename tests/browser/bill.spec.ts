@@ -111,6 +111,7 @@ test('[P1] custom bill accepts a gallery image without scanning, preserving an i
   await page.setViewportSize({ width: 320, height: 844 }); const state = await fixtures(page); await page.goto('/expenses');
   await page.getByRole('button', { name: 'Open holidays', exact: true }).click();
   await page.getByRole('button', { name: 'Split a bill', exact: true }).click();
+  await page.getByText('Attach image without scanning', { exact: true }).click();
   const chooser = page.waitForEvent('filechooser');
   await page.getByRole('dialog', { name: 'Split a bill' }).getByRole('button', { name: 'Choose image' }).click();
   await (await chooser).setFiles(pathPhoto);
@@ -130,6 +131,7 @@ test('[P1] custom bill accepts a gallery image without scanning, preserving an i
 
 test('[P1] an existing bill can add, replace and remove a photo without changing any money', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 }); const state = await fixtures(page); await page.goto('/expenses'); await selectBill(page);
+  await page.locator('.bill-photo-section > summary').click();
   const chooser = page.waitForEvent('filechooser');
   await page.getByRole('button', { name: 'Choose image', exact: true }).click();
   await (await chooser).setFiles(pathPhoto);
@@ -198,7 +200,7 @@ test('[P3] summary shares only names and amounts', async ({ page }) => {
 });
 test('[P3] People sheet reuses names and safe removal without dates or weights', async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 844 }); await fixtures(page); await page.goto('/expenses'); await selectBill(page);
-  await page.getByRole('button', { name: 'Bill options', exact: true }).click(); await page.getByRole('button', { name: 'People', exact: true }).click();
+  await page.getByRole('button', { name: 'Bill options', exact: true }).click(); await page.getByRole('menuitem', { name: 'Bill options', exact: true }).click(); await page.getByRole('button', { name: 'People', exact: true }).click();
   await expect(page.getByRole('dialog', { name: 'People', exact: true })).toBeVisible();
   await expect(page.getByRole('textbox', { name: 'Traveller 2 name', exact: true })).toBeVisible();
   await expect(page.getByText('Counts as', { exact: true })).toHaveCount(0); await expect(page.getByText('Joined on', { exact: true })).toHaveCount(0); await fits(page);

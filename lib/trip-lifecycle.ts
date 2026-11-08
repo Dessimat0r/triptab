@@ -247,7 +247,7 @@ export async function discardEmptyBill(database: D1Database, actor: Actor, rawTr
 async function deleteTripRecord(database: D1Database, actor: Actor, rawTripId: unknown, confirmName: unknown, discard: boolean) {
   const id = tripId(rawTripId);
   const row = await database.prepare('SELECT owner, data FROM trips WHERE id = ?').bind(id).first<{ owner: string; data: string }>();
-  const discardError = 'This bill has entries. Delete it from its settings instead.';
+  const discardError = 'This bill has entries or an image. Use Delete bill from its menu, or Remove from my list.';
   if (!row || row.owner !== actor.id) throw new TripLifecycleError(discard ? 'Only the bill owner can discard it.' : tripMessage(row ? JSON.parse(row.data) : undefined, 'Only the holiday owner can delete it.'), 403);
   const trip = JSON.parse(row.data) as Trip;
   if (discard && (!isBill(trip) || trip.expenses.length || trip.payments.length || trip.drafts.length || trip.billPhotoId)) throw new TripLifecycleError(discardError, 409);

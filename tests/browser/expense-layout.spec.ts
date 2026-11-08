@@ -183,11 +183,13 @@ for (const { width, height, touch } of viewports) {
           expect(smallControls).toBe(0);
         }
         // Collapsed lines are one row each; every split method of an open line fits too.
+        if (!await page.locator('.item .split-method > summary').first().isVisible()) await page.locator('.item-edit > summary').first().click();
         await page.locator('.item .split-method > summary').first().click();
         await page.getByRole('button', { name: 'By percentage', exact: true }).first().click();
         await fits(page);
         await page.getByRole('button', { name: 'By quantity', exact: true }).first().click();
         await fits(page);
+        await page.locator('.bill-split-options > summary').click();
         await page.getByRole('button', { name: 'Whole bill', exact: true }).click();
         await fits(page);
         await page.evaluate(() => { document.documentElement.style.fontSize = '32px'; });

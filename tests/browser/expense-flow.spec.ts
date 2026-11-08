@@ -57,7 +57,7 @@ async function openDraft(page: Page) {
   await expect(page.locator('.editor')).toBeVisible({ timeout: 30_000 });
 }
 
-test('a scanned foreign receipt fetches its rate, splits in one tap and stays tidy', async ({ page }) => {
+test('a scanned foreign receipt fetches its rate, splits automatically and stays tidy', async ({ page }) => {
   const errors = reactErrors(page);
   await fixtures(page);
   await openDraft(page);
@@ -67,7 +67,7 @@ test('a scanned foreign receipt fetches its rate, splits in one tap and stays ti
   // Payer and currency are always visible in Purchase, whichever layout is shown.
   await expect(page.getByRole('combobox', { name: 'Paid by' })).toHaveValue('flow-gary');
   await expect(page.getByRole('combobox', { name: 'Currency', exact: true })).toHaveValue('EUR');
-  await page.getByRole('button', { name: 'Share the remaining item equally' }).click();
+  await expect(page.getByRole('button', { name: 'Share the remaining item equally' })).toHaveCount(0);
   await expect(page.locator('.quick-split')).toHaveCount(0);
   await expect(page.locator('.expense-shares')).toContainText('Gary');
   await expect(page.locator('.expense-shares')).toContainText('Sam');

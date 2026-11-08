@@ -95,15 +95,15 @@ test('manual entry has two presses and an untouched Save explains and focuses mi
   expect(await clicks(page)).toEqual(['Add expense', 'Save expense']); expect(state.posts).toBe(1);
 });
 
-test('Scan receipt starts reading and a clean scan needs only allocation and the footer Save', async ({ page }) => {
+test('Scan receipt starts reading and a clean scan defaults equally and needs only the footer Save', async ({ page }) => {
   const state = await fixtures(page); await page.goto('/expenses'); await scan(page);
   await expect(page.getByRole('textbox', { name: 'Item 1 name', exact: true })).toHaveValue('Coffee');
   await expect(page.getByRole('button', { name: 'Save expense now' })).toHaveCount(0);
-  await page.getByRole('button', { name: 'Share the remaining item equally', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Share the remaining item equally', exact: true })).toHaveCount(0);
   await expect(page.locator('.editor button[type=submit], .editor-footer .primary')).toHaveCount(1);
   await save(page).click(); await expect(page.locator('.editor')).toHaveCount(0);
   // F-07: Scan receipt first offers an optional name, then the camera button: one deliberate extra tap.
-  expect(await clicks(page)).toEqual(['Scan receipt', 'Scan receipt', 'Share the remaining item equally', 'Save expense']);
+  expect(await clicks(page)).toEqual(['Scan receipt', 'Scan receipt', 'Save expense']);
   expect(state.uploads).toBe(1); expect(state.scans).toBe(1); expect(state.posts).toBe(1);
 });
 
@@ -189,7 +189,7 @@ test('all hard blockers are revealed together and never accepted by confirmation
   const state = await fixtures(page, { draft: proposal({ receiptScan: { version: 1, printedTotal: null, printedCurrency: 'GBP', status: 'incomplete', warnings: [{ code: 'ambiguous-currency' }] },
     items: [{ id: 'coffee', name: '', amount: null, members: [] }] }) });
   await openDraft(page); await save(page).click(); const list = page.locator('.save-checklist');
-  for (const message of ['Enter 1 unreadable price', 'Name 1 item', 'Match the currency', 'Choose who shares 1 item']) await expect(list).toContainText(message);
+  for (const message of ['Enter 1 unreadable price', 'Name 1 item', 'Match the currency']) await expect(list).toContainText(message);
   await expect(list).toHaveAttribute('role', 'group');
   await expect(page.locator('.expense-save-announcement')).toContainText('Enter 1 unreadable price'); await expect(page.getByRole('textbox', { name: 'Amount', exact: true })).toBeFocused();
   expect(state.posts).toBe(0); await expect(save(page)).toHaveText('Save expense');

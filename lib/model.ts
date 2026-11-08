@@ -229,6 +229,9 @@ const conversationSchema = z.array(receiptMessageSchema).max(100).superRefine((m
 
 const rawItemSchema = z.object({
   id, name: z.string().min(1).max(200), amount: cents, members: z.array(id).min(1).max(50),
+  // Explicit members remain the financial truth. Only new default rows follow
+  // participant changes; absent provenance protects historical/custom shares.
+  splitMode: z.enum(['default', 'custom']).optional(),
   nameLanguage:languageSchema.optional(), translations:itemTranslationsSchema.optional(),
   quantity: receiptQuantitySchema.optional(),
   percentages: z.record(id, z.number().finite().min(0).max(100)).optional(),
@@ -328,6 +331,7 @@ const expenseBaseSchema = z.object({
   time: timeSchema.default('12:00'), timezone: timezoneSchema.default('Europe/London'),
   currency: currencySchema.default('EUR'), fx: fxSchema.optional(), bankAmount: bankAmountSchema.optional(),
   payer: id, items: z.array(expenseItemSchema).min(1).max(200),
+  splitMembers: z.array(id).min(1).max(50).optional(),
   percentages: percentagesSchema.optional(),
   adjustmentAllocation: calculationRuleSchema.optional(),
   memberWeights: memberWeightsSchema.optional(),
@@ -377,6 +381,7 @@ export const draftSchema = z.object({
   items: z.array(draftItemSchema).max(200), tax: cents, tip: cents, discount: cents,
   adjustments: adjustmentsSchema.optional(),
   payer: id, status: z.enum(['waiting', 'review']),
+  splitMembers: z.array(id).min(1).max(50).optional(),
 });
 export const paymentSchema = z.object({
   id, from: id, to: id, amount: cents, date: dateSchema,
@@ -604,6 +609,9 @@ export function validateLedger(data: unknown, options: { previous?: Ledger; sour
         throw new LedgerValidationError('Remove the bank charge when the receipt and settlement currencies are the same');
       }
       if (!memberIds.has(expense.payer)) throw new LedgerValidationError('Choose a trip member as payer');
+      if (expense.splitMembers && (!unique(expense.splitMembers) || expense.splitMembers.some(member => !memberIds.has(member)))) {
+        throw new LedgerValidationError('Choose current bill participants for the default split');
+      }
       if (expense.percentages && Object.keys(expense.percentages).some(member => !memberIds.has(member))) {
         throw new LedgerValidationError('Check receipt percentage assignments');
       }

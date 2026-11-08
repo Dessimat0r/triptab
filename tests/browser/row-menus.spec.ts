@@ -29,7 +29,7 @@ async function fixtures(page: Page, initial: Trip[]) {
       tripActions.push(body);
       if (body.action === 'archive' || body.action === 'delete' || body.action === 'discard') trips = trips.filter(trip => trip.id !== body.tripId);
       revision++;
-      return route.fulfill({ json: { ok: true } });
+      return route.fulfill({ json: { ok: true, deleted: true } });
     }
     const json = pathname === '/api/ledger' ? { data: { trips }, revision }
       : pathname === '/api/profile' ? { id: 'owner', displayName: 'Gary', email: 'gary@example.invalid', authMethod: 'password' }

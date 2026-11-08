@@ -10,6 +10,7 @@ import { draftSchema, tripSchema, draftUnitsSchema, receiptQuantitySchema, CURRE
 import { receiptMemorySchema, type ReceiptMemory } from '@/lib/receipt-context';
 import { validateReceiptMemoryOwnership } from '@/lib/receipt-memory-ownership';
 import { mayRecognizeUnknownProvenance, reconcileReceiptScan, receiptScanFingerprint, mergeReceiptSourceLines, scanSourceSchema, sourceLineSchema, receiptScanWarningSchema, RECEIPT_SCAN_WARNING_CODES } from '@/lib/receipt-scan';
+import { billParticipantIds, equalItem } from '@/lib/default-split';
 
 export const dynamic = 'force-dynamic';
 
@@ -223,7 +224,7 @@ publishedMetadata.currency = metadataProperties.currency;
 publishedDraft.properties = {
   ...publishedMetadata,
   expenseIcon: receiptExpenseIconJsonSchema,
-  upsertItems: { type: 'array', maxItems: 200, items: publishedItem, description: 'Create or correct only these stable item IDs. Omitted existing items are retained. New items may have null unreadable amounts and no selected travellers.' },
+  upsertItems: { type: 'array', maxItems: 200, items: publishedItem, description: 'Create or correct only these stable item IDs. Omitted existing items are retained. Unreadable prices stay null. New items split equally between bill participants automatically; supply shares only for explicit human requests.' },
   adjustments: { type: 'array', maxItems: 20, description: 'Proposed promotion or charge records read from the receipt (BOGOF, multibuy, coupons, loyalty, percentage savings, service charges). They replace earlier assistant-proposed records; a person\u2019s own records are kept. Item scope uses stable item IDs of the qualifying lines only when the receipt makes them clear; otherwise omit the record and keep the line as unmapped sourceLines evidence. Refunds, returns and deposits are never records. Amounts are positive integer hundredths; never also put the saving in discount.',
     items: { type: 'object', additionalProperties: false, required: ['id', 'kind', 'scope'], properties: {
       id: identifier, kind: { type: 'string', enum: ['discount', 'charge'] }, label: { type: 'string', maxLength: 80 },
@@ -257,14 +258,14 @@ publishedDraft.properties = {
 };
 publishedDraft.required = ['id'];
 publishedDraft.not = { required: ['items', 'upsertItems'] };
-expenseDraftTool.description = 'Save corrections to an existing receipt or create an expense draft for human review; never post, approve, acknowledge a discrepancy or select an expense target. First read get_receipt_context for an existing draft and use its current revision. Use draft.id with upsertItems for only the affected stable item IDs. Omitted items always remain; removeItemIds is the only deletion operation and requires known unique IDs. The legacy items array also upserts and never replaces the receipt. Omitted item fields retain their saved values. Preserve saved shares and manual details; change members, units or percentages only for explicit user cost-allocation requests. Purchase quantity and receipt observations describe the evidence independently of personal cost choices. New scanned items may have amount null and members [], leaving missing values or assignments for review; never invent a zero price or assign people as evidence of consumption. Every amount is a full line total in integer hundredths of the original currency, not a unit price to multiply. Read local quantity terms such as Stck, Stück, pcs and pz in context; pizza alone does not establish slices. Label quantities only when supported by the image or saved context. Use receiptScan.printedSubtotal and printedTotal for independently observed printed totals, null if unreadable; TripTab computes discrepancies and incomplete status. Keep receipt source order and flag uncertain readings in scanSource rather than inventing text, currency, date/time, exchange rates, bank charges or personal consumption. Negative receipt adjustments belong in the appropriate discount/adjustment field only when their meaning is clear; retain uncertain evidence for review instead of a negative purchase amount. On an existing draft, change metadata only through metadataPatch when the user explicitly requests that correction. Legacy metadata fields initialize new drafts only. Explicit currency correction clears incompatible saved fx/bankAmount unless explicitly replaced. Existing receipt image, expense link, chats and memory always survive. Item units and percentages are mutually exclusive; use only user-stated or saved cost shares, never infer them from the image. Unit allocation totals and percentage totals are validated; incomplete allocations remain drafts. ' + contextGuidance;
+expenseDraftTool.description = 'Save corrections to an existing receipt or create an expense draft for human review; never post, approve, acknowledge a discrepancy or select an expense target. First read get_receipt_context for an existing draft and use its current revision. Use draft.id with upsertItems for only the affected stable item IDs. Omitted items always remain; removeItemIds is the only deletion operation and requires known unique IDs. The legacy items array also upserts and never replaces the receipt. Omitted item fields retain their saved values. Preserve saved shares and manual details; change members, units or percentages only for explicit user cost-allocation requests. Purchase quantity and receipt observations describe the evidence independently of personal cost choices. New scanned items may have amount null; omit members to use TripTab’s automatic equal split, leaving only missing financial values for review; never invent a zero price or assign people as evidence of consumption. Every amount is a full line total in integer hundredths of the original currency, not a unit price to multiply. Read local quantity terms such as Stck, Stück, pcs and pz in context; pizza alone does not establish slices. Label quantities only when supported by the image or saved context. Use receiptScan.printedSubtotal and printedTotal for independently observed printed totals, null if unreadable; TripTab computes discrepancies and incomplete status. Keep receipt source order and flag uncertain readings in scanSource rather than inventing text, currency, date/time, exchange rates, bank charges or personal consumption. Negative receipt adjustments belong in the appropriate discount/adjustment field only when their meaning is clear; retain uncertain evidence for review instead of a negative purchase amount. On an existing draft, change metadata only through metadataPatch when the user explicitly requests that correction. Legacy metadata fields initialize new drafts only. Explicit currency correction clears incompatible saved fx/bankAmount unless explicitly replaced. Existing receipt image, expense link, chats and memory always survive. Item units and percentages are mutually exclusive; use only user-stated or saved cost shares, never infer them from the image. Unit allocation totals and percentage totals are validated; incomplete allocations remain drafts. ' + contextGuidance;
 tools.push({
   ...expenseDraftTool,
   name: 'create_expense_draft',
   description: 'Create or update an expense draft from the user’s natural-language payment details for review in TripTab. Use this for a card charge, cash purchase, dinner, taxi or other expense without an image. It never posts an expense or records a settlement transfer. ' + expenseDraftTool.description,
 });
 for (const tool of tools.filter(tool => ['update_receipt_draft', 'create_expense_draft'].includes(tool.name))) {
-  tool.description += ' Supplying receiptScan means receipt recognition: TripTab preserves all saved personal shares, user-confirmed item names, amounts and quantities, and existing legacy manual names/prices whose field provenance is unknown; new recognition items remain unassigned. Save explicit user-requested financial/item corrections separately with upsertItems and metadataPatch, omitting receiptScan. Receipt-backed AI proposals without evidence remain incomplete until the independently printed total is confirmed. Cost shares describe who owes the cost; payer remains the one person who paid upfront. Whole-receipt percentages include tax, tip and discount and override item shares. Percentages total 100 with at most two decimal places; item units have at most six decimal places and allocations exactly matching selected member IDs. Their allocations must add to the purchased total before saving an expense. Tax included in line totals must not be added again. Receipt evidence, independent printed totals and sourceLines are separate from these financial choices. Default metadata explicitly marked by the app may be filled from receipt observations; saved user details require an explicit metadataPatch to change.';
+  tool.description += ' Supplying receiptScan means receipt recognition: TripTab preserves all saved personal shares, user-confirmed item names, amounts and quantities, and existing legacy manual names/prices whose field provenance is unknown; new recognition items get equal cost shares between bill participants automatically. Merchant, date and time are optional: accept checkout screenshots, order summaries and partial purchase images without inventing metadata. Save explicit user-requested financial/item corrections separately with upsertItems and metadataPatch, omitting receiptScan. Receipt-backed AI proposals without evidence remain incomplete until the independently printed total is confirmed. Cost shares describe who owes the cost; payer remains the one person who paid upfront. Whole-receipt percentages include tax, tip and discount and override item shares. Percentages total 100 with at most two decimal places; item units have at most six decimal places and allocations exactly matching selected member IDs. Their allocations must add to the purchased total before saving an expense. Tax included in line totals must not be added again. Receipt evidence, independent printed totals and sourceLines are separate from these financial choices. Default metadata explicitly marked by the app may be filled from receipt observations; saved user details require an explicit metadataPatch to change.';
   tool.description += ' Conversation corrections are AI proposals, even when dictated by a user: their field provenance is ai, never browser-confirmed user. A person must still review uncertain readings and warnings in TripTab. An existing draft accepts id-only or partial patches. A new draft needs payer as an existing trip member, and its initial metadata; missing purchase fields remain for review. Changed legacy metadata on an existing draft is rejected with instructions to use metadataPatch instead of silently ignored. A person may explicitly review an unavailable printed total in TripTab without inventing printed evidence; the AI cannot acknowledge this.';
 }
 
@@ -729,9 +730,9 @@ export async function POST(request: Request) {
             }
             if (protectAmount) next.amount = previous!.amount;
             if (protectQuantity) next.quantity = previous!.quantity;
-            next.members = previous?.members ?? [];
+            next.members = previous?.members ?? existing?.splitMembers ?? billParticipantIds(trip);
             next.percentages = previous?.percentages;
-            next.units = previous?.units ?? (item.units ? { ...item.units, allocations: {} } : undefined);
+            next.units = previous?.units;
             next.fieldSources = {
               ...previous?.fieldSources,
               ...(item.name !== undefined && !protectName ? { name: 'receipt' as const } : {}),
@@ -748,6 +749,9 @@ export async function POST(request: Request) {
             };
             if (!Object.keys(next.fieldSources).length) next.fieldSources = undefined;
           }
+          if (recognition && (!previous || (!existing?.expenseId && !previous.members.length && !previous.percentages && !Object.keys(previous.units?.allocations ?? {}).length))) return equalItem(next, existing?.splitMembers ?? billParticipantIds(trip));
+          if (!recognition && previous?.splitMode === 'default' && (item.members !== undefined || item.units !== undefined || item.percentages !== undefined)) return { ...next, splitMode: 'custom' as const };
+          if (!previous && !next.members.length) return equalItem(next, existing?.splitMembers ?? billParticipantIds(trip));
           return next;
         });
         const items = priorItems.filter(item => !removedIds.includes(item.id)).map(item => mergedItems.find(value => value.id === item.id) ?? item);
@@ -850,6 +854,10 @@ export async function POST(request: Request) {
             processedAt: new Date().toISOString(), processor: 'chatgpt-mcp', imageIds: [existing.receiptId],
           } : undefined),
         };
+        if (!candidate.title.trim()) {
+          candidate.title = 'Bill';
+          candidate.fieldSources = { ...candidate.fieldSources, title: 'default' };
+        }
         const draft = draftSchema.parse(candidate);
         draft.receiptScan = reconcileReceiptScan(draft);
         if (draft.receiptScan && existing?.receiptScan && receiptScanFingerprint(draft) !== receiptScanFingerprint(existing)) {

@@ -93,11 +93,12 @@ export function SwipeRow({ children, onDelete, deleteLabel, disabled, className 
       // Decide once: a mostly vertical move is a scroll, not a swipe.
       if (current.horizontal === undefined && Math.hypot(dx, dy) > 8) current.horizontal = Math.abs(dx) > Math.abs(dy) * 1.5;
       if (current.horizontal) {
+        if (event.nativeEvent.isTrusted && !event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.setPointerCapture(event.pointerId);
         current.offset = Math.max(-reveal * 1.4, Math.min(0, dx));
         setOffset(current.offset);
       }
     }}
-    onPointerUp={end} onPointerCancel={end}
+    onPointerUp={end} onPointerCancel={() => { start.current = null; setOffset(revealed ? -reveal : 0); }}
     onClickCapture={event => {
       // A tap on a revealed row closes it rather than opening the entry.
       if (revealed && !(event.target as HTMLElement).closest(".swipe-row-delete")) { event.preventDefault(); event.stopPropagation(); setRevealed(false); setOffset(0); }

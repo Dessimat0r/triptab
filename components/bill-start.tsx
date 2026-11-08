@@ -7,7 +7,7 @@ import { CURRENCIES, type Currency, type Ledger } from '@/lib/model';
 import './bills.css';
 
 /** `accounts[i]` is the verified account chosen for `names[i]` (F-04); never inferred from a name. */
-export type BillStartValues = { names: string[]; accounts?: (string | undefined)[]; name: string; currency: Currency; currencyDefault: boolean; file?: File; billPhoto?: File };
+export type BillStartValues = { names: string[]; accounts?: (string | undefined)[]; name: string; notes?: string; currency: Currency; currencyDefault: boolean; file?: File; billPhoto?: File };
 export default function BillStart({ ledger, displayName, busy, onClose, onStart }: {
   ledger: Ledger; displayName: string; busy: boolean; onClose: () => void; onStart: (values: BillStartValues) => Promise<void>;
 }) {
@@ -15,6 +15,7 @@ export default function BillStart({ ledger, displayName, busy, onClose, onStart 
   const [names, setNames] = useState<string[]>([]), [entry, setEntry] = useState(''), [name, setName] = useState('');
   const [currency, setCurrency] = useState<Currency>(ledger.trips.at(-1)?.currency || 'GBP');
   const [currencyDefault, setCurrencyDefault] = useState(true), [error, setError] = useState('');
+  const [notes, setNotes] = useState('');
   // F-04 / D03: people this account already shares a holiday or bill with, verified by the server.
   const [connections, setConnections] = useState<{ id: string; name: string }[]>([]);
   const [linked, setLinked] = useState<Record<string, string>>({});
@@ -42,7 +43,7 @@ export default function BillStart({ ledger, displayName, busy, onClose, onStart 
   }
   const picker = useRef<HTMLInputElement>(null), photoPicker = useRef<HTMLInputElement>(null), cameraPicker = useRef<HTMLInputElement>(null), pending = useRef<string[]>([]);
   function values(next: string[], file?: File, billPhoto?: File): BillStartValues {
-    return { names: [displayName, ...next], accounts: [undefined, ...next.map(value => linked[value.toLocaleLowerCase()])], name: name.trim(), currency, currencyDefault, file, billPhoto };
+    return { names: [displayName, ...next], accounts: [undefined, ...next.map(value => linked[value.toLocaleLowerCase()])], name: name.trim(), notes: notes.trim() || undefined, currency, currencyDefault, file, billPhoto };
   }
   function addConnected(person: { id: string; name: string }) {
     const label = person.name.trim().slice(0, 50) || 'Friend';
@@ -86,9 +87,16 @@ export default function BillStart({ ledger, displayName, busy, onClose, onStart 
       <div className="bill-start-actions">
         <button type="button" className="primary" disabled={busy} onClick={scan}>{uiText('Scan receipt')}</button>
         <button type="button" className="quiet" disabled={busy} onClick={() => void enter()}>{uiText('Enter amount')}</button>
+      </div>
+      <details className="bill-attachment-options"><summary>{uiText('Attach image without scanning')}</summary>
+        <p className="footnote">{uiText('Keep an image with a custom bill and enter the amount yourself.')}</p>
+        <div className="bill-photo-actions">
         <button type="button" className="quiet" disabled={busy} onClick={() => choosePhoto(false)}>{uiText('Choose image')}</button>
         <button type="button" className="quiet" disabled={busy} onClick={() => choosePhoto(true)}>{uiText('Take photo')}</button>
-        <input ref={picker} type="file" hidden aria-label={uiText('Scan receipt photo')} accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif" capture="environment" onChange={event => {
+        </div>
+      </details>
+      <details className="bill-start-notes"><summary>{uiText('Add a note for the split')}</summary><textarea aria-label={uiText('Split notes')} value={notes} rows={2} maxLength={4000} disabled={busy} placeholder={uiText('Who bought what?')} onChange={event => setNotes(event.target.value)} /></details>
+        <input ref={picker} type="file" hidden aria-label={uiText('Scan receipt photo')} accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif" onChange={event => {
           const file = event.target.files?.[0]; event.target.value = '';
           if (file) void onStart(values(pending.current, file));
         }} />
@@ -100,8 +108,7 @@ export default function BillStart({ ledger, displayName, busy, onClose, onStart 
           const file = event.target.files?.[0]; event.target.value = '';
           if (file) void onStart(values(pending.current, undefined, file));
         }} />
-      </div>
-      <p className="footnote">{uiText('Bill images are shared with bill members without scanning or changing any amounts.')}</p>
+      <p className="footnote">{uiText('Items split equally automatically. Change only the exceptions.')}</p>
     </section>
   </ModalA11y>;
 }

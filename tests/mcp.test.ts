@@ -2015,7 +2015,7 @@ test('MCP retains unreadable prices and unassigned purchases as incomplete draft
   assert.equal(saved.result.isError, undefined);
   const draft = content(saved).data.trips[0].drafts[0];
   assert.equal(draft.items[1].amount, null);
-  assert.deepEqual(draft.items.map(item => item.members), [[], []]);
+  assert.deepEqual(draft.items.map(item => item.members), [['a','b'], ['a','b']]);
   assert.equal(draft.receiptScan?.status, 'incomplete');
   assert.equal(draft.receiptScan?.calculatedSubtotal, 800);
   assert.ok(draft.receiptScan?.warnings.some(warning => warning.code === 'unreadable-amount' && warning.itemId === 'unclear'));
@@ -2136,8 +2136,8 @@ test('published MCP schema and runtime retain pending unit quantities without in
   const saved = await invoke('update_receipt_draft', args);
   assert.equal(saved.result.isError, undefined);
   const item = content(saved).data.trips[0].drafts[0].items.find(item => item.id === 'pizza')!;
-  assert.deepEqual(item.members, []);
-  assert.deepEqual(item.units?.allocations, {});
+  assert.deepEqual(item.members, ['a','b']);
+  assert.equal(item.units, undefined);
   assert.equal(state.data.trips[0].expenses.length, 0);
 });
 
@@ -2202,7 +2202,7 @@ test('receipt recognition preserves confirmed item text, prices, quantities and 
   assert.equal(saved.result.isError, undefined);
   const items = content(saved).data.trips[0].drafts[0].items;
   assert.deepEqual(items[0], before);
-  assert.deepEqual(items[1].members, []);
+  assert.deepEqual(items[1].members, ['a','b']);
   assert.equal(items[1].percentages, undefined);
   assert.equal(items[1].fieldSources?.amount, 'receipt');
   const corrected = await invoke('update_receipt_draft', { trip_id: 'trip-1', revision: 4, draft: {
@@ -2379,7 +2379,7 @@ test('recognition can correct explicitly observed or default fields and read new
     assert.equal(items[0].amount, 1300);
     assert.deepEqual(items[0].fieldSources, { name: 'receipt', amount: 'receipt' });
     assert.equal(items[1].amount, 250);
-    assert.deepEqual(items[1].members, []);
+    assert.deepEqual(items[1].members, ['a','b']);
     assert.equal(items[1].fieldSources?.amount, 'receipt');
   }
 });

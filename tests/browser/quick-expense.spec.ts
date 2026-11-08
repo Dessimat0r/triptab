@@ -416,6 +416,7 @@ for (const mobile of [true, false]) test.describe(`cancel item splitting on ${mo
     await activate(page.locator('.split-method > summary'));
     await activate(page.getByRole('button', { name: 'By item', exact: true }));
     await activate(page.getByRole('button', { name: 'Add item', exact: true }));
+    await activate(page.locator('.bill-split-options > summary'));
     await activate(page.getByRole('button', { name: 'Whole bill', exact: true }));
     await activate(page.getByRole('button', { name: 'Remove item 2', exact: true }));
     await activate(page.getByRole('button', { name: 'Use one amount', exact: true }));
@@ -546,7 +547,7 @@ test('the header icon changes the badge, guards unsaved work and saves the choic
   expect(posted.at(-1)!.data.trips[0].expenses[0]).toMatchObject({ icon: { symbol: 'Coffee', background: 'blue' } });
 });
 
-test('a processed receipt focuses QuickSplit and keeps its name above both views', async ({ page }) => {
+test('a processed receipt defaults equally and keeps its name above both views', async ({ page }) => {
   const scanned = { ...trip, drafts: [{
     id: 'quick-draft', receiptId: 'quick-photo', title: 'Café Central', status: 'review', currency: 'GBP',
     date: '2026-10-05', time: '13:42', timezone: 'Europe/Vienna', payer: 'quick-gary', tax: 0, tip: 0, discount: 0,
@@ -557,20 +558,16 @@ test('a processed receipt focuses QuickSplit and keeps its name above both views
   await fixtures(page, { trip: scanned as unknown as typeof trip });
   await page.goto('/expenses?receiptDraft=quick-draft&receiptTrip=quick-trip', { waitUntil: 'domcontentloaded' });
   const name = page.locator('.editor .modalheading').getByRole('textbox', { name: 'Expense name', exact: true });
-  await expect(page.getByRole('button', { name: 'Share the remaining item equally', exact: true })).toBeFocused();
+  await expect(page.getByRole('button', { name: 'Share the remaining item equally', exact: true })).toHaveCount(0);
   await expect(name).not.toBeFocused();
   await expect(name).not.toHaveAttribute('autofocus');
   const suggestion = page.locator('.expense-title-suggestion');
-  await expect(suggestion).toHaveText('Suggested name. Receipt reading may replace it; editing confirms your choice.');
-  expect((await suggestion.boundingBox())!.y).toBeGreaterThan((await name.boundingBox())!.y);
-  expect((await suggestion.boundingBox())!.y).toBeLessThan((await page.locator('.expense-step').first().boundingBox())!.y);
+  await expect(suggestion).toHaveCount(0);
   await page.getByRole('button', { name: 'Receipt history', exact: true }).click();
   await expect(name).toBeVisible();
   await expect(page.locator('.editor .modalheading .expense-icon-trigger')).toBeVisible();
   await page.getByRole('button', { name: 'Back to details & split', exact: true }).click();
-  await page.getByRole('button', { name: 'Share the remaining item equally', exact: true }).click();
-  // The bulk action is gone once used; focus stays at the step it completed.
-  await expect(page.getByRole('heading', { name: 'Split', exact: true })).toBeFocused();
+  await expect(page.locator('.quick-split')).toHaveCount(0);
   await name.fill('Melange at Café Central');
   await expect(suggestion).toHaveCount(0);
   await expect(page.locator('.expense-shares')).toContainText('Gary £2.60 · Sam £2.60');

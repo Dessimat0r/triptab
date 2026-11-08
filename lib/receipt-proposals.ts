@@ -114,7 +114,7 @@ export function applyReceiptChanges(trip: Trip, draft: Draft, input: ReceiptChan
     if (targetId && !previous) throw Error('The assistant referenced an unknown receipt item.');
     if (targetId && seen.has(targetId)) throw Error('The assistant proposed duplicate receipt item changes.');
     if (targetId) seen.add(targetId);
-    if (options.recognition && (!previous || previous.members.length || previous.percentages || Object.keys(previous.units?.allocations ?? {}).length || draft.percentages)) continue;
+    if (options.recognition && (!previous || (previous.members.length && previous.splitMode !== 'default') || previous.percentages || Object.keys(previous.units?.allocations ?? {}).length || draft.percentages)) continue;
     if (!previous && !options.recognition && (patch.name === null || patch.amount === null)) throw Error('A new requested item needs a description and amount.');
     const item: DraftItem = previous ? { ...previous } : { id: crypto.randomUUID(), name: '', amount: null, members: [] as string[] };
     if (!options.recognition) {
@@ -122,6 +122,7 @@ export function applyReceiptChanges(trip: Trip, draft: Draft, input: ReceiptChan
       if (patch.amount !== null) { item.amount = patch.amount; item.fieldSources = { ...item.fieldSources, amount: 'ai' }; }
     }
     if (patch.members !== null) {
+      item.splitMode = 'custom';
       if (new Set(patch.members).size !== patch.members.length || patch.members.some(id => !trip.members.some(member => member.id === id))) throw Error('The assistant selected an unknown or duplicate traveller.');
       const changed = patch.members.length !== item.members.length || patch.members.some(id => !item.members.includes(id));
       item.members = patch.members;
@@ -129,6 +130,7 @@ export function applyReceiptChanges(trip: Trip, draft: Draft, input: ReceiptChan
     }
     if (patch.units && patch.percentages) throw Error('Choose quantities or percentages for an item, not both.');
     if (patch.units) {
+      item.splitMode = 'custom';
       if (options.recognition && item.quantity && patch.units.total !== item.quantity.total) {
         issues.push(`Check ${item.name || 'this item'}: the stated quantities differ from the receipt. Its shares were left unchanged.`); continue;
       }
@@ -136,6 +138,7 @@ export function applyReceiptChanges(trip: Trip, draft: Draft, input: ReceiptChan
       item.units = { total: patch.units.total, allocations, ...(patch.units.label ? { label: patch.units.label } : {}) };
       item.members = Object.keys(allocations); item.percentages = undefined;
     } else if (patch.percentages) {
+      item.splitMode = 'custom';
       item.percentages = mapShares(patch.percentages, trip); item.members = Object.keys(item.percentages); item.units = undefined;
     }
     const invalid = item.members.length || patch.units || patch.percentages ? itemSplitError(item) : null;

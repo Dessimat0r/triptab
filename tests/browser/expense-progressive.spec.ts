@@ -85,11 +85,8 @@ test('a seven-line receipt opens at the top with one compact row per line and ea
   await fixtures(page);
   await openReceipt(page);
   const share = page.getByRole('button', { name: 'Share 7 remaining items equally', exact: true });
-  await expect(share).toBeFocused();
+  await expect(share).toHaveCount(0);
   expect(await page.locator('.editor').evaluate(editor => editor.scrollTop)).toBe(0);
-  const footerTop = (await page.locator('.editor-footer').boundingBox())!.y;
-  const shareBox = (await share.boundingBox())!;
-  expect(shareBox.y + shareBox.height).toBeLessThanOrEqual(footerTop);
   const rows = page.locator('.item');
   await expect(rows).toHaveCount(7);
   for (const box of await rows.evaluateAll(items => items.map(item => item.getBoundingClientRect().height))) expect(box).toBeLessThanOrEqual(120);
@@ -102,9 +99,8 @@ test('a seven-line receipt opens at the top with one compact row per line and ea
   await expect(page.locator('.rate-result')).toContainText('≈ £94.65');
   await expect(page.locator('.rate-result')).toContainText('1 EUR = 0.8612 GBP');
   await expect(page.locator('.editor')).not.toContainText(/Outside the supported amount range|0\.86120000|Look up historical rate/);
-  await share.click();
-  // The bulk action disappears once used; focus stays at the step it completed.
-  await expect(page.getByRole('heading', { name: 'Split', exact: true })).toBeFocused();
+  // The default split needs no allocation action.
+  await expect(page.locator('.quick-split')).toHaveCount(0);
   expect(await page.evaluate(() => document.activeElement === document.body)).toBe(false);
   await expect(page.locator('.expense-shares')).toContainText('Gary £23.66');
   // A line opens to edit and closes again.

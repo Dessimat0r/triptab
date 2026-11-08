@@ -25,7 +25,7 @@ test('initial scan infers outlier language and captures both versions in the ori
   const parsed=applyReceiptTranscription(trip,draft,result,undefined,{readingLanguage:'en'});
   assert.equal(parsed.detectedLanguage,'it');assert.equal(parsed.items[0].name,'Acqua frizzante');assert.equal(parsed.items[0].nameLanguage,'it');
   assert.equal(parsed.items[0].translations?.en?.text,'Sparkling water');assert.equal(parsed.items[0].translations?.en?.sourceText,'Acqua frizzante');
-  assert.equal(parsed.items[0].scanSource?.observedText,'ACQUA FRIZZANTE 2,50');assert.equal(parsed.items[0].amount,250);assert.deepEqual(parsed.items[0].members,[]);
+  assert.equal(parsed.items[0].scanSource?.observedText,'ACQUA FRIZZANTE 2,50');assert.equal(parsed.items[0].amount,250);assert.deepEqual(parsed.items[0].members,['alice']);
 });
 test('rescans preserve manual translations and canonical corrections and update accepted detected languages',()=>{
   const original=applyReceiptTranscription(trip,draft,transcription,undefined,{readingLanguage:'en'}),item=original.items[0];
