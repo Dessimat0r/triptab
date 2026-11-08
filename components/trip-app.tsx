@@ -284,6 +284,7 @@ export default function Home({ children }: { children: ReactNode }) {
     [drawerBusy, setDrawerBusy] = useState(false),
     [billStart, setBillStart] = useState(false),
     [billScan, setBillScan] = useState<File | null>(null),
+    [billPhotoPending, setBillPhotoPending] = useState<{ tripId: string; file: File } | null>(null),
     [personalView, setPersonalView] = useState(false),
     [unsavedVersion, setUnsavedVersion] = useState(0),
     [readingTick, setReadingTick] = useState(0),
@@ -771,6 +772,45 @@ export default function Home({ children }: { children: ReactNode }) {
       setSaving(false);
     }
   }
+  // Bill photos reuse the private image endpoint but are a standalone bill field.
+  // No draft is created, no AI scan runs, and the financial entries are untouched.
+  async function changeBillPhoto(tripId: string, file: File | null): Promise<boolean> {
+    const accountId = profile?.id || "";
+    if (!accountId) return false;
+    const session = receiptSession.current;
+    setUploading(true); setError("");
+    let uploaded: string | undefined;
+    try {
+      if (file) {
+        const prepared = await prepareReceiptImage(file);
+        if (!isReceiptSessionCurrent(session, tripId, accountId, false)) return false;
+        const response = await fetch("/api/receipt?tripId=" + encodeURIComponent(tripId), {
+          method: "POST", headers: { "Content-Type": prepared.type, "X-TripTab-Account": accountId }, body: prepared,
+        });
+        const result = await response.json() as { receiptId?: string; error?: string };
+        if (!response.ok || !result.receiptId) throw Error(result.error || "Unable to upload the bill image.");
+        uploaded = result.receiptId;
+      }
+      if (!isReceiptSessionCurrent(session, tripId, accountId, false)) return false;
+      const current = latestSnapshot.current.data.trips.find(value => value.id === tripId);
+      if (!current || !isBill(current)) throw Error("This bill is no longer available.");
+      if (!file && !current.billPhotoId) return true;
+      const next = { ...current };
+      if (uploaded) next.billPhotoId = uploaded;
+      else delete next.billPhotoId;
+      const latest = latestSnapshot.current.data;
+      const saved = await save({ trips: latest.trips.map(value => value.id === tripId ? next : value) });
+      if (!saved && uploaded) {
+        // A rejected save must not leave a new image attached to another entry.
+        void fetch("/api/receipt?id=" + encodeURIComponent(uploaded), { method: "DELETE" }).catch(() => {});
+      }
+      return saved;
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Unable to save the bill image.");
+      if (uploaded) void fetch("/api/receipt?id=" + encodeURIComponent(uploaded), { method: "DELETE" }).catch(() => {});
+      return false;
+    } finally { setUploading(false); }
+  }
   async function startBill(values: BillStartValues) {
     const previousTripId = trip?.id || "";
     const bill: Trip = { id: uid(), kind: "bill", name: values.name || uiText("Bill · {value0}", { value0: formatCalendarDate(today()) }), currency: values.currency,
@@ -797,6 +837,7 @@ export default function Home({ children }: { children: ReactNode }) {
     // F-07: a name typed for the bill is the receipt's name too; the merchant never replaces it.
     if (values.name) setEditing(previous => previous && userReceiptField(previous, "title", values.name));
     if (values.file) setBillScan(values.file);
+    if (values.billPhoto) { setUploading(true); setBillPhotoPending({ tripId: bill.id, file: values.billPhoto }); }
   }
   // The photo is chosen during the tap that starts the bill, because browsers
   // only open a file picker for a direct user gesture. It is read once the new
@@ -815,11 +856,17 @@ export default function Home({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (billScan && editing && trip?.id === billDefaults.current?.tripId) { const file = billScan; setBillScan(null); void scanReceiptFile(file); }
   }, [billScan, editing, trip?.id]);
+  useEffect(() => {
+    if (billPhotoPending && trip?.id === billPhotoPending.tripId) {
+      const pending = billPhotoPending; setBillPhotoPending(null);
+      void changeBillPhoto(pending.tripId, pending.file);
+    }
+  }, [billPhotoPending, trip?.id]);
   async function discardNewBill(restore = true) {
     const defaults = billDefaults.current;
     if (!defaults) return;
     const current = latestSnapshot.current.data.trips.find(value => value.id === defaults.tripId);
-    if (!current || current.expenses.length || current.payments.length || current.drafts.length) return;
+    if (!current || current.expenses.length || current.payments.length || current.drafts.length || current.billPhotoId || billPhotoPending?.tripId === current.id) return;
     try {
       const response = await fetch("/api/trip", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "discard", tripId: current.id }) });
       const result = await response.json() as { error?: string };
@@ -2330,7 +2377,7 @@ export default function Home({ children }: { children: ReactNode }) {
   }
   const renderSection = (section: TripSection) => {
     if (!trip) return null;
-    if (isBill(trip) && section !== "history") return <BillView trip={trip} busy={saving || loading} calculationError={calculationError} due={due} onStatement={setStatement} onPayment={suggestion => void openPayment(suggestion)} onArchive={archiveBill}
+    if (isBill(trip) && section !== "history") return <BillView trip={trip} busy={saving || loading || uploading} calculationError={calculationError} due={due} onStatement={setStatement} onPayment={suggestion => void openPayment(suggestion)} onArchive={archiveBill} onPhotoChange={file => changeBillPhoto(trip.id, file)}
       receipts={<>
         {trip.expenses.length >= 3 && breakdown && <SpendingBreakdownPanel breakdown={breakdown} members={trip.members} currency={trip.currency} category={expenseFilter.category} onCategory={category => setExpenseFilter({ ...expenseFilter, category })} filtered={expenseFilterActive(expenseFilter)} />}
         {/* F-05: bills get the same search and filters as holidays; the breakdown's categories filter this list too. */}

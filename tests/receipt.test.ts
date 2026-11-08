@@ -338,6 +338,27 @@ test('ambiguous upload failure plus deletion outage keeps cleanup metadata until
   assert.equal(result.deleted, 1); assert.equal(count(database), 0); assert.equal(bucket.objects.size, 0);
 });
 
+test('standalone bill photo is readable by bill members and protected until removed', async () => {
+  const { database, bucket } = await storage();
+  const id = await upload(database, bucket);
+  const current: Trip = { ...trip(), kind: 'bill', billPhotoId: id };
+  database.sqlite.prepare('UPDATE trips SET data=? WHERE id=?').run(JSON.stringify(current), current.id);
+  // Expiry and explicit receipt deletion must not remove a photo still on the bill.
+  database.sqlite.prepare('UPDATE receipts SET created_at=? WHERE id=?')
+    .run(new Date(Date.now() - 2 * RECEIPT_LIMITS.orphanAgeMs).toISOString(), id);
+  assert.equal(await sweepReceiptOrphans(database.asD1(), actor), 0);
+  assert.equal(await markRemovedReceipts(database.asD1(), member, [id]), 0);
+  assert.deepEqual(await maintainSystemReceipts(database.asD1(), bucket.asR2()), { marked: 0, deleted: 0, failed: 0 });
+  const image = await route.GET(request('GET', 'id=' + id, { user: member }));
+  assert.equal(image.status, 200);
+  assert.deepEqual(new Uint8Array(await image.arrayBuffer()), png);
+  // Detaching the independent photo is a metadata-only change; the object is then reclaimable.
+  database.sqlite.prepare('UPDATE trips SET data=? WHERE id=?').run(JSON.stringify({ ...current, billPhotoId: undefined }), current.id);
+  assert.equal(await markRemovedReceipts(database.asD1(), actor, [id]), 1);
+  assert.equal((await purgeDeletingReceipts(database.asD1(), bucket.asR2(), actor)).deleted, 1);
+  assert.equal(bucket.objects.has(imageKey(id)), false);
+});
+
 test('orphan sweep is bounded and protects references, recent uploads, unknown historical age and other trips', async () => {
   const { database, bucket } = await storage(); addTrip(database, 'private-trip', outsider);
   const old = new Date(Date.now() - 2 * RECEIPT_LIMITS.orphanAgeMs).toISOString();

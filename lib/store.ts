@@ -686,6 +686,10 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
         for(const other of trip.members)if(other.id!==firstMember.id&&other.name.trim().toLowerCase()===firstMember.name.trim().toLowerCase())other.name=`${other.name.slice(0,44)} (${trip.members.indexOf(other)+1})`;
       }
     }
+    // Bill photos use the existing authenticated image store, but never become receipt drafts.
+    if (trip.billPhotoId && !receiptRows.results.some(receipt => receipt.id === trip.billPhotoId && receipt.trip_id === trip.id)) {
+      throw new RequestError('This bill photo is unavailable or belongs to another bill. Upload it again before saving.');
+    }
     for (const entry of [...trip.expenses, ...trip.drafts]) {
       if (entry.receiptId && !receiptRows.results.some(receipt => receipt.id === entry.receiptId && receipt.trip_id === trip.id)) {
         throw new RequestError('This receipt was removed or does not belong to the trip. Upload it again before saving.');
@@ -741,9 +745,17 @@ export async function writeLedger(id: string, data: unknown, revision: unknown, 
     if (!previous) newTrips.push(trip);
     else if (changes.some(change => change.tripId === trip.id)) changedTrips.push(trip);
   }
-  const receiptReferences = ledger.trips.flatMap(trip => [...trip.expenses, ...trip.drafts].flatMap(entry => entry.receiptId ? [{ id: entry.receiptId, tripId: trip.id }] : []));
+  // Both financial receipt evidence and independent bill photos must be pinned
+  // to their own trip before the CAS; detaching either retains the normal undo hold.
+  const receiptReferences = ledger.trips.flatMap(trip => [
+    ...(trip.billPhotoId ? [{ id: trip.billPhotoId, tripId: trip.id }] : []),
+    ...[...trip.expenses, ...trip.drafts].flatMap(entry => entry.receiptId ? [{ id: entry.receiptId, tripId: trip.id }] : []),
+  ]);
   const retainedReceiptIds = new Set(receiptReferences.map(reference => reference.id));
-  const removedReceiptIds = [...new Set([...previousTrips.values()].flatMap(trip => [...trip.expenses, ...trip.drafts].flatMap(entry => entry.receiptId && !retainedReceiptIds.has(entry.receiptId) ? [entry.receiptId] : [])))];
+  const removedReceiptIds = [...new Set([...previousTrips.values()].flatMap(trip => [
+    ...(trip.billPhotoId && !retainedReceiptIds.has(trip.billPhotoId) ? [trip.billPhotoId] : []),
+    ...[...trip.expenses, ...trip.drafts].flatMap(entry => entry.receiptId && !retainedReceiptIds.has(entry.receiptId) ? [entry.receiptId] : []),
+  ]))];
   const preimages = tripIds.map(tripId => ({ id: tripId, owner: existing.get(tripId)?.owner ?? null }));
   // Every production trip writer (ledger save and invitation acceptance) advances
   // the same transactional revision. CAS pins their data without rebinding JSON;
@@ -877,7 +889,7 @@ export function failure(e: unknown) {
   const issue = e instanceof ZodError ? e.issues[0] : undefined;
   const knownFields = new Set(['trips', 'id', 'ownerId', 'name', 'currency', 'startDate', 'endDate', 'members', 'userId', 'email', 'expenses', 'drafts', 'payments', 'title', 'date', 'time', 'timezone', 'fx', 'rate', 'asOf', 'source', 'bankAmount', 'payer', 'items', 'amount', 'percentages', 'quantity', 'sourceText', 'units', 'total', 'allocations', 'label', 'conversation', 'role', 'text', 'createdAt', 'replyTo', 'itemId', 'authorMemberId', 'authorName', 'memory', 'notes', 'aliases', 'memberId', 'scopeMemberId', 'tax', 'tip', 'discount', 'receiptId', 'sourceDraftId', 'expenseId', 'status', 'from', 'to', 'note', 'method', 'payTo', 'paypal', 'monzo', 'revolut', 'wise', 'bank']);
   for (const field of ['receiptScan', 'version', 'printedSubtotal', 'printedTotal', 'printedCurrency', 'calculatedSubtotal', 'calculatedTotal', 'warnings', 'code', 'itemIds', 'lineIndex', 'observedText', 'difference', 'resolved', 'sourceLines', 'kind', 'mappedTo', 'processedAt', 'processor', 'attemptId', 'imageIds', 'acknowledgement', 'missingTotalAcknowledgement', 'fingerprint', 'scanSource', 'confidence', 'fieldSources']) knownFields.add(field);
-  for (const field of ['memberWeights', 'weight', 'joinedOn', 'leftOn', 'budget']) knownFields.add(field);
+  for (const field of ['memberWeights', 'weight', 'joinedOn', 'leftOn', 'budget', 'billPhotoId']) knownFields.add(field);
   for (const field of ['icon', 'suggestedIcon', 'symbol', 'background', 'receiptLanguage', 'detectedLanguage', 'nameLanguage', 'translations', 'pairedText', 'sourceLanguage', 'provenance', 'languageViewId', 'readingLanguage', 'primaryVersion', 'itemVersions', 'itemKey', 'itemVersion']) knownFields.add(field);
   const issuePath = issue?.path.map(part => typeof part === 'number' ? String(part + 1) : knownFields.has(part) ? part : 'entry').join(' → ');
   // Zod's enum/literal messages can echo the supplied value; use a fixed message.

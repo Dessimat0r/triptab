@@ -111,12 +111,13 @@ test('JSON financial copy keeps saved rounding and item translations while dropp
 });
 
 test('TripTab JSON preserves bill kind and applies bill validation on import', () => {
-  const bill: Trip = { id: 'bill', kind: 'bill', name: 'Dinner', currency: 'GBP', members: [{ id: 'a', name: 'Alice' }, { id: 'b', name: 'Bob' }], expenses: [], drafts: [], payments: [] };
+  const bill: Trip = { id: 'bill', kind: 'bill', name: 'Dinner', currency: 'GBP', billPhotoId: 'private-bill-image', members: [{ id: 'a', name: 'Alice' }, { id: 'b', name: 'Bob' }], expenses: [], drafts: [], payments: [] };
   const input = (trip: Trip) => JSON.stringify({ schemaVersion: 1, amountScale: 100, data: { trips: [trip] } });
   const copy = previewImport(input(bill), 'bill.json').trips[0];
   assert.equal(copy.kind, 'bill');
   assert.equal(copy.name, bill.name);
   assert.equal(copy.currency, bill.currency);
+  assert.equal(copy.billPhotoId, undefined, 'a copied bill must not adopt a source account\'s private image');
   assert.deepEqual(copy.members.map(member => member.name), ['Alice', 'Bob']);
   for (const extra of [{ startDate: '2026-10-10' }, { budget: 100 }, { members: [{ id: 'a', name: 'Alice', weight: 2 }] }]) {
     assert.throws(() => previewImport(input({ ...bill, ...extra }), 'bill.json'), /Bills don’t/);

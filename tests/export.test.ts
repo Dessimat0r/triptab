@@ -255,7 +255,12 @@ test('trip receipt metadata includes attached authorized IDs, never raw storage 
   assert.deepEqual(body.receiptMetadata, [{ id: 'photo-mine', tripId: 'mine' }]);
   assert.equal(Object.keys(body.receiptMetadata![0]).includes('owner'), false);
   assert.equal('receipts' in body, false);
-  const trip = holiday('mine', 'owner'); trip.expenses[0].receiptId = 'photo-secret';
+  database.sqlite.prepare('INSERT INTO receipts (id,owner,trip_id) VALUES (?,?,?)').run('bill-image', 'owner', 'mine');
+  const withBillPhoto = holiday('mine', 'owner'); withBillPhoto.kind = 'bill'; withBillPhoto.billPhotoId = 'bill-image';
+  database.sqlite.prepare('UPDATE trips SET data=? WHERE id=?').run(JSON.stringify(withBillPhoto), 'mine');
+  body = await json<Snapshot>(await route.GET(request('scope=trip&tripId=mine&receipts=1')));
+  assert.deepEqual(body.receiptMetadata, [{ id: 'bill-image', tripId: 'mine' }, { id: 'photo-mine', tripId: 'mine' }]);
+  const trip = holiday('mine', 'owner'); trip.expenses[0].receiptId = 'photo-secret'; trip.billPhotoId = 'photo-secret';
   database.sqlite.prepare('UPDATE trips SET data=? WHERE id=?').run(JSON.stringify(trip), 'mine');
   body = await json<Snapshot>(await route.GET(request('scope=trip&tripId=mine&receipts=1')));
   assert.deepEqual(body.receiptMetadata, []);

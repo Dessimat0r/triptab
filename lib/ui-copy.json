@@ -4042,5 +4042,59 @@
     "Añadido por {creator} · pagado por {payer}",
     "Ajouté par {creator} · payé par {payer}",
     "Hinzugefügt von {creator} · bezahlt von {payer}"
+  ],
+  [
+    "Take photo",
+    "Hacer foto",
+    "Prendre une photo",
+    "Foto aufnehmen"
+  ],
+  [
+    "Bill image",
+    "Imagen de la cuenta",
+    "Image de la note",
+    "Rechnungsbild"
+  ],
+  [
+    "Choose bill image",
+    "Elegir imagen para la cuenta",
+    "Choisir une image pour la note",
+    "Bild für Rechnung auswählen"
+  ],
+  [
+    "Take bill photo",
+    "Hacer foto de la cuenta",
+    "Prendre une photo de la note",
+    "Rechnung fotografieren"
+  ],
+  [
+    "Image attached to this bill",
+    "Imagen adjunta a esta cuenta",
+    "Image jointe à cette note",
+    "Bild, das dieser Rechnung beigefügt ist"
+  ],
+  [
+    "Replace image",
+    "Sustituir imagen",
+    "Remplacer l’image",
+    "Bild ersetzen"
+  ],
+  [
+    "Remove image",
+    "Eliminar imagen",
+    "Supprimer l’image",
+    "Bild entfernen"
+  ],
+  [
+    "Bill images are shared with bill members without scanning or changing any amounts.",
+    "Las imágenes de la cuenta se comparten con sus participantes sin escanear recibos ni modificar importes.",
+    "Les images de la note sont partagées avec ses membres sans analyser de reçu ni modifier les montants.",
+    "Bilder zur Rechnung werden mit den Mitgliedern geteilt, ohne Belege zu scannen oder Beträge zu ändern."
+  ],
+  [
+    "Optional shared image. Adding it does not scan a receipt or change the split.",
+    "Imagen compartida opcional. Añadirla no escanea un recibo ni modifica el reparto.",
+    "Image partagée facultative. L’ajouter ne lance pas l’analyse d’un reçu et ne modifie pas la répartition.",
+    "Optionales geteiltes Bild. Das Hinzufügen scannt keinen Beleg und ändert die Aufteilung nicht."
   ]
 ]

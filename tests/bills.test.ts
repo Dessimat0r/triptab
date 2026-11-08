@@ -19,6 +19,13 @@ test('bills reject holiday planning and more than twenty people', () => {
   validateLedger({ trips: [old] }, { previous: { trips: [old] } });
   assert.throws(() => validateLedger({ trips: [{ ...old, name: 'Changed' }] }, { previous: { trips: [old] } }), /Bills don’t have dates/);
 });
+test('bill photos persist independently of receipt drafts and cannot be attached to holidays', () => {
+  const withPhoto = { ...base, billPhotoId: 'bill-photo-uuid' };
+  assert.deepEqual(validateLedger({ trips: [withPhoto] }).trips[0], withPhoto);
+  assert.equal(parseStoredTrip(JSON.parse(JSON.stringify(withPhoto))).billPhotoId, 'bill-photo-uuid');
+  assert.deepEqual(validateLedger({ trips: [{ ...withPhoto, billPhotoId: undefined }] }, { previous: { trips: [withPhoto] } }).trips[0].drafts, []);
+  assert.throws(() => validateLedger({ trips: [{ ...withPhoto, kind: 'holiday' }] }), /Only bills can have a bill photo/);
+});
 test('twenty seeded mixed split ledgers give identical holiday and bill balances and settlements', () => {
   let seed = 0x515babe;
   const random = (limit: number) => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed % limit; };
@@ -49,7 +56,7 @@ test('discard deletes only an empty unshared owner bill, queues photos and retai
   assert.equal(db.sqlite.prepare("SELECT COUNT(*) AS n FROM activity_events WHERE action='delete'").get()?.n, 1);
 });
 test('discard rejects holidays, entries, a different actor and another joined account', async () => {
-  for (const value of [{ ...base, kind: undefined }, { ...base, payments: [{ id: 'p', from: 'sam', to: 'alex', amount: 100, date: '2026-10-10' }] }, { ...base, expenses: [{ id: 'e' }] as Trip['expenses'] }, { ...base, drafts: [{ id: 'd' }] as Trip['drafts'] }]) {
+  for (const value of [{ ...base, kind: undefined }, { ...base, billPhotoId: 'photo' }, { ...base, payments: [{ id: 'p', from: 'sam', to: 'alex', amount: 100, date: '2026-10-10' }] }, { ...base, expenses: [{ id: 'e' }] as Trip['expenses'] }, { ...base, drafts: [{ id: 'd' }] as Trip['drafts'] }]) {
     const db = await seeded(value); await assert.rejects(discardEmptyBill(db.asD1(), actor, base.id), conflict); assert.ok(db.sqlite.prepare('SELECT 1 FROM trips').get());
   }
   const db = await seeded(); await assert.rejects(discardEmptyBill(db.asD1(), { id: 'other', displayName: 'Sam' }, base.id), (error: unknown) => error instanceof TripLifecycleError && error.status === 403);

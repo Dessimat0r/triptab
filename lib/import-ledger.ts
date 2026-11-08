@@ -141,6 +141,7 @@ export function previewImport(text: string, filename: string): ImportPreview {
       const trip = tripSchema.parse(value);
       trip.id = newId();
       delete trip.ownerId;
+      delete trip.billPhotoId; // A financial-only import must not reference another trip's private image.
       trip.members = trip.members.map(
         ({ id, name, weight, joinedOn, leftOn, retired }) => ({
           id,
@@ -373,6 +374,7 @@ export function prepareImportedTrip(value: unknown, memberId: string): Trip {
   );
   trip.drafts = [];
   if (
+    trip.billPhotoId ||
     trip.expenses.some(
       (entry) =>
         entry.receiptId ||
