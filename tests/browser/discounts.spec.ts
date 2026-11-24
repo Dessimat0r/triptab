@@ -82,8 +82,10 @@ test('receipt chat applies a capped mains BOGOF in one question on mobile', asyn
     await page.locator('details.expense-more-options').filter({ has: page.locator('.receipt-chat:not([data-item-id])') }).locator(':scope > summary').click();
   }
   await chat.fill(question);
+  const ask = page.getByRole('button', { name: 'Ask assistant', exact: true });
+  await ask.scrollIntoViewIfNeeded();
   await auditScreenshot(page, 'mobile-chat', name => testInfo.outputPath(name));
-  await page.getByRole('button', { name: 'Ask assistant', exact: true }).click();
+  await ask.click();
   await expect(discounts(page).locator('.adjustment-row')).toContainText('1 pair');
   await expect(discounts(page).locator('.adjustment-row')).toContainText('−£8.00');
   await expect(page.locator('summary .item-offer-badges button[aria-label="Group A"]')).toHaveCount(4);
@@ -126,7 +128,10 @@ test('a BOGOF offer adds badges only to the selected portions and previews an in
   await discounts(page).getByRole('button', { name: 'Add discount', exact: true }).click();
   const form = discounts(page).locator('.adjustment-form');
   await form.getByRole('radio', { name: 'Offer rule' }).check();
-  await form.getByRole('combobox', { name: 'Offer rule' }).selectOption('bogof');
+  const offerRule = form.getByRole('combobox', { name: 'Offer rule' });
+  await offerRule.selectOption('bogof');
+  await expect(offerRule).toHaveCSS('appearance', 'none');
+  await expect(offerRule).toHaveCSS('padding-top', '0px');
   const limit = form.getByText('Offer limit · all complete groups', { exact: true });
   await expect(form.getByRole('spinbutton', { name: 'Maximum uses (optional)' })).not.toBeVisible();
   await limit.click();
@@ -140,6 +145,8 @@ test('a BOGOF offer adds badges only to the selected portions and previews an in
   await expect(form.locator('.adjustment-preview')).toContainText('New total £16.50');
   await expect(form.locator('.adjustment-preview')).toContainText('Alice −£5.00');
   await expect(form.locator('.adjustment-preview')).toContainText('Bob −£5.00');
+  await form.locator('.adjustment-preview').scrollIntoViewIfNeeded();
+  await auditScreenshot(page, 'mobile-manual-preview', name => testInfo.outputPath(name));
   await form.getByRole('button', { name: 'Add', exact: true }).click();
   await expect(page.locator('.item-offer-badges button')).toHaveCount(2);
   const badge = page.locator('summary .item-offer-badges button[aria-label="Group A"]').first();

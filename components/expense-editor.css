@@ -44,6 +44,22 @@
 .editor label:has(> select) {
   contain: layout;
 }
+/* Native WebKit selects can clip the selected text inside their control even
+   when the box is tall enough. Keep the native picker, but draw the closed
+   control like our text fields, with a text-coloured arrow. */
+.editor label > select {
+  appearance: none;
+  padding-block: 0;
+  padding-inline-end: 2rem;
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 51%),
+    linear-gradient(135deg, currentColor 50%, transparent 51%);
+  background-position: right 16px center, right 11px center;
+  background-size: 5px 5px;
+  background-repeat: no-repeat;
+}
+.editor label > select:dir(rtl) {
+  background-position: left 11px center, left 16px center;
+}
 /* Fields are spaced by their stack's gap, not by margins on each control. */
 .editor label > input,
 .editor label > select,
