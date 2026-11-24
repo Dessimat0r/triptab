@@ -59,26 +59,30 @@ async function auditScreenshot(page: Page, name: string, outputPath: (name: stri
 
 test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
 
-test('receipt chat applies a capped mains BOGOF in one question on mobile', async ({ page }, testInfo) => {
+test('receipt chat compares two mains offers against the bill in one question on mobile', async ({ page }, testInfo) => {
   const draft = r1();
   draft.title = 'Restaurant';
-  draft.receiptScan = undefined;
+  draft.receiptScan = { version: 1, printedCurrency: 'GBP', printedSubtotal: 5600, printedTotal: 4900, status: 'needs-review', warnings: [] };
   draft.items = [1800, 1600, 1000, 800, 400].map((amount, index) => ({
     id: `line-${index}`, name: ['Main A', 'Main B', 'Main C', 'Main D', 'Tea'][index], amount, members: ['alice', 'bob'],
   }));
-  const question = 'Apply BOGOF to the mains once. The offer is capped at three uses.';
+  const question = 'Was the cheaper main a quid or free? We used the deal once. See which fits the bill.';
   const state = await fixtures(page, { ...structuredClone(base), drafts: [draft] }, (trip, saved, id) => {
     expect(saved.conversation?.find(message => message.id === id)?.text).toBe(question);
     // The production ledger stamps the signed-in author's member ID. Supply
     // the same trusted attribution in this synthetic account's server fixture.
     const authored = { ...saved, conversation: saved.conversation?.map(message => message.id === id
       ? { ...message, authorMemberId: 'alice' } : message) };
-    return applyReceiptQuestion(trip, authored, { summary: 'One pair: Main A qualifies and Main D is free.', changes: {
-      metadata: null, items: [], removeItemIds: [], clear: [], remember: null, aliases: [],
-      offers: [{ adjustmentId: null, label: null, group: null, sourceLineIndex: null, preset: 'bogof', presetValue: null,
-        maxUses: 1, savedRule: null, custom: null, split: null, stacking: null,
-        items: draft.items.slice(0, 4).map(item => ({ itemId: item.id, itemIndex: null, portions: null })) }],
-    } }, id);
+    return applyReceiptQuestion(trip, authored, { summary: 'Compare the two offers.',
+      changes: { metadata: null, items: [], removeItemIds: [], clear: [], remember: null, aliases: [] },
+      offerComparison: {
+        target: { adjustmentId: null, group: null, sourceLineIndex: null, maxUses: 1, split: null, stacking: null,
+          items: draft.items.slice(0, 4).map(item => ({ itemId: item.id, itemIndex: null, portions: null })) },
+        alternatives: [
+          { preset: 'bogof', presetValue: null, savedRule: null, custom: null },
+          { preset: 'secondPrice', presetValue: 100, savedRule: null, custom: null },
+        ],
+      } }, id);
   });
   await open(page);
   const chat = page.getByRole('textbox', { name: 'Receipt question', exact: true });
@@ -95,14 +99,15 @@ test('receipt chat applies a capped mains BOGOF in one question on mobile', asyn
   await ask.click();
   const review = page.getByRole('button', { name: 'Review offer', exact: true });
   await expect(review).toBeVisible();
+  await expect(page.locator('.receipt-chat:not([data-item-id])')).toContainText('matches the printed total of £49.00');
   await review.scrollIntoViewIfNeeded();
   await auditScreenshot(page, 'mobile-chat-reply', name => testInfo.outputPath(name));
   expect(state.trip.expenses).toHaveLength(0);
   await review.click();
   await expect(discounts(page).locator('.adjustment-row')).toContainText('1 pair');
   await expect(discounts(page).locator('.adjustment-row')).toContainText('4 eligible items');
-  await expect(discounts(page).locator('.adjustment-row')).toContainText('−£8.00');
-  await expect(discounts(page)).toContainText('Main D £8.00 → £0.00');
+  await expect(discounts(page).locator('.adjustment-row')).toContainText('−£7.00');
+  await expect(discounts(page)).toContainText('Main D £8.00 → £1.00');
   await expect(discounts(page)).not.toContainText('Main A £18.00 → £18.00');
   await expect(page.locator('summary .item-offer-badges button[aria-label="Group A"]')).toHaveCount(4);
   await discounts(page).locator('.adjustment-row').scrollIntoViewIfNeeded();
@@ -113,7 +118,7 @@ test('receipt chat applies a capped mains BOGOF in one question on mobile', asyn
   expect(state.trip.expenses).toHaveLength(0);
   await save(page).click();
   await expect(page.locator('.editor')).toHaveCount(0);
-  expect(state.trip.expenses[0]?.adjustments?.[0]).toMatchObject({ rule: { limit: 1, pairing: 'highest-lowest' } });
+  expect(state.trip.expenses[0]?.adjustments?.[0]).toMatchObject({ rule: { value: 100, limit: 1, pairing: 'highest-lowest' } });
 });
 
 test('discount choices keep readable item names and prices on a 320px phone', async ({ page }, testInfo) => {

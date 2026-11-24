@@ -5,6 +5,8 @@ import { applyReceiptChanges, type ReceiptChanges } from '../lib/receipt-proposa
 import { applyReceiptTranscription, receiptContext, type ReceiptTranscription } from '../lib/receipt-ai';
 import { draftSchema, total, type Draft, type Trip } from '../lib/model';
 import { receiptLocationHintSchema, receiptLocationSchema } from '../lib/receipt-location';
+import type { receiptOfferComparisonSchema } from '../lib/receipt-offer-proposals';
+import type { z } from 'zod';
 
 const trip: Trip = { id:'holiday',name:'Bratislava holiday',currency:'GBP',ownerId:'account',
   members:[{id:'chris',name:'Christopher Dennett',userId:'account',email:'private@example.test'},{id:'gary',name:'Gareth'}],expenses:[],payments:[],drafts:[] };
@@ -77,6 +79,9 @@ test('native item question sends a single text-only strict request with trusted 
     assert.equal(body.text.format.strict,true); assert.equal(body.input[0].content.length,1); assert.equal(body.input[0].content[0].type,'input_text');
     assert.doesNotMatch(JSON.stringify(body),/input_image|private@example|fake-key/);
     const context=JSON.parse(body.input[0].content[0].text);
+    assert.equal(context.calculatedReceipt.total,1600);
+    assert.equal(context.calculatedReceipt.differenceFromPrintedTotal,0);
+    assert.equal(context.calculatedReceipt.unitScale,100);
     assert.equal(context.callerMemberId,'chris'); assert.equal(context.speakerMemberId,'gary'); assert.equal(context.questionItemId,item.id);
     assert.deepEqual(context.members,trip.members.map(({id,name})=>({id,name})));
     assert(context.travellerAliases.some((alias:{name:string})=>alias.name==='Gaz')); assert.match(context.nameResolution,/loose nicknames/i);
@@ -90,6 +95,119 @@ test('native item question sends a single text-only strict request with trusted 
   assert.equal(applied.conversation!.at(-1)!.replyTo,'question'); assert.equal(applied.conversation!.at(-1)!.authorMemberId,undefined);
   assert.equal(applied.status,'review'); assert.equal(sharedTrip.expenses.length,0);
   assert.strictEqual(applyReceiptQuestion(sharedTrip,applied,result,'question'),applied,'a saved reply is idempotent');
+});
+
+type OfferComparison = z.infer<typeof receiptOfferComparisonSchema>;
+const offerQuestion = 'We each had a lasagne. Mains on that deal – cheaper one was maybe a quid? Or free. Can you see which fits?';
+function offerDraft(amounts: number[], printedTotal: number | null, tip = 0): Draft {
+  return draftSchema.parse({ ...base, title: 'Restaurant', currency: 'GBP', status: 'review', tip,
+    items: [...amounts.map((amount, i) => ({ id: `main-${i}`, name: 'Lasagne', amount, members: ['chris', 'gary'] })),
+      { id: 'drink', name: 'Tea', amount: 400, members: ['gary'] }],
+    conversation: [{ ...base.conversation![0], text: offerQuestion }],
+    receiptScan: { version: 1, printedCurrency: 'GBP', printedTotal, status: 'needs-review', warnings: [] },
+  });
+}
+function compareMains(receipt: Draft): OfferComparison {
+  return {
+    target: { adjustmentId: null, group: null, sourceLineIndex: null, maxUses: null, split: null, stacking: null,
+      items: receipt.items.filter(item => item.id !== 'drink').map(item => ({ itemId: item.id, itemIndex: null, portions: null })) },
+    alternatives: [
+      { preset: 'bogof', presetValue: null, savedRule: null, custom: null, maxUses: null },
+      { preset: 'secondPrice', presetValue: 100, savedRule: null, custom: null, maxUses: null },
+    ],
+  };
+}
+const compare = (receipt: Draft, offerComparison = compareMains(receipt), changes = empty()) =>
+  applyReceiptQuestion(trip, receipt, { summary: 'Model summary must not be used for the comparison.', changes, offerComparison }, 'guidance');
+
+test('receipt chat sends checked arithmetic and compares free versus £1 using one mocked provider request', async () => {
+  const receipt = offerDraft([1800, 1600, 1000, 800], 4500, 500);
+  receipt.receiptScan!.printedSubtotal = 4000;
+  let calls = 0;
+  const reply = await processReceiptQuestion({ accessToken: 'unused-test-key', provider: 'api', trip, draft: receipt, callerMemberId: 'chris', questionId: 'guidance' }, {
+    fetcher: async (_url, init) => {
+      calls++;
+      const body = JSON.parse(init!.body as string);
+      const request = JSON.parse(body.input[0].content[0].text);
+      assert.equal(request.receipt.conversation.at(-1).text, offerQuestion);
+      assert.deepEqual(
+        [request.calculatedReceipt.itemSubtotal, request.calculatedReceipt.tip, request.calculatedReceipt.total, request.calculatedReceipt.differenceFromPrintedTotal],
+        [5600, 500, 6100, 1600],
+      );
+      assert.match(body.instructions, /Do not calculate candidate offer totals yourself/);
+      assert(body.text.format.schema.required.includes('offerComparison'));
+      return sse({ summary: 'Guessed free.', changes: empty(), offerComparison: compareMains(receipt) });
+    },
+  });
+  const original = structuredClone(receipt);
+  const result = applyReceiptQuestion(trip, receipt, reply, 'guidance');
+  assert.equal(calls, 1);
+  assert.deepEqual(receipt, original);
+  assert.equal(trip.expenses.length, 0);
+  assert.equal(total(result), 4500);
+  assert.equal(result.tip, 500);
+  assert.equal(result.receiptScan!.status, 'matched');
+  assert.equal(result.adjustments![0].rule?.value, 100);
+  assert.deepEqual(result.adjustments![0].scope, { type: 'items', itemIds: ['main-0', 'main-1', 'main-2', 'main-3'] });
+  assert.match(result.conversation!.at(-1)!.text, /£1\.00.*£45\.00.*£16\.00 on 2 pairs/);
+});
+
+test('comparison handles three mains, multiple portions per line and an explicit use cap', () => {
+  const odd = offerDraft([1800, 1600, 800], 3900);
+  assert.match(compare(odd).conversation!.at(-1)!.text, /£7\.00 on 1 pair/);
+  const twoPortions = offerDraft([3000], 2000);
+  twoPortions.items[0].quantity = { total: 2, label: 'portions' };
+  assert.equal(compare(twoPortions).adjustments?.[0].rule?.value, 100);
+  const capped = offerDraft([1800, 1600, 1000, 800], 4800);
+  const comparison = compareMains(capped);
+  comparison.target.maxUses = 1;
+  assert.match(compare(capped, comparison).conversation!.at(-1)!.text, /free.*£8\.00 on 1 pair/);
+});
+
+test('a printed saving independently checks the rule rather than overriding a wrong hypothesis', () => {
+  const receipt = offerDraft([1800, 800], 2300);
+  receipt.receiptScan!.sourceLines = [{ kind: 'adjustment', lineIndex: 2, observedText: 'Main offer', amount: -700, mappedTo: 'unmapped' }];
+  const comparison = compareMains(receipt);
+  comparison.target.sourceLineIndex = 2;
+  assert.equal(compare(receipt, comparison).adjustments?.[0].rule?.value, 100);
+  receipt.receiptScan!.printedTotal = null;
+  const result = compare(receipt, comparison);
+  assert.equal(result.adjustments?.[0].rule?.value, 100);
+  assert.equal(result.receiptScan!.status, 'incomplete');
+  assert.match(result.conversation!.at(-1)!.text, /matches the printed discount/);
+  receipt.receiptScan!.printedTotal = 2200;
+  assert.equal(compare(receipt, comparison).adjustments, undefined);
+});
+
+test('ambiguous or contradictory bills do not change prices, charges, splits or the original draft', () => {
+  const receipt = offerDraft([1000, 1000], 1400);
+  const comparison = compareMains(receipt);
+  comparison.alternatives[1] = { ...comparison.alternatives[1], preset: 'percentage', presetValue: 50 };
+  const inventedCharges = { ...empty(), metadata: { ...metadata(), tip: 200 },
+    items: [{ ...patch('main-0', null), amount: 400, members: ['gary'] }] };
+  const result = compare(receipt, comparison, inventedCharges);
+  assert.deepEqual({ ...result, conversation: receipt.conversation }, receipt);
+  assert.match(result.conversation!.at(-1)!.text, /More than one offer matches/);
+  assert.match(compare(offerDraft([1000, 1000], 1200)).conversation!.at(-1)!.text, /None of the plausible offers/);
+  assert.match(compare(offerDraft([1000, 1000], null)).conversation!.at(-1)!.text, /printed total or discount/);
+  assert.match(compare(offerDraft([1000, 1000], 2400)).conversation!.at(-1)!.text, /already matches/);
+});
+
+test('corrections cannot force an offer to fit, but compatible explicit shares can accompany it', () => {
+  const receipt = offerDraft([1800, 800], 2300);
+  const changes = { ...empty(), metadata: { ...metadata(), tax: 100, discount: 100 },
+    items: [{ ...patch('main-0', null), amount: 500, members: ['gary'] }, { ...patch('main-1', null), members: ['chris'] }],
+    removeItemIds: ['drink'] };
+  const result = compare(receipt, compareMains(receipt), changes);
+  assert.equal(total(result), 2300);
+  assert.deepEqual(result.items.map(item => [item.amount, item.members]), [[1800, ['chris', 'gary']], [800, ['chris']], [400, ['gary']]]);
+  assert.equal(result.tax, 0);
+  assert.equal(result.discount, 0);
+  receipt.receiptScan!.printedSubtotal = 1;
+  assert.equal(compare(receipt).adjustments, undefined);
+  receipt.receiptScan!.printedSubtotal = 2600;
+  receipt.items[0].amount = null;
+  assert.equal(compare(receipt).adjustments, undefined);
 });
 
 test('selected unknown author is not replaced by caller or an earlier known speaker',()=>{
