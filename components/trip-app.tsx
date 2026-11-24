@@ -31,7 +31,7 @@ import ReceiptLocationFields, { type ReceiptPlace } from "@/components/receipt-l
 import ReceiptPhotoViewer from "@/components/receipt-photo-viewer";
 import ExpenseIconPicker from "@/components/expense-icon";
 import { parseAmountText } from "@/lib/amount-text";
-import AdjustmentEditor, { type AdjustmentDraft } from "@/components/adjustment-editor";
+import AdjustmentEditor, { OfferBadge, type AdjustmentDraft } from "@/components/adjustment-editor";
 import { RowActionsMenu, SwipeRow, type RowAction } from "@/components/row-actions";
 import { describeSettlementImpact, settlementImpact } from "@/lib/settlement-impact";
 import PersonalActivity from "@/components/personal-activity";
@@ -2010,6 +2010,15 @@ export default function Home({ children }: { children: ReactNode }) {
   // several lines) lists the lines instead, and stays that way for this entry.
   const [editorMode, setEditorMode] = useState<{ id: string; itemised: boolean } | null>(null);
   const [adjustmentsFor, setAdjustmentsFor] = useState("");
+  const [highlightedOffer, setHighlightedOffer] = useState<{ entry: string; letter: string } | null>(null);
+  function itemOfferBadges(entry: ReceiptEditor, itemId: string) {
+    const letters = [...new Set((entry.adjustments ?? []).flatMap(adjustment => adjustment.group && adjustment.scope.type === "items" && adjustment.scope.itemIds.includes(itemId) ? [adjustment.group] : []))].sort();
+    if (!letters.length) return null;
+    return <span className="item-offer-badges">{letters.map(letter => {
+      const active = highlightedOffer?.entry === entry.id && highlightedOffer.letter === letter;
+      return <OfferBadge key={letter} letter={letter} active={active} onClick={() => setHighlightedOffer(active ? null : { entry: entry.id, letter })} />;
+    })}</span>;
+  }
   const [fxDetailsOpen, setFxDetailsOpen] = useState("");
   if (editing && editorMode?.id !== editing.id) setEditorMode({ id: editing.id,
     itemised: editing.items.length > 1 || (editing.items.length === 1 && !quickEligible(editing) && !singleReceiptLineEligible(editing)) });
@@ -3382,6 +3391,7 @@ export default function Home({ children }: { children: ReactNode }) {
                       const item = editing.items[0];
                       return <div className="receipt-line" id={expenseItemTarget(item.id)}>
                         <ReceiptItemNames accountId={profile?.id || ""} trip={trip} receipt={editing} item={item} index={0} settings={languageSettings}
+                          offerBadges={itemOfferBadges(editing, item.id)}
                           onUpdate={change => setEditing(previous => previous && previous.id === editing.id && previous.receiptLanguage === editing.receiptLanguage
                             ? { ...previous, items: previous.items.map(current => current.id === item.id ? change(current) : current) } : previous)} />
                         {languageSettings.error && <p className="error" role="alert">{languageSettings.error}</p>}
@@ -3514,6 +3524,7 @@ export default function Home({ children }: { children: ReactNode }) {
                               }))} /> : <p className="item-share-summary">{item.splitMode === 'default' ? uiText("Equal split") : item.members.map(id => name(id)).join(", ")}</p> : undefined}>
                               <div className="item-top">
                                 <ReceiptItemNames accountId={profile?.id || ""} trip={trip} receipt={editing} item={item} index={i} settings={languageSettings}
+                                  offerBadges={itemOfferBadges(editing, item.id)}
                                   onUpdate={change=>setEditing(previous=>previous&&previous.id===editing.id&&previous.receiptLanguage===editing.receiptLanguage
                                     ?{...previous,items:previous.items.map(current=>current.id===item.id?change(current):current)}:previous)} />
                                 <div className="moneyinput">
@@ -3598,7 +3609,8 @@ export default function Home({ children }: { children: ReactNode }) {
                       {canCollapseToQuick && <button type="button" className="quiet" disabled={isManualSingleLine(editing) && !editing.items[0].members.length} title={!isManualSingleLine(editing) || editing.items[0].members.length ? undefined : uiText("Choose who shares this first")} onClick={stopItemSplitting}><Minus size={16} aria-hidden="true" />{uiText(" Use one amount")}</button>}
                       {!adjustmentsShown && <button type="button" className="quiet" onClick={() => setAdjustmentsFor(editing.id)}><Plus size={16} aria-hidden="true" />{uiText(" Tip, tax or discount")}</button>}
                     </div>
-                    {(!quickMode || editing.receiptId || editing.receiptScan || !!editing.adjustments?.length || adjustmentDraft) && <AdjustmentEditor entry={editing} members={trip.members}
+                    {(!quickMode || adjustmentsShown || editing.receiptId || editing.receiptScan || !!editing.adjustments?.length || adjustmentDraft) && <AdjustmentEditor entry={editing} members={trip.members}
+                      highlightedGroup={highlightedOffer?.entry === editing.id ? highlightedOffer.letter : undefined}
                       onChange={setEditing} draft={adjustmentDraft} onDraft={draft => {
                         setAdjustmentDraft(draft);
                         if (draft) requestAnimationFrame(() => focusExpenseTarget("expense-discounts", ".adjustment-form input[type=radio]:checked"));

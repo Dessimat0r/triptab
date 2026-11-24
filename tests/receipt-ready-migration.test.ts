@@ -12,10 +12,11 @@ async function apply(until: number) {
 }
 
 test('0018 is the next migration after 0017 and is in the journal', async () => {
-  assert.equal(files.at(-1), '0018_receipt_ready_preference.sql');
-  assert.equal(files.at(-2), '0017_receipt_operation_jobs.sql');
+  const previous = files.indexOf('0017_receipt_operation_jobs.sql');
+  assert.ok(previous >= 0);
+  assert.equal(files[previous + 1], '0018_receipt_ready_preference.sql');
   const journal = JSON.parse(await readFile(new URL('../drizzle/meta/_journal.json', import.meta.url), 'utf8')) as { entries: Array<{ idx: number; tag: string }> };
-  assert.deepEqual(journal.entries.at(-1), { ...journal.entries.at(-1)!, idx: 18, tag: '0018_receipt_ready_preference' });
+  assert.equal(journal.entries.find(entry => entry.idx === 18)?.tag, '0018_receipt_ready_preference');
 });
 
 test('0018 leaves every existing preference row unchanged and switches the new option off for all of them', async () => {

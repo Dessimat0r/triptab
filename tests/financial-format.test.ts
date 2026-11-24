@@ -20,7 +20,7 @@ test('R01: the format a request declares is read strictly, and anything unreadab
   assert.equal(requestFinancialFormat(request('2')), 2);
   assert.equal(requestFinancialFormat(request(' 3 ')), 3);
   for (const value of ['', '0', '-2', '2.0', 'two', '1e3', '99999']) assert.equal(requestFinancialFormat(request(value)), 1, value);
-  assert.equal(financialFormatRefusal(request('2')), null);
+  assert.equal(financialFormatRefusal(request('3')), null);
   assert.equal(financialFormatRefusal(request('1'))?.status, 426);
 });
 
@@ -28,14 +28,14 @@ test('R01-E: only the exact supported format is accepted. Missing, invalid, olde
   const request = (value?: string, method = 'GET') => new Request('https://triptab.test/api/ledger', { method, ...(value === undefined ? {} : { headers: { [FINANCIAL_FORMAT_HEADER]: value } }) });
   assert.equal(financialFormatRefusal(request(String(FINANCIAL_FORMAT))), null, 'the supported format proceeds');
   assert.equal(financialFormatRefusal(request(` ${FINANCIAL_FORMAT} `)), null, 'surrounding spaces are tolerated, as before');
-  for (const value of [undefined, '', 'x', '0', '1', '3', '4', '9999', '2.0', '-2']) {
+  for (const value of [undefined, '', 'x', '0', '1', '2', '4', '9999', '2.0', '-2']) {
     const refusal = financialFormatRefusal(request(value));
     assert.equal(refusal?.status, 426, `declaration ${JSON.stringify(value)}`);
     assert.equal(refusal?.headers.get('Cache-Control'), 'private, no-store');
     assert.equal(refusal?.headers.get('X-TripTab-Financial-Format-Required'), String(FINANCIAL_FORMAT));
     assert.deepEqual(await refusal!.clone().json(), { error: FINANCIAL_FORMAT_REFUSAL });
   }
-  const head = financialFormatRefusal(request('3', 'HEAD'));
+  const head = financialFormatRefusal(request('2', 'HEAD'));
   assert.equal(head?.status, 426);
   assert.equal(await head!.text(), '', 'a HEAD refusal has no body');
 });

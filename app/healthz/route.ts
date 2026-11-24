@@ -14,6 +14,7 @@ export async function GET() {
       pr.deleted_at,pr.ui_language,np.scope,np.delivery,np.reminders,np.receipt_ready,nd.updates,sr.sent_at,rp.receipt_id,
       ro.operation_key,ro.status,ro.attempt_id,ro.lease_until,
       ro.request_json,ro.grant_kind,ro.grant_ref,ro.grant_expires_at,ro.provider,ro.provider_started_at,ro.auto_resumes
+      ,ofr.user_id,ofr.rule_key,ofr.data
       FROM auth_credentials ac CROSS JOIN auth_email_tokens et CROSS JOIN trip_archives ta
       CROSS JOIN receipt_restore_holds rh CROSS JOIN auth_sessions os CROSS JOIN profiles pr
       CROSS JOIN notification_preferences np CROSS JOIN notification_digests nd
@@ -25,6 +26,7 @@ export async function GET() {
       CROSS JOIN current_receipt_links l INDEXED BY current_receipt_links_entity_idx
       CROSS JOIN receipt_history_links h INDEXED BY receipt_history_links_snapshot_idx
       CROSS JOIN trip_language_preferences lp INDEXED BY trip_language_preferences_trip_idx
+      CROSS JOIN receipt_offer_rules ofr
       CROSS JOIN receipt_ai_settings ai CROSS JOIN chatgpt_plan_connections pc
       CROSS JOIN chatgpt_plan_transactions pt INDEXED BY chatgpt_plan_transactions_user_idx LIMIT 0`).all();
     const receiptHistoryIndexes = ['account_activity_events_id_idx', 'account_activity_events_user_sequence_idx',

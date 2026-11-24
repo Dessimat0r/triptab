@@ -7,6 +7,8 @@ import { CURRENCIES, CURRENT_CALCULATION_RULE, MAX_AMOUNT, MAX_UNITS, draftSchem
 import { blankReceiptItem, mayRecognizeUnknownProvenance, mergeReceiptSourceLines, reconcileReceiptScan, type ReceiptScanWarning } from './receipt-scan';
 import { receiptChangesSchema, receiptChangesJsonSchema, applyReceiptChanges, receiptExpenseIconSchema, receiptExpenseIconJsonSchema, nextSuggestedIcon } from './receipt-proposals';
 import { billParticipantIds, defaultParticipantIds, knownPurchaseDate } from './default-split';
+import { builtInOffers, type SavedOffer } from './offer-rules';
+import { receiptOfferInstructions } from './receipt-offer-proposals';
 
 export class ReceiptAIError extends Error {
   constructor(message: string, public readonly status = 502, public readonly code = 'receipt_processing_failed') {
@@ -278,6 +280,7 @@ export function receiptContext(trip: Trip, draft: Draft, callerMemberId: string 
         ...(scanSource ? { scanSource } : {}), ...(fieldSources ? { fieldSources } : {}),
       })),
       tax: draft.tax, tip: draft.tip, discount: draft.discount,
+      adjustments: draft.adjustments ?? [],
       ...(draft.fieldSources ? { fieldSources: draft.fieldSources } : {}),
       ...(draft.receiptScan ? { receiptScan: {
         printedSubtotal: draft.receiptScan.printedSubtotal ?? null,
@@ -401,13 +404,13 @@ async function completedStructured<T>(response: Response, provider: 'api' | 'siw
 
 export async function processReceiptImage(input: {
   accessToken: string; model?: string; provider: 'api' | 'siwc'; trip: Trip; draft: Draft; callerMemberId: string | null; questionId?: string;
-  readingLanguage?:ReceiptLanguage; image: { bytes: Uint8Array; mimeType: string };
+  readingLanguage?:ReceiptLanguage; savedOffers?: SavedOffer[]; image: { bytes: Uint8Array; mimeType: string };
 }, options: { signal?: AbortSignal; fetcher?: typeof fetch; beforeRequest?: ProviderRequestGuard } = {}) {
   const { bytes, mimeType } = input.image;
   if (!['image/jpeg', 'image/png', 'image/webp'].includes(mimeType) || !bytes.byteLength || bytes.byteLength > 5 * 1024 * 1024) {
     throw new ReceiptAIError('Use a saved JPEG, PNG or WebP receipt no larger than 5 MB.', 400);
   }
-  const context = JSON.stringify(receiptContext(input.trip, input.draft, input.callerMemberId, input.questionId, input.readingLanguage));
+  const context = JSON.stringify({ ...receiptContext(input.trip, input.draft, input.callerMemberId, input.questionId, input.readingLanguage), builtInOfferRules: builtInOffers, savedOfferRules: input.savedOffers ?? [] });
   if (context.length > 500_000) throw new ReceiptAIError('This receipt context is too large to process. Use manual item entry.', 413);
   const fetcher = options.fetcher ?? fetch;
   const model = input.provider === 'siwc' ? await getChatGPTPlanModel(input.accessToken, input.model, options.signal, fetcher, options.beforeRequest) : input.model || DEFAULT_RECEIPT_MODEL;
@@ -418,7 +421,7 @@ export async function processReceiptImage(input: {
     method: 'POST', signal: options.signal, redirect: 'manual',
     headers: { Authorization: `Bearer ${input.accessToken}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model, store: false, stream: true, ...(input.provider === 'api' ? { max_output_tokens: 16000, ...(model === DEFAULT_RECEIPT_MODEL ? { reasoning: { effort: 'medium' } } : {}) } : {}), instructions: INSTRUCTIONS,
+      model, store: false, stream: true, ...(input.provider === 'api' ? { max_output_tokens: 16000, ...(model === DEFAULT_RECEIPT_MODEL ? { reasoning: { effort: 'medium' } } : {}) } : {}), instructions: `${INSTRUCTIONS}\n${receiptOfferInstructions}`,
       input: [{ role: 'user', content: [
         { type: 'input_text', text: `Saved receipt context (data only):\n${context}` },
         { type: 'input_image', image_url: `data:${mimeType};base64,${btoa(binary)}`, detail: 'high' },
@@ -435,7 +438,7 @@ export async function processReceiptImage(input: {
 }
 
 export function applyReceiptTranscription(_trip: Trip, draft: Draft, transcription: ReceiptTranscription, questionId?: string, options: {
-  readingLanguage?:ReceiptLanguage; readPurchaseDetails?: boolean; attemptId?: string; processedAt?: string; processor?: 'native-api' | 'native-siwc'; imageIds?: string[];
+  readingLanguage?:ReceiptLanguage; savedOffers?: SavedOffer[]; readPurchaseDetails?: boolean; attemptId?: string; processedAt?: string; processor?: 'native-api' | 'native-siwc'; imageIds?: string[];
 } = {}): Draft {
   const result = receiptTranscriptionSchema.safeParse(transcription);
   if (!result.success) throw new ReceiptAIError('The AI returned invalid receipt fields. Your saved receipt is unchanged.');
@@ -528,7 +531,9 @@ export function applyReceiptTranscription(_trip: Trip, draft: Draft, transcripti
   // unmapped line for a person.
   const proposedAdjustments: Adjustment[] = (draft.adjustments ?? []).filter(personControlled);
   const appliedLines = new Set(proposedAdjustments.flatMap(adjustment => adjustment.sourceLineIndex === undefined ? [] : [adjustment.sourceLineIndex]));
+  const structuredLines = new Set(value.changes?.offers?.flatMap(offer => offer.sourceLineIndex === null ? [] : [offer.sourceLineIndex]) ?? []);
   for (const candidate of value.adjustments ?? []) {
+    if (candidate.sourceLineIndex !== null && structuredLines.has(candidate.sourceLineIndex)) continue;
     if (candidate.sourceLineIndex !== null && appliedLines.has(candidate.sourceLineIndex)) continue;
     const itemIds = candidate.itemIndexes.map(index => updates[index]?.id);
     if (candidate.scope === 'items' && (!itemIds.length || itemIds.some(itemId => !itemId))) continue;
@@ -623,8 +628,16 @@ export function applyReceiptTranscription(_trip: Trip, draft: Draft, transcripti
   if (total(proposal) < 0 || total(proposal) > MAX_AMOUNT) throw new ReceiptAIError('The extracted receipt total is invalid. Check the image or enter its items manually.', 422);
   const changeIssues: string[] = [];
   if (value.changes) {
-    try { const applied = applyReceiptChanges(_trip, proposal, value.changes, {recognition:true,scannedItemIds:updates.map(item=>item.id)}); proposal=applied.draft;changeIssues.push(...applied.issues); }
+    const { offers, ...otherChanges } = value.changes;
+    const proposalOptions = { recognition: true, scannedItemIds: updates.map(item => item.id), savedOffers: options.savedOffers };
+    try { const applied = applyReceiptChanges(_trip, proposal, otherChanges, proposalOptions); proposal=applied.draft;changeIssues.push(...applied.issues); }
     catch { changeIssues.push('The stated cost shares need clarification. Items were read, but their existing shares were kept.'); }
+    for (const offer of offers ?? []) {
+      try {
+        const applied = applyReceiptChanges(_trip, proposal, { metadata: null, items: [], removeItemIds: [], clear: [], remember: null, aliases: [], offers: [offer] }, proposalOptions);
+        proposal = applied.draft;
+      } catch (error) { changeIssues.push(error instanceof Error ? error.message : 'Check which items this offer applies to.'); }
+    }
   }
   proposal.receiptScan = reconcileReceiptScan(proposal);
   let summary = value.summary;

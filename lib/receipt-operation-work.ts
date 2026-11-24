@@ -7,6 +7,7 @@ import { applyReceiptQuestion, processReceiptQuestion } from './receipt-assistan
 import { holdsOperation, operationAuthorized, startProviderCall, type OperationCredential, type OperationFence, type OperationProvider, type OperationSource } from './receipt-operations';
 import type { Draft, Ledger, Trip } from './model';
 import { notifyReceiptReady } from './notifications';
+import { readSavedOffers } from './saved-offer-rules';
 
 /**
  * One paid receipt operation's work (R06/R07/R12), shared by the browser
@@ -107,7 +108,11 @@ export async function executeOperation(input: {
   // Nothing is spent for an attempt that was superseded or whose grant ended.
   const refused = await refusal(fence, userId);
   if (refused) throw refused;
-  const { preferences: { readingLanguage } } = await readTripLanguagePreferences(database, userId, trip.id);
+  const questionAuthor = request.questionId ? draft.conversation?.find(message => message.id === request.questionId)?.authorMemberId : undefined;
+  const useSavedRules = !request.questionId || trip.members.some(member => member.id === questionAuthor && member.userId === userId);
+  const [{ preferences: { readingLanguage } }, savedOffers] = await Promise.all([
+    readTripLanguagePreferences(database, userId, trip.id), useSavedRules ? readSavedOffers(database, userId) : [],
+  ]);
   const connection = await input.credential();
   if (!await startProviderCall(database, fence, userId, connection.provider, Date.now(), credentialFence(connection))) {
     throw await refusal(fence, userId) ?? new ReceiptAIAccessError('Receipt processing settings changed before this reading started. Read the receipt again.', 409, 'credentials_changed');
@@ -137,7 +142,7 @@ export async function executeOperation(input: {
     }
   };
   logOperation('native-processing-started', input.log, { provider: connection.provider });
-  const context = { ...connection, trip, draft, readingLanguage, callerMemberId: trip.members.find(member => member.userId === userId)?.id ?? null };
+  const context = { ...connection, trip, draft, readingLanguage, savedOffers, callerMemberId: trip.members.find(member => member.userId === userId)?.id ?? null };
   const answer = request.questionId ? await processReceiptQuestion({ ...context, questionId: request.questionId }, { signal, beforeRequest }) : undefined;
   const transcription = image ? await processReceiptImage({ ...context, image }, { signal, beforeRequest }) : undefined;
   // An unrelated ledger edit does not invalidate a paid transcription. Rebase
@@ -149,8 +154,8 @@ export async function executeOperation(input: {
     await input.stillCurrent?.();
     const { latest, currentTrip, currentDraft } = await currentSource();
     const tripSnapshot = structuredClone(currentTrip);
-    const proposal = answer && request.questionId ? applyReceiptQuestion(currentTrip, currentDraft, answer, request.questionId) : applyReceiptTranscription(currentTrip, currentDraft, transcription!, undefined, {
-      readingLanguage, readPurchaseDetails: request.readPurchaseDetails, attemptId: fence.attemptId,
+    const proposal = answer && request.questionId ? applyReceiptQuestion(currentTrip, currentDraft, answer, request.questionId, savedOffers) : applyReceiptTranscription(currentTrip, currentDraft, transcription!, undefined, {
+      readingLanguage, savedOffers, readPurchaseDetails: request.readPurchaseDetails, attemptId: fence.attemptId,
       processedAt: new Date().toISOString(), processor: connection.provider === 'api' ? 'native-api' : 'native-siwc',
       imageIds: request.receiptId ? [request.receiptId] : [],
     });

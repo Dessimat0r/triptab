@@ -261,6 +261,7 @@ export async function deleteAccount(
     'notification_digests',
     'trip_archives',
     'trip_language_preferences',
+    'receipt_offer_rules',
     'push_subscriptions',
     'notifications',
     'memberships',

@@ -11,6 +11,12 @@ export const profiles = sqliteTable('profiles', {
   id: text('id').primaryKey(), email: text('email').notNull(), displayName: text('display_name').notNull(), createdAt: text('created_at').notNull(),
 });
 
+export const receiptOfferRules = sqliteTable('receipt_offer_rules', {
+  userId: text('user_id').notNull().references(() => profiles.id, { onDelete: 'cascade' }),
+  key: text('rule_key').notNull(),
+  data: text('data').notNull(),
+}, table => [primaryKey({ columns: [table.userId, table.key] })]);
+
 export const authCredentials = sqliteTable('auth_credentials', {
   userId: text('user_id').primaryKey().references(() => profiles.id, { onDelete: 'cascade' }),
   email: text('email').notNull(),

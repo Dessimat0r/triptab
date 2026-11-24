@@ -27,6 +27,7 @@ async function fixtures(page: Page, start: Trip = { ...structuredClone(base), dr
     }
     if (pathname === '/api/receipt' && request.method() === 'GET') return route.fulfill({ contentType: 'image/png', path: photo });
     const json = pathname === '/api/ledger' ? { data: { trips: [current] }, revision }
+      : pathname === '/api/receipt/offer-rules' ? []
       : pathname === '/api/profile' ? { id: 'owner', displayName: 'Alice', email: 'alice@example.invalid', authMethod: 'password' }
       : pathname === '/api/receipt/ai-status' ? { configured: true, connected: true, provider: 'api', eligible: true, manageable: false, siwcAvailable: false }
       : pathname === '/api/trip-language' ? { accountId: 'owner', tripId: base.id, revision: 1, preferences: { readingLanguage: 'en', primaryVersion: 'reading', itemVersions: {} } }
@@ -43,6 +44,31 @@ async function open(page: Page) {
 const discounts = (page: Page) => page.locator('#expense-discounts');
 
 test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+
+test('a BOGOF offer adds badges only to the selected portions and previews an independent equal split', async ({ page }) => {
+  const draft = r1();
+  draft.items[0] = { ...draft.items[0], name: 'First main', amount: 1500 };
+  draft.items[1] = { ...draft.items[1], name: 'Second main', amount: 1000, members: ['bob'] };
+  draft.receiptScan = { version: 1, status: 'needs-review', warnings: [], printedTotal: 1650 };
+  await fixtures(page, { ...structuredClone(base), drafts: [draft] });
+  await open(page);
+  await expect(page.locator('.item-offer-badges')).toHaveCount(0);
+  await discounts(page).getByRole('button', { name: 'Add discount', exact: true }).click();
+  const form = discounts(page).locator('.adjustment-form');
+  await form.getByRole('radio', { name: 'Offer rule' }).check();
+  await form.getByRole('combobox', { name: 'Offer rule' }).selectOption('bogof');
+  await form.getByRole('checkbox', { name: /First main/ }).check();
+  await form.getByRole('checkbox', { name: /Second main/ }).check();
+  await form.getByText('Change split', { exact: true }).click();
+  await form.getByRole('combobox', { name: 'Split method' }).selectOption('equal');
+  await expect(form.locator('.adjustment-preview')).toContainText('New total £16.50');
+  await expect(form.locator('.adjustment-preview')).toContainText('Alice −£5.00');
+  await expect(form.locator('.adjustment-preview')).toContainText('Bob −£5.00');
+  await form.getByRole('button', { name: 'Add', exact: true }).click();
+  await expect(page.locator('.item-offer-badges button')).toHaveCount(2);
+  await page.locator('.item-offer-badges').first().getByRole('button', { name: 'Group A' }).click();
+  await expect(discounts(page).locator('.offer-highlight')).toContainText('−£10.00');
+});
 
 test('scan R1: the BOGOF line becomes a discount on both Pringles, reconciles, and stores the correct shares', async ({ page }) => {
   const state = await fixtures(page);

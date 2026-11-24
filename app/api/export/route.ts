@@ -3,6 +3,7 @@ import { expenseShares, expenseTotal, parseStoredTrip, total, type Trip } from '
 import { tripLanguagePreferencesSchema } from '@/lib/receipt-languages';
 import { financialFormatRefusal } from '@/lib/financial-format';
 import { readAccountActivity } from '@/lib/audit';
+import { readSavedOffers } from '@/lib/saved-offer-rules';
 
 export const dynamic = 'force-dynamic';
 
@@ -184,7 +185,8 @@ export async function GET(request: Request) {
         if(Number((size.results[0] as {bytes:number}).bytes)>MAX_SNAPSHOT_BYTES)throw new RequestError('Your language preference export is too large.',413);
         languagePreferences=(rows.results as {trip_id:string;data:string}[]).map(row=>({tripId:row.trip_id,preferences:tripLanguagePreferencesSchema.parse(JSON.parse(row.data))}));
       }
-      body = format === 'json' ? JSON.stringify({ schemaVersion: 1, exportedAt, amountScale: 100,...(languagePreferences?{languagePreferences}:{}), profile: ownProfile, data: { trips }, ...(receiptMetadata ? { receiptMetadata } : {}) }) : financialCsv(trips[0]);
+      const savedOfferRules = scope === 'account' ? await readSavedOffers(db(), actor) : undefined;
+      body = format === 'json' ? JSON.stringify({ schemaVersion: 1, exportedAt, amountScale: 100,...(languagePreferences?{languagePreferences}:{}), ...(savedOfferRules?.length ? { savedOfferRules } : {}), profile: ownProfile, data: { trips }, ...(receiptMetadata ? { receiptMetadata } : {}) }) : financialCsv(trips[0]);
     }
     if (new TextEncoder().encode(body).byteLength > MAX_DOWNLOAD_BYTES) throw new RequestError('This export is too large. Choose a smaller holiday or history page.', 413);
     const safeId = tripId?.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 60);

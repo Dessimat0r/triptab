@@ -1,6 +1,7 @@
 import { applyAdjustments, type Adjustment, type AdjustmentResult } from './adjustments';
 import { shares, stampCalculationRules } from './model';
 import type { ReceiptEditor } from './receipt-processing';
+import { canonicalJson } from './data-utils';
 
 /**
  * The one ordered list a discount form previews, validates and saves (R03).
@@ -12,7 +13,14 @@ import type { ReceiptEditor } from './receipt-processing';
  */
 export function adjustmentCandidates(adjustments: readonly Adjustment[], candidate: Adjustment, editing?: string): Adjustment[] {
   const index = editing === undefined ? -1 : adjustments.findIndex(value => value.id === editing);
-  return index < 0 ? [...adjustments, candidate] : adjustments.map((value, position) => position === index ? candidate : value);
+  const before = index < 0 ? undefined : adjustments[index];
+  const group = candidate.group && candidate.group === before?.group && canonicalJson(candidate.scope) !== canonicalJson(before.scope) ? candidate.group : undefined;
+  const list = adjustments.map((value, position) => {
+    if (position === index) return candidate;
+    if (!group || value.group !== group || candidate.scope.type !== 'items') return value;
+    return { ...value, scope: candidate.scope, allocation: undefined, source: 'user' as const };
+  });
+  return index < 0 ? [...list, candidate] : list;
 }
 
 export type AdjustmentPreview = {
@@ -35,10 +43,10 @@ function stampedShares(entry: ReceiptEditor, adjustments: Adjustment[], members:
 export function previewAdjustment(entry: ReceiptEditor, members: readonly Member[], candidate: Adjustment | null, editing?: string): AdjustmentPreview {
   const current = entry.adjustments ?? [];
   const others = current.filter(value => value.id !== editing);
-  const before = applyAdjustments(entry.items, others);
+  const before = applyAdjustments(entry.items, others, entry.currency);
   if (!candidate) return { list: null, before, after: before, outcome: null };
   const list = adjustmentCandidates(current, candidate, editing);
-  const after = applyAdjustments(entry.items, list);
+  const after = applyAdjustments(entry.items, list, entry.currency);
   let outcome: AdjustmentPreview['outcome'] = null;
   if (!after.errors.length && !entry.items.some(item => item.amount === null)) {
     try {

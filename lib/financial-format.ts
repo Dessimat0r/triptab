@@ -21,7 +21,7 @@
  * format refuses this bundle the same way, and this bundle clears its amounts
  * when refused (fail closed).
  */
-export const FINANCIAL_FORMAT = 2;
+export const FINANCIAL_FORMAT = 3;
 export const FINANCIAL_FORMAT_HEADER = 'X-TripTab-Financial-Format';
 export const FINANCIAL_FORMAT_REQUIRED_HEADER = 'X-TripTab-Financial-Format-Required';
 export const FINANCIAL_FORMAT_STATUS = 426;

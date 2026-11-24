@@ -11,6 +11,9 @@ import { receiptMemorySchema, type ReceiptMemory } from '@/lib/receipt-context';
 import { validateReceiptMemoryOwnership } from '@/lib/receipt-memory-ownership';
 import { mayRecognizeUnknownProvenance, reconcileReceiptScan, receiptScanFingerprint, mergeReceiptSourceLines, scanSourceSchema, sourceLineSchema, receiptScanWarningSchema, RECEIPT_SCAN_WARNING_CODES } from '@/lib/receipt-scan';
 import { defaultParticipantIds, equalItem, knownPurchaseDate } from '@/lib/default-split';
+import { applyOfferProposals, receiptOfferInstructions, receiptOfferProposalJsonSchema, receiptOfferProposalSchema } from '@/lib/receipt-offer-proposals';
+import { builtInOffers } from '@/lib/offer-rules';
+import { readSavedOffers } from '@/lib/saved-offer-rules';
 
 export const dynamic = 'force-dynamic';
 
@@ -225,6 +228,7 @@ publishedDraft.properties = {
   ...publishedMetadata,
   expenseIcon: receiptExpenseIconJsonSchema,
   upsertItems: { type: 'array', maxItems: 200, items: publishedItem, description: 'Create or correct only these stable item IDs. Omitted existing items are retained. Unreadable prices stay null. New items split equally between bill participants automatically; supply shares only for explicit human requests.' },
+  offers: { type: 'array', maxItems: 20, items: receiptOfferProposalJsonSchema, description: receiptOfferInstructions.replace('changes.offers', 'draft.offers') },
   adjustments: { type: 'array', maxItems: 20, description: 'Proposed promotion or charge records read from the receipt (BOGOF, multibuy, coupons, loyalty, percentage savings, service charges). They replace earlier assistant-proposed records; a person\u2019s own records are kept. Item scope uses stable item IDs of the qualifying lines only when the receipt makes them clear; otherwise omit the record and keep the line as unmapped sourceLines evidence. Refunds, returns and deposits are never records. Amounts are positive integer hundredths; never also put the saving in discount.',
     items: { type: 'object', additionalProperties: false, required: ['id', 'kind', 'scope'], properties: {
       id: identifier, kind: { type: 'string', enum: ['discount', 'charge'] }, label: { type: 'string', maxLength: 80 },
@@ -244,7 +248,7 @@ publishedDraft.properties = {
           ...(publishedItem.properties as Record<string, ToolSchema>).scanSource.properties as Record<string, ToolSchema>,
           kind: { type: 'string', enum: ['item', 'tax-summary', 'adjustment', 'subtotal', 'total', 'other'] },
           amount: { anyOf: [{ type: 'integer', minimum: -100000000, maximum: 100000000 }, { type: 'null' }] },
-          mappedTo: { type: 'string', enum: ['discount', 'tax', 'tip', 'included', 'unmapped'] },
+          mappedTo: { type: 'string', enum: ['discount', 'tax', 'tip', 'included', 'adjustment', 'unmapped'] },
         }, additionalProperties: false },
       },
       warnings: { type: 'array', maxItems: 1000, items: { type: 'object', properties: {
@@ -359,6 +363,7 @@ const updateArgs = z.object({
     receiptScan: scanEvidenceInput.optional(),
     expenseIcon: receiptExpenseIconSchema.optional(),
     adjustments: z.array(adjustmentSchema).max(20).optional(),
+    offers: z.array(receiptOfferProposalSchema).max(20).optional(),
   }).strict().refine(value => value.items === undefined || value.upsertItems === undefined,
     'Use upsertItems or the compatible items field, never both'),
 }).strict();
@@ -478,6 +483,8 @@ async function receiptContext(ledger: { revision: number }, trip: Trip, receipt:
   return {
     revision: ledger.revision,
     readingLanguage: (await readTripLanguagePreferences(db(),user,trip.id)).preferences.readingLanguage,
+    builtInOfferRules: builtInOffers,
+    savedOfferRules: !question || speakerMemberId === callerMemberId ? await readSavedOffers(db(), user) : [],
     trip: { id: trip.id, name: trip.name, currency: trip.currency, receiptLanguage: trip.receiptLanguage ?? "auto" },
     receiptType,
     receipt: { ...safeReceipt, conversation: safeReceipt.conversation ?? [], memory: { notes: savedMemory.notes, aliases: contextualAliases } },
@@ -761,7 +768,7 @@ export async function POST(request: Request) {
         // Legacy full-draft metadata initializes a new draft; explicit patches
         // are required to change saved manual metadata during corrections.
         const { id: draftId, receiptId: requestedReceiptId, items: ignoredItems, upsertItems: ignoredUpserts,
-          removeItemIds: ignoredRemovals, metadataPatch, receiptScan: scanEvidence, expenseIcon, adjustments: proposedAdjustments, ...legacyMetadata } = args.draft;
+          removeItemIds: ignoredRemovals, metadataPatch, receiptScan: scanEvidence, expenseIcon, adjustments: proposedAdjustments, offers, ...legacyMetadata } = args.draft;
         void ignoredItems; void ignoredUpserts; void ignoredRemovals;
         const defaultReceiptMetadata = recognition && existing?.receiptId ? Object.fromEntries(Object.entries(legacyMetadata).filter(([key, value]) => value !== undefined
           && ((key === 'location' && (!existing.location || existing.location.source === 'receipt') && existing.fieldSources?.location !== 'user')
@@ -813,7 +820,8 @@ export async function POST(request: Request) {
             if (!scope.length) return [];
             const allocation = adjustment.allocation && scope.length === adjustment.scope.itemIds.length ? adjustment.allocation : undefined;
             const { allocation: dropped, ...rest } = adjustment; void dropped;
-            return [{ ...rest, scope: { type: 'items' as const, itemIds: scope }, ...(allocation ? { allocation } : {}) }];
+            const portions = adjustment.scope.portions ? Object.fromEntries(Object.entries(adjustment.scope.portions).filter(([id]) => scope.includes(id))) : undefined;
+            return [{ ...rest, scope: { type: 'items' as const, itemIds: scope, ...(portions && Object.keys(portions).length ? { portions } : {}) }, ...(allocation ? { allocation } : {}) }];
           });
         const candidate = {
           title: '', currency: null, tax: 0, tip: 0, discount: 0,
@@ -861,6 +869,7 @@ export async function POST(request: Request) {
           candidate.fieldSources = { ...candidate.fieldSources, title: 'default' };
         }
         const draft = draftSchema.parse(candidate);
+        if (offers?.length) applyOfferProposals(trip, draft, offers.map(offer => recognition ? { ...offer, split: null } : offer), { scan: recognition, savedOffers: await readSavedOffers(db(), user) });
         draft.receiptScan = reconcileReceiptScan(draft);
         if (draft.receiptScan && existing?.receiptScan && receiptScanFingerprint(draft) !== receiptScanFingerprint(existing)) {
           draft.receiptScan.warnings = draft.receiptScan.warnings.map(warning => {

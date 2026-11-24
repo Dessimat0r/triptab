@@ -81,5 +81,5 @@ test('R01-A: every export download declares the money format the server requires
   const reader = controller(async (_url, options) => { sent.push(options.headers as Record<string, string>); return new Response('download fixture'); });
   await reader.download('account-activity', 'json');
   assert.equal(sent.length, 1);
-  assert.equal(sent[0]['X-TripTab-Financial-Format'], '2');
+  assert.equal(sent[0]['X-TripTab-Financial-Format'], '3');
 });

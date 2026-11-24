@@ -8,7 +8,7 @@ import { pathToFileURL } from 'node:url';
 import { ModuleKind, ScriptTarget } from 'typescript';
 import { performAuthAction } from '../lib/auth';
 import type { Trip } from '../lib/model';
-const declared = { 'X-TripTab-Financial-Format': '2' }; // R01: the current bundle declares the money format on these requests
+const declared = { 'X-TripTab-Financial-Format': '3' }; // R01: the current bundle declares the money format on these requests
 
 // Same native SQLite/D1 transaction harness as store.test.ts: only Worker
 // bindings and external notification delivery are replaced. All auth, invite,
