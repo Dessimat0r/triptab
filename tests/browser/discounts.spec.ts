@@ -29,7 +29,11 @@ async function fixtures(page: Page, start: Trip = { ...structuredClone(base), dr
     if (pathname === '/api/receipt' && request.method() === 'GET') return route.fulfill({ contentType: 'image/png', path: photo });
     if (pathname === '/api/receipt/process' && request.method() === 'POST' && answer) {
       const { draftId, questionId } = request.postDataJSON();
-      current = { ...current, drafts: current.drafts.map(draft => draft.id === draftId ? answer(current, draft, questionId) : draft) };
+      const next = { ...current, drafts: current.drafts.map(draft => draft.id === draftId ? answer(current, draft, questionId) : draft) };
+      // The real processing route calls writeLedger before returning a
+      // proposal. Use its validator so the draft receives the calculation
+      // rule that posting an unchanged financial snapshot will preserve.
+      current = validateLedger({ trips: [next] }, { source: 'web', previous: { trips: [current] } }).trips[0];
       return route.fulfill({ json: { data: { trips: [current] }, revision: ++revision }, headers: { 'X-TripTab-Account': 'owner' } });
     }
     const json = pathname === '/api/ledger' ? { data: { trips: [current] }, revision }
