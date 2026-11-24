@@ -82,10 +82,19 @@ test('receipt chat applies a capped mains BOGOF in one question on mobile', asyn
     await page.locator('details.expense-more-options').filter({ has: page.locator('.receipt-chat:not([data-item-id])') }).locator(':scope > summary').click();
   }
   await chat.fill(question);
+  const receiptLanguage = page.getByRole('combobox', { name: 'Receipt language' });
+  await receiptLanguage.scrollIntoViewIfNeeded();
+  await auditScreenshot(page, 'mobile-receipt-language', name => testInfo.outputPath(name));
   const ask = page.getByRole('button', { name: 'Ask assistant', exact: true });
   await ask.scrollIntoViewIfNeeded();
   await auditScreenshot(page, 'mobile-chat', name => testInfo.outputPath(name));
   await ask.click();
+  const review = page.getByRole('button', { name: 'Review offer', exact: true });
+  await expect(review).toBeVisible();
+  await review.scrollIntoViewIfNeeded();
+  await auditScreenshot(page, 'mobile-chat-reply', name => testInfo.outputPath(name));
+  expect(state.trip.expenses).toHaveLength(0);
+  await review.click();
   await expect(discounts(page).locator('.adjustment-row')).toContainText('1 pair');
   await expect(discounts(page).locator('.adjustment-row')).toContainText('−£8.00');
   await expect(page.locator('summary .item-offer-badges button[aria-label="Group A"]')).toHaveCount(4);

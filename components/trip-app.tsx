@@ -1300,6 +1300,7 @@ export default function Home({ children }: { children: ReactNode }) {
       tax: source.tax,
       tip: source.tip,
       discount: source.discount,
+      adjustments: source.adjustments,
       bankAmount: source.bankAmount,
       fx: source.fx,
       source: source.source || "manual",
@@ -3684,6 +3685,11 @@ export default function Home({ children }: { children: ReactNode }) {
                         memory={editing.memory}
                         error={receiptHandoffError || error}
                         nativeAvailable={nativeAvailable}
+                        onReviewOffer={processedReceipt?.conversation?.at(-1)?.role === "assistant"
+                          && !equalSavedValue(editing.adjustments ?? [], processedReceipt.adjustments ?? []) ? () => {
+                            reviewProcessedReceipt();
+                            requestAnimationFrame(() => focusExpenseTarget("expense-discounts", ".adjustment-row button"));
+                          } : undefined}
                         onRetry={retryReceiptQuestion}
                         refreshError={refreshError}
                         offline={offline}
