@@ -1110,6 +1110,12 @@
   color: var(--primary);
 }
 
+.editor .save-checklist-item {
+  border-radius: var(--radius-s);
+  white-space: normal;
+  line-height: 1.35;
+}
+
 /* With room to spare, the next correction shares the row with Total and Save. */
 @media (min-width: 720px) {
   .editor-footer > .save-checklist {
@@ -1433,17 +1439,37 @@
   gap: var(--space-2);
 }
 .adjustment-form .segmented label,
-.adjustment-items label,
+.adjustment-items label:has(> input[type="checkbox"]),
 .adjustment-split > label:first-child {
   display: flex;
   align-items: center;
   gap: var(--space-2);
   min-height: 44px;
 }
-.adjustment-items label span {
-  flex: 1;
+.editor .adjustment-form label > :is(input[type="radio"], input[type="checkbox"]) {
+  flex: 0 0 1.25rem;
+  inline-size: 1.25rem;
+  block-size: 1.25rem;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  margin: 0;
+}
+.adjustment-form .segmented label {
+  padding-inline-end: var(--space-1);
+  overflow-wrap: normal;
+}
+.adjustment-items label:has(> input[type="checkbox"]):has(> small) {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+.adjustment-items label:has(> input[type="checkbox"]) > span {
   min-width: 0;
   overflow-wrap: anywhere;
+}
+.adjustment-items label > small {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 .adjustment-split {
   display: grid;

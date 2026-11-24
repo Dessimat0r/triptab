@@ -4,7 +4,7 @@ import { adjustmentSchema, applyAdjustments } from '../lib/adjustments';
 import { builtInOffers, offerRuleSchema, type OfferRule } from '../lib/offer-rules';
 import { draftSchema, expenseShares, shares, stampCalculationRules, total, type Trip } from '../lib/model';
 import { applyReceiptQuestion } from '../lib/receipt-assistant';
-import { applyReceiptTranscription } from '../lib/receipt-ai';
+import { applyReceiptTranscription, type ReceiptTranscription } from '../lib/receipt-ai';
 import { reconcileReceiptScan } from '../lib/receipt-scan';
 import { createReceiptOperationWorker } from './helpers/receipt-operation-worker';
 
@@ -71,6 +71,30 @@ test('upload applies the printed saving using scanned line references and leaves
   assert.equal(read.adjustments?.[0].group, 'A');
   assert.equal(read.receiptScan?.status, 'matched');
   assert.equal(draftSchema.parse({ ...blank, adjustments: undefined }).adjustments, undefined);
+});
+
+test('restaurant scan distinguishes a free main from a £1 main, and does not discount drinks or guess an ambiguous offer', () => {
+  const blank = draftSchema.parse({ ...draft, items: [], status: 'waiting', conversation: [], receiptScan: undefined });
+  for (const price of [0, 100]) {
+    const saving = 1000 - price;
+    const input: ReceiptTranscription = {
+      title: 'Zizzi', currency: 'GBP', date: null, time: null, tax: 0, tip: 0, discount: 0,
+      printedSubtotal: 2500 + price, printedTotal: 2500 + price, warnings: [], summary: 'Read the restaurant bill.',
+      items: [...items, { id: 'drink', name: 'Drinks', amount: 1000, members: ['a'] }].map(({ name, amount }) => ({ id: null, name, amount })),
+      sourceLines: [{ lineIndex: 3, kind: 'adjustment', amount: -saving, mappedTo: 'unmapped', confidence: 'high',
+        observedText: price ? 'Buy one main, second main £1' : 'Buy one main, cheapest main free' }],
+      changes: { ...changes, offers: [{ ...proposal, preset: price ? 'secondPrice' : 'bogof', presetValue: price || null,
+        items: [0, 1].map(itemIndex => ({ itemId: null, itemIndex, portions: null })), split: null }] },
+    };
+    const result = applyReceiptTranscription(trip, blank, input);
+    assert.equal(result.adjustments?.[0].printedAmount, saving);
+    assert.deepEqual(result.adjustments?.[0].scope, { type: 'items', itemIds: result.items.slice(0, 2).map(item => item.id) });
+    assert.equal(total(result), input.printedTotal);
+    assert.equal(result.receiptScan?.status, 'matched');
+    const ambiguous = applyReceiptTranscription(trip, blank, { ...input, changes: null });
+    assert.equal(ambiguous.adjustments, undefined);
+    assert.notEqual(ambiguous.receiptScan?.status, 'matched');
+  }
 });
 
 test('reusable rules are account-scoped and can be changed without rewriting a receipt snapshot', async () => {
