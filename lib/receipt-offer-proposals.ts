@@ -35,6 +35,17 @@ export const receiptOfferProposalJsonSchema = object({
   stacking: nullable({ type: 'boolean' }),
 });
 
+const ruleFields = { preset: true, presetValue: true, savedRule: true, custom: true, maxUses: true } as const;
+export const receiptOfferComparisonSchema = z.object({
+  target: receiptOfferProposalSchema.omit({ preset: true, presetValue: true, savedRule: true, custom: true, label: true }),
+  alternatives: z.array(receiptOfferProposalSchema.pick(ruleFields)).min(2).max(6),
+}).strict();
+const { adjustmentId, group, items, sourceLineIndex, maxUses, split, stacking, preset, presetValue, savedRule, custom } = receiptOfferProposalJsonSchema.properties;
+export const receiptOfferComparisonJsonSchema = object({
+  target: object({ adjustmentId, group, items, sourceLineIndex, maxUses, split, stacking }),
+  alternatives: { ...array(object({ preset, presetValue, savedRule, custom, maxUses }), 6), minItems: 2 },
+});
+
 export const receiptOfferInstructions = `Use changes.offers for offers. Match the stated or printed TERMS first against builtInOfferRules and savedOfferRules; the same cash saving does not prove a match. Use savedRule by name, preset with presetValue for priced, percentage and fixed presets, or custom when the clear terms need a new rule. The custom buy is the quantity per use, cheapest is how many cheapest portions receive the benefit, value and cap are integer hundredths except percent value, and limit caps uses per bill. For a clear printed amount with unknown terms, use only sourceLineIndex and qualifying items. Keep printed coupon text in sourceLines, mappedTo unmapped until the offer is applied. Do not also return the same offer in adjustments or metadata.discount. Only use itemIndex from this scan/current context or stable itemId; specify portions only when fewer than the purchased quantity qualify. Null items means the whole bill, unless using an existing group or changing an existing offer. Group is null for a new group and a letter only to reuse an existing group. For BOGOF or a set-price second item, select all clearly eligible mains when the user says mains, even when the offer is capped. Exclude drinks, sides and ambiguous items; ask only when eligibility cannot be resolved. The calculator pairs the highest-priced remaining portion with the lowest-priced remaining portion without reusing either. Set maxUses to the lower of any stated promotion cap and the number of uses explicitly requested (for example, max three but apply once means 1); otherwise null. Do not infer a cap from the merchant name. Use the preset rather than inventing a custom rule just to set maxUses. On scan omit personal splits unless explicitly requested by a named human in the context. For chat, leave split null unless requested; set items to follow shares, cheapest to give the saving to the discounted portions, equal for selected people, or exact with minor-unit amounts. Only set stacking when the evidence or the user explicitly confirms two offers use the same portions. For an existing offer supply its adjustmentId. Propose changes in the draft; never claim the balance has been posted. A new custom rule is local to this draft until a person saves it for reuse.`;
 
 export function applyOfferProposals(trip: Trip, draft: Draft, proposals: z.infer<typeof receiptOfferProposalSchema>[], options: { scan?: boolean; scannedItemIds?: string[]; savedOffers?: SavedOffer[] }) {

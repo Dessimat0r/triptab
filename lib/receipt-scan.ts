@@ -138,6 +138,26 @@ function warningKey(warning: ReceiptScanWarning): string {
   return JSON.stringify([warning.code, warning.itemId, warning.itemIds, warning.lineIndex, warning.observedText]);
 }
 
+/** One server-side breakdown for reconciliation and receipt chat; all money is in integer hundredths. */
+export function receiptAmountBreakdown(entry: ScannableReceipt) {
+  let calculatedSubtotal = 0;
+  for (const item of entry.items) {
+    if (item.amount === null) continue;
+    if (!Number.isSafeInteger(item.amount) || item.amount < 0 || item.amount > 100000000) {
+      throw new Error('Receipt amounts must be non-negative integer hundredths');
+    }
+    calculatedSubtotal += item.amount;
+  }
+  const adjusted = applyAdjustments(entry.items, entry.adjustments, entry.currency);
+  const adjustedItems = adjusted.net.reduce<number>((sum, amount) => sum + (amount ?? 0), 0);
+  const calculatedTotal = adjustedItems + adjusted.receiptDelta + entry.tax + entry.tip - entry.discount;
+  if (![entry.tax, entry.tip, entry.discount].every(value => Number.isSafeInteger(value) && value >= 0 && value <= 100000000)
+    || ![calculatedSubtotal, calculatedTotal].every(Number.isSafeInteger)) {
+    throw new Error('Receipt amounts must be integer hundredths');
+  }
+  return { calculatedSubtotal, calculatedTotal, adjustedItems, adjusted };
+}
+
 /** Reconcile integer hundredths against independently observed printed values.
  * Allocation warnings are separate from recognition status. Legacy entries
  * without source evidence remain untouched rather than gaining invented facts.
@@ -175,17 +195,11 @@ export function reconcileReceiptScan(entry: ScannableReceipt): ReceiptScan | und
     }
     add(warning);
   }
-  let calculatedSubtotal = 0;
   let incomplete = !entry.items.length;
   for (const item of entry.items) {
     if (item.amount === null) {
       incomplete = true;
       add({ code: 'unreadable-amount', itemId: item.id });
-    } else {
-      if (!Number.isSafeInteger(item.amount) || item.amount < 0 || item.amount > 100000000) {
-        throw new Error('Receipt amounts must be non-negative integer hundredths');
-      }
-      calculatedSubtotal += item.amount;
     }
     if (!item.name.trim()) {
       incomplete = true;
@@ -208,13 +222,7 @@ export function reconcileReceiptScan(entry: ScannableReceipt): ReceiptScan | und
     add(resolved || candidate);
   }
   // Discount and charge records (F-02) count once each against the printed total.
-  const adjusted = applyAdjustments(entry.items, entry.adjustments, entry.currency);
-  const adjustmentEffect = adjusted.net.reduce<number>((sum, value, index) => sum + (value ?? 0) - (entry.items[index].amount ?? 0), 0) + adjusted.receiptDelta;
-  const calculatedTotal = calculatedSubtotal + adjustmentEffect + entry.tax + entry.tip - entry.discount;
-  if (![entry.tax, entry.tip, entry.discount].every(value => Number.isSafeInteger(value) && value >= 0 && value <= 100000000)
-    || ![calculatedSubtotal, calculatedTotal].every(Number.isSafeInteger)) {
-    throw new Error('Receipt amounts must be integer hundredths');
-  }
+  const { adjusted, calculatedSubtotal, calculatedTotal } = receiptAmountBreakdown(entry);
   if (!entry.currency) {
     incomplete = true;
     add({ code: 'ambiguous-currency' });
