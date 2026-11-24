@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import path from 'node:path';
 import { expenseShares, settlements, validateLedger, type Draft, type Trip } from '../../lib/model';
+import { applyReceiptQuestion } from '../../lib/receipt-assistant';
 
 // Audit fixture R1: two £3.00 Pringles, £1.50 milk, "BOGOF PRINGLES -3.00", total £4.50.
 const photo = path.resolve('tests/fixtures/receipts/v1/images/long-receipt.png');
@@ -14,7 +15,7 @@ const r1 = (): Draft => ({ id: 'r1-draft', receiptId: 'photo', title: 'Tesco', d
   receiptScan: { version: 1, printedCurrency: 'GBP', printedTotal: 450, status: 'needs-review', warnings: [],
     sourceLines: [{ lineIndex: 3, observedText: 'BOGOF PRINGLES -3.00', amount: -300, kind: 'adjustment', mappedTo: 'unmapped' }] } });
 
-async function fixtures(page: Page, start: Trip = { ...structuredClone(base), drafts: [r1()] }) {
+async function fixtures(page: Page, start: Trip = { ...structuredClone(base), drafts: [r1()] }, answer?: (trip: Trip, draft: Draft, questionId: string) => Draft) {
   let current: Trip = start, revision = 1, posts = 0;
   await page.route('**/api/**', async route => {
     const request = route.request(), pathname = new URL(request.url()).pathname;
@@ -26,6 +27,11 @@ async function fixtures(page: Page, start: Trip = { ...structuredClone(base), dr
       return route.fulfill({ json: { data: { trips: [current] }, revision: ++revision }, headers: { 'X-TripTab-Account': 'owner' } });
     }
     if (pathname === '/api/receipt' && request.method() === 'GET') return route.fulfill({ contentType: 'image/png', path: photo });
+    if (pathname === '/api/receipt/process' && request.method() === 'POST' && answer) {
+      const { draftId, questionId } = request.postDataJSON();
+      current = { ...current, drafts: current.drafts.map(draft => draft.id === draftId ? answer(current, draft, questionId) : draft) };
+      return route.fulfill({ json: { data: { trips: [current] }, revision: ++revision }, headers: { 'X-TripTab-Account': 'owner' } });
+    }
     const json = pathname === '/api/ledger' ? { data: { trips: [current] }, revision }
       : pathname === '/api/receipt/offer-rules' ? []
       : pathname === '/api/profile' ? { id: 'owner', displayName: 'Alice', email: 'alice@example.invalid', authMethod: 'password' }
@@ -44,6 +50,36 @@ async function open(page: Page) {
 const discounts = (page: Page) => page.locator('#expense-discounts');
 
 test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+
+test('receipt chat applies a capped mains BOGOF in one question on mobile', async ({ page }) => {
+  const draft = r1();
+  draft.title = 'Restaurant';
+  draft.receiptScan = undefined;
+  draft.items = [1800, 1600, 1000, 800, 400].map((amount, index) => ({
+    id: `line-${index}`, name: ['Main A', 'Main B', 'Main C', 'Main D', 'Tea'][index], amount, members: ['alice', 'bob'],
+  }));
+  const question = 'Apply BOGOF to the mains once. The offer is capped at three uses.';
+  const state = await fixtures(page, { ...structuredClone(base), drafts: [draft] }, (trip, saved, id) => {
+    expect(saved.conversation?.find(message => message.id === id)?.text).toBe(question);
+    return applyReceiptQuestion(trip, saved, { summary: 'One pair: Main A qualifies and Main D is free.', changes: {
+      metadata: null, items: [], removeItemIds: [], clear: [], remember: null, aliases: [],
+      offers: [{ adjustmentId: null, label: null, group: null, sourceLineIndex: null, preset: 'bogof', presetValue: null,
+        maxUses: 1, savedRule: null, custom: null, split: null, stacking: null,
+        items: draft.items.slice(0, 4).map(item => ({ itemId: item.id, itemIndex: null, portions: null })) }],
+    } }, id);
+  });
+  await open(page);
+  const chat = page.getByRole('textbox', { name: 'Receipt question', exact: true });
+  if (!(await chat.isVisible())) {
+    await page.locator('details.expense-more-options').filter({ has: page.locator('.receipt-chat:not([data-item-id])') }).locator(':scope > summary').click();
+  }
+  await chat.fill(question);
+  await page.getByRole('button', { name: 'Ask assistant', exact: true }).click();
+  await expect(discounts(page).locator('.adjustment-row')).toContainText('1 pair');
+  await expect(discounts(page).locator('.adjustment-row')).toContainText('−£8.00');
+  await expect(page.locator('summary .item-offer-badges button[aria-label="Group A"]')).toHaveCount(4);
+  expect(state.trip.expenses).toHaveLength(0);
+});
 
 test('discount choices keep readable item names and prices on a 320px phone', async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 740 });

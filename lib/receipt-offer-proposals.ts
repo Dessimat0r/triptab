@@ -19,6 +19,7 @@ export const receiptOfferProposalSchema = z.object({
   sourceLineIndex: z.number().int().min(0).max(999).nullable(),
   preset: z.enum(['bogof', 'secondPrice', 'bundle', 'percentage', 'fixed']).nullable(),
   presetValue: minor.or(z.number().positive().max(100)).nullable(),
+  maxUses: count.nullable().optional(),
   savedRule: text.max(80).nullable(),
   custom: z.object({ buy: count.nullable(), cheapest: count.nullable(), benefit: z.enum(['price', 'percent', 'amount']), value: minor.or(z.number().positive().max(100)), cap: minor.nullable(), limit: count.nullable() }).strict().nullable(),
   split: z.object({ mode: z.enum(['items', 'cheapest', 'equal', 'exact']), people: z.array(z.object({ id: text, amount: minor.nullable() }).strict()).max(50) }).strict().nullable(),
@@ -28,13 +29,13 @@ export const receiptOfferProposalSchema = z.object({
 export const receiptOfferProposalJsonSchema = object({
   adjustmentId: nullable(string), label: nullable(string), group: nullable(string),
   items: nullable(array(object({ itemId: nullable(string), itemIndex: nullable(integer), portions: nullable(integer) }), 200)),
-  sourceLineIndex: nullable(integer), preset: nullable({ type: 'string', enum: Object.keys(builtInOffers) }), presetValue: nullable(number),
+  sourceLineIndex: nullable(integer), preset: nullable({ type: 'string', enum: Object.keys(builtInOffers) }), presetValue: nullable(number), maxUses: nullable(integer),
   savedRule: nullable(string), custom: nullable(object({ buy: nullable(integer), cheapest: nullable(integer), benefit: { type: 'string', enum: ['price', 'percent', 'amount'] }, value: number, cap: nullable(integer), limit: nullable(integer) })),
   split: nullable(object({ mode: { type: 'string', enum: ['items', 'cheapest', 'equal', 'exact'] }, people: array(object({ id: string, amount: nullable(integer) }), 50) })),
   stacking: nullable({ type: 'boolean' }),
 });
 
-export const receiptOfferInstructions = `Use changes.offers for offers. Match the stated or printed TERMS first against builtInOfferRules and savedOfferRules; the same cash saving does not prove a match. Use savedRule by name, preset with presetValue for priced, percentage and fixed presets, or custom when the clear terms need a new rule. The custom buy is the quantity per use, cheapest is how many cheapest portions receive the benefit, value and cap are integer hundredths except percent value, and limit caps uses per bill. For a clear printed amount with unknown terms, use only sourceLineIndex and qualifying items. Keep printed coupon text in sourceLines, mappedTo unmapped until the offer is applied. Do not also return the same offer in adjustments or metadata.discount. Only use itemIndex from this scan/current context or stable itemId; specify portions only when fewer than the purchased quantity qualify. Null items means the whole bill, unless using an existing group or changing an existing offer. Group is null for a new group and a letter only to reuse an existing group. Ask which items qualify when unclear, especially if more items could qualify than the redemption count. On scan omit personal splits unless explicitly requested by a named human in the context. For chat, leave split null unless requested; set items to follow shares, cheapest to give the saving to the discounted portions, equal for selected people, or exact with minor-unit amounts. Only set stacking when the evidence or the user explicitly confirms two offers use the same portions. For an existing offer supply its adjustmentId. Propose changes in the draft; never claim the balance has been posted. A new custom rule is local to this draft until a person saves it for reuse.`;
+export const receiptOfferInstructions = `Use changes.offers for offers. Match the stated or printed TERMS first against builtInOfferRules and savedOfferRules; the same cash saving does not prove a match. Use savedRule by name, preset with presetValue for priced, percentage and fixed presets, or custom when the clear terms need a new rule. The custom buy is the quantity per use, cheapest is how many cheapest portions receive the benefit, value and cap are integer hundredths except percent value, and limit caps uses per bill. For a clear printed amount with unknown terms, use only sourceLineIndex and qualifying items. Keep printed coupon text in sourceLines, mappedTo unmapped until the offer is applied. Do not also return the same offer in adjustments or metadata.discount. Only use itemIndex from this scan/current context or stable itemId; specify portions only when fewer than the purchased quantity qualify. Null items means the whole bill, unless using an existing group or changing an existing offer. Group is null for a new group and a letter only to reuse an existing group. For BOGOF or a set-price second item, select all clearly eligible mains when the user says mains, even when the offer is capped. Exclude drinks, sides and ambiguous items; ask only when eligibility cannot be resolved. The calculator pairs the highest-priced remaining portion with the lowest-priced remaining portion without reusing either. Set maxUses to the lower of any stated promotion cap and the number of uses explicitly requested (for example, max three but apply once means 1); otherwise null. Do not infer a cap from the merchant name. Use the preset rather than inventing a custom rule just to set maxUses. On scan omit personal splits unless explicitly requested by a named human in the context. For chat, leave split null unless requested; set items to follow shares, cheapest to give the saving to the discounted portions, equal for selected people, or exact with minor-unit amounts. Only set stacking when the evidence or the user explicitly confirms two offers use the same portions. For an existing offer supply its adjustmentId. Propose changes in the draft; never claim the balance has been posted. A new custom rule is local to this draft until a person saves it for reuse.`;
 
 export function applyOfferProposals(trip: Trip, draft: Draft, proposals: z.infer<typeof receiptOfferProposalSchema>[], options: { scan?: boolean; scannedItemIds?: string[]; savedOffers?: SavedOffer[] }) {
   let adjustments: Adjustment[] = [...(draft.adjustments ?? [])];
@@ -65,7 +66,10 @@ export function applyOfferProposals(trip: Trip, draft: Draft, proposals: z.infer
     if (proposal.preset && proposal.preset !== 'bogof' && proposal.presetValue === null) throw Error('Choose the value used by this offer.');
     const custom = proposal.custom ? { version: 1, ...Object.fromEntries(Object.entries(proposal.custom).filter(([, value]) => value !== null)) } : undefined;
     const ruleValue = saved?.rule ?? (preset ? { ...preset.rule, ...(proposal.presetValue !== null ? { value: proposal.presetValue } : {}) } : custom) ?? previous?.rule;
-    const rule = ruleValue ? offerRuleSchema.parse(ruleValue) : undefined;
+    const baseRule = ruleValue ? offerRuleSchema.parse(ruleValue) : undefined;
+    const rule = baseRule && proposal.maxUses != null
+      ? offerRuleSchema.parse({ ...baseRule, limit: Math.min(baseRule.limit ?? proposal.maxUses, proposal.maxUses) })
+      : baseRule;
     const kind = previous?.kind ?? (line && line.amount! > 0 ? 'charge' : 'discount');
     if (rule && kind === 'charge') throw Error('A charge needs its printed amount.');
     const matchingRule = rule && options.savedOffers?.find(value => (!value.rule.currency || value.rule.currency === draft.currency)
@@ -85,7 +89,7 @@ export function applyOfferProposals(trip: Trip, draft: Draft, proposals: z.infer
       printedAmount: rule ? printedAmount : undefined, scope, group,
       sourceLineIndex: line?.lineIndex ?? previous?.sourceLineIndex, source: options.scan ? 'receipt' : 'user',
       stacking: proposal.stacking ?? previous?.stacking, memberSplit,
-      rewardOnly: proposal.split ? proposal.split.mode === 'cheapest' : previous?.rewardOnly,
+      rewardOnly: proposal.split ? proposal.split.mode === 'cheapest' : previous ? previous.rewardOnly : Boolean(rule?.pairing) || undefined,
     });
     adjustments = previous ? adjustments.map(value => {
       if (value.id === previous.id) return candidate;

@@ -14,10 +14,12 @@ export const offerRuleSchema = z.object({
   limit: count.optional(),
   cap: money.positive().optional(),
   currency: z.string().regex(/^[A-Z]{3}$/).optional(),
+  pairing: z.literal('highest-lowest').optional(),
 }).strict().superRefine((rule, context) => {
   const bad = (path: string, message: string) => context.addIssue({ code: z.ZodIssueCode.custom, path: [path], message });
   if (rule.cheapest !== undefined && (rule.buy === undefined || rule.cheapest > rule.buy)) bad('cheapest', 'Choose at most as many discounted portions as the offer requires');
   if (!rule.buy && rule.limit) bad('limit', 'A use limit needs a qualifying quantity');
+  if (rule.pairing && (rule.buy !== 2 || rule.cheapest !== 1)) bad('pairing', 'Pairing requires two portions and one discounted portion');
   if (rule.benefit === 'percent' && !percent.safeParse(rule.value).success) bad('value', 'Enter a percentage from 0 to 100 with up to two decimal places');
   if (rule.benefit !== 'percent' && !money.safeParse(rule.value).success) bad('value', 'Enter a whole number of minor currency units');
   if (rule.benefit === 'amount' && !rule.value) bad('value', 'Enter a positive saving');
@@ -28,8 +30,8 @@ export const savedOfferSchema = z.object({ name: z.string().trim().min(1).max(80
 export type SavedOffer = z.infer<typeof savedOfferSchema>;
 
 export const builtInOffers = {
-  bogof: { name: 'Buy one, get one free', rule: { version: 1, buy: 2, cheapest: 1, benefit: 'price', value: 0 } },
-  secondPrice: { name: 'Buy one, get one for a set price', rule: { version: 1, buy: 2, cheapest: 1, benefit: 'price', value: 100 } },
+  bogof: { name: 'Buy one, get one free', rule: { version: 1, buy: 2, cheapest: 1, benefit: 'price', value: 0, pairing: 'highest-lowest' } },
+  secondPrice: { name: 'Buy one, get one for a set price', rule: { version: 1, buy: 2, cheapest: 1, benefit: 'price', value: 100, pairing: 'highest-lowest' } },
   bundle: { name: 'Bundle for a set price', rule: { version: 1, benefit: 'price', value: 0 } },
   percentage: { name: 'Percentage off', rule: { version: 1, benefit: 'percent', value: 10 } },
   fixed: { name: 'Fixed amount off', rule: { version: 1, benefit: 'amount', value: 100 } },
@@ -37,16 +39,18 @@ export const builtInOffers = {
 
 type Portion = { line: number; price: number };
 
-/** Each complete set is an offer use. For multiple sets the selected receipt
- *  portions are grouped highest price first so results do not depend on UI order. */
-export function offerSaving(rule: OfferRule, portions: Portion[], roundPercent: (base: number, percent: number) => number) {
+/** Repeated pair offers take one from each end of the sorted eligible list.
+ *  Untagged snapshots keep their original descending-chunk behaviour. */
+export function offerSaving<T extends Portion>(rule: OfferRule, portions: T[], roundPercent: (base: number, percent: number) => number) {
   const eligible = [...portions].sort((a, b) => b.price - a.price || a.line - b.line);
   const size = rule.buy ?? eligible.length;
   const uses = size ? Math.min(rule.limit ?? Infinity, Math.floor(eligible.length / size)) : 0;
   const rewards = new Map<number, number>();
+  const selected: T[] = [];
   let amount = 0;
   for (let i = 0; i < uses; i++) {
-    const set = eligible.slice(i * size, (i + 1) * size);
+    const set = rule.pairing ? [eligible[i], eligible[eligible.length - 1 - i]] : eligible.slice(i * size, (i + 1) * size);
+    selected.push(...set);
     const reward = rule.cheapest ? set.slice(-rule.cheapest) : set;
     const rewardTotal = reward.reduce((sum, portion) => sum + portion.price, 0);
     const saving = rule.benefit === 'percent' ? roundPercent(rewardTotal, rule.value)
@@ -54,5 +58,5 @@ export function offerSaving(rule: OfferRule, portions: Portion[], roundPercent: 
     amount += saving;
     for (const { line, price } of reward) rewards.set(line, (rewards.get(line) ?? 0) + price);
   }
-  return { amount: Math.min(amount, rule.cap ?? Infinity), uses, rewards };
+  return { amount: Math.min(amount, rule.cap ?? Infinity), uses, rewards, selected };
 }

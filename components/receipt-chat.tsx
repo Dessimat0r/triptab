@@ -135,6 +135,7 @@ export default function ReceiptChat({ messages, busy, itemId, scopeLabel, contex
       <label htmlFor={questionId}>{questionLabel}</label>
       <textarea
         id={questionId}
+        placeholder={!itemId ? "e.g. Apply BOGOF to the mains once" : undefined}
         value={question}
         autoComplete="off"
         maxLength={4000}

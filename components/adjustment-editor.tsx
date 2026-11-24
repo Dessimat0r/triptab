@@ -57,7 +57,7 @@ export default function AdjustmentEditor({ entry, members, onChange, draft, onDr
           <div className="adjustment-row">
             <span>
               <strong>{adjustment.group && <OfferBadge letter={adjustment.group} onClick={() => onDraft({ ...adjustment, editing: adjustment.id })} />}{adjustment.label || (adjustment.kind === "discount" ? uiText("Discount") : uiText("Charge"))}</strong>
-              <small>{describeScope(adjustment, entry)}{adjustment.percent !== undefined ? ` · ${adjustment.percent}%` : ""}</small>
+              <small>{describeScope(adjustment, entry)}{adjustment.percent !== undefined ? ` · ${adjustment.percent}%` : ""}{applied?.pairCount ? ` · ${applied.pairCount} ${applied.pairCount === 1 ? "pair" : "pairs"}` : ""}</small>
             </span>
             <b>{applied ? `${sign}${money(applied.amount, entry.currency)}` : uiText("Check")}</b>
             <button type="button" className="iconbutton" aria-label={uiText("Edit {value0}", { value0: adjustment.label || uiText("discount") })}
@@ -102,6 +102,7 @@ function AdjustmentForm({ entry, members, draft, onSave, onCancel }: {
   const [cheapest, setCheapest] = useState(draft.rule?.cheapest?.toString() ?? "");
   const [cap, setCap] = useState(draft.rule?.cap === undefined ? "" : String(draft.rule.cap / 100));
   const [limit, setLimit] = useState(draft.rule?.limit?.toString() ?? "");
+  const [pairing, setPairing] = useState(draft.rule?.pairing);
   const [ruleCurrency, setRuleCurrency] = useState(draft.rule?.currency);
   const [savedOffers, setSavedOffers] = useState<SavedOffer[]>([]);
   const [savedName, setSavedName] = useState("");
@@ -144,6 +145,9 @@ function AdjustmentForm({ entry, members, draft, onSave, onCancel }: {
     setRuleValue(String(rule.benefit === "percent" ? rule.value : rule.value / 100));
     setBuy(rule.buy?.toString() ?? ""); setCheapest(rule.cheapest?.toString() ?? "");
     setCap(rule.cap === undefined ? "" : String(rule.cap / 100)); setLimit(rule.limit?.toString() ?? "");
+    setPairing(rule.pairing);
+    if (rule.pairing && !draft.editing && sharing === "items") setSharing("cheapest");
+    else if (!rule.cheapest && sharing === "cheapest") setSharing("items");
     setRuleCurrency(rule.currency);
     if (rule.buy) setScopeType("items");
   };
@@ -151,6 +155,7 @@ function AdjustmentForm({ entry, members, draft, onSave, onCancel }: {
     version: 1, benefit, value: benefit === "percent" ? (ruleValue.trim() ? Number(ruleValue.replace(",", ".")) : NaN) : parseAmountText(ruleValue)?.hundredths,
     buy: buy ? Number(buy) : undefined, cheapest: cheapest ? Number(cheapest) : undefined,
     cap: cap ? parseAmountText(cap)?.hundredths ?? NaN : undefined, limit: limit ? Number(limit) : undefined, currency: ruleCurrency,
+    pairing: Number(buy) === 2 && Number(cheapest) === 1 ? pairing : undefined,
   });
   const printed = parseAmountText(printedText)?.hundredths || undefined;
   const fromEvidence = draft.sourceLineIndex === undefined ? undefined : entry.receiptScan?.sourceLines?.find(line => line.lineIndex === draft.sourceLineIndex)?.amount;
@@ -201,7 +206,9 @@ function AdjustmentForm({ entry, members, draft, onSave, onCancel }: {
     : after?.errors[0] ?? (memberSplit && !outcome && !entry.items.some(item => item.amount === null) ? "Check that the saving does not exceed anyone’s share." : null);
   const preview = !problem && outcome ? { total: outcome.total,
     changes: outcome.changes.map(value => ({ name: members.find(member => member.id === value.id)?.name ?? "", change: value.change })) } : null;
-  const defaultParts = after?.applied.find(value => value.id === candidate?.id)?.allocation;
+  const previewedAdjustment = after?.applied.find(value => value.id === candidate?.id);
+  const defaultParts = previewedAdjustment?.allocation;
+  const pairCount = previewedAdjustment?.pairCount;
 
   return <fieldset className="adjustment-form" aria-labelledby={`${formId}-legend`}>
     <legend id={`${formId}-legend`}>{draft.editing ? uiText("Edit discount or charge") : kind === "discount" ? uiText("Add discount") : uiText("Add charge")}</legend>
@@ -238,8 +245,11 @@ function AdjustmentForm({ entry, members, draft, onSave, onCancel }: {
         {ruleMode !== "bogof" && <label>{benefit === "percent" ? "Percentage off" : benefit === "amount" ? "Amount off" : "Offer price"}<input inputMode="decimal" value={ruleValue} onChange={event => setRuleValue(event.target.value)} /></label>}
         {ruleMode === "custom" && <div className="offer-fields-row">
           <label>Maximum saving (optional)<input inputMode="decimal" value={cap} onChange={event => setCap(event.target.value)} /></label>
-          <label>Maximum uses (optional)<input type="number" min={1} max={200} value={limit} onChange={event => setLimit(event.target.value)} /></label>
         </div>}
+        {buy && <details>
+          <summary>{limit ? `Offer limit · up to ${limit}` : "Offer limit · all complete groups"}</summary>
+          <label>Maximum uses (optional)<input type="number" min={1} max={200} value={limit} onChange={event => setLimit(event.target.value)} /></label>
+        </details>}
         <label>Printed saving (optional)<input inputMode="decimal" placeholder={printedAmount === undefined ? "" : (printedAmount / 100).toFixed(2)} value={printedText} onChange={event => setPrintedText(event.target.value)} /></label>
         {rule && <details><summary>Save this rule for future receipts</summary>
           <label>Rule name<input value={savedName} maxLength={80} onChange={event => { setSavedName(event.target.value); setSaveMessage(""); }} /></label>
@@ -279,7 +289,7 @@ function AdjustmentForm({ entry, members, draft, onSave, onCancel }: {
       </div>)}
       {(stacking || after?.errors.some(error => error.includes("overlap"))) && <label><input type="checkbox" checked={stacking} onChange={event => setStacking(event.target.checked)} />This offer stacks with the other discount</label>}
     </fieldset>}
-    <details open={sharing !== "items" ? true : undefined}><summary>{kind === "discount" ? "Change split" : "Change who pays the charge"}</summary>
+    <details open={sharing === "equal" || sharing === "exact" ? true : undefined}><summary>{kind === "discount" ? "Change split" : "Change who pays the charge"}</summary>
       <label>Split method<select value={sharing} onChange={event => setSharing(event.target.value as typeof sharing)}>
         <option value="items">Follow item shares</option>
         {rule?.cheapest && <option value="cheapest">Give saving to discounted portions</option>}
@@ -303,6 +313,7 @@ function AdjustmentForm({ entry, members, draft, onSave, onCancel }: {
     </div>}
     {problem ? <p className="footnote" role="status">{problem}</p> : preview && <p className="adjustment-preview" role="status">
       {uiText("New total {value0}", { value0: money(preview.total, entry.currency) })}
+      {pairCount ? ` · ${pairCount} ${pairCount === 1 ? "pair" : "pairs"}` : ""}
       {preview.changes.length ? ` · ${preview.changes.map(value => `${value.name} ${value.change < 0 ? "−" : "+"}${money(Math.abs(value.change), entry.currency)}`).join(" · ")}` : ""}
     </p>}
     {before.errors.length > 0 && <p className="footnote">{uiText(before.errors[0])}</p>}

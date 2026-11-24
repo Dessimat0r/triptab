@@ -107,7 +107,7 @@ export function claimEditedProposals(adjustments: readonly Adjustment[], earlier
 
 type Line = { id?: string; amount: number | null; quantity?: { total: number } };
 export const enhancedAdjustment = (value: Adjustment) => Boolean(value.rule || value.group || value.memberSplit || value.scope.type === 'items' && value.scope.portions);
-export type AppliedAdjustment = { id: string; amount: number; expected?: number; allocation?: Record<string, number>; members?: Record<string, number> };
+export type AppliedAdjustment = { id: string; amount: number; expected?: number; pairCount?: number; allocation?: Record<string, number>; members?: Record<string, number> };
 export type AdjustmentResult = {
   /** Net price of each line, in input order. Unreadable lines stay null. */
   net: (number | null)[];
@@ -197,11 +197,12 @@ export function applyAdjustments(items: readonly Line[], adjustments: readonly A
     if (indexes.some(index => net[index] === null)) { applied.push({ id: adjustment.id, amount: 0 }); continue; }
     let parts: number[];
     let expected: number | undefined;
+    let pairCount: number | undefined;
     const used = new Map<number, number>();
     const selectedUnits = new Map<number, number[]>();
     if (adjustment.rule || scope.portions) {
       const priorErrors = errors.length;
-      const portions: { line: number; price: number }[] = [];
+      const portions: { line: number; price: number; unit: number }[] = [];
       for (const index of indexes) {
         const line = items[index];
         const explicit = scope.portions?.[line.id!];
@@ -222,16 +223,22 @@ export function applyAdjustments(items: readonly Line[], adjustments: readonly A
         if (realUnits && !unitPrices.has(index)) unitPrices.set(index, split(price, Array(count).fill(1)));
         if (realUnits) selectedUnits.set(index, Array.from({ length: selections }, (_, position) => start + position));
         for (let j = 0; j < selections; j++) {
-          portions.push({ line: index, price: realUnits ? unitPrices.get(index)![start + j] : price });
+          portions.push({ line: index, price: realUnits ? unitPrices.get(index)![start + j] : price, unit: start + j });
         }
       }
       if (!portions.length || errors.length !== priorErrors) continue;
-      const prices = new Map<number, number>();
-      for (const { line, price } of portions) prices.set(line, (prices.get(line) ?? 0) + price);
       const offer = adjustment.rule ? offerSaving(adjustment.rule, portions, percentOf) : undefined;
       if (offer && !offer.uses) { errors.push(`${label(adjustment)} needs more qualifying portions`); continue; }
-      if (offer && adjustment.rule?.buy && (portions.length % adjustment.rule.buy !== 0 || adjustment.rule.limit && portions.length > adjustment.rule.limit * adjustment.rule.buy)) {
+      if (offer && adjustment.rule?.buy && !adjustment.rule.pairing && (portions.length % adjustment.rule.buy !== 0 || adjustment.rule.limit && portions.length > adjustment.rule.limit * adjustment.rule.buy)) {
         errors.push(`${label(adjustment)} has extra portions. Choose only those used by the offer`); continue;
+      }
+      const prices = new Map<number, number>();
+      const paired = adjustment.rule?.pairing ? offer?.selected : undefined;
+      if (paired) pairCount = offer?.uses;
+      for (const { line, price } of paired ?? portions) prices.set(line, (prices.get(line) ?? 0) + price);
+      if (paired) {
+        selectedUnits.clear();
+        for (const { line, unit } of paired) selectedUnits.set(line, [...(selectedUnits.get(line) ?? []), unit]);
       }
       expected = offer?.amount;
       const reward = adjustment.rewardOnly && offer ? offer.rewards : prices;
@@ -287,7 +294,7 @@ export function applyAdjustments(items: readonly Line[], adjustments: readonly A
       }
       net[index] = net[index]! + delta;
     });
-    applied.push({ id: adjustment.id, amount, ...(expected === undefined ? {} : { expected }), ...(members ? { members } : {}),
+    applied.push({ id: adjustment.id, amount, ...(expected === undefined ? {} : { expected }), ...(pairCount === undefined ? {} : { pairCount }), ...(members ? { members } : {}),
       allocation: Object.fromEntries(scope.itemIds.map((itemId, position) => [itemId, parts[position]])) });
   }
   const subtotal = () => net.reduce<number>((sum, value) => sum + (value ?? 0), 0);

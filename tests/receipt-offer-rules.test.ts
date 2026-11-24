@@ -48,6 +48,41 @@ test('one grouped portion on a quantity line leaves other portions available and
   assert.deepEqual(applyAdjustments(items, [offer(bogof), { ...second, stacking: true }]).errors, []);
 });
 
+test('BOGOF takes distinct outer pairs, allows leftovers, honours limits, and leaves old snapshots unchanged', () => {
+  const mains = [1800, 1600, 1400, 1200, 1000, 800, 600, 400]
+    .map((amount, i) => ({ ...items[0], id: `main-${i}`, amount }));
+  const discount = (rule: OfferRule, scopeItems = mains) => offer(rule, {
+    scope: { type: 'items', itemIds: scopeItems.map(item => item.id) }, rewardOnly: true,
+  });
+  const all = [...mains, { ...items[0], id: 'drink', amount: 100 }];
+  const capped = applyAdjustments(all, [discount({ ...bogof, limit: 3 })]);
+  assert.deepEqual(capped.errors, []);
+  assert.equal(capped.applied[0].pairCount, 3);
+  assert.equal(capped.applied[0].amount, 1800);
+  assert.deepEqual(capped.net, [1800, 1600, 1400, 1200, 1000, 0, 0, 0, 100]);
+  const once = applyAdjustments(all, [discount({ ...bogof, limit: 1 })]);
+  assert.equal(once.applied[0].amount, 400);
+  assert.equal(once.applied[0].pairCount, 1);
+  const five = mains.slice(0, 5);
+  assert.equal(applyAdjustments(five, [discount(bogof, five)]).applied[0].amount, 2200);
+  const four = mains.slice(0, 4);
+  assert.equal(applyAdjustments(four, [discount(bogof, four)]).applied[0].amount, 2600);
+  assert.equal(applyAdjustments(four, [discount({ ...bogof, pairing: undefined }, four)]).applied[0].amount, 2800);
+});
+
+test('receipt chat can request one use on a mains group without entering individual portions', () => {
+  const mains = [1800, 1600, 1000, 800].map((amount, i) => ({ ...items[0], id: `m${i}`, amount }));
+  const chat = { ...draft, items: [...mains, { ...items[0], id: 'drink', amount: 400 }], receiptScan: undefined };
+  const result = applyReceiptQuestion(trip, chat, { summary: 'Applied once. Cheapest main free.', changes: { ...changes,
+    offers: [{ ...proposal, sourceLineIndex: null, split: null, maxUses: 1,
+      items: mains.map(item => ({ itemId: item.id, itemIndex: null, portions: null })) }],
+  } }, 'q');
+  assert.equal(result.adjustments?.[0].rule?.limit, 1);
+  assert.deepEqual(result.adjustments?.[0].scope, { type: 'items', itemIds: mains.map(item => item.id) });
+  assert.equal(total(result), 4800);
+  assert.deepEqual(applyAdjustments(result.items, result.adjustments).net, [1800, 1600, 1000, 0, 400]);
+});
+
 test('a capped custom rule is copied from the saved library and the observed amount takes precedence', () => {
   const rule = offerRuleSchema.parse({ version: 1, buy: 2, cheapest: 1, benefit: 'percent', value: 50, cap: 400, limit: 1 });
   const updated = applyReceiptQuestion(trip, draft, { summary: 'Offer applied.', changes: { ...changes,
