@@ -65,7 +65,11 @@ test('receipt chat applies a capped mains BOGOF in one question on mobile', asyn
   const question = 'Apply BOGOF to the mains once. The offer is capped at three uses.';
   const state = await fixtures(page, { ...structuredClone(base), drafts: [draft] }, (trip, saved, id) => {
     expect(saved.conversation?.find(message => message.id === id)?.text).toBe(question);
-    return applyReceiptQuestion(trip, saved, { summary: 'One pair: Main A qualifies and Main D is free.', changes: {
+    // The production ledger stamps the signed-in author's member ID. Supply
+    // the same trusted attribution in this synthetic account's server fixture.
+    const authored = { ...saved, conversation: saved.conversation?.map(message => message.id === id
+      ? { ...message, authorMemberId: 'alice' } : message) };
+    return applyReceiptQuestion(trip, authored, { summary: 'One pair: Main A qualifies and Main D is free.', changes: {
       metadata: null, items: [], removeItemIds: [], clear: [], remember: null, aliases: [],
       offers: [{ adjustmentId: null, label: null, group: null, sourceLineIndex: null, preset: 'bogof', presetValue: null,
         maxUses: 1, savedRule: null, custom: null, split: null, stacking: null,
