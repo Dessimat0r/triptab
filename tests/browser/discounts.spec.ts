@@ -44,6 +44,25 @@ const discounts = (page: Page) => page.locator('#expense-discounts');
 
 test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
 
+test('discount choices keep readable item names and prices on a 320px phone', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 740 });
+  await page.emulateMedia({ colorScheme: 'dark' });
+  const draft = r1();
+  draft.items[0].name = 'Clipper Earl Grey Tea';
+  await fixtures(page, { ...structuredClone(base), drafts: [draft] });
+  await open(page);
+  await page.getByRole('button', { name: 'Apply as discount', exact: true }).click();
+  const form = discounts(page).locator('.adjustment-form');
+  const row = form.locator('.adjustment-items label').filter({ hasText: 'Clipper Earl Grey Tea' });
+  const width = async (selector: string) => row.locator(selector).evaluate(node => node.getBoundingClientRect().width);
+  expect(await width('input')).toBeLessThan(28);
+  expect(await width('span')).toBeGreaterThan(90);
+  expect(await row.locator('small').evaluate(node => getComputedStyle(node).whiteSpace)).toBe('nowrap');
+  expect((await form.getByRole('radio', { name: 'Discount', exact: true }).boundingBox())?.width).toBeLessThan(28);
+  await row.getByRole('checkbox').check();
+  await expect(row.getByRole('checkbox')).toBeChecked();
+});
+
 test('scan R1: the BOGOF line becomes a discount on both Pringles, reconciles, and stores the correct shares', async ({ page }) => {
   const state = await fixtures(page);
   await open(page);
