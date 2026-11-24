@@ -161,6 +161,7 @@ function AdjustmentForm({ entry, members, draft, onSave, onCancel }: {
     return rule?.buy && chosen.includes(item.id) && !item.quantity && Number.isSafeInteger(total) && total > 1 && total <= 200
       ? { ...item, quantity: { total }, fieldSources: { ...item.fieldSources, quantity: "user" as const } } : item;
   });
+  const qualifyingCount = items.filter(item => chosen.includes(item.id)).reduce((sum, item) => sum + (portions[item.id] ?? item.quantity?.total ?? 1), 0);
   const chosenPortions = Object.fromEntries(chosen.flatMap(id => portions[id] === undefined ? [] : [[id, portions[id]]]));
   const participantIds = [...new Set(entry.items.filter(item => scopeType === "receipt" || chosen.includes(item.id)).flatMap(item => item.members))];
   const selectedPeople = people ?? participantIds;
@@ -266,7 +267,7 @@ function AdjustmentForm({ entry, members, draft, onSave, onCancel }: {
         <label><input type="checkbox" checked={itemIds.includes(item.id)} onChange={event => setItemIds(previous => event.target.checked ? [...previous, item.id] : previous.filter(value => value !== item.id))} />
           <span>{item.name || uiText("Item {value0}", { value0: index + 1 })}</span>
           <small>{item.amount === null ? uiText("Unreadable") : money(item.amount, entry.currency)}</small></label>
-        {itemIds.includes(item.id) && rule?.buy && !entry.items[index].quantity && <label className="offer-portions">
+        {itemIds.includes(item.id) && rule?.buy && !entry.items[index].quantity && (qualifyingCount < rule.buy || purchased[item.id]) && <label className="offer-portions">
           <span>Purchased portions</span><input aria-label={`Purchased portions for ${item.name || index + 1}`} type="number" min={1} max={200} placeholder="1" value={purchased[item.id] ?? ""} onChange={event => setPurchased(previous => ({ ...previous, [item.id]: event.target.value }))} />
         </label>}
         {itemIds.includes(item.id) && Number.isSafeInteger(item.quantity?.total) && item.quantity!.total > 1 && <label className="offer-portions">
