@@ -16,6 +16,7 @@ export function quickEligible(entry: ReceiptEditor) {
   const [item] = entry.items;
   return isManualSingleLine(entry) && entry.percentages === undefined
     && !!item.members.length && item.amount !== null && item.name === entry.title && !item.quantity
+    && !entry.adjustments?.some(adjustment => adjustment.group)
     && !item.scanSource && !Object.keys(item.translations ?? {}).length;
 }
 

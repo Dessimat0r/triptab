@@ -1,6 +1,6 @@
 import { canonicalJson as canonical } from './data-utils';
 import { z } from 'zod';
-import { applyAdjustments, type Adjustment } from './adjustments';
+import { applyAdjustments, enhancedAdjustment, type Adjustment } from './adjustments';
 
 const amount = z.number().int().min(0).max(100000000);
 const identifier = z.string().min(1).max(100);
@@ -121,6 +121,7 @@ export type ScannableReceipt = {
     id: string; name: string; amount: number | null; members: string[];
     scanSource?: ScanSource; fieldSources?: z.infer<typeof itemFieldSourcesSchema>;
     units?: { total: number; allocations: Record<string, number>; label?: string };
+    quantity?: { total: number };
     percentages?: Record<string, number>;
   }[];
   tax: number; tip: number; discount: number;
@@ -207,7 +208,7 @@ export function reconcileReceiptScan(entry: ScannableReceipt): ReceiptScan | und
     add(resolved || candidate);
   }
   // Discount and charge records (F-02) count once each against the printed total.
-  const adjusted = applyAdjustments(entry.items, entry.adjustments);
+  const adjusted = applyAdjustments(entry.items, entry.adjustments, entry.currency);
   const adjustmentEffect = adjusted.net.reduce<number>((sum, value, index) => sum + (value ?? 0) - (entry.items[index].amount ?? 0), 0) + adjusted.receiptDelta;
   const calculatedTotal = calculatedSubtotal + adjustmentEffect + entry.tax + entry.tip - entry.discount;
   if (![entry.tax, entry.tip, entry.discount].every(value => Number.isSafeInteger(value) && value >= 0 && value <= 100000000)
@@ -227,7 +228,12 @@ export function reconcileReceiptScan(entry: ScannableReceipt): ReceiptScan | und
   } else if (calculatedTotal !== scan.printedTotal) {
     add({ code: 'total-mismatch', difference: calculatedTotal - scan.printedTotal });
   }
-  if (scan.printedSubtotal !== undefined && scan.printedSubtotal !== null && calculatedSubtotal !== scan.printedSubtotal) {
+  // Some tills print SUBTOTAL after the promotion. Accept that basis only
+  // when an applied offer and the independently printed total both reconcile.
+  const discountTotal = adjusted.applied.reduce((sum, value) => sum + (entry.adjustments?.some(adjustment => adjustment.id === value.id && adjustment.kind === 'discount') ? value.amount : 0), 0) + entry.discount;
+  const netPrintedSubtotal = entry.adjustments?.some(enhancedAdjustment) && discountTotal > 0
+    && calculatedTotal === scan.printedTotal && calculatedSubtotal - discountTotal === scan.printedSubtotal;
+  if (scan.printedSubtotal !== undefined && scan.printedSubtotal !== null && calculatedSubtotal !== scan.printedSubtotal && !netPrintedSubtotal) {
     add({ code: 'subtotal-mismatch', difference: calculatedSubtotal - scan.printedSubtotal });
   }
   const appliedLines = new Set((entry.adjustments ?? []).flatMap(adjustment => adjustment.sourceLineIndex === undefined ? [] : [adjustment.sourceLineIndex]));

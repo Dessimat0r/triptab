@@ -44,6 +44,22 @@
 .editor label:has(> select) {
   contain: layout;
 }
+/* Native WebKit selects can clip the selected text inside their control even
+   when the box is tall enough. Keep the native picker, but draw the closed
+   control like our text fields, with a text-coloured arrow. */
+.editor label > select {
+  appearance: none;
+  padding-block: 0;
+  padding-inline-end: 2rem;
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 51%),
+    linear-gradient(135deg, currentColor 50%, transparent 51%);
+  background-position: right 16px center, right 11px center;
+  background-size: 5px 5px;
+  background-repeat: no-repeat;
+}
+.editor label > select:dir(rtl) {
+  background-position: left 11px center, left 16px center;
+}
 /* Fields are spaced by their stack's gap, not by margins on each control. */
 .editor label > input,
 .editor label > select,
@@ -1391,6 +1407,28 @@
 .adjustment-row b {
   font-variant-numeric: tabular-nums;
 }
+.item-name-with-offers { display: flex; align-items: center; gap: .3rem; }
+.item-offer-badges { display: inline-flex; flex: 0 0 auto; flex-wrap: wrap; max-width: 44%; gap: .25rem; }
+.item-summary-name .item-offer-badges { margin-inline: .3rem; vertical-align: middle; }
+.offer-badge, .adjustment-row .offer-badge {
+  display: inline-grid; place-items: center; min-width: 1.7rem; min-height: 1.7rem;
+  border: 1px solid transparent; border-radius: 50%; padding: 0 .25rem;
+  background: var(--offer-bg); color: var(--offer-fg); font-size: .75rem; font-weight: 700; line-height: 1;
+}
+.offer-badge[aria-pressed="true"] { border-color: currentColor; box-shadow: 0 0 0 2px var(--offer-bg); }
+.offer-badge--0 { --offer-bg: #dbeafe; --offer-fg: #1e3a8a; }
+.offer-badge--1 { --offer-bg: #dcfce7; --offer-fg: #14532d; }
+.offer-badge--2 { --offer-bg: #fef3c7; --offer-fg: #78350f; }
+.offer-badge--3 { --offer-bg: #f3e8ff; --offer-fg: #581c87; }
+.offer-badge--4 { --offer-bg: #fce7f3; --offer-fg: #831843; }
+.adjustment-row strong .offer-badge { margin-inline-end: .35rem; }
+.offer-highlight { outline: 2px solid currentColor; outline-offset: 3px; border-radius: 4px; }
+.offer-rule-fields, .offer-fields-row { display: grid; gap: .5rem; }
+.offer-fields-row { grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr)); }
+.offer-person { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; }
+.adjustment-form .offer-person label, .adjustment-items .offer-portions { display: flex; align-items: center; gap: .4rem; }
+.adjustment-form .offer-person label { min-height: 44px; }
+.offer-person > input, .offer-portions input { width: 6rem; }
 .adjustment-form,
 .adjustment-items {
   display: grid;
@@ -1457,6 +1495,11 @@
 .adjustment-preview {
   margin: 0;
   font-variant-numeric: tabular-nums;
+}
+.adjustment-preview-share {
+  display: inline-block;
+  max-inline-size: 100%;
+  overflow-wrap: anywhere;
 }
 /* F-14: Undo stays reachable while a form is open. */
 .saved-banner.undo-over-editor {

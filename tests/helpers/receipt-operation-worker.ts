@@ -42,6 +42,7 @@ export async function createReceiptOperationWorker(options: { kind?: 'bill'; bin
       import * as activity from './app/api/activity/route.ts';
       import * as accountActivity from './app/api/account-activity/route.ts';
       import * as exports from './app/api/export/route.ts';
+      import * as offerRules from './app/api/receipt/offer-rules/route.ts';
       import * as imports from './app/api/import/route.ts';
       import * as offline from './app/api/offline-expenses/route.ts';
       import * as aiStatus from './app/api/receipt/ai-status/route.ts';
@@ -57,7 +58,7 @@ export async function createReceiptOperationWorker(options: { kind?: 'bill'; bin
       import { hooks } from ${JSON.stringify(shim)};
       import { readLedger as storedLedger, writeLedger } from './lib/store.ts';
       ${hasBackground ? "import * as background from './lib/receipt-background.ts';" : 'const background = undefined;'}
-      const routes = { '/api/ledger': ledger, '/api/receipt': receipt, '/api/receipt/process': process, '/api/trip': tripRoute, '/api/auth': authRoute, '/api/profile': profile, '/api/activity': activity, '/api/account-activity': accountActivity, '/api/export': exports, '/api/import': imports, '/api/offline-expenses': offline, '/api/receipt/ai-status': aiStatus, '/api/trip-language': tripLanguage, '/api/notifications': notifications, '/api/receipt/audit': receiptAudit, '/mcp': mcp, '/api/invite': invite, '/api/receipt/translate': translate, '/api/account': accountRoute, '/api/remind': remind, '/api/notification-preferences': notificationPreferences };
+      const routes = { '/api/ledger': ledger, '/api/receipt': receipt, '/api/receipt/process': process, '/api/trip': tripRoute, '/api/auth': authRoute, '/api/profile': profile, '/api/activity': activity, '/api/account-activity': accountActivity, '/api/export': exports, '/api/import': imports, '/api/offline-expenses': offline, '/api/receipt/ai-status': aiStatus, '/api/trip-language': tripLanguage, '/api/notifications': notifications, '/api/receipt/audit': receiptAudit, '/api/receipt/offer-rules': offerRules, '/mcp': mcp, '/api/invite': invite, '/api/receipt/translate': translate, '/api/account': accountRoute, '/api/remind': remind, '/api/notification-preferences': notificationPreferences };
       export default {
         async fetch(request, env, ctx) {
           const url = new URL(request.url);

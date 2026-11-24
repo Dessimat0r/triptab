@@ -23,6 +23,7 @@ export type ReceiptChatProps = {
   refreshError?: string;
   offline?: boolean;
   nativeAvailable?: boolean;
+  onReviewOffer?: () => void;
   onRetry?: (questionId: string) => Promise<boolean>;
   onSend: (text: string, itemId?: string) => Promise<boolean> | boolean;
   onRefresh: () => void;
@@ -30,7 +31,7 @@ export type ReceiptChatProps = {
 
 function messageTime(value: string) { return formatInstant(value, { year: false }); }
 
-export default function ReceiptChat({ messages, busy, itemId, scopeLabel, contextTitle, itemNames, memberNames, currentMemberId, memory, error, refreshError, offline, nativeAvailable = false, onRetry, onSend, onRefresh }: ReceiptChatProps) {
+export default function ReceiptChat({ messages, busy, itemId, scopeLabel, contextTitle, itemNames, memberNames, currentMemberId, memory, error, refreshError, offline, nativeAvailable = false, onReviewOffer, onRetry, onSend, onRefresh }: ReceiptChatProps) {
   const titleId = useId();
   const questionId = useId();
   const hintId = useId();
@@ -132,9 +133,13 @@ export default function ReceiptChat({ messages, busy, itemId, scopeLabel, contex
       <div className="receipt-chat-announcement" role="status" aria-live="polite" aria-atomic="true">
         {replies.length > 0 ? uiText(itemId ? replies.length === 1 ? "1 reply is available from the assistant about {item}." : "{count} replies are available from the assistant about {item}." : replies.length === 1 ? "1 reply is available from the assistant." : "{count} replies are available from the assistant.", { count: replies.length, item: itemLabel }) : ""}
       </div>
+      {onReviewOffer && <div className="receipt-chat-actions">
+        <button type="button" className="primary" disabled={working} onClick={onReviewOffer}>{uiText("Review offer")}</button>
+      </div>}
       <label htmlFor={questionId}>{questionLabel}</label>
       <textarea
         id={questionId}
+        placeholder={!itemId ? "e.g. Apply BOGOF to the mains once" : undefined}
         value={question}
         autoComplete="off"
         maxLength={4000}

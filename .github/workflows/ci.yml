@@ -127,8 +127,17 @@ jobs:
           cat "$RUNNER_TEMP/triptab-previous.log"
           exit 1
       - name: Check production browser layouts
+        env:
+          TRIPTAB_OFFER_VISUAL_AUDIT: '1'
         # Retain the measured two-worker default for each complete engine suite.
         run: npm run test:layout -- --project=${{ matrix.browser }}
+      - name: Upload receipt offer visual audit
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: receipt-offer-visual-${{ matrix.browser }}
+          path: test-results/**/offer-audit-*.png
+          retention-days: 7
       - name: Upload failed browser traces
         if: failure()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6

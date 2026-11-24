@@ -12,7 +12,7 @@ import { AlertTriangle, ChevronDown } from "lucide-react";
  * be saved as it is opens by itself, and a correction jump opens a closed one
  * (the editors stay in the document inside the closed disclosure).
  */
-export default function ExpenseItemRow({ id, index, name, detail, price, flag, unassigned, open: initiallyOpen, sharing, children }: {
+export default function ExpenseItemRow({ id, index, name, detail, price, flag, unassigned, open: initiallyOpen, sharing, badges, children }: {
   id: string;
   index: number;
   name: string;
@@ -26,6 +26,7 @@ export default function ExpenseItemRow({ id, index, name, detail, price, flag, u
   open: boolean;
   /** The line's people, given whether the line is open so its split method can follow. */
   sharing?: (open: boolean) => ReactNode;
+  badges?: ReactNode;
   children: ReactNode;
 }) {
   const [defaultOpen] = useState(initiallyOpen);
@@ -34,7 +35,7 @@ export default function ExpenseItemRow({ id, index, name, detail, price, flag, u
   return <div className={`item${open ? " item--open" : ""}${unassigned ? " item--unassigned" : ""}`} id={id}>
     <details className="item-edit" open={defaultOpen || undefined} onToggle={event => setOpen(event.currentTarget.open)}>
       <summary>
-        <span className="item-summary-name">{label}{detail && <small>{detail}</small>}</span>
+        <span className="item-summary-name">{label}{badges}{detail && <small>{detail}</small>}</span>
         {flag && <span className="item-flag"><AlertTriangle size={13} aria-hidden="true" />{flag}</span>}
         <span className="item-summary-price">{price}</span>
         <ChevronDown className="item-summary-chevron" size={18} aria-hidden="true" />

@@ -4,6 +4,8 @@ import { reconcileReceiptScan } from './receipt-scan';
 import { receiptAliasSchema } from './receipt-context';
 import { receiptLanguageSchema } from './receipt-languages';
 import { expenseIconSchema, defaultBackground, type ExpenseIconChoice } from './expense-icons';
+import { applyOfferProposals, receiptOfferProposalJsonSchema, receiptOfferProposalSchema } from './receipt-offer-proposals';
+import type { SavedOffer } from './offer-rules';
 
 export const receiptExpenseIconSchema = z.object({
   symbol: expenseIconSchema.shape.symbol.nullable(),
@@ -50,6 +52,7 @@ export const receiptChangesSchema = z.object({
   clear: z.array(z.enum(['location', 'locationHint', 'percentages', 'fx', 'bankAmount', 'receiptLanguage'])).max(6),
   remember: z.string().trim().max(2000).nullable(),
   aliases: z.array(z.object({ name: z.string().trim().min(1).max(60), itemId: id.nullable(), memberId: id.nullable(), scopeMemberId: id.nullable() }).strict()).max(50),
+  offers: z.array(receiptOfferProposalSchema).max(20).optional(),
 }).strict();
 export type ReceiptChanges = z.infer<typeof receiptChangesSchema>;
 
@@ -71,6 +74,7 @@ export const receiptChangesJsonSchema = object({
   }), 200),
   removeItemIds: array(string, 200), clear: array({ type: 'string', enum: ['location', 'locationHint', 'percentages', 'fx', 'bankAmount', 'receiptLanguage'] }, 6),
   remember: nullable(string), aliases: array(object({ name: string, itemId: nullable(string), memberId: nullable(string), scopeMemberId: nullable(string) }), 50),
+  offers: array(receiptOfferProposalJsonSchema, 20),
 });
 
 function mapShares(rows: { memberId: string; value: number }[], trip: Trip) {
@@ -81,12 +85,12 @@ function mapShares(rows: { memberId: string; value: number }[], trip: Trip) {
 }
 
 /** Apply explicit cost decisions separately from recognition; never post an expense. */
-export function applyReceiptChanges(trip: Trip, draft: Draft, input: ReceiptChanges, options: { recognition?: boolean; scannedItemIds?: string[]; questionId?: string } = {}) {
+export function applyReceiptChanges(trip: Trip, draft: Draft, input: ReceiptChanges, options: { recognition?: boolean; scannedItemIds?: string[]; questionId?: string; savedOffers?: SavedOffer[] } = {}) {
   const changes = receiptChangesSchema.parse(input), next = structuredClone(draft), issues: string[] = [];
   const question = options.questionId ? draft.conversation?.find(message => message.id === options.questionId && message.role === 'user') : undefined;
   const knownAuthor = question ? trip.members.some(member => member.id === question.authorMemberId)
     : draft.conversation?.some(message => message.role === 'user' && trip.members.some(member => member.id === message.authorMemberId));
-  if (!knownAuthor && (changes.items.length || changes.removeItemIds.length || changes.clear.some(field => ['percentages','fx','bankAmount'].includes(field)) || changes.metadata && Object.entries(changes.metadata).some(([key, value]) => key !== 'location' && value !== null))) {
+  if (!knownAuthor && (changes.items.length || changes.removeItemIds.length || !options.recognition && changes.offers?.length || changes.clear.some(field => ['percentages','fx','bankAmount'].includes(field)) || changes.metadata && Object.entries(changes.metadata).some(([key, value]) => key !== 'location' && value !== null))) {
     if (!options.recognition) throw Error('The assistant needs a known traveller before proposing these changes. Clarify who is speaking.');
     issues.push('Clarify who is speaking before assigning personal cost shares.'); changes.items = [];
   }
@@ -150,6 +154,14 @@ export function applyReceiptChanges(trip: Trip, draft: Draft, input: ReceiptChan
   if (!options.recognition) {
     if (new Set(changes.removeItemIds).size !== changes.removeItemIds.length || changes.removeItemIds.some(id => !draft.items.some(item => item.id === id) || seen.has(id))) throw Error('Only distinct existing items can be removed, without also changing them.');
     next.items = next.items.filter(item => !changes.removeItemIds.includes(item.id));
+  }
+  if (changes.offers?.length) {
+    if (!options.recognition || knownAuthor) {
+      applyOfferProposals(trip, next, changes.offers, { scan: options.recognition, scannedItemIds: options.scannedItemIds, savedOffers: options.savedOffers });
+    } else {
+      // A scan can identify an offer independently of anyone's personal split.
+      applyOfferProposals(trip, next, changes.offers.map(offer => ({ ...offer, split: null })), { scan: true, scannedItemIds: options.scannedItemIds, savedOffers: options.savedOffers });
+    }
   }
   if (total(next) < 0 || total(next) > MAX_AMOUNT) throw Error('The proposed receipt total is outside the supported range.');
   if (!options.recognition && changes.metadata?.fx && changes.metadata.fx.source !== 'manual') throw Error('Only an explicitly supplied manual exchange rate can be changed in chat.');

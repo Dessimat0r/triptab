@@ -134,6 +134,13 @@
       "when": 1794646800000,
       "tag": "0018_receipt_ready_preference",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "6",
+      "when": 1795480287315,
+      "tag": "0019_receipt_offer_rules",
+      "breakpoints": true
     }
   ]
 }

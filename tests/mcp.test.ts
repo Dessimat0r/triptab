@@ -15,6 +15,7 @@ const user = 'owner-1';
 const profile = { id: user, email: 'owner@example.com', displayName: 'Owner', createdAt: '2026-10-04T00:00:00Z' };
 const rateDatabase = new DatabaseSync(':memory:');
 rateDatabase.exec('CREATE TABLE auth_rate_limits (key_hash TEXT PRIMARY KEY, window_start INTEGER NOT NULL, attempts INTEGER NOT NULL)');
+rateDatabase.exec('CREATE TABLE receipt_offer_rules (user_id TEXT, rule_key TEXT, data TEXT, PRIMARY KEY (user_id, rule_key))');
 const initialTrip: Trip = {
   id: 'trip-1', ownerId: user, name: 'Lisbon', currency: 'GBP',
   members: [{ id: 'a', name: 'Owner', userId: user, email: profile.email }, { id: 'b', name: 'Alex' }],
@@ -51,6 +52,7 @@ const state = {
 };
 function reset() {
   rateDatabase.exec('DELETE FROM auth_rate_limits');
+  rateDatabase.exec('DELETE FROM receipt_offer_rules');
   state.data = { trips: [structuredClone(initialTrip)] };
   state.revision = 3;
   state.writes = 0;
@@ -102,6 +104,7 @@ const mockStore = {
   db() {
     return { prepare: (sql: string) => ({ bind: (...values: (string | number)[]) => ({
       first: async () => sql.includes('auth_rate_limits') ? rateDatabase.prepare(sql).get(...values) ?? null : state.profileAvailable ? { email: profile.email, display_name: profile.displayName } : null,
+      all: async () => { assert.ok(sql.includes('receipt_offer_rules')); return { results: rateDatabase.prepare(sql).all(...values) }; },
       run: async () => { assert.ok(sql.includes('auth_rate_limits')); const result = rateDatabase.prepare(sql).run(...values); return { meta: { changes: Number(result.changes) } }; },
     }) }) };
   },

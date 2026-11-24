@@ -23,7 +23,7 @@ async function fixtures(page: Page, offline: { mode: 'ok' | 'refuse' }) {
     seen.push({ path, method: request.method(), format: request.headers()['x-triptab-financial-format'] });
     let json: unknown = {};
     if (path === '/api/offline-expenses') {
-      if (offline.mode === 'refuse') return route.fulfill({ status: 426, headers: { 'X-TripTab-Financial-Format-Required': '2', 'Cache-Control': 'private, no-store' }, json: { error: REFUSAL } });
+      if (offline.mode === 'refuse') return route.fulfill({ status: 426, headers: { 'X-TripTab-Financial-Format-Required': '3', 'Cache-Control': 'private, no-store' }, json: { error: REFUSAL } });
       json = { saved: true };
     } else if (path === '/api/ledger') json = { data: { trips: [trip] }, revision: 1 };
     else if (path === '/api/profile') json = { id: 'alice', displayName: 'Alice', email: 'alice@example.test', authMethod: 'password', hasPassword: true, emailVerified: true, uiLanguage: 'en' };
@@ -54,7 +54,7 @@ const queued = (page: Page) => page.evaluate(() => new Promise<number>((resolve,
   open.onsuccess = () => { const count = open.result.transaction('queue').objectStore('queue').count(); count.onsuccess = () => resolve(count.result); count.onerror = () => reject(count.error); };
 }));
 
-test('a refused (426) offline sync keeps the queued expense, shows the guidance, declares format 2 and does not retry on focus or reconnect; a reload then syncs it', async ({ page }) => {
+test('a refused (426) offline sync keeps the queued expense, shows the guidance, declares format 3 and does not retry on focus or reconnect; a reload then syncs it', async ({ page }) => {
   const offline = { mode: 'refuse' as 'ok' | 'refuse' };
   const seen = await fixtures(page, offline);
   await queueOneEntry(page);
@@ -64,7 +64,7 @@ test('a refused (426) offline sync keeps the queued expense, shows the guidance,
   expect(await queued(page)).toBe(1);
   const attempts = () => seen.filter(entry => entry.path === '/api/offline-expenses');
   expect(attempts().length).toBeGreaterThanOrEqual(1);
-  expect(attempts().every(entry => entry.format === '2')).toBe(true);
+  expect(attempts().every(entry => entry.format === '3')).toBe(true);
   const afterFirst = attempts().length;
   for (let i = 0; i < 3; i++) await page.evaluate(() => { window.dispatchEvent(new Event('focus')); window.dispatchEvent(new Event('online')); });
   await page.waitForTimeout(500);
@@ -74,7 +74,7 @@ test('a refused (426) offline sync keeps the queued expense, shows the guidance,
   offline.mode = 'ok';
   await page.reload();
   await expect.poll(() => queued(page)).toBe(0);
-  expect(attempts().filter(entry => entry.format === '2').length).toBeGreaterThan(afterFirst);
+  expect(attempts().filter(entry => entry.format === '3').length).toBeGreaterThan(afterFirst);
 });
 
 test('the receipt audit report and the trip history load and download with the declared format (a plain link could not send it)', async ({ page }) => {
@@ -84,9 +84,9 @@ test('the receipt audit report and the trip history load and download with the d
   await expect(page.getByText('No discrepancies found in the available evidence.', { exact: false })).toBeVisible();
   const audits = () => seen.filter(entry => entry.path === '/api/receipt/audit');
   expect(audits().length).toBeGreaterThanOrEqual(1);
-  expect(audits().every(entry => entry.format === '2')).toBe(true);
+  expect(audits().every(entry => entry.format === '3')).toBe(true);
   const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download this report' }).click()]);
   expect(download.suggestedFilename()).toBe('receipt-discrepancies.json');
   expect(audits().length).toBeGreaterThanOrEqual(2);
-  expect(audits().every(entry => entry.format === '2')).toBe(true);
+  expect(audits().every(entry => entry.format === '3')).toBe(true);
 });

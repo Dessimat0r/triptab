@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import path from 'node:path';
 import { expenseShares, settlements, validateLedger, type Draft, type Trip } from '../../lib/model';
+import { applyReceiptQuestion } from '../../lib/receipt-assistant';
 
 // Audit fixture R1: two £3.00 Pringles, £1.50 milk, "BOGOF PRINGLES -3.00", total £4.50.
 const photo = path.resolve('tests/fixtures/receipts/v1/images/long-receipt.png');
@@ -14,7 +15,7 @@ const r1 = (): Draft => ({ id: 'r1-draft', receiptId: 'photo', title: 'Tesco', d
   receiptScan: { version: 1, printedCurrency: 'GBP', printedTotal: 450, status: 'needs-review', warnings: [],
     sourceLines: [{ lineIndex: 3, observedText: 'BOGOF PRINGLES -3.00', amount: -300, kind: 'adjustment', mappedTo: 'unmapped' }] } });
 
-async function fixtures(page: Page, start: Trip = { ...structuredClone(base), drafts: [r1()] }) {
+async function fixtures(page: Page, start: Trip = { ...structuredClone(base), drafts: [r1()] }, answer?: (trip: Trip, draft: Draft, questionId: string) => Draft) {
   let current: Trip = start, revision = 1, posts = 0;
   await page.route('**/api/**', async route => {
     const request = route.request(), pathname = new URL(request.url()).pathname;
@@ -26,7 +27,17 @@ async function fixtures(page: Page, start: Trip = { ...structuredClone(base), dr
       return route.fulfill({ json: { data: { trips: [current] }, revision: ++revision }, headers: { 'X-TripTab-Account': 'owner' } });
     }
     if (pathname === '/api/receipt' && request.method() === 'GET') return route.fulfill({ contentType: 'image/png', path: photo });
+    if (pathname === '/api/receipt/process' && request.method() === 'POST' && answer) {
+      const { draftId, questionId } = request.postDataJSON();
+      const next = { ...current, drafts: current.drafts.map(draft => draft.id === draftId ? answer(current, draft, questionId) : draft) };
+      // The real processing route calls writeLedger before returning a
+      // proposal. Use its validator so the draft receives the calculation
+      // rule that posting an unchanged financial snapshot will preserve.
+      current = validateLedger({ trips: [next] }, { source: 'web', previous: { trips: [current] } }).trips[0];
+      return route.fulfill({ json: { data: { trips: [current] }, revision: ++revision }, headers: { 'X-TripTab-Account': 'owner' } });
+    }
     const json = pathname === '/api/ledger' ? { data: { trips: [current] }, revision }
+      : pathname === '/api/receipt/offer-rules' ? []
       : pathname === '/api/profile' ? { id: 'owner', displayName: 'Alice', email: 'alice@example.invalid', authMethod: 'password' }
       : pathname === '/api/receipt/ai-status' ? { configured: true, connected: true, provider: 'api', eligible: true, manageable: false, siwcAvailable: false }
       : pathname === '/api/trip-language' ? { accountId: 'owner', tripId: base.id, revision: 1, preferences: { readingLanguage: 'en', primaryVersion: 'reading', itemVersions: {} } }
@@ -41,10 +52,71 @@ async function open(page: Page) {
   await expect(page.locator('.editor')).toBeVisible();
 }
 const discounts = (page: Page) => page.locator('#expense-discounts');
+async function auditScreenshot(page: Page, name: string, outputPath: (name: string) => string) {
+  if (process.env.TRIPTAB_OFFER_VISUAL_AUDIT !== '1') return;
+  await page.screenshot({ path: outputPath(`offer-audit-${name}.png`), animations: 'disabled' });
+}
 
 test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
 
-test('discount choices keep readable item names and prices on a 320px phone', async ({ page }) => {
+test('receipt chat applies a capped mains BOGOF in one question on mobile', async ({ page }, testInfo) => {
+  const draft = r1();
+  draft.title = 'Restaurant';
+  draft.receiptScan = undefined;
+  draft.items = [1800, 1600, 1000, 800, 400].map((amount, index) => ({
+    id: `line-${index}`, name: ['Main A', 'Main B', 'Main C', 'Main D', 'Tea'][index], amount, members: ['alice', 'bob'],
+  }));
+  const question = 'Apply BOGOF to the mains once. The offer is capped at three uses.';
+  const state = await fixtures(page, { ...structuredClone(base), drafts: [draft] }, (trip, saved, id) => {
+    expect(saved.conversation?.find(message => message.id === id)?.text).toBe(question);
+    // The production ledger stamps the signed-in author's member ID. Supply
+    // the same trusted attribution in this synthetic account's server fixture.
+    const authored = { ...saved, conversation: saved.conversation?.map(message => message.id === id
+      ? { ...message, authorMemberId: 'alice' } : message) };
+    return applyReceiptQuestion(trip, authored, { summary: 'One pair: Main A qualifies and Main D is free.', changes: {
+      metadata: null, items: [], removeItemIds: [], clear: [], remember: null, aliases: [],
+      offers: [{ adjustmentId: null, label: null, group: null, sourceLineIndex: null, preset: 'bogof', presetValue: null,
+        maxUses: 1, savedRule: null, custom: null, split: null, stacking: null,
+        items: draft.items.slice(0, 4).map(item => ({ itemId: item.id, itemIndex: null, portions: null })) }],
+    } }, id);
+  });
+  await open(page);
+  const chat = page.getByRole('textbox', { name: 'Receipt question', exact: true });
+  if (!(await chat.isVisible())) {
+    await page.locator('details.expense-more-options').filter({ has: page.locator('.receipt-chat:not([data-item-id])') }).locator(':scope > summary').click();
+  }
+  await chat.fill(question);
+  const receiptLanguage = page.getByRole('combobox', { name: 'Receipt language' });
+  await receiptLanguage.scrollIntoViewIfNeeded();
+  await auditScreenshot(page, 'mobile-receipt-language', name => testInfo.outputPath(name));
+  const ask = page.getByRole('button', { name: 'Ask assistant', exact: true });
+  await ask.scrollIntoViewIfNeeded();
+  await auditScreenshot(page, 'mobile-chat', name => testInfo.outputPath(name));
+  await ask.click();
+  const review = page.getByRole('button', { name: 'Review offer', exact: true });
+  await expect(review).toBeVisible();
+  await review.scrollIntoViewIfNeeded();
+  await auditScreenshot(page, 'mobile-chat-reply', name => testInfo.outputPath(name));
+  expect(state.trip.expenses).toHaveLength(0);
+  await review.click();
+  await expect(discounts(page).locator('.adjustment-row')).toContainText('1 pair');
+  await expect(discounts(page).locator('.adjustment-row')).toContainText('4 eligible items');
+  await expect(discounts(page).locator('.adjustment-row')).toContainText('−£8.00');
+  await expect(discounts(page)).toContainText('Main D £8.00 → £0.00');
+  await expect(discounts(page)).not.toContainText('Main A £18.00 → £18.00');
+  await expect(page.locator('summary .item-offer-badges button[aria-label="Group A"]')).toHaveCount(4);
+  await discounts(page).locator('.adjustment-row').scrollIntoViewIfNeeded();
+  await auditScreenshot(page, 'mobile-offer-review', name => testInfo.outputPath(name));
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await discounts(page).locator('.adjustment-row').scrollIntoViewIfNeeded();
+  await auditScreenshot(page, 'wide-offer-review', name => testInfo.outputPath(name));
+  expect(state.trip.expenses).toHaveLength(0);
+  await save(page).click();
+  await expect(page.locator('.editor')).toHaveCount(0);
+  expect(state.trip.expenses[0]?.adjustments?.[0]).toMatchObject({ rule: { limit: 1, pairing: 'highest-lowest' } });
+});
+
+test('discount choices keep readable item names and prices on a 320px phone', async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 320, height: 740 });
   await page.emulateMedia({ colorScheme: 'dark' });
   const draft = r1();
@@ -61,6 +133,46 @@ test('discount choices keep readable item names and prices on a 320px phone', as
   expect((await form.getByRole('radio', { name: 'Discount', exact: true }).boundingBox())?.width).toBeLessThan(28);
   await row.getByRole('checkbox').check();
   await expect(row.getByRole('checkbox')).toBeChecked();
+  await auditScreenshot(page, '320px-dark-items', name => testInfo.outputPath(name));
+});
+
+test('a BOGOF offer adds badges only to the selected portions and previews an independent equal split', async ({ page }, testInfo) => {
+  const draft = r1();
+  draft.items[0] = { ...draft.items[0], name: 'First main', amount: 1500 };
+  draft.items[1] = { ...draft.items[1], name: 'Second main', amount: 1000, members: ['bob'] };
+  draft.receiptScan = { version: 1, status: 'needs-review', warnings: [], printedTotal: 1650 };
+  await fixtures(page, { ...structuredClone(base), drafts: [draft] });
+  await open(page);
+  await expect(page.locator('.item-offer-badges')).toHaveCount(0);
+  await discounts(page).getByRole('button', { name: 'Add discount', exact: true }).click();
+  const form = discounts(page).locator('.adjustment-form');
+  await form.getByRole('radio', { name: 'Offer rule' }).check();
+  const offerRule = form.getByRole('combobox', { name: 'Offer rule' });
+  await offerRule.selectOption('bogof');
+  await expect(offerRule).toHaveCSS('appearance', 'none');
+  await expect(offerRule).toHaveCSS('padding-top', '0px');
+  const limit = form.getByText('Offer limit · all complete groups', { exact: true });
+  await expect(form.getByRole('spinbutton', { name: 'Maximum uses (optional)' })).not.toBeVisible();
+  await limit.click();
+  await expect(form.getByRole('spinbutton', { name: 'Maximum uses (optional)' })).toBeVisible();
+  await auditScreenshot(page, 'mobile-offer-limit', name => testInfo.outputPath(name));
+  await limit.click();
+  await form.getByRole('checkbox', { name: /First main/ }).check();
+  await form.getByRole('checkbox', { name: /Second main/ }).check();
+  await form.getByText('Change split', { exact: true }).click();
+  await form.getByRole('combobox', { name: 'Split method' }).selectOption('equal');
+  await expect(form.locator('.offer-person label').first()).toHaveCSS('display', 'flex');
+  await expect(form.locator('.adjustment-preview')).toContainText('New total £16.50');
+  await expect(form.locator('.adjustment-preview')).toContainText('Alice −£5.00');
+  await expect(form.locator('.adjustment-preview')).toContainText('Bob −£5.00');
+  await form.locator('.adjustment-preview').scrollIntoViewIfNeeded();
+  await auditScreenshot(page, 'mobile-manual-preview', name => testInfo.outputPath(name));
+  await form.getByRole('button', { name: 'Add', exact: true }).click();
+  await expect(page.locator('.item-offer-badges button')).toHaveCount(2);
+  const badge = page.locator('summary .item-offer-badges button[aria-label="Group A"]').first();
+  await expect(badge).toBeVisible();
+  await badge.click();
+  await expect(discounts(page).locator('.offer-highlight')).toContainText('−£10.00');
 });
 
 test('scan R1: the BOGOF line becomes a discount on both Pringles, reconciles, and stores the correct shares', async ({ page }) => {
@@ -91,9 +203,9 @@ test('scan R1: the BOGOF line becomes a discount on both Pringles, reconciles, a
   expect(expense.items.map(item => item.amount)).toEqual([300, 300, 150]);
   // A person applied the printed line and chose its items, so the record is
   // theirs (R05) and keeps the line as evidence.
-  expect(expense.adjustments).toEqual([expect.objectContaining({ kind: 'discount', amount: 300, sourceLineIndex: 3, source: 'user',
+  expect(expense.adjustments).toEqual([expect.objectContaining({ group: 'A', kind: 'discount', amount: 300, sourceLineIndex: 3, source: 'user',
     scope: { type: 'items', itemIds: ['p1', 'p2'] } })]);
-  expect(expense.adjustmentAllocation).toBe('scoped-adjustments');
+  expect(expense.adjustmentAllocation).toBe('receipt-offers');
   expect(expense.receiptScan?.status).toBe('matched');
   expect(expense.receiptScan?.acknowledgement).toBeUndefined();
   expect(expenseShares(expense, members, 'GBP')).toEqual([375, 75]);
