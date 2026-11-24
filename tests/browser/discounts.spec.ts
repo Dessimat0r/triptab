@@ -96,7 +96,10 @@ test('receipt chat applies a capped mains BOGOF in one question on mobile', asyn
   expect(state.trip.expenses).toHaveLength(0);
   await review.click();
   await expect(discounts(page).locator('.adjustment-row')).toContainText('1 pair');
+  await expect(discounts(page).locator('.adjustment-row')).toContainText('4 eligible items');
   await expect(discounts(page).locator('.adjustment-row')).toContainText('−£8.00');
+  await expect(discounts(page)).toContainText('Main D £8.00 → £0.00');
+  await expect(discounts(page)).not.toContainText('Main A £18.00 → £18.00');
   await expect(page.locator('summary .item-offer-badges button[aria-label="Group A"]')).toHaveCount(4);
   await discounts(page).locator('.adjustment-row').scrollIntoViewIfNeeded();
   await auditScreenshot(page, 'mobile-offer-review', name => testInfo.outputPath(name));
@@ -104,6 +107,9 @@ test('receipt chat applies a capped mains BOGOF in one question on mobile', asyn
   await discounts(page).locator('.adjustment-row').scrollIntoViewIfNeeded();
   await auditScreenshot(page, 'wide-offer-review', name => testInfo.outputPath(name));
   expect(state.trip.expenses).toHaveLength(0);
+  await save(page).click();
+  await expect(page.locator('.editor')).toHaveCount(0);
+  expect(state.trip.expenses[0]?.adjustments?.[0]).toMatchObject({ rule: { limit: 1, pairing: 'highest-lowest' } });
 });
 
 test('discount choices keep readable item names and prices on a 320px phone', async ({ page }, testInfo) => {
@@ -151,6 +157,7 @@ test('a BOGOF offer adds badges only to the selected portions and previews an in
   await form.getByRole('checkbox', { name: /Second main/ }).check();
   await form.getByText('Change split', { exact: true }).click();
   await form.getByRole('combobox', { name: 'Split method' }).selectOption('equal');
+  await expect(form.locator('.offer-person label').first()).toHaveCSS('display', 'flex');
   await expect(form.locator('.adjustment-preview')).toContainText('New total £16.50');
   await expect(form.locator('.adjustment-preview')).toContainText('Alice −£5.00');
   await expect(form.locator('.adjustment-preview')).toContainText('Bob −£5.00');

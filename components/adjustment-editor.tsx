@@ -24,6 +24,7 @@ export function OfferBadge({ letter, onClick, active }: { letter: string; onClic
 function describeScope(adjustment: Adjustment, entry: ReceiptEditor) {
   if (adjustment.scope.type === "receipt") return uiText("Whole receipt");
   const count = adjustment.scope.itemIds.length;
+  if (adjustment.rule?.pairing) return uiText("{value0} eligible items", { value0: count });
   return count === 1 ? entry.items.find(item => item.id === (adjustment.scope as { itemIds: string[] }).itemIds[0])?.name || uiText("1 item")
     : uiText("{value0} items", { value0: count });
 }
@@ -67,7 +68,7 @@ export default function AdjustmentEditor({ entry, members, onChange, draft, onDr
           </div>
           {applied?.expected !== undefined && applied.expected !== applied.amount && <small className="adjustment-lines">{`Receipt ${money(applied.amount, entry.currency)} · Rule calculates ${money(applied.expected, entry.currency)}`}</small>}
           {applied?.members && <small className="adjustment-lines">{Object.entries(applied.members).map(([id, amount]) => `${members.find(member => member.id === id)?.name ?? id} ${sign}${money(amount, entry.currency)}`).join(" · ")}</small>}
-          {applied?.allocation && <small className="adjustment-lines">{Object.keys(applied.allocation).map(itemId => {
+          {applied?.allocation && <small className="adjustment-lines">{Object.entries(applied.allocation).filter(([, amount]) => !adjustment.rule?.pairing || amount > 0).map(([itemId]) => {
             const item = entry.items.find(value => value.id === itemId);
             const index = entry.items.findIndex(value => value.id === itemId);
             return item && item.amount !== null ? `${item.name || uiText("Item")} ${money(item.amount, entry.currency)} → ${money(result.net[index] ?? 0, entry.currency)}` : "";
@@ -205,7 +206,7 @@ function AdjustmentForm({ entry, members, draft, onSave, onCancel }: {
   const problem = !candidate ? (scopeType === "items" && !chosen.length ? uiText("Choose the items it applies to") : parsed.error?.issues[0]?.message ?? "Check the offer")
     : after?.errors[0] ?? (memberSplit && !outcome && !entry.items.some(item => item.amount === null) ? "Check that the saving does not exceed anyone’s share." : null);
   const preview = !problem && outcome ? { total: outcome.total,
-    changes: outcome.changes.map(value => ({ name: members.find(member => member.id === value.id)?.name ?? "", change: value.change })) } : null;
+    changes: outcome.changes.map(value => ({ id: value.id, name: members.find(member => member.id === value.id)?.name ?? "", change: value.change })) } : null;
   const previewedAdjustment = after?.applied.find(value => value.id === candidate?.id);
   const defaultParts = previewedAdjustment?.allocation;
   const pairCount = previewedAdjustment?.pairCount;
@@ -314,7 +315,9 @@ function AdjustmentForm({ entry, members, draft, onSave, onCancel }: {
     {problem ? <p className="footnote" role="status">{problem}</p> : preview && <p className="adjustment-preview" role="status">
       {uiText("New total {value0}", { value0: money(preview.total, entry.currency) })}
       {pairCount ? ` · ${pairCount} ${pairCount === 1 ? "pair" : "pairs"}` : ""}
-      {preview.changes.length ? ` · ${preview.changes.map(value => `${value.name} ${value.change < 0 ? "−" : "+"}${money(Math.abs(value.change), entry.currency)}`).join(" · ")}` : ""}
+      {preview.changes.map(value => <span className="adjustment-preview-share" key={value.id}>
+        {` · ${value.name} ${value.change < 0 ? "−" : "+"}${money(Math.abs(value.change), entry.currency)}`}
+      </span>)}
     </p>}
     {before.errors.length > 0 && <p className="footnote">{uiText(before.errors[0])}</p>}
     <div className="action-row">

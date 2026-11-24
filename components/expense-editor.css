@@ -1426,7 +1426,8 @@
 .offer-rule-fields, .offer-fields-row { display: grid; gap: .5rem; }
 .offer-fields-row { grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr)); }
 .offer-person { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; }
-.offer-person label, .adjustment-items .offer-portions { display: flex; align-items: center; gap: .4rem; }
+.adjustment-form .offer-person label, .adjustment-items .offer-portions { display: flex; align-items: center; gap: .4rem; }
+.adjustment-form .offer-person label { min-height: 44px; }
 .offer-person > input, .offer-portions input { width: 6rem; }
 .adjustment-form,
 .adjustment-items {
@@ -1494,6 +1495,11 @@
 .adjustment-preview {
   margin: 0;
   font-variant-numeric: tabular-nums;
+}
+.adjustment-preview-share {
+  display: inline-block;
+  max-inline-size: 100%;
+  overflow-wrap: anywhere;
 }
 /* F-14: Undo stays reachable while a form is open. */
 .saved-banner.undo-over-editor {
