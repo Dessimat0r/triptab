@@ -48,10 +48,14 @@ async function open(page: Page) {
   await expect(page.locator('.editor')).toBeVisible();
 }
 const discounts = (page: Page) => page.locator('#expense-discounts');
+async function auditScreenshot(page: Page, name: string, outputPath: (name: string) => string) {
+  if (process.env.TRIPTAB_OFFER_VISUAL_AUDIT !== '1') return;
+  await page.screenshot({ path: outputPath(`offer-audit-${name}.png`), animations: 'disabled' });
+}
 
 test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
 
-test('receipt chat applies a capped mains BOGOF in one question on mobile', async ({ page }) => {
+test('receipt chat applies a capped mains BOGOF in one question on mobile', async ({ page }, testInfo) => {
   const draft = r1();
   draft.title = 'Restaurant';
   draft.receiptScan = undefined;
@@ -74,14 +78,20 @@ test('receipt chat applies a capped mains BOGOF in one question on mobile', asyn
     await page.locator('details.expense-more-options').filter({ has: page.locator('.receipt-chat:not([data-item-id])') }).locator(':scope > summary').click();
   }
   await chat.fill(question);
+  await auditScreenshot(page, 'mobile-chat', name => testInfo.outputPath(name));
   await page.getByRole('button', { name: 'Ask assistant', exact: true }).click();
   await expect(discounts(page).locator('.adjustment-row')).toContainText('1 pair');
   await expect(discounts(page).locator('.adjustment-row')).toContainText('−£8.00');
   await expect(page.locator('summary .item-offer-badges button[aria-label="Group A"]')).toHaveCount(4);
+  await discounts(page).locator('.adjustment-row').scrollIntoViewIfNeeded();
+  await auditScreenshot(page, 'mobile-offer-review', name => testInfo.outputPath(name));
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await discounts(page).locator('.adjustment-row').scrollIntoViewIfNeeded();
+  await auditScreenshot(page, 'wide-offer-review', name => testInfo.outputPath(name));
   expect(state.trip.expenses).toHaveLength(0);
 });
 
-test('discount choices keep readable item names and prices on a 320px phone', async ({ page }) => {
+test('discount choices keep readable item names and prices on a 320px phone', async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 320, height: 740 });
   await page.emulateMedia({ colorScheme: 'dark' });
   const draft = r1();
@@ -98,9 +108,10 @@ test('discount choices keep readable item names and prices on a 320px phone', as
   expect((await form.getByRole('radio', { name: 'Discount', exact: true }).boundingBox())?.width).toBeLessThan(28);
   await row.getByRole('checkbox').check();
   await expect(row.getByRole('checkbox')).toBeChecked();
+  await auditScreenshot(page, '320px-dark-items', name => testInfo.outputPath(name));
 });
 
-test('a BOGOF offer adds badges only to the selected portions and previews an independent equal split', async ({ page }) => {
+test('a BOGOF offer adds badges only to the selected portions and previews an independent equal split', async ({ page }, testInfo) => {
   const draft = r1();
   draft.items[0] = { ...draft.items[0], name: 'First main', amount: 1500 };
   draft.items[1] = { ...draft.items[1], name: 'Second main', amount: 1000, members: ['bob'] };
@@ -112,6 +123,12 @@ test('a BOGOF offer adds badges only to the selected portions and previews an in
   const form = discounts(page).locator('.adjustment-form');
   await form.getByRole('radio', { name: 'Offer rule' }).check();
   await form.getByRole('combobox', { name: 'Offer rule' }).selectOption('bogof');
+  const limit = form.getByText('Offer limit · all complete groups', { exact: true });
+  await expect(form.getByRole('spinbutton', { name: 'Maximum uses (optional)' })).not.toBeVisible();
+  await limit.click();
+  await expect(form.getByRole('spinbutton', { name: 'Maximum uses (optional)' })).toBeVisible();
+  await auditScreenshot(page, 'mobile-offer-limit', name => testInfo.outputPath(name));
+  await limit.click();
   await form.getByRole('checkbox', { name: /First main/ }).check();
   await form.getByRole('checkbox', { name: /Second main/ }).check();
   await form.getByText('Change split', { exact: true }).click();
