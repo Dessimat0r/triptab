@@ -17,7 +17,7 @@ const newId = () => typeof crypto !== "undefined" && "randomUUID" in crypto ? cr
 
 export function OfferBadge({ letter, onClick, active }: { letter: string; onClick?: () => void; active?: boolean }) {
   const style = `offer-badge offer-badge--${offerLetters.indexOf(letter) % 5}`;
-  return onClick ? <button type="button" className={style} aria-label={`Group ${letter}`} aria-pressed={active} onClick={onClick}>{letter}</button>
+  return onClick ? <button type="button" className={style} aria-label={`Group ${letter}`} aria-pressed={active} onClick={event => { event.preventDefault(); onClick(); }}>{letter}</button>
     : <span className={style} aria-label={`Group ${letter}`}>{letter}</span>;
 }
 

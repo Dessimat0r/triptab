@@ -3515,6 +3515,7 @@ export default function Home({ children }: { children: ReactNode }) {
                             const secondary = reading && reading !== item.name ? (primary === reading ? item.name : reading) : undefined;
                             const blocked = item.amount === null || !item.name.trim() || (editing.percentages === undefined && item.members.length > 0 && !!itemSplitError(item));
                             return <ExpenseItemRow key={item.id} id={expenseItemTarget(item.id)} index={i} name={primary} detail={secondary}
+                              badges={itemOfferBadges(editing, item.id)}
                               price={item.amount === null ? "Price missing" : receiptMoney(item.amount, editing.currency)}
                               flag={item.amount === null ? "Price" : warnings.length || item.scanSource?.confidence === "low" ? "Check" : undefined}
                               unassigned={editing.percentages === undefined && !item.members.length} open={blocked}
@@ -3524,7 +3525,6 @@ export default function Home({ children }: { children: ReactNode }) {
                               }))} /> : <p className="item-share-summary">{item.splitMode === 'default' ? uiText("Equal split") : item.members.map(id => name(id)).join(", ")}</p> : undefined}>
                               <div className="item-top">
                                 <ReceiptItemNames accountId={profile?.id || ""} trip={trip} receipt={editing} item={item} index={i} settings={languageSettings}
-                                  offerBadges={itemOfferBadges(editing, item.id)}
                                   onUpdate={change=>setEditing(previous=>previous&&previous.id===editing.id&&previous.receiptLanguage===editing.receiptLanguage
                                     ?{...previous,items:previous.items.map(current=>current.id===item.id?change(current):current)}:previous)} />
                                 <div className="moneyinput">

@@ -1387,6 +1387,7 @@
 }
 .item-name-with-offers { display: flex; align-items: center; gap: .3rem; }
 .item-offer-badges { display: inline-flex; flex: 0 0 auto; flex-wrap: wrap; max-width: 44%; gap: .25rem; }
+.item-summary-name .item-offer-badges { margin-inline: .3rem; vertical-align: middle; }
 .offer-badge, .adjustment-row .offer-badge {
   display: inline-grid; place-items: center; min-width: 1.7rem; min-height: 1.7rem;
   border: 1px solid transparent; border-radius: 50%; padding: 0 .25rem;

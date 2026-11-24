@@ -66,7 +66,9 @@ test('a BOGOF offer adds badges only to the selected portions and previews an in
   await expect(form.locator('.adjustment-preview')).toContainText('Bob −£5.00');
   await form.getByRole('button', { name: 'Add', exact: true }).click();
   await expect(page.locator('.item-offer-badges button')).toHaveCount(2);
-  await page.locator('.item-offer-badges').first().getByRole('button', { name: 'Group A' }).click();
+  const badge = page.locator('summary .item-offer-badges button[aria-label="Group A"]').first();
+  await expect(badge).toBeVisible();
+  await badge.click();
   await expect(discounts(page).locator('.offer-highlight')).toContainText('−£10.00');
 });
 
