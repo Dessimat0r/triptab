@@ -1,0 +1,108 @@
+{
+  "base": "http://127.0.0.1:8787",
+  "account": "repro-mwz2rtqz@example.test",
+  "ranAt": "2026-11-27T14:27:44.773Z",
+  "results": [
+    {
+      "id": "TT-03",
+      "finding": "Save drops a valid, unapplied discount preview",
+      "defectPresent": true,
+      "details": {
+        "preview": "New total €54.00 · Repro Owner −€2.00 · Bob −€2.00 · Cara −€2.00",
+        "savedRow": "- button \"Groceries Repro Owner paid · 1 item 27 Nov 2026 · 14:27 · Paid €60.00 Your share €20.00\""
+      }
+    },
+    {
+      "id": "TT-03b",
+      "finding": "Save drops a pending edit to an existing discount",
+      "defectPresent": true,
+      "details": {
+        "preview": "New total €36.00 · Repro Owner −€3.00 · Bob −€3.00 · Cara −€3.00",
+        "savedRow": "- button \"Museum Repro Owner paid · 1 item 27 Nov 2026 · 14:27 · Paid €39.00 Your share €13.00\""
+      }
+    },
+    {
+      "id": "TT-02",
+      "finding": "Closing a dirty payment (even from Review) discards it without confirmation",
+      "defectPresent": true,
+      "details": {
+        "reviewHeading": "€10.00",
+        "confirmShown": 0,
+        "paymentsBefore": 0,
+        "paymentsAfter": 0
+      }
+    },
+    {
+      "id": "TT-07",
+      "finding": "Existing-expense edits are not persisted (no resume after reload/tab discard); new expenses are",
+      "defectPresent": true,
+      "details": {
+        "resumeExisting": 0,
+        "resumeNewControl": 1
+      }
+    },
+    {
+      "id": "OP-02",
+      "finding": "Flat Discount field and structured discount stack without any combined summary or warning",
+      "defectPresent": true,
+      "details": {
+        "footerTotal": "Total €48.00"
+      }
+    },
+    {
+      "id": "OP-01",
+      "finding": "Reload/relaunch switches to the first holiday instead of the one in use",
+      "defectPresent": true,
+      "details": {
+        "before": "Second Trip",
+        "after": "Repro Trip",
+        "url": "http://127.0.0.1:8787/expenses"
+      }
+    },
+    {
+      "id": "TT-01",
+      "finding": "Keyboard focus moves outside the visible settings modal (no scroll-into-view)",
+      "defectPresent": true,
+      "details": {
+        "worst": {
+          "name": "checkbox",
+          "top": 1898,
+          "viewport": 844,
+          "scrollTop": 0
+        }
+      }
+    },
+    {
+      "id": "OP-03",
+      "finding": "Upload failure: raw \"Failed to fetch\", page banner offers unrelated \"Retry updates\"",
+      "defectPresent": true,
+      "details": {
+        "alerts": [
+          {
+            "text": "Failed to fetchRetry updates",
+            "top": 295,
+            "inViewport": true
+          },
+          {
+            "text": "Failed to fetch",
+            "top": 1088,
+            "inViewport": false
+          }
+        ]
+      }
+    },
+    {
+      "id": "TT-09",
+      "finding": "Offline navigation fails because the cached offline page is a redirected response",
+      "defectPresent": true,
+      "details": {
+        "cached": {
+          "redirected": true,
+          "url": "http://127.0.0.1:8787/offline",
+          "status": 200
+        },
+        "navigation": "Error: page.goto: net::ERR_FAILED at http://127.0.0.1:8787/expenses"
+      }
+    }
+  ]
+}
